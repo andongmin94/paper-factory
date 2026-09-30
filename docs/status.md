@@ -9,6 +9,56 @@ acceptance run against the user's actual journal and review-round-aware revision
 uploads remain target-specific work. See [whole-project audit](project-audit.md)
 and [official OJS protocol research](submission-reuse.md).
 
+## Version 0.5.0 verification
+
+The final Windows / Python 3.12.14 collection contains **701 cases**. Complete
+file shards, the two portal suites and final affected-case reruns cover that exact
+collection: **699 passed, 2 skipped, 0 failed**. The two skips require Windows
+symlink creation privileges; ordinary path and junction rejection are exercised
+independently. Four initial failures were stale test helpers/fixtures: their
+corrections preserve the stricter production conversion and artifact checks.
+No passing count includes an unexecuted case. The deduplicated JUnit evidence was
+compared with the final `pytest --collect-only` identifiers and preserved at
+`C:/Users/Public/Documents/ESTsoft/CreatorTemp/paperfactory-v050-local-verification.json`.
+
+Final portal suites passed 20 and 26 tests. The affected follow-up run passed 114
+tests, including all 73 OJS contract cases, all 37 literature cases and the four
+corrected fixtures. Dependency validation and source compilation pass. Editable
+package metadata and the source both report version 0.5.0.
+
+The first clean GitHub Actions run at code commit
+`0831b35fd038c391dcf276124ee06616bb5d9466` also completed successfully:
+**all eight Windows/Ubuntu jobs passed**, with every test file assigned to one
+of four shards per OS and actual Pandoc/Typst/document libraries installed.
+See the [successful full platform run](https://github.com/andongmin94/paper-factory/actions/runs/36706128635).
+The public run/job status evidence is preserved at
+`C:/Users/Public/Documents/ESTsoft/CreatorTemp/paperfactory-v050-github-verification.json`.
+
+The actual CLI portal smoke completed two independent local research workspaces:
+normal delivery and a lost final-provider response. Each genuinely executed the
+459-byte corpus experiment, measured 215 compressed bytes (ratio
+0.4684095860566449), froze the evidence and generated a real two-page blinded PDF.
+The synthetic provider accepted exactly the recorded PDF bytes. Normal delivery
+was confirmed by a separate read. Lost-response delivery kept the occupied slot,
+blocked cancellation/retry and reconciled by reading the provider, with exactly
+one final Submit request. Scientific freezes and ZIPs remained unchanged. All
+four PDF pages from the preceding equivalent smoke were rendered and visually
+checked for layout, numbering, glyphs and identity leakage.
+
+Latest result: `C:/Users/Public/Documents/ESTsoft/CreatorTemp/
+paperfactory-portal-smoke-2iyi0yti/SYNTHETIC-portal-smoke-result.json`.
+Providers, policies, authors and receipts are conspicuously synthetic; experiments
+and exports are real. The result explicitly records
+`external_submission_performed: false`; no real journal request or upload occurred.
+
+The preserved Phase 1 workspace still reports its two successful runs. The Phase
+2 ready ZIP validates historically, while its deliberately incomplete genuine
+PLOS candidate remains blocked. Phase 3 withdrawal/rejection journals, Phase 4
+revision packages and resubmission receipts all validate without modifying their
+scientific freezes or histories. Installed 0.5.0 CLI checks also pass the preserved
+Phase 2 ready package and both latest portal journals with no errors. The older
+phase-specific results below remain historical release evidence.
+
 ## Working implementation
 
 Commands: `--help`, `start`, `status`, `research`, `experiment plan/register/run`,
