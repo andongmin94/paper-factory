@@ -244,8 +244,25 @@ def _active(ws: Workspace, revision: Revision) -> None:
     report = publication.check(ws, submission)
     if not report["passed"]:
         raise ValueError("Publication history is invalid: " + "; ".join(report["errors"]))
-    if report["state"] != SubmissionState.REVISION or not report["events"] or report["events"][-1]["id"] != revision.decision_event_id:
-        raise ValueError("Revision preparation requires the current confirmed journal revision decision")
+    if report["state"] not in {SubmissionState.REVISION, SubmissionState.REJECTED} or not report["events"] or report["events"][-1]["id"] != revision.decision_event_id:
+        raise ValueError("Revision preparation requires the current confirmed journal review decision (REVISION or REJECTED)")
+    if report["state"] == SubmissionState.REJECTED and publication.active_for_study(ws, revision.study_id):
+        raise ValueError("Rejected-feedback edits are blocked while another active peer-reviewed submission occupies this Study")
+
+
+def assert_editable(ws: Workspace, paper: Paper) -> None:
+    """Apply the rejected-feedback gate to the ordinary canonical edit path too."""
+    if not ws.path("revisions").exists():
+        return
+    _registry(ws)
+    for revision in ws.list("revision", Revision):
+        if revision.revised_paper_id == paper.id:
+            decision = ws.get("publication_event", revision.decision_event_id, publication.PublicationEvent)
+            if decision.to_state == SubmissionState.REJECTED:
+                problems = verify_review(ws, revision)
+                if problems:
+                    raise ValueError("Revision history is invalid: " + "; ".join(problems))
+                _active(ws, revision)
 
 
 def _validated_review(ws: Workspace, revision: Revision):
@@ -276,7 +293,7 @@ def _validated_review(ws: Workspace, revision: Revision):
     if digest_file(path) != event.artifact_sha256 or json.loads(path.read_bytes()) != event.model_dump(mode="json", exclude={"artifact_sha256"}):
         raise ValueError("Revision decision artifact changed")
     submission = ws.get("submission", revision.base_submission_id, Submission)
-    if event.kind != "receipt" or event.to_state != SubmissionState.REVISION or event.submission_id != revision.base_submission_id or event.paper_id != submission.paper_id or event.study_id != revision.study_id or event.actor != revision.reviewed_by or event.values.get("occurred_at") != revision.received_at:
+    if event.kind != "receipt" or event.to_state not in {SubmissionState.REVISION, SubmissionState.REJECTED} or event.submission_id != revision.base_submission_id or event.paper_id != submission.paper_id or event.study_id != revision.study_id or event.actor != revision.reviewed_by or event.values.get("occurred_at") != revision.received_at:
         raise ValueError("Revision observation is not bound to its confirmed journal decision")
     evidence = ws.path(f"publication/{revision.base_submission_id}/{event.id}/evidence.bin")
     if not event.evidence_sha256 or digest_file(evidence) != event.evidence_sha256:
@@ -310,8 +327,8 @@ def import_review(ws: Workspace, submission: Submission, spec_path: Path, report
         history = publication.check(ws, current)
         if not history["passed"]:
             raise ValueError("Publication history is invalid: " + "; ".join(history["errors"]))
-        if current.state != SubmissionState.REVISION or not history["events"]:
-            raise ValueError("Import requires a confirmed journal REVISION decision")
+        if current.state not in {SubmissionState.REVISION, SubmissionState.REJECTED} or not history["events"]:
+            raise ValueError("Import requires a confirmed journal REVISION or REJECTED decision")
         decision = publication.PublicationEvent.model_validate(history["events"][-1])
         for record in ws.list("revision", Revision):
             if record.base_submission_id == current.id and record.decision_event_id == decision.id:

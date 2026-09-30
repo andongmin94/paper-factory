@@ -240,6 +240,8 @@ def _approve(ws: Workspace, paper: Paper, assessment: str, author_values: dict |
         current = ws.get("paper", paper.id, Paper)
         if current.state == PaperState.AUTHOR_APPROVED:
             raise ValueError("Paper already approved and frozen")
+        from .revisions import assert_editable
+        assert_editable(ws, current)
         if destination.exists():
             raise ValueError("A freeze snapshot already exists; will not overwrite it")
         report = _check(ws, current)

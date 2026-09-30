@@ -1,5 +1,7 @@
 import hashlib
 import json
+from concurrent.futures import ThreadPoolExecutor
+import threading
 
 import httpx
 import pytest
@@ -74,6 +76,7 @@ def test_injected_client_cannot_follow_provider_redirects(workspace):
 
 def test_query_hits_are_resolved_instead_of_used_as_verified_metadata(workspace):
     study = Study(project_id="project-test", title="Study", research_question="Question?", state=StudyState.EVIDENCE_READY)
+    workspace.save("study", study)
     requests = []
 
     def handler(request):
@@ -107,6 +110,7 @@ def test_query_hits_are_resolved_instead_of_used_as_verified_metadata(workspace)
 
 def test_search_failure_is_audited_without_marking_novelty_searched(workspace):
     study = Study(project_id="project-test", title="Study", research_question="Question?")
+    workspace.save("study", study)
     with client(lambda request: httpx.Response(503)) as api, pytest.raises(ValueError, match="Crossref request failed"):
         search(workspace, "query", study, client=api)
     assert study.novelty_status == "unassessed"
@@ -115,6 +119,67 @@ def test_search_failure_is_audited_without_marking_novelty_searched(workspace):
     assert len(audits) == 1
     assert json.loads(audits[0].read_text())["status"] == "FAILED"
     assert any("did not succeed" in error for error in verify_search(workspace, audits[0].stem, study.id))
+
+
+def test_sequential_searches_merge_current_study_instead_of_overwriting_stale_snapshot(workspace):
+    study = Study(project_id="project-test", title="Study", research_question="Question?")
+    workspace.save("study", study)
+    stale = study.model_copy(deep=True)
+
+    def handler(request):
+        if request.url.path == "/works":
+            key = request.url.params["query.bibliographic"]
+            return httpx.Response(200, json={"status": "ok", "message": {"items": [{"DOI": f"10.1234/{key}"}]}})
+        doi = "10.1234/" + request.url.path.rsplit("/", 1)[-1]
+        return httpx.Response(200, json=work(doi=doi, title=doi))
+
+    with client(handler) as api:
+        search(workspace, "first", study, client=api)
+        current = workspace.get("study", study.id, Study)
+        current.state = StudyState.EVIDENCE_READY
+        current.human_subjects = True
+        workspace.save("study", current)
+        search(workspace, "second", stale, client=api)
+    stored = workspace.get("study", study.id, Study)
+    assert len(stored.literature_search_ids) == len(stored.citation_ids) == 2
+    assert stored.state == StudyState.EVIDENCE_READY and stored.human_subjects
+    assert stale.literature_search_ids == stored.literature_search_ids
+    assert all(verify_search(workspace, id, stored.id) == [] for id in stored.literature_search_ids)
+
+
+def test_competing_search_fails_explicitly_then_retry_preserves_both_searches(workspace):
+    study = Study(project_id="project-test", title="Study", research_question="Question?")
+    workspace.save("study", study)
+    stale = study.model_copy(deep=True)
+    entered, release = threading.Event(), threading.Event()
+
+    def handler(request):
+        if request.url.path == "/works":
+            if request.url.params["query.bibliographic"] == "first":
+                entered.set()
+                assert release.wait(timeout=10)
+            return httpx.Response(200, json={"status": "ok", "message": {"items": []}})
+        pytest.fail("Empty query fixture must not resolve DOI metadata")
+
+    with client(handler) as api, ThreadPoolExecutor(max_workers=1) as pool:
+        running = pool.submit(search, workspace, "first", study, client=api)
+        try:
+            assert entered.wait(timeout=10)
+            with pytest.raises(ValueError, match="already running"):
+                search(workspace, "second", stale, client=api)
+        finally:
+            release.set()
+        running.result(timeout=10)
+        search(workspace, "second", stale, client=api)
+    current = workspace.get("study", study.id, Study)
+    assert len(current.literature_search_ids) == 2
+    assert all(verify_search(workspace, id, current.id) == [] for id in current.literature_search_ids)
+
+
+def test_unknown_study_cannot_start_external_literature_requests(workspace):
+    with client(lambda _: pytest.fail("Unknown Study reached provider")) as api:
+        with pytest.raises(ValueError, match="Unknown study"):
+            search(workspace, "query", Study(project_id="project-test", title="Study", research_question="Question?"), client=api)
 
 
 @pytest.mark.parametrize("field,value", [
@@ -161,6 +226,7 @@ def test_metadata_updates_do_not_overwrite_previously_cited_evidence(workspace):
 
 def perform_search(workspace, items=None):
     study = Study(project_id="project-test", title="Study", research_question="Question?")
+    workspace.save("study", study)
 
     def handler(request):
         if request.url.path == "/works":

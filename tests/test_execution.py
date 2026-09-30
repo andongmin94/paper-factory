@@ -13,7 +13,7 @@ import pytest
 import httpx
 
 from paper_factory.evidence import claims_for_run, study_readiness_errors, verify_claim
-from paper_factory.experiments import extract_metric, register_manifest, run_experiment
+from paper_factory.experiments import extract_metric, register_manifest, run_experiment, _human_subjects
 from paper_factory.models import ExperimentManifest, ExperimentRun, Metric, Paper, PaperState, Project, Study, StudyState
 from paper_factory.project import ingest, inventory, verify_snapshot
 from paper_factory.research import create_study, discover, plan
@@ -47,6 +47,44 @@ def custom_manifest(ws, tmp_path, *, script=None, output="result.json", pointer=
     path = tmp_path / "manifest.json"
     write_json(path, manifest)
     return register_manifest(ws, path)
+
+
+@pytest.mark.parametrize("input_path,output", [("data.csv", "data.csv"), ("data.csv", "DATA.CSV"), ("measurements", "measurements/result.json")])
+def test_register_rejects_outputs_that_would_delete_declared_input(imported, tmp_path, input_path, output):
+    ws, _ = imported
+    if input_path == "measurements":
+        # A registered directory input protects its contents, not only its name.
+        source = tmp_path / "directory-input-source"
+        source.mkdir()
+        (source / input_path).mkdir()
+        (source / input_path / "result.json").write_text('{"score": 1}', encoding="utf-8")
+        ws = ingest(str(source), tmp_path / "directory-input-workspace")
+    before = inventory(ws.path("source"))
+    with pytest.raises(ValueError, match="separate from declared input"):
+        custom_manifest(ws, tmp_path, output=output, inputs=[input_path])
+    assert inventory(ws.path("source")) == before
+    assert ws.list("run", ExperimentRun) == []
+
+
+@pytest.mark.parametrize("question", [
+    "Patient satisfaction survey", "Clinical interviews with patients", "Student experience survey",
+    "Interviews with customers", "임상 환자 면담", "학생 만족도 설문", "연구 대상자 인터뷰",
+])
+def test_obvious_human_collection_descriptors_block_before_process_launch(imported, tmp_path, question):
+    ws, _ = imported
+    manifest = custom_manifest(ws, tmp_path, question=question)
+    with pytest.raises(ValueError, match="Human-subject research cannot execute"):
+        run_experiment(ws, manifest)
+    assert ws.list("run", ExperimentRun) == []
+
+
+@pytest.mark.parametrize("question", ["Survey of existing citation libraries", "Clinical parser benchmark", "Interview transcript parser benchmark", "Patiently waiting for compiler completion"])
+def test_unrelated_survey_or_clinical_software_words_do_not_mark_human_collection(imported, tmp_path, question):
+    ws, _ = imported
+    manifest = custom_manifest(ws, tmp_path, question=question)
+    study = ws.get("study", manifest.study_id, Study)
+    assert not _human_subjects(study, manifest)
+    assert run_experiment(ws, manifest).status == "SUCCEEDED"
 
 
 def test_ingestion_is_sanitized_stable_and_independent_of_cwd(imported, tmp_path, monkeypatch):

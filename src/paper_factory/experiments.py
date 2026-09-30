@@ -32,7 +32,7 @@ def _validate_manifest(ws: Workspace, manifest: ExperimentManifest) -> Study:
     study = ws.get("study", manifest.study_id, Study)
     if study.project_id != project.id or manifest.source_digest != project.snapshot_digest or manifest.source_commit != project.source_commit:
         raise ValueError("Experiment must match the study's imported source version")
-    if len(set(manifest.expected_outputs)) != len(manifest.expected_outputs):
+    if len({output.casefold() for output in manifest.expected_outputs}) != len(manifest.expected_outputs):
         raise ValueError("Expected outputs must be unique")
     names = [metric.name for metric in manifest.metrics]
     if len(set(names)) != len(names) or any(not name.strip() for name in names):
@@ -41,6 +41,11 @@ def _validate_manifest(ws: Workspace, manifest: ExperimentManifest) -> Study:
         target = safe_relative(ws.root / "source", path)
         if not target.exists():
             raise ValueError(f"Experiment input is absent from source snapshot: {path}")
+        input_parts = tuple(part.casefold() for part in PurePosixPath(path).parts)
+        for output in manifest.expected_outputs:
+            output_parts = tuple(part.casefold() for part in PurePosixPath(output).parts)
+            if output_parts == input_parts or target.is_dir() and output_parts[:len(input_parts)] == input_parts:
+                raise ValueError("Experiment outputs must be separate from declared input files and directories; existing outputs are removed before execution")
     for path in manifest.expected_outputs:
         safe_relative(ws.root / "source", path)
     for metric in manifest.metrics:
@@ -91,7 +96,12 @@ def register_manifest(ws: Workspace, path: Path) -> ExperimentManifest:
 
 def _human_subjects(study: Study, manifest: ExperimentManifest) -> bool:
     text = " ".join([study.title, study.research_question, *manifest.command, *manifest.inputs]).casefold()
-    return study.human_subjects or manifest.human_subjects or bool(re.search(r"\b(?:participants?|human[ _-]subjects?|user[ _-]stud(?:y|ies)|clinical[ _-]trial|recruitment|consent[ _-]form|survey[ _-]responses)\b|사람\s*대상|사용자\s*(?:실험|연구)|참가자|임상\s*시험", text))
+    return study.human_subjects or manifest.human_subjects or bool(re.search(
+        r"\b(?:participants?|patients?|human[ _-]subjects?|user[ _-]stud(?:y|ies)|clinical[ _-](?:trials?|stud(?:y|ies)|interviews?)|recruitment|consent[ _-]form|survey[ _-]responses)\b"
+        r"|\b(?:users?|students?|teachers?|employees?|customers?)[ _-]+(?:(?:satisfaction|experience)[ _-]+)?(?:surveys?|interviews?)\b"
+        r"|\b(?:surveys?|interviews?)[ _-]+(?:with|of)[ _-]+(?:users?|students?|teachers?|employees?|customers?)\b"
+        r"|사람\s*대상|사용자\s*(?:실험|연구)|참가자|참여자|피험자|환자|연구\s*대상자"
+        r"|임상\s*(?:시험|연구|면담|설문)|(?:사용자|학생|교사|고객|직원)\s*(?:만족도\s*)?(?:설문|면담|인터뷰)", text))
 
 
 def _environment(manifest: ExperimentManifest) -> dict[str, str]:

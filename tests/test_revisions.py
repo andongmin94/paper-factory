@@ -80,8 +80,9 @@ def test_explicit_confirmation_current_revision_decision_and_single_open_round_a
     assert not revisions.check(ws, revision)["passed"]
     with pytest.raises(ValueError, match="current confirmed"):
         revisions.draft(ws, revision)
-    with pytest.raises(ValueError, match="confirmed journal REVISION"):
-        revisions.import_review(ws, submission, spec, report, confirmed=True)
+    rejected, _ = revisions.import_review(ws, submission, spec, report, confirmed=True)
+    assert rejected.decision_event_id != revision.decision_event_id
+    assert revisions.check(ws, rejected)["passed"]
 
 
 def test_native_crlf_report_preserves_raw_bytes_and_verifies_exact_multiline_quote(prepared, mock_conversion, tmp_path):

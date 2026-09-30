@@ -94,6 +94,42 @@ def test_local_end_to_end_has_measured_claims_and_compile_ready_manuscript(built
     assert not (source / ".paper-factory").exists()
 
 
+@pytest.mark.parametrize("heading", ["Accuracy achieved 99 percent", "The first novel experimental approach"])
+def test_new_section_headings_cannot_introduce_unsupported_results_or_novelty(built_case, heading):
+    _, ws, _, _, paper, root = built_case
+    doc = manuscript.Document.model_validate_json((root / "canonical.json").read_bytes())
+    doc.sections.append(manuscript.Section(heading=heading, blocks=[manuscript.prose("This additional interpretation is presented for author review.")]))
+    write_json(root / "canonical.json", doc)
+    with pytest.raises(ValueError, match="Unsupported quantitative prose|Unsupported novelty"):
+        manuscript.refresh(ws, paper)
+
+
+@pytest.mark.parametrize("description", ["Accuracy achieved 99 percent", "Latency reduced by ninety percent", "The first novel performance measure", "See DOI: 10.1234/unverified"])
+def test_actual_metric_results_do_not_license_unverified_claims_in_description(workspace_case, description):
+    _, ws, study, source = workspace_case
+    manifest = source.model_copy(update={"id": uid("experiment")}, deep=True)
+    manifest.metrics[0].description = description
+    manifest_path = ws.path("metric-description-test.json")
+    write_json(manifest_path, manifest)
+    experiments.register_manifest(ws, manifest_path)
+    assert experiments.run_experiment(ws, manifest).status == "SUCCEEDED"
+    with pytest.raises(ValueError, match="metric label"):
+        manuscript.build(ws, study)
+
+
+@pytest.mark.parametrize("description", ["P95 latency", "95th percentile latency", "F1 score", "Top-5 accuracy", "Accuracy (%)", "Percentage of successful recoveries", "Time to first byte"])
+def test_valid_numeric_metric_identifiers_and_units_still_render(workspace_case, description):
+    _, ws, study, source = workspace_case
+    manifest = source.model_copy(update={"id": uid("experiment")}, deep=True)
+    manifest.metrics[0].description = description
+    manifest_path = ws.path("metric-description-test.json")
+    write_json(manifest_path, manifest)
+    experiments.register_manifest(ws, manifest_path)
+    assert experiments.run_experiment(ws, manifest).status == "SUCCEEDED"
+    paper, _ = manuscript.build(ws, study)
+    assert integrity.check(ws, paper)["passed"]
+
+
 def test_missing_evidence_rejects_manuscript(workspace_case):
     _, ws, study, _ = workspace_case
     with pytest.raises(ValueError, match="No successful experimental evidence"):

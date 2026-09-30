@@ -69,6 +69,18 @@ def prose(text: str) -> Block:
     return Block(kind="prose", text=text)
 
 
+def quantitative_label(text: str) -> bool:
+    """Keep standard metric identifiers distinct from an asserted result.
+
+    A metric's measured value belongs in its Claim, not its editable label.
+    Ordinal percentiles, F1/P95 identifiers and bare percentage units describe
+    measurements without asserting an additional measured outcome.
+    """
+    label = re.sub(r"\b\d+(?:st|nd|rd|th)[ -]+percentile\b|\btop[ -]*\d+\b|\b[A-Za-z]+\d+[A-Za-z\d]*\b", "identifier", text, flags=re.I)
+    label = re.sub(r"\bpercent(?:age)?s?\b|%", "unit", label, flags=re.I)
+    return bool(QUANTITY.search(label) and EMPIRICAL.search(text))
+
+
 def validate_document(ws: Workspace, doc: Document) -> list[str]:
     issues: list[str] = []
     study = ws.get("study", doc.study_id, Study)
@@ -88,6 +100,8 @@ def validate_document(ws: Workspace, doc: Document) -> list[str]:
     claim_sections: dict[str, set[str]] = {}
     for section in doc.sections:
         texts.append(section.heading)
+        novelty_texts.append(section.heading)
+        quantitative_texts.append(section.heading)
         claim_sections.setdefault(section.heading, set())
         for block in section.blocks:
             if block.kind == "prose":
@@ -111,6 +125,13 @@ def validate_document(ws: Workspace, doc: Document) -> list[str]:
                         if claim.study_id != doc.study_id:
                             issues.append(f"Claim {claim.id} belongs to a different study")
                         issues.extend(verify_claim(ws, claim))
+                        if quantitative_label(claim.description):
+                            issues.append(f"Unsupported quantitative metric label: {claim.description[:100]}")
+                        if CITATION_TOKEN.search(claim.description):
+                            issues.append("Unverified inline citation in metric label; use a citation record block")
+                        novelty_label = re.sub(r"\b(?:time[ -]to[ -])?first[ -]byte\b", "response byte", claim.description, flags=re.I)
+                        if NOVELTY.search(novelty_label):
+                            issues.append(f"Unsupported novelty/conclusion wording in metric label: {claim.description[:100]}")
                         claim_sections[section.heading].add(claim.id)
                     else:
                         citation = ws.get("citation", block.ref, Citation)
@@ -286,6 +307,8 @@ def _refresh(ws: Workspace, paper: Paper, pandoc: str | None, pdf: bool) -> tupl
     current = ws.get("paper", paper.id, Paper)
     if current.state == PaperState.AUTHOR_APPROVED or (ws.root / "freezes" / paper.id).exists():
         raise ValueError("Approved manuscript is frozen; cannot render author edits")
+    from .revisions import assert_editable
+    assert_editable(ws, current)
     root = ws.root / "manuscripts" / paper.id
     doc = Document.model_validate_json((root / "canonical.json").read_text(encoding="utf-8"))
     if doc.paper_id != current.id or doc.study_id != current.study_id:

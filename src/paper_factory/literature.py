@@ -162,6 +162,20 @@ def search(
     client: httpx.Client | None = None,
 ) -> list[Citation]:
     """Search metadata and resolve every candidate DOI before citing it."""
+    # The study lock is shared with experiments and scientific freeze. Reload
+    # its current record after acquiring it: a previously selected CLI/API
+    # object must not overwrite searches, state or author assessment added later.
+    with ws.lock(f"study-{study.id}"):
+        current = ws.get("study", study.id, Study)
+        if study.project_id != current.project_id:
+            raise ValueError("Literature search Study belongs to a different registered project")
+        citations = _search(ws, query, current, limit, client=client)
+        for field in Study.model_fields:
+            setattr(study, field, getattr(current, field))
+        return citations
+
+
+def _search(ws: Workspace, query: str, study: Study, limit: int, *, client: httpx.Client | None) -> list[Citation]:
     query = query.strip()
     if not query or len(query) > 1000:
         raise ValueError("Literature query must contain 1 to 1000 characters")
