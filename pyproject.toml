@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "paper-factory"
+version = "0.4.0"
+description = "Evidence-first local research and manuscript CLI"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = ["pydantic>=2.10,<3", "typer>=0.15,<1", "httpx>=0.28,<1", "beautifulsoup4>=4.14,<5"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10"]
+pdf = ["typst>=0.14,<1", "pypdf>=5,<7", "python-docx>=1.2,<2"]
+
+[project.scripts]
+paperfactory = "paper_factory.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["network: live external API or public repository integration"]

@@ -1,0 +1,7 @@
+Research claims should be linked to the observations that support them.
+A reproducible experiment records its input, command, environment and output.
+An accurate bibliography identifies a source without inventing its findings.
+A study can have useful results while still requiring careful scientific review.
+Research claims should be linked to the observations that support them.
+A reproducible experiment records its input, command, environment and output.
+
