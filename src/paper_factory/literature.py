@@ -153,6 +153,27 @@ def import_doi(ws: Workspace, doi: str, *, client: httpx.Client | None = None) -
         return _import(ws, doi, active_client)
 
 
+def import_into_study(
+    ws: Workspace,
+    doi: str,
+    study: Study,
+    *,
+    client: httpx.Client | None = None,
+) -> Citation:
+    """Resolve a DOI and link it without overwriting newer Study evidence."""
+    with ws.lock(f"study-{study.id}"):
+        current = ws.get("study", study.id, Study)
+        if study.project_id != current.project_id:
+            raise ValueError("Literature import Study belongs to a different registered project")
+        citation = import_doi(ws, doi, client=client)
+        if citation.id not in current.citation_ids:
+            current.citation_ids.append(citation.id)
+        ws.save("study", current)
+        for field in Study.model_fields:
+            setattr(study, field, getattr(current, field))
+        return citation
+
+
 def search(
     ws: Workspace,
     query: str,

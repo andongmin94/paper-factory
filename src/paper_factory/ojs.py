@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from . import __version__
 from .venue_policy import MAX_SOURCE_BYTES, _origin, _public_ip
 from .workspace import ensure_unlinked
 
@@ -279,7 +280,7 @@ class OJSClient:
         try:
             with self._client.stream(method, connection,
                     headers={"Host": canonical.host, "Authorization": "Bearer " + self._token,
-                             "Accept": "application/json", "Accept-Encoding": "identity", "User-Agent": "PaperFactory/0.4"},
+                             "Accept": "application/json", "Accept-Encoding": "identity", "User-Agent": f"PaperFactory/{__version__}"},
                     extensions={"sni_hostname": canonical.host}, follow_redirects=False, timeout=20,
                     json=payload, data=data, files=files) as response:
                 response_received = True
@@ -396,10 +397,13 @@ class OJSClient:
             raise OJSError("draft_locale_mismatch", status_code=200, reconciliation_required=True)
         return receipt
 
-    def upload_file(self, submission_id: int, path: Path, genre_id: int, file_stage: int = 2) -> OJSReceipt:
+    def upload_file(self, submission_id: int, path: Path, genre_id: int, file_stage: int = 2,
+                    *, expected_sha256: str | None = None) -> OJSReceipt:
         submission_id, genre_id = _positive(submission_id), _positive(genre_id)
         if type(file_stage) is not int or file_stage != 2:
             raise OJSError("unsupported_author_upload_stage")
+        if expected_sha256 is not None and (not isinstance(expected_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_sha256)):
+            raise OJSError("invalid_expected_upload_digest")
         try:
             path = Path(path)
             ensure_unlinked(path)
@@ -412,10 +416,15 @@ class OJSClient:
                 raise ValueError("Invalid upload size")
         except (ValueError, OSError, TypeError):
             raise OJSError("upload_file_invalid_or_too_large") from None
+        content_digest = hashlib.sha256(content).hexdigest()
+        if expected_sha256 is not None and content_digest != expected_sha256:
+            # HTTPX receives this immutable buffer, never a subsequently reopened
+            # path. A changed file must be rejected before sending any bytes.
+            raise OJSError("upload_bytes_differ_from_approved_digest")
         receipt = self._request("POST", f"/submissions/{submission_id}/files", mutation=True,
                                 data={"fileStage": str(file_stage), "genreId": str(genre_id)},
                                 files={"file": (path.name, content, mimetypes.guess_type(path.name)[0] or "application/octet-stream")},
-                                submission_id=submission_id, upload_sha256=hashlib.sha256(content).hexdigest())
+                                submission_id=submission_id, upload_sha256=content_digest)
         value = receipt.data
         if (not isinstance(value, dict) or type(value.get("id")) is not int or value["id"] <= 0 or
                 type(value.get("fileId")) is not int or value["fileId"] <= 0 or
@@ -466,7 +475,11 @@ class OJSClient:
 
     def validate_submission(self, submission_id: int) -> OJSReceipt:
         submission_id = _positive(submission_id)
-        receipt = self._request("PUT", f"/submissions/{submission_id}/submit", payload={"_validateOnly": True}, submission_id=submission_id)
+        # The documented 3.5 implementation is read-only with this flag, but an
+        # unrecognized installation may ignore it. Ambiguous outcomes therefore
+        # need the same conservative reconciliation treatment as final Submit.
+        receipt = self._request("PUT", f"/submissions/{submission_id}/submit", mutation=True,
+                                payload={"_validateOnly": True}, submission_id=submission_id)
         if receipt.data != []:
             # A mismatched installation may have ignored the validation flag.
             raise OJSError("unsupported_validation_response", status_code=200, reconciliation_required=True)

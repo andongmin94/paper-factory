@@ -6,7 +6,7 @@ import threading
 import httpx
 import pytest
 
-from paper_factory.literature import import_doi, search, verify_citation, verify_search
+from paper_factory.literature import import_doi, import_into_study, search, verify_citation, verify_search
 from paper_factory.models import Citation, Provenance, Study, StudyState
 from paper_factory.workspace import Workspace
 
@@ -145,6 +145,59 @@ def test_sequential_searches_merge_current_study_instead_of_overwriting_stale_sn
     assert stored.state == StudyState.EVIDENCE_READY and stored.human_subjects
     assert stale.literature_search_ids == stored.literature_search_ids
     assert all(verify_search(workspace, id, stored.id) == [] for id in stored.literature_search_ids)
+
+
+def test_doi_import_merges_current_study_instead_of_overwriting_stale_snapshot(workspace):
+    study = Study(project_id="project-test", title="Study", research_question="Question?")
+    workspace.save("study", study)
+    stale = study.model_copy(deep=True)
+
+    def handler(request):
+        if request.url.path == "/works":
+            return httpx.Response(200, json={"status": "ok", "message": {"items": [{"DOI": "10.1234/reproducible"}]}})
+        doi = "10.1234/second" if "second" in request.url.path else "10.1234/reproducible"
+        return httpx.Response(200, json=work(doi=doi))
+
+    with client(handler) as api:
+        searched = search(workspace, "actual prior query", study, client=api)
+        current = workspace.get("study", study.id, Study)
+        current.state = StudyState.EVIDENCE_READY
+        current.human_subjects = True
+        current.ethics_approval = "Author supplied approval reference"
+        current.novelty_status = "author_assessed"
+        workspace.save("study", current)
+        citation = import_into_study(workspace, "10.1234/second", stale, client=api)
+    stored = workspace.get("study", study.id, Study)
+    assert stored.literature_search_ids == study.literature_search_ids
+    assert stored.citation_ids == [searched[0].id, citation.id]
+    assert stored.state == StudyState.EVIDENCE_READY and stored.human_subjects
+    assert stored.ethics_approval == current.ethics_approval
+    assert stored.novelty_status == "author_assessed"
+    assert stale == stored
+    assert verify_search(workspace, stored.literature_search_ids[0], stored.id) == []
+    assert verify_citation(workspace, citation) == []
+
+
+def test_doi_import_held_study_lock_blocks_before_external_request(workspace):
+    study = Study(project_id="project-test", title="Study", research_question="Question?")
+    workspace.save("study", study)
+    with client(lambda _: pytest.fail("Locked Study reached provider")) as api:
+        with workspace.lock(f"study-{study.id}"), pytest.raises(ValueError, match="already running"):
+            import_into_study(workspace, "10.1234/reproducible", study, client=api)
+    assert workspace.get("study", study.id, Study) == study
+    assert workspace.list("citation", Citation) == []
+
+
+@pytest.mark.parametrize("registered", [False, True])
+def test_doi_import_rejects_unknown_or_mismatched_study_before_external_request(workspace, registered):
+    study = Study(project_id="project-test", title="Study", research_question="Question?")
+    if registered:
+        workspace.save("study", study)
+        study.project_id = "project-other"
+    with client(lambda _: pytest.fail("Invalid Study reached provider")) as api:
+        with pytest.raises(ValueError, match="different registered project" if registered else "Unknown study"):
+            import_into_study(workspace, "10.1234/reproducible", study, client=api)
+    assert workspace.list("citation", Citation) == []
 
 
 def test_competing_search_fails_explicitly_then_retry_preserves_both_searches(workspace):

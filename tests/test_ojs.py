@@ -102,7 +102,7 @@ def test_exact_official_vertical_routes_and_payloads(tmp_path):
         draft = client.create_draft(OJSDraft(sectionId=7, locale="en", userGroupId=6))
         assert draft.submission_id == 12 and draft.publication_id == 34
         assert client.get_submission(12).data["submissionProgress"] == "start"
-        uploaded = client.upload_file(12, path, 5)
+        uploaded = client.upload_file(12, path, 5, expected_sha256=hashlib.sha256(path.read_bytes()).hexdigest())
         assert uploaded.file_id == 56 and uploaded.data["fileId"] == 78
         assert uploaded.upload_sha256 == hashlib.sha256(path.read_bytes()).hexdigest()
         assert client.get_submission_files(12).data["items"][0]["id"] == 56
@@ -299,6 +299,23 @@ def test_wrong_validation_response_may_have_ignored_validate_only():
     assert caught.value.reconciliation_required
 
 
+@pytest.mark.parametrize("outcome", ["timeout", "server_error", "invalid_json"])
+def test_ambiguous_validation_put_requires_reconciliation_without_retry(outcome):
+    calls = []
+    def handler(request):
+        calls.append(json.loads(request.content))
+        if outcome == "timeout":
+            raise httpx.ReadTimeout("Synthetic server may have ignored validation flag " + TOKEN, request=request)
+        if outcome == "server_error":
+            return httpx.Response(500, json={"debug": TOKEN})
+        return httpx.Response(200, content=b"unexpected response")
+    with provider(handler) as client:
+        with pytest.raises(OJSError) as caught:
+            client.final_submit(12, approved=True)
+    assert calls == [{"_validateOnly": True}] and caught.value.reconciliation_required
+    assert TOKEN not in str(caught.value)
+
+
 @pytest.mark.parametrize("result", [submission(), submission(submissionProgress="", dateSubmitted=None), submission(id=13, submissionProgress="", dateSubmitted="2026-09-30 09:00:00")])
 def test_final_receipt_must_show_same_id_and_completed_submission(result):
     calls = []
@@ -335,6 +352,24 @@ def test_upload_link_is_rejected_before_read(tmp_path, monkeypatch):
     with provider(lambda request: pytest.fail("Linked upload must not call provider")) as client:
         with pytest.raises(OJSError, match="upload_file_invalid_or_too_large"):
             client.upload_file(12, path, 5)
+
+
+def test_upload_replacement_after_approval_is_blocked_before_provider_call(tmp_path):
+    path = tmp_path / "manuscript.pdf"
+    path.write_bytes(b"original approved manuscript bytes")
+    approved_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    path.write_bytes(b"replaced unapproved or private bytes")
+    with provider(lambda request: pytest.fail("Changed bytes must never be uploaded")) as client:
+        with pytest.raises(OJSError, match="upload_bytes_differ_from_approved_digest") as caught:
+            client.upload_file(12, path, 5, expected_sha256=approved_digest)
+    assert not caught.value.reconciliation_required
+
+
+@pytest.mark.parametrize("digest", ["short", "f" * 63, "F" * 64, True])
+def test_invalid_approved_upload_digest_is_rejected_before_read(tmp_path, digest):
+    with provider(lambda request: pytest.fail("Invalid digest must not make a provider request")) as client:
+        with pytest.raises(OJSError, match="invalid_expected_upload_digest"):
+            client.upload_file(12, tmp_path / "missing.pdf", 5, expected_sha256=digest)
 
 
 def test_live_client_enforces_tls_no_proxy_and_context_closes_secret(monkeypatch):

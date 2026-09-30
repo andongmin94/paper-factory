@@ -1,9 +1,13 @@
 # Implementation status
 
-Verified 2026-09-30 (Asia/Seoul). Version 0.4.0. The audited Phase 1–3 working
-path now includes evidence-linked revision, separately approved child manuscripts
-and immutable same-journal resubmission bundles. Phase 4's actual publisher upload
-adapter remains pending. No external upload or final Submit is performed.
+Verified 2026-09-30 (Asia/Seoul). Version 0.5.0. The audited research and venue
+path includes evidence-linked revision, separately approved child manuscripts,
+immutable same-journal resubmission bundles, rejected-feedback retargeting and
+explicit OJS 3.5 initial draft/upload/final-submit/reconciliation commands.
+No actual journal submission was performed during development. An authenticated
+acceptance run against the user's actual journal and review-round-aware revision
+uploads remain target-specific work. See [whole-project audit](project-audit.md)
+and [official OJS protocol research](submission-reuse.md).
 
 ## Working implementation
 
@@ -15,6 +19,7 @@ Commands: `--help`, `start`, `status`, `research`, `experiment plan/register/run
 `preprint settings/schema/prepare/record/check`,
 `revision schema/import/draft/plan/apply/experiment/check/response/response-check`,
 `revision submission prepare/attestation/attest/record/check`.
+Also: `submission portal schema/settings/prepare/upload/inspect/submit/reconcile/check`.
 
 | Component | Responsibility |
 | --- | --- |
@@ -30,6 +35,7 @@ Commands: `--help`, `start`, `status`, `research`, `experiment plan/register/run
 | preprints | Explicit policy/release review, local public derivatives and separately recorded posting facts |
 | revisions | Actual referee excerpts, new same-Study manuscript, verified additional experiments, response letter/change table/diff and immutable response audit |
 | revision_submission | Same-journal child package, separate revised factual attestation and confirmed resubmission on the original occupied slot |
+| ojs/portal | Official OJS 3.5 API, explicit reviewer-file delivery, remote inspection, durable write intents and receipt-backed final submission |
 
 No agent framework, fixed journal list, migration or provider fallback was added.
 Research/licensing: [Phase 1 reuse](reuse-decisions.md), [Phase 2 reuse](phase2-reuse.md),
@@ -324,6 +330,8 @@ no account or undocumented API is used.
 The next useful increment is one substantive existing analysis and fully reviewed
 real venue, extending only the required figure/supplement/template support. The
 revision workflow, additional experiment linkage and response-to-reviewers are
-implemented. Phase 4 still needs an actual target publisher adapter and verified
-revision portal requirements. Final external Submit remains an explicitly
-authorized author action. No automatic journal/arXiv upload adapter is implemented.
+implemented, including rejected-feedback retargeting and an OJS 3.5 initial
+submission adapter. Actual target credentials, custom requirements and revision
+review-round uploads need verified acceptance. Final external Submit remains an
+explicitly authorized author action. ScholarOne, Editorial Manager and arXiv upload
+adapters are not implemented.

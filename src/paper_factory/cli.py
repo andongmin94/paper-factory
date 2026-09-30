@@ -11,7 +11,7 @@ import typer
 
 from . import __version__
 from . import experiments, integrity, literature, manuscript, project, research as research_engine
-from . import venues, venue_policy, venue_compiler, submission_package, publication, preprints, revisions, revision_submission
+from . import venues, venue_policy, venue_compiler, submission_package, publication, preprints, revisions, revision_submission, portal
 from .evidence import claims_for_run, study_readiness_errors
 from .models import ExperimentManifest, ExperimentRun, Paper, Project, Provenance, Study, Submission
 from .workspace import Workspace, ensure_unlinked, write_json
@@ -27,6 +27,7 @@ submission_app = typer.Typer(no_args_is_help=True, help="Prepare packages, reser
 preprint_app = typer.Typer(no_args_is_help=True, help="Prepare permitted preprints and record actual postings separately from peer review.")
 revision_app = typer.Typer(no_args_is_help=True, help="Link actual referee comments to verified manuscript changes and responses.")
 revision_submission_app = typer.Typer(no_args_is_help=True, help="Prepare and record a revised delivery within the original journal submission.")
+portal_app = typer.Typer(no_args_is_help=True, help="Explicit OJS 3.5 draft upload, inspected final Submit and read-only reconciliation.")
 app.add_typer(experiment_app, name="experiment")
 app.add_typer(literature_app, name="literature")
 app.add_typer(manuscript_app, name="manuscript")
@@ -37,6 +38,7 @@ app.add_typer(submission_app, name="submission")
 app.add_typer(preprint_app, name="preprint")
 app.add_typer(revision_app, name="revision")
 revision_app.add_typer(revision_submission_app, name="submission")
+submission_app.add_typer(portal_app, name="portal")
 
 
 def handled(function):
@@ -80,7 +82,7 @@ def editable_destination(ws: Workspace, destination: Path) -> Path:
     """Keep editable configuration outside originals and scientific artifacts."""
     ensure_unlinked(destination.expanduser())
     target = destination.expanduser().resolve()
-    protected = [ws.root / name for name in ("source", "runs", "freezes", "manuscripts", "submissions", "publication", "preprints", "revisions", "revision-deliveries")]
+    protected = [ws.root / name for name in ("source", "runs", "freezes", "manuscripts", "submissions", "publication", "preprints", "revisions", "revision-deliveries", "portals")]
     original = Path(ws.latest("project", Project).source)
     if original.is_dir():
         protected.append(original.resolve())
@@ -117,7 +119,8 @@ def status(ctx: typer.Context):
     preprint_records = ws.list("preprint", preprints.Preprint)
     revision_records = ws.list("revision", revisions.Revision)
     deliveries = ws.list("revision_delivery", revision_submission.RevisionDelivery)
-    output({"version": __version__, "scope": "Phase 1–3 and evidence-linked revision with local resubmission bundles", "workspace": str(ws.root), "project": ws.latest("project", Project).name, "studies": [{"id": study.id, "title": study.title, "state": study.state, "novelty": study.novelty_status, "experiment_issues": study_readiness_errors(ws, study.id)} for study in studies], "papers": [{"id": paper.id, "state": paper.state} for paper in papers], "experiments": {"succeeded": sum(run.status == "SUCCEEDED" for run in runs), "failed": sum(run.status == "FAILED" for run in runs), "running": sum(run.status == "RUNNING" for run in runs)}, "venues": len(ws.list("venue", venues.Venue)), "policies": len(ws.list("policy", venue_policy.VenuePolicy)), "submissions": [record.model_dump(mode="json") for record in submissions], "publication_history": history, "revisions": [record.model_dump(mode="json") for record in revision_records], "revision_deliveries": [revision_submission.check(ws, record) for record in deliveries], "preprints": [record.model_dump(mode="json") for record in preprint_records], "external_submission_recorded": any(report.get("external_submission_recorded") for report in history), "external_submission_performed": False})
+    portal_reports = [portal.check(ws, plan) for plan in portal._plans(ws)]
+    output({"version": __version__, "scope": "Evidence-linked research, venue packages, revision and explicit OJS 3.5 submission", "workspace": str(ws.root), "project": ws.latest("project", Project).name, "studies": [{"id": study.id, "title": study.title, "state": study.state, "novelty": study.novelty_status, "experiment_issues": study_readiness_errors(ws, study.id)} for study in studies], "papers": [{"id": paper.id, "state": paper.state} for paper in papers], "experiments": {"succeeded": sum(run.status == "SUCCEEDED" for run in runs), "failed": sum(run.status == "FAILED" for run in runs), "running": sum(run.status == "RUNNING" for run in runs)}, "venues": len(ws.list("venue", venues.Venue)), "policies": len(ws.list("policy", venue_policy.VenuePolicy)), "submissions": [record.model_dump(mode="json") for record in submissions], "publication_history": history, "revisions": [record.model_dump(mode="json") for record in revision_records], "revision_deliveries": [revision_submission.check(ws, record) for record in deliveries], "preprints": [record.model_dump(mode="json") for record in preprint_records], "portals": portal_reports, "external_submission_recorded": any(report.get("external_submission_recorded") for report in history), "external_submission_performed": any(report.get("submission_confirmed") for report in portal_reports)})
 
 
 @app.command()
@@ -148,10 +151,7 @@ def search_literature(ctx: typer.Context, query: str, study: Annotated[str | Non
 def import_doi(ctx: typer.Context, doi: str, study: Annotated[str | None, typer.Option()] = None):
     ws = workspace(ctx)
     selected = selected_study(ws, study)
-    citation = literature.import_doi(ws, doi)
-    if citation.id not in selected.citation_ids:
-        selected.citation_ids.append(citation.id)
-    ws.save("study", selected)
+    citation = literature.import_into_study(ws, doi, selected)
     output(citation.model_dump())
 
 
@@ -477,7 +477,7 @@ def revision_schema():
 def import_revision(ctx: typer.Context, submission: str,
                     spec: Annotated[Path, typer.Argument(exists=True, dir_okay=False)],
                     report: Annotated[Path, typer.Argument(exists=True, dir_okay=False)],
-                    confirm: Annotated[bool, typer.Option("--confirm", help="Confirm actual referee excerpts and their manuscript targets.")] = False):
+                    confirm: Annotated[bool, typer.Option("--confirm", help="Confirm actual referee excerpts and targets after a journal REVISION or REJECTED decision.")] = False):
     ws = workspace(ctx)
     record, root = revisions.import_review(ws, ws.get("submission", submission, Submission), spec, report, confirmed=confirm)
     output({"revision": record.model_dump(mode="json"), "directory": str(root),
@@ -633,6 +633,115 @@ def record_revision_submission(ctx: typer.Context, delivery: str,
 def check_revision_submission(ctx: typer.Context, delivery: str):
     ws = workspace(ctx)
     report = revision_submission.check(ws, ws.get("revision_delivery", delivery, revision_submission.RevisionDelivery))
+    output(report)
+    if not report["passed"]:
+        raise typer.Exit(1)
+
+
+
+
+@portal_app.command("schema")
+def portal_schema():
+    output(portal.PortalSettings.model_json_schema())
+
+
+@portal_app.command("settings")
+@handled
+def portal_settings(ctx: typer.Context, submission: str,
+                    api_url: Annotated[str, typer.Option(help="Actual reviewed journal HTTPS /api/v1 endpoint.")],
+                    section: Annotated[int, typer.Option(min=1, help="Actual OJS section ID.")],
+                    locale: Annotated[str, typer.Option(help="Actual journal submission locale, e.g. en.")],
+                    genre: Annotated[int, typer.Option(min=1, help="Actual manuscript genre ID; inspect its reviewer visibility.")],
+                    remote: Annotated[int | None, typer.Option(min=1, help="Existing draft ID instead of creating a new draft.")] = None,
+                    path: Annotated[Path | None, typer.Option("--output")] = None):
+    ws = workspace(ctx)
+    record = ws.get("submission", submission, Submission)
+    package_root = ws.path(f"submissions/{record.id}/package")
+    readme = json.loads((package_root / "package-readme.json").read_bytes())
+    manuscripts = readme["accepted_manuscript_files"]
+    if not manuscripts:
+        raise ValueError("Ready package has no accepted manuscript format")
+    values = portal.PortalSettings(connection=portal.OJSSettings(api_url=api_url),
+        draft=portal.OJSDraft(sectionId=section, locale=locale),
+        uploads=[portal.Upload(path=manuscripts[0], genre_id=genre)], remote_submission_id=remote)
+    destination = editable_destination(ws, path or ws.root / "portal-settings" / f"{record.id}.json")
+    write_json(destination, values)
+    output({"settings": str(destination), "notice": "Review the actual journal version, context, section, locale and reviewer genre. No credentials or uploads are written."})
+
+
+@portal_app.command("prepare")
+@handled
+def prepare_portal(ctx: typer.Context, submission: str,
+                   path: Annotated[Path, typer.Argument(exists=True, dir_okay=False)]):
+    ws = workspace(ctx)
+    ensure_unlinked(path)
+    plan = portal.prepare(ws, ws.get("submission", submission, Submission),
+        portal.PortalSettings.model_validate_json(path.read_bytes()))
+    output({"plan": plan.model_dump(mode="json"), "external_upload_performed": False,
+        "next": f"paperfactory submission portal upload {plan.id} --upload"})
+
+
+@portal_app.command("upload")
+@handled
+def upload_portal(ctx: typer.Context, plan: str,
+                  upload: Annotated[bool, typer.Option("--upload", help="Authorize sending reviewed files and metadata to the actual journal.")] = False):
+    if not upload:
+        raise ValueError("Remote draft creation and upload require explicit --upload")
+    ws = workspace(ctx)
+    record = ws.get("portal_plan", plan, portal.StoredPlan)
+    with portal.client_from_environment(record) as client:
+        output(portal.connect(ws, record, client, upload=upload))
+
+
+@portal_app.command("inspect")
+@handled
+def inspect_portal(ctx: typer.Context, plan: str):
+    ws = workspace(ctx)
+    record = ws.get("portal_plan", plan, portal.StoredPlan)
+    with portal.client_from_environment(record) as client:
+        output(portal.inspect(ws, record, client))
+
+
+@portal_app.command("submit")
+@handled
+def submit_portal(ctx: typer.Context, plan: str,
+                  attestation: Annotated[Path, typer.Argument(exists=True, dir_okay=False)],
+                  review_sha256: Annotated[str, typer.Option(help="Exact hash of the remote snapshot you inspected.")],
+                  approve: Annotated[bool, typer.Option("--approve", help="Confirm all six factual author declarations and the inspected journal material.")] = False,
+                  submit: Annotated[bool, typer.Option("--submit", help="Perform the actual journal's final Submit.")] = False,
+                  confirm_copyright: Annotated[bool, typer.Option("--confirm-copyright", help="Explicitly accept this journal's reviewed copyright terms.")] = False):
+    if not approve or not submit:
+        raise ValueError("Actual final submission requires both --approve and --submit after factual and remote review")
+    ws = workspace(ctx)
+    ensure_unlinked(attestation)
+    record = ws.get("portal_plan", plan, portal.StoredPlan)
+    values = publication.AttestationInput.model_validate_json(attestation.read_bytes())
+    with portal.client_from_environment(record) as client:
+        output(portal.submit(ws, record, client, values, review_sha256=review_sha256,
+            approve=approve, final_submit=submit, confirm_copyright=confirm_copyright))
+
+
+@portal_app.command("reconcile")
+@handled
+def reconcile_portal(ctx: typer.Context, plan: str,
+                     actor: Annotated[str, typer.Option(help="Approved author's actual identity.")],
+                     remote: Annotated[int | None, typer.Option(min=1, help="Explicitly inspected draft ID after uncertain creation.")] = None,
+                     confirm: Annotated[bool, typer.Option("--confirm", help="Confirm a remote draft or preserved local recovery evidence.")] = False,
+                     recover_local: Annotated[bool, typer.Option("--recover-local", help="Import verified preserved event evidence after a failed local database acknowledgement; requires --confirm.")] = False):
+    if recover_local and not confirm:
+        raise ValueError("Local delivery event recovery requires --confirm after reviewing the preserved evidence")
+    ws = workspace(ctx)
+    record = ws.get("portal_plan", plan, portal.StoredPlan)
+    with portal.client_from_environment(record) as client:
+        output(portal.reconcile(ws, record, client, actor=actor, remote_submission_id=remote,
+            confirm=confirm, recover_local=recover_local))
+
+
+@portal_app.command("check")
+@handled
+def check_portal(ctx: typer.Context, plan: str):
+    ws = workspace(ctx)
+    report = portal.check(ws, ws.get("portal_plan", plan, portal.StoredPlan))
     output(report)
     if not report["passed"]:
         raise typer.Exit(1)

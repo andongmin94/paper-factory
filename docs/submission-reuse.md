@@ -56,6 +56,13 @@ fields and redacts credential fields, including ORCID access/refresh tokens.
 [publication mapping source](https://github.com/pkp/pkp-lib/blob/8809a197de7c5f677428172bf5e6b4a5013460d6/classes/publication/maps/Schema.php),
 [author schema](https://github.com/pkp/pkp-lib/blob/8809a197de7c5f677428172bf5e6b4a5013460d6/schemas/author.json).
 
+Title and abstract support HTML. The official abstract editor is rich text and
+the public article template renders sanitized HTML; it does not interpret
+Markdown emphasis. Generate numeric prose from verified typed claims and the
+existing number formatter, then escape literal canonical text for HTML.
+[Official title/abstract form](https://github.com/pkp/pkp-lib/blob/8809a197de7c5f677428172bf5e6b4a5013460d6/classes/components/forms/publication/TitleAbstractForm.php),
+[official article template](https://github.com/pkp/ojs/blob/040e9163780bcf9ca5c614d8588688f6c324d4da/templates/frontend/objects/article_details.tpl).
+
 The file response distinguishes the submission-file resource `id` from storage
 `fileId`, plus submission ID, genre, stage and multilingual `name`. The server
 fills an omitted name from the actual upload filename. Stage 2 is initial
@@ -71,6 +78,12 @@ local observation, without guessing the journal's clock zone.
 ## Local approval and transport boundaries
 
 Persist only a `PF_OJS_API_TOKEN` environment variable reference, never the token.
+The official middleware accepts `Authorization: Bearer ...`, validates the JWT
+with the journal's configured `security.api_key_secret`, and requires an enabled
+API key belonging to a valid user. The local client uses that documented bearer
+form and never sends credentials in the URL.
+[Official API-token middleware](https://github.com/pkp/pkp-lib/blob/8809a197de7c5f677428172bf5e6b4a5013460d6/classes/middleware/DecodeApiTokenWithValidation.php).
+
 Use bearer authentication with verified HTTPS, public DNS pinning and original
 hostname TLS verification, no environment proxies, no redirects, bounded JSON
 and file sizes, and no write retries. An unexpected success status, timeout,
@@ -79,6 +92,8 @@ not permission to create a replacement draft or upload again. Preserve safe
 operation metadata for reconciliation; provider error text and request bodies
 must not appear in errors. The final local gate must bind author review to the
 exact venue, package bytes, metadata, author roster and current provider draft.
+The uploader compares its immutable byte buffer with the approved package hash
+before sending anything; checking the returned hash alone would be too late.
 
 OJS/PKP source is GPL v3; the client implements the public HTTP protocol
 independently and copies no PHP implementation. This remains a local manuscript

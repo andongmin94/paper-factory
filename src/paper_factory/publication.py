@@ -455,6 +455,32 @@ def active_for_study(ws: Workspace, study_id: str) -> list[Submission]:
             and _get(db, "paper", submission.paper_id, Paper).study_id == study_id]
 
 
+def assert_current_attestation(ws: Workspace, submission: Submission,
+        *, db: sqlite3.Connection | None = None) -> PublicationEvent:
+    """Validate final author facts before an outbound initial submission action.
+
+    An imported receipt remains an observed fact. A new outbound action must
+    match the latest attestation, including preprints recorded since it was made.
+    Pass the caller's write transaction to keep this boundary atomic.
+    """
+    if db is None:
+        with ws._database() as connection:
+            return assert_current_attestation(ws, submission, db=connection)
+    submissions, histories = _audit(ws, db)
+    current = submissions.get(submission.id)
+    history = histories.get(submission.id, [])
+    if current is None or current.state != SubmissionState.AUTHOR_ATTESTED or not history or history[-1].kind != "attestation":
+        raise ValueError("Outbound submission requires the current final author attestation")
+    event = history[-1]
+    paper = _get(db, "paper", current.paper_id, Paper)
+    values = AttestationInput.model_validate(event.values["attestation"])
+    policy = _get(db, "policy", event.values["policy_id"], VenuePolicy)
+    observed = _review_preprints(ws, paper, values, policy, live_boundary=True, db=db)
+    if observed != event.values["preprint_records"]:
+        raise ValueError("Existing preprint posting facts changed after final author attestation")
+    return event
+
+
 def _evidence_signature(ws: Workspace, paper: Paper) -> tuple[str, set[tuple]]:
     snapshot = frozen_workspace(ws, paper)
     study = snapshot.get("study", paper.study_id, Study)
@@ -570,6 +596,8 @@ def cancel_attestation(ws: Workspace, submission: Submission, actor: str, reason
         current = submissions.get(submission.id)
         if current is None or current.state != SubmissionState.AUTHOR_ATTESTED:
             raise ValueError("Only an unused author attestation reservation can be cancelled")
+        from .portal import assert_cancellable
+        assert_cancellable(ws, current, db=db)
         paper = _get(db, "paper", current.paper_id, Paper)
         event = _append(ws, db, current, paper, histories[current.id], kind="cancellation",
             target=SubmissionState.SUBMISSION_READY, actor=values.actor, values=values.model_dump(mode="json"))

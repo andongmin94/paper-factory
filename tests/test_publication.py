@@ -367,6 +367,52 @@ def test_existing_preprint_requires_complete_explicit_review_against_target_poli
     assert not publication.check(ws, submission)["passed"]
 
 
+def test_new_posting_blocks_outbound_action_but_does_not_erase_observed_submission(prepared, mock_conversion, tmp_path):
+    from paper_factory import preprints
+    ws, paper, submission, handler = ready_case(prepared)
+    event = attest(ws, submission, handler)
+    assert publication.assert_current_attestation(ws, submission).id == event.id
+    receipt_path = tmp_path / "new-posting.json"
+    write_json(receipt_path, preprints.PostingReceipt(paper_id=paper.id, remote_identifier="new-fixture-preprint",
+        source_url="https://preprints.example.net/new-fixture-preprint", posted_at=now(), recorded_by=paper.approved_by,
+        statement="Synthetic observation of a preprint posted after final author attestation.", content_digest=paper.freeze_digest))
+    evidence = tmp_path / "new-posting.txt"
+    evidence.write_text("Synthetic newly observed posting evidence.", encoding="utf-8")
+    preprints.record_posting(ws, receipt_path, evidence, confirmed=True)
+    with ws._database() as db:
+        db.execute("BEGIN IMMEDIATE")
+        with pytest.raises(ValueError, match="preprint"):
+            publication.assert_current_attestation(ws, submission, db=db)
+    assert publication.check(ws, submission)["passed"]
+    # An actual imported journal observation remains recordable even when the
+    # author did not use Paper Factory's outbound preparation checks.
+    receipt(ws, submission, SubmissionState.SUBMITTED, tmp_path)
+    assert publication.check(ws, submission)["state"] == SubmissionState.SUBMITTED
+    with pytest.raises(ValueError, match="current final author attestation"):
+        publication.assert_current_attestation(ws, submission)
+
+
+def test_outbound_boundary_rechecks_the_author_reviewed_preprint_set(prepared, mock_conversion, tmp_path):
+    from paper_factory import preprints
+    ws, paper, submission, handler = ready_case(prepared)
+    receipt_path = tmp_path / "reviewed-posting.json"
+    write_json(receipt_path, preprints.PostingReceipt(paper_id=paper.id, remote_identifier="reviewed-fixture-preprint",
+        source_url="https://preprints.example.net/reviewed-fixture-preprint", posted_at=now(), recorded_by=paper.approved_by,
+        statement="Synthetic observed posting reviewed against the target journal policy.", content_digest=paper.freeze_digest))
+    evidence = tmp_path / "reviewed-posting.txt"
+    evidence.write_text("Synthetic reviewed posting evidence.", encoding="utf-8")
+    posting, _ = preprints.record_posting(ws, receipt_path, evidence, confirmed=True)
+    policy = ws.get("policy", submission.policy_id, VenuePolicy)
+    values = author_values()
+    values.preprint_review = PreprintReview(decision="allowed", preprint_ids=[posting.id], evidence=policy.evidence["preprint_policy"])
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        event = publication.attest(ws, submission, values, client=client)
+    assert publication.assert_current_attestation(ws, submission).id == event.id
+    publication.cancel_attestation(ws, submission, paper.approved_by, "This unsubmitted fixture author attestation is cancelled.")
+    with pytest.raises(ValueError, match="current final author attestation"):
+        publication.assert_current_attestation(ws, submission)
+
+
 def test_deleting_preprint_record_cannot_hide_posting_before_first_attestation(prepared, mock_conversion, tmp_path):
     from paper_factory import preprints
     ws, paper, submission, handler = ready_case(prepared)
