@@ -1,0 +1,44 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        shard: [0, 1, 2, 3]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Install project and actual document converters
+        run: python -m pip install -e ".[dev,pdf]" pypandoc_binary
+      - name: Check dependencies and CLI
+        run: |
+          python -m pip check
+          python -m compileall -q src
+          paperfactory --help
+      - name: Run complete test shard
+        shell: python
+        env:
+          TEST_SHARD: ${{ matrix.shard }}
+        run: |
+          import os, pathlib, subprocess, sys
+          # Every present/future test file belongs to exactly one shard.
+          files = sorted(pathlib.Path('tests').glob('test_*.py'))
+          selected = files[int(os.environ['TEST_SHARD'])::4]
+          if not selected:
+              raise SystemExit('Empty test shard')
+          raise SystemExit(subprocess.call([sys.executable, '-m', 'pytest', '-q', '--tb=short', *map(str, selected)]))
