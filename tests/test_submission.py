@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import re
 import shutil
 import sys
 from types import SimpleNamespace
@@ -180,6 +181,7 @@ def test_final_cited_pdf_can_exceed_word_limit_even_when_source_fits(prepared, m
         if output.suffix == ".pdf":
             with output.open("a", encoding="utf-8") as stream:
                 stream.write("\n" + " cited " * 3000)
+            result["output_sha256"] = digest_file(output)
         return result
 
     monkeypatch.setattr(venue_compiler, "convert", expanded_citations)
@@ -241,6 +243,49 @@ def test_rebound_hashes_cannot_hide_changed_quantitative_results(prepared, mock_
     assert any("approved evidence" in issue for issue in venue_compiler.verify_compilation(ws, submission))
 
 
+@pytest.mark.parametrize("format", ["pdf", "tex", "docx"])
+def test_rebound_native_export_must_match_its_conversion_receipt(prepared, mock_conversion, format):
+    ws, _, submission, root, _ = compile_case(prepared)
+    path = root / f"manuscript.{format}"
+    if format == "docx":
+        with zipfile.ZipFile(path) as archive:
+            files = {name: archive.read(name) for name in archive.namelist()}
+        files["word/document.xml"], count = re.subn(rb"\b1\b", b"999", files["word/document.xml"], count=1)
+        with zipfile.ZipFile(path, "w") as archive:
+            for name, content in files.items():
+                archive.writestr(name, content)
+    else:
+        changed, count = re.subn(r"\b1\b", "999", path.read_text(encoding="utf-8"), count=1)
+        path.write_text(changed, encoding="utf-8")
+    assert count == 1  # Same word count, different measured result.
+    compilation = ws.get("compilation", submission.id, Compilation)
+    compilation.files[path.name] = digest_file(path)
+    write_json(root / "compliance.json", compilation)
+    submission.compilation_digest = digest_file(root / "compliance.json")
+    ws.save("submission", submission)
+    ws.save("compilation", compilation)
+    assert any("Conversion receipt" in issue for issue in venue_compiler.verify_compilation(ws, submission))
+
+
+@pytest.mark.parametrize("mutation", ["input", "formats"])
+def test_rebound_conversion_receipt_must_retain_the_actual_source_and_formats(prepared, mock_conversion, mutation):
+    ws, _, submission, root, _ = compile_case(prepared)
+    path = root / "conversion.json"
+    reports = json.loads(path.read_bytes())
+    if mutation == "input":
+        reports["pdf"]["input_sha256"] = "0" * 64
+    else:
+        reports.pop("docx")
+    write_json(path, reports)
+    compilation = ws.get("compilation", submission.id, Compilation)
+    compilation.files[path.name] = digest_file(path)
+    write_json(root / "compliance.json", compilation)
+    submission.compilation_digest = digest_file(root / "compliance.json")
+    ws.save("submission", submission)
+    ws.save("compilation", compilation)
+    assert any("Conversion receipt" in issue for issue in venue_compiler.verify_compilation(ws, submission))
+
+
 def test_rebound_hashes_cannot_remove_required_compliance_blockers(prepared, mock_conversion):
     ws, _, submission, root, _ = compile_case(prepared, settings_change=lambda settings: settings["declarations"].pop("funding"))
     compilation = ws.get("compilation", submission.id, Compilation)
@@ -300,6 +345,44 @@ def test_failed_conversion_is_preserved_and_can_be_retried(prepared, mock_conver
     assert not venue_compiler.verify_compilation(ws, compiled)
 
 
+@pytest.mark.parametrize("after_commit", [False, True])
+def test_compilation_commit_outcome_preserves_or_rolls_back_its_artifacts(prepared, mock_conversion, fail_transaction, after_commit):
+    ws, venue, paper, settings, policy_for = prepared
+    policy, handler = policy_for()
+    candidate = venue_compiler.select(ws, paper, venue, policy)
+    fail_transaction(ws, "compilation", after_commit=after_commit)
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(OSError, match="failure"):
+            venue_compiler.compile_submission(ws, candidate, settings, client=client)
+        current = ws.get("submission", candidate.id, Submission)
+        if after_commit:
+            assert current.state == SubmissionState.VENUE_COMPILED
+            assert not venue_compiler.verify_compilation(ws, current)
+        else:
+            assert current.state == SubmissionState.VENUE_SELECTED
+            assert not ws.path(f"submissions/{candidate.id}/compiled").exists()
+            current, _ = venue_compiler.compile_submission(ws, current, settings, client=client)
+            assert not venue_compiler.verify_compilation(ws, current)
+
+
+@pytest.mark.parametrize("after_commit", [False, True])
+def test_package_commit_outcome_preserves_or_rolls_back_its_artifacts(prepared, mock_conversion, fail_transaction, after_commit):
+    ws, _, candidate, _, handler = compile_case(prepared)
+    fail_transaction(ws, "package", after_commit=after_commit)
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(OSError, match="failure"):
+            submission_package.build(ws, candidate, client=client)
+        current = ws.get("submission", candidate.id, Submission)
+        if after_commit:
+            assert current.state == SubmissionState.SUBMISSION_READY
+            assert submission_package.verify(ws, current)["ready"]
+        else:
+            assert current.state == SubmissionState.VENUE_COMPILED
+            assert not ws.path(f"submissions/{candidate.id}/package").exists()
+            package, _ = submission_package.build(ws, current, client=client)
+            assert package.ready
+
+
 def test_package_readiness_cannot_diverge_from_candidate_state(prepared, mock_conversion):
     ws, _, submission, _, handler = compile_case(prepared)
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
@@ -347,6 +430,7 @@ def test_exported_identity_metadata_blocks_blind_readiness(prepared, mock_conver
             else:
                 with zipfile.ZipFile(output, "a") as archive:
                     archive.writestr("docProps/custom.xml", "<creator>Fixture [Author]</creator>")
+            result["output_sha256"] = digest_file(output)
         return result
 
     monkeypatch.setattr(venue_compiler, "convert", identifying)
@@ -358,10 +442,7 @@ def test_exported_identity_metadata_blocks_blind_readiness(prepared, mock_conver
 
 
 @pytest.mark.parametrize("blind", [False, True])
-def test_real_pandoc_typst_compile_creates_readable_pdf(prepared, blind):
-    pandoc = Path(__file__).parents[1] / ".venv/Lib/site-packages/pypandoc/files/pandoc.exe"
-    if not pandoc.is_file():
-        pytest.skip("Bundled test Pandoc executable is unavailable")
+def test_real_pandoc_typst_compile_creates_readable_pdf(prepared, blind, pandoc):
     pytest.importorskip("typst")
     from pypdf import PdfReader
     ws, venue, paper, settings_path, policy_for = prepared

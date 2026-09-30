@@ -1,5 +1,8 @@
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+import json
+import re
+import shutil
 import sqlite3
 import zipfile
 
@@ -224,6 +227,31 @@ def test_rebound_artifact_hashes_cannot_hide_scientific_drift(preprint_case):
     assert not report["valid"] and any("frozen scientific manuscript" in error for error in report["errors"])
 
 
+@pytest.mark.parametrize("mutation", ["output", "input", "formats"])
+def test_rebound_preprint_exports_must_match_their_conversion_receipts(preprint_case, mutation):
+    ws, _, _, _, _, _ = preprint_case
+    record, root = prepare_case(preprint_case)
+    path = root / "conversion.json"
+    if mutation == "output":
+        path = root / "manuscript.pdf"
+        changed, count = re.subn(r"\b1\b", "999", path.read_text(encoding="utf-8"), count=1)
+        assert count == 1
+        path.write_text(changed, encoding="utf-8")
+    else:
+        reports = json.loads(path.read_bytes())
+        if mutation == "input":
+            reports["pdf"]["input_sha256"] = "0" * 64
+        else:
+            reports.pop("tex")
+        write_json(path, reports)
+    record.files[path.name] = digest_file(path)
+    write_json(root / "manifest.json", preprints._preparation_manifest(record))
+    record.manifest_sha256 = digest_file(root / "manifest.json")
+    ws.save("preprint", record)
+    report = preprints.check(ws, record)
+    assert not report["valid"] and any("Conversion receipt" in error for error in report["errors"])
+
+
 def test_active_venue_cannot_be_bypassed_and_later_attestation_revokes_other_permission(preprint_case, monkeypatch):
     ws, paper, policy, _, _, _ = preprint_case
     active = Submission(paper_id=paper.id, venue_id="another-venue", policy_id=policy.id,
@@ -303,6 +331,46 @@ def test_preparation_database_failure_rolls_back_published_bundle_and_can_retry(
     assert preprints.check(ws, record)["upload_authorized"]
 
 
+def test_preparation_acknowledgement_failure_keeps_committed_bundle(preprint_case, fail_transaction):
+    ws, _, _, _, _, _ = preprint_case
+    fail_transaction(ws, "preprint", after_commit=True)
+    with pytest.raises(OSError, match="after durable commit"):
+        prepare_case(preprint_case)
+    record = ws.latest("preprint", Preprint)
+    assert preprints.check(ws, record)["upload_authorized"]
+
+
+@pytest.mark.parametrize("prepared_posting", [False, True])
+def test_posting_acknowledgement_failure_keeps_actual_receipt_evidence(preprint_case, tmp_path, fail_transaction, prepared_posting):
+    ws, _, _, _, _, _ = preprint_case
+    prepared = prepare_case(preprint_case)[0] if prepared_posting else None
+    receipt, evidence, _ = receipt_case(preprint_case, tmp_path, prepared)
+    fail_transaction(ws, "preprint", after_commit=True)
+    with pytest.raises(OSError, match="after durable commit"):
+        preprints.record_posting(ws, receipt, evidence, confirmed=True)
+    record = ws.latest("preprint", Preprint)
+    assert record.state == "PREPRINTED"
+    assert preprints.check(ws, record)["posting_recorded"]
+    assert ws.path(f"preprints/{record.id}/posting/evidence.bin").read_bytes() == evidence.read_bytes()
+
+
+def test_followup_posting_cannot_make_committed_preparation_look_uncommitted(preprint_case, tmp_path, fail_transaction):
+    ws, _, _, _, _, _ = preprint_case
+
+    def confirm_followup():
+        record = ws.latest("preprint", Preprint)
+        receipt, evidence, _ = receipt_case(preprint_case, tmp_path, record)
+        preprints.record_posting(ws, receipt, evidence, confirmed=True)
+
+    fail_transaction(ws, "preprint", after_commit=True, on_commit=confirm_followup)
+    with pytest.raises(OSError, match="after durable commit"):
+        prepare_case(preprint_case)
+    record = ws.latest("preprint", Preprint)
+    report = preprints.check(ws, record)
+    assert report["valid"] and report["posting_recorded"]
+    assert ws.path(f"preprints/{record.id}/manuscript.pdf").is_file()
+
+
 def test_invalid_receipt_dates_and_private_hosts_are_rejected(preprint_case, tmp_path):
     _, _, _, _, _, _ = preprint_case
     _, _, receipt = receipt_case(preprint_case, tmp_path)
@@ -334,6 +402,7 @@ def test_deleted_posting_index_cannot_hide_existing_external_facts(preprint_case
 def test_missing_committed_preprint_artifacts_fail_registry_audit(preprint_case):
     ws, _, _, _, _, _ = preprint_case
     record, root = prepare_case(preprint_case)
-    preprints._remove_published(ws, root)
+    assert root.resolve().is_relative_to(ws.root.resolve())
+    shutil.rmtree(root)
     with pytest.raises(ValueError, match="missing or orphaned"):
         preprints.audit_registry(ws)

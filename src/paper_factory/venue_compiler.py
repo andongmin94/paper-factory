@@ -13,7 +13,7 @@ from pathlib import Path
 import httpx
 from pydantic import Field, field_validator
 
-from .conversion import convert
+from .conversion import convert, verify_receipts
 from .integrity import frozen_workspace
 from .manuscript import Document, claim_text, escape_md, number_text
 from .models import Citation, Claim, Paper, PaperState, Record, Submission, SubmissionState, now, transition_submission, uid
@@ -306,9 +306,10 @@ def compile_submission(ws: Workspace, submission: Submission, settings_path: Pat
             files = {path.relative_to(stage).as_posix(): digest_file(path) for path in stage.rglob("*") if path.is_file()}
             compilation = Compilation(id=submission.id, paper_id=paper.id, policy_id=policy.id, canonical_digest=paper.freeze_digest, settings_sha256=digest_file(stage / "settings.json"), files=files, errors=list(dict.fromkeys(errors)), warnings=warnings, word_counts=counts)
             write_json(stage / "compliance.json", compilation)
+            compilation_digest = digest_file(stage / "compliance.json")
             ws.rename_artifact(stage, destination)
             published = True
-            submission.compilation_digest = digest_file(destination / "compliance.json")
+            submission.compilation_digest = compilation_digest
             transition_submission(submission, SubmissionState.VENUE_COMPILED)
             with ws._database() as db:
                 for kind, record in (("compilation", compilation), ("submission", submission)):
@@ -316,7 +317,9 @@ def compile_submission(ws: Workspace, submission: Submission, settings_path: Pat
             return submission, destination
         except Exception as exc:
             if published:
-                shutil.rmtree(destination)
+                ws.discard_uncommitted_artifact(destination, kind="submission",
+                    record_id=submission.id, field="compilation_digest",
+                    expected_value=compilation_digest)
             elif stage.exists():
                 write_json(stage / "failure.json", {"error": str(exc), "failed_at": now(), "submission_id": submission.id})
                 ws.rename_artifact(stage, destination.parent / uid("failed-compilation"))
@@ -347,6 +350,9 @@ def verify_compilation(ws: Workspace, submission: Submission, *, check_complianc
         for relative, expected in compilation.files.items():
             if digest_file(ws.path(f"submissions/{submission.id}/compiled/{relative}")) != expected:
                 errors.append(f"Compilation output changed: {relative}")
+        errors.extend(verify_receipts(root / "manuscript.md",
+            {format: root / f"manuscript.{format}" for format in ("pdf", "tex", "docx")},
+            root / "conversion.json"))
         snapshot = frozen_workspace(ws, ws.get("paper", submission.paper_id, Paper))
         doc = Document.model_validate_json(snapshot.path("canonical.json").read_bytes())
         settings = CompilerSettings.model_validate_json((root / "settings.json").read_bytes())

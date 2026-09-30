@@ -16,14 +16,6 @@ def source(tmp_path):
     return path
 
 
-@pytest.fixture
-def pandoc():
-    binary = Path(__file__).parents[1] / ".venv/Lib/site-packages/pypandoc/files/pandoc.exe"
-    if not binary.is_file():
-        pytest.skip("Bundled test Pandoc executable is unavailable")
-    return str(binary)
-
-
 @pytest.mark.parametrize("enabled", [False, True])
 def test_docx_export_uses_native_line_and_page_settings(source, pandoc, enabled):
     docx = pytest.importorskip("docx")

@@ -1,11 +1,27 @@
 """Use Pandoc and Typst, rather than implementing document conversion/rendering."""
 
+import json
 import shutil
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
 from .workspace import digest_file, write_json
+
+
+def verify_receipts(markdown: Path, outputs: dict[str, Path], receipt_path: Path) -> list[str]:
+    """Bind native exports to their recorded source and conversion output."""
+    reports = json.loads(receipt_path.read_bytes())
+    if not isinstance(reports, dict) or set(reports) != set(outputs):
+        return ["Conversion receipt format set differs from the required exports"]
+    source_digest = digest_file(markdown)
+    errors = []
+    for format, output in outputs.items():
+        report = reports[format]
+        if (not isinstance(report, dict) or report.get("input_sha256") != source_digest
+                or report.get("output_sha256") != digest_file(output)):
+            errors.append(f"Conversion receipt differs from its source or native output: {format}")
+    return errors
 
 
 def _format_docx(output: Path, *, line_numbers: bool, page_numbers: bool) -> None:

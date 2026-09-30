@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import shutil
 import sqlite3
 import stat
 import tempfile
@@ -187,6 +188,33 @@ class Workspace:
                 if os.name != "nt" or attempt == 4:
                     raise
                 time.sleep(0.025 * (attempt + 1))
+
+    def discard_uncommitted_artifact(self, destination: Path, *, kind: str,
+            record_id: str, field: str, expected_value: str) -> bool:
+        """Roll back an owned artifact only after checking its durable binding.
+
+        A commit can succeed before the caller receives its acknowledgement.
+        Callers pass an immutable artifact digest so later valid state changes
+        do not make a committed artifact look like an uncommitted one.
+        """
+        if not isinstance(expected_value, str) or not expected_value:
+            return False
+        try:
+            with self._database() as db:
+                row = db.execute("SELECT data FROM records WHERE kind=? AND id=?", (kind, record_id)).fetchone()
+            if row is not None:
+                data = json.loads(row[0])
+                if not isinstance(data, dict) or data.get(field) == expected_value:
+                    return False
+            relative = destination.absolute().relative_to(self.root).as_posix()
+            target = self.path(relative)
+            for path in target.rglob("*"):
+                ensure_unlinked(path)
+            shutil.rmtree(target)
+            return True
+        except (OSError, ValueError, TypeError):
+            # An unavailable store or uncertain outcome must retain evidence.
+            return False
 
     @contextmanager
     def lock(self, name: str):

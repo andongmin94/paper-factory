@@ -220,3 +220,28 @@ def test_invalid_typed_policies_cannot_be_converted_into_ready_facts():
         PolicyValues(apc={"status": "charged", "amount": 100, "currency": "made-up"})
     with pytest.raises(ValueError):
         PolicySpec(venue_id="venue-test", evidence={"fabricated": {"source_url": "https://example.org", "excerpt": "Official excerpt here", "interpretation": "Test"}})
+
+
+@pytest.mark.parametrize("field", ["values", "evidence", "reviewed_by", "ttl_days", "venue_id", "sources", "official_origins"])
+def test_rehashed_policy_record_cannot_override_its_reviewed_specification(setup_policy, field):
+    ws, venue, path, _, handler = setup_policy
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        policy = verify_policy(ws, venue, path, client=client)
+    original_spec = ws.path(policy.spec_path).read_bytes()
+    if field == "values":
+        policy.values.anonymization_required = True
+    elif field == "evidence":
+        policy.evidence["ai_policy"].interpretation = "An unreviewed replacement interpretation."
+    elif field == "sources":
+        policy.sources = policy.sources[:-1]
+    elif field == "official_origins":
+        policy.official_origins = [{"origin": "https://unreviewed.example.org", "rationale": "Unreviewed added authority",
+            "evidence_url": "https://example.org/guidelines", "evidence_excerpt": "An unreviewed publisher origin"}]
+    else:
+        setattr(policy, field, {"reviewed_by": "Unreviewed Researcher", "ttl_days": 30, "venue_id": "venue-other"}[field])
+    write_json(ws.path(policy.receipt_path), policy.model_dump(mode="json", exclude={"receipt_sha256"}))
+    policy.receipt_sha256 = digest_file(ws.path(policy.receipt_path))
+    ws.save("policy", policy)
+    assert ws.path(policy.spec_path).read_bytes() == original_spec
+    assert validate_policy(ws, policy)
+    assert validate_policy(ws, policy, check_compliance=False)

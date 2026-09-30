@@ -8,7 +8,6 @@ permission to post. Permission preparation always re-fetches publisher policy.
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
-import shutil
 import sqlite3
 import tempfile
 from typing import Literal
@@ -17,7 +16,7 @@ import zipfile
 import httpx
 from pydantic import Field, field_validator
 
-from .conversion import convert
+from .conversion import convert, verify_receipts
 from .integrity import frozen_workspace
 from .manuscript import Document, claim_text, escape_md, render
 from .models import Claim, Paper, Record, now, uid
@@ -181,17 +180,6 @@ def _preparation_manifest(record: Preprint) -> dict:
             "files": record.files, "external_upload_performed": False, "peer_reviewed": False}
 
 
-def _remove_published(ws: Workspace, destination: Path) -> None:
-    """Roll back only this operation's verified artifact directory."""
-    relative = destination.absolute().relative_to(ws.root).as_posix()
-    target = ws.path(relative)
-    if not target.resolve().is_relative_to(ws.root.resolve()):
-        raise ValueError("Preprint rollback escaped its workspace")
-    for path in target.rglob("*"):
-        ensure_unlinked(path)
-    shutil.rmtree(target)
-
-
 def audit_registry(ws: Workspace, *, db: sqlite3.Connection | None = None) -> list[Preprint]:
     """Reconcile indexed facts with committed artifacts, ignoring failed staging.
 
@@ -289,7 +277,8 @@ def prepare(ws: Workspace, settings_path: Path, *, pandoc: str | None = None,
             return record, destination
         except BaseException:
             if published:
-                _remove_published(ws, destination)
+                ws.discard_uncommitted_artifact(destination, kind="preprint",
+                    record_id=record.id, field="manifest_sha256", expected_value=record.manifest_sha256)
             if stage.exists():
                 # A failed local derivative can be inspected and retried without
                 # publishing a PREPRINT_READY record.
@@ -354,7 +343,8 @@ def record_posting(ws: Workspace, receipt_path: Path, evidence_path: Path, *, co
             return record, root
         except BaseException:
             if published:
-                _remove_published(ws, destination)
+                ws.discard_uncommitted_artifact(destination, kind="preprint",
+                    record_id=record.id, field="receipt_sha256", expected_value=record.receipt_sha256)
             if stage.exists():
                 write_json(stage / "failure.json", {"preprint_id": record.id, "failed_at": now()})
             raise
@@ -396,6 +386,9 @@ def check(ws: Workspace, preprint: Preprint, *, check_active_policy: bool = True
             for name, digest in record.files.items():
                 if digest_file(ws.path(f"preprints/{record.id}/{name}")) != digest:
                     errors.append(f"Prepared preprint artifact changed: {name}")
+            errors.extend(verify_receipts(root / "manuscript.md",
+                {format: root / f"manuscript.{format}" for format in ("tex", "pdf")},
+                root / "conversion.json"))
             settings_path = ws.path(f"preprints/{record.id}/settings.json")
             settings = PreprintSettings.model_validate_json(settings_path.read_bytes())
             if digest_file(settings_path) != record.settings_sha256 or settings.paper_id != record.paper_id or settings.reviewed_by != paper.approved_by:

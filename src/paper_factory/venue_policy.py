@@ -423,6 +423,12 @@ def validate_policy(ws: Workspace, policy: VenuePolicy, *, fresh: bool = True, c
         if digest_file(spec_path) != policy.spec_sha256:
             return ["Policy specification changed"]
         spec = PolicySpec.model_validate_json(spec_path.read_bytes())
+        if (policy.venue_id != spec.venue_id or policy.values != spec.values
+                or policy.evidence != spec.evidence or policy.official_origins != spec.official_origins
+                or policy.reviewed_by != spec.reviewed_by or policy.ttl_days != spec.ttl_days):
+            return ["Policy facts, evidence or review metadata differ from the reviewed specification"]
+        if len(policy.sources) != len(spec.sources) or {source.url for source in policy.sources} != set(spec.sources):
+            return ["Policy captures differ from the requested official source set"]
         venue = ws.get("venue", policy.venue_id, Venue)
         errors.extend(validate_venue(ws, venue))
         texts = {}

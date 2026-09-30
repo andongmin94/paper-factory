@@ -99,7 +99,9 @@ def build(ws: Workspace, submission: Submission, *, client: httpx.Client | None 
             return package, destination
         except Exception as exc:
             if published:
-                shutil.rmtree(destination)
+                ws.discard_uncommitted_artifact(destination, kind="package",
+                    record_id=package.id, field="manifest_sha256",
+                    expected_value=package.manifest_sha256)
             elif stage.exists():
                 write_json(stage / "failure.json", {"error": str(exc), "failed_at": now(), "submission_id": submission.id})
                 ws.rename_artifact(stage, destination.parent / uid("failed-package"))
