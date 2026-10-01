@@ -385,17 +385,39 @@ def validate_plan(plan: ResearchPlan, source_root: Path) -> None:
             raise ValueError("Frozen protocol parameters must be finite scalar values")
 
 
-def writing_prompt(plan: Any, analysis: dict, literature: Any) -> str:
+def execution_evidence_prompt(execution: dict) -> str:
+    evidence = {key: execution[key] for key in (
+        "status", "coverage_mechanism", "production_calls", "coverage_truncated", "cleanup_confirmed",
+    )}
+    return """Use the actual controller execution receipt for claims about observed execution.
+The frozen protocol and its parameter placeholders describe planned requirements,
+not evidence that the proposed instrumentation occurred. State any discrepancy
+between the planned mechanism and the receipt's actual evidence.
+production_calls contains function counts aggregated across the whole execution.
+Node V8 coverage is process-wide aggregate coverage; Python profiling counts are
+also aggregated across the whole execution. Neither establishes per-invocation
+timing endpoints, coverage snapshots or function-count increments around individual
+calls. Individual output or latency records are distinct from call-specific tracing
+evidence. Do not claim, and reject manuscript claims of, unsupported per-invocation
+tracing. Describe receipt facts qualitatively unless a verified numeric placeholder
+is available; do not invent result or parameter references.
+
+Actual controller execution evidence:
+""" + json.dumps(evidence, ensure_ascii=False, indent=2)
+
+
+def writing_prompt(plan: Any, analysis: dict, literature: Any, execution: dict) -> str:
     instrumentation_requirement = ""
     if "execution_instrumentation" in _dump(plan).get("parameters", {}):
         instrumentation_requirement = (
             "\nIn Method or Experimental Setup, include the exact protocol placeholder "
-            "{{parameter:setting.execution_instrumentation}}. Explain that instrumented "
+            "{{parameter:setting.execution_instrumentation}} as the planned instrumentation "
+            "setting, and describe the receipt's actual mechanism separately. Explain that instrumented "
             "timings include tracing overhead and cannot establish uninstrumented absolute "
             "or relative production performance. Do not omit this measurement limitation.\n"
         )
     return """Write a complete, readable empirical manuscript as the requested ManuscriptDraft JSON.
-Use only the frozen protocol, independently computed analysis, inspected source
+Use only the frozen protocol, actual controller execution evidence, independently computed analysis, inspected source
 context recorded in that protocol, and literature evidence supplied below.
 Provide the exact required headings: """ + ", ".join(REQUIRED_SECTIONS) + """.
 The sections are {"heading":"...","text":"paragraphs of prose"}.
@@ -421,7 +443,7 @@ Do not include author identities, affiliations or emails; authors are injected
 after model generation. Do not write Markdown tables with copied numeric values;
 the trusted renderer supplies analysis tables.
 
-Frozen protocol:\n""" + json.dumps(_dump(plan), ensure_ascii=False, indent=2) + instrumentation_requirement + "\n\nTrusted analysis:\n" + json.dumps(analysis, ensure_ascii=False, indent=2) + "\n\nRetrieved literature evidence:\n" + json.dumps(_dump(literature), ensure_ascii=False, indent=2)
+Frozen protocol:\n""" + json.dumps(_dump(plan), ensure_ascii=False, indent=2) + instrumentation_requirement + "\n\n" + execution_evidence_prompt(execution) + "\n\nTrusted analysis:\n" + json.dumps(analysis, ensure_ascii=False, indent=2) + "\n\nRetrieved literature evidence:\n" + json.dumps(_dump(literature), ensure_ascii=False, indent=2)
 
 
 def _statistics(values: list[float]) -> dict[str, float | int]:

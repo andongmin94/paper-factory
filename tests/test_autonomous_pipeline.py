@@ -154,7 +154,7 @@ class FixtureRunner:
         if self.on_run:
             self.on_run()
         return {"status": "succeeded", "simulation": True, "image_digest": "sha256:" + "1" * 64,
-                "coverage_truncated": False,
+                "coverage_mechanism": "python-profile", "coverage_truncated": False, "cleanup_confirmed": True,
                 "production_calls": [{"path": "transform.py", "function": "transform", "calls": 6}] if self.production_calls else [],
                 "stdout": "synthetic runner fixture", "stderr": "", "exit_code": 0}
 
@@ -539,6 +539,45 @@ def test_rejected_manuscript_review_does_not_regenerate_successful_experiment(wo
     assert result.status == "blocked" and result.code == "MANUSCRIPT_EVIDENCE_INVALID"
     assert components[1].calls == 1 and "analysis" in result.artifacts
     assert "manuscript" not in result.artifacts
+
+
+@pytest.mark.parametrize("mechanism", ["node-v8-coverage", "python-profile"])
+def test_writer_and_review_retries_receive_actual_aggregate_execution(workspace, components, monkeypatch, mechanism):
+    provider, runner, _, _ = components
+    planned_claim = "Collect per-invocation coverage snapshots and function-count increments."
+    provider.plan["parameters"]["execution"] = planned_claim
+    provider.reviews = [{"accepted": True, "issues": [], "checks": []},
+                        {"accepted": False, "issues": ["Unsupported per-invocation tracing claim."], "checks": []}]
+    run = runner.run
+
+    def executed_receipt(*args, **kwargs):
+        receipt = run(*args, **kwargs)
+        receipt.update(coverage_mechanism=mechanism, private_unrelated_field="Do not forward this runner field.")
+        return receipt
+
+    monkeypatch.setattr(runner, "run", executed_receipt)
+    result = launch(workspace, components, budget={"repair_attempts": 1})
+    assert result.status == "blocked" and result.code == "MANUSCRIPT_EVIDENCE_INVALID"
+    assert runner.calls == 1
+    execution = pipeline._read(workspace, result, "execution")
+    expected = {"status": "succeeded", "coverage_mechanism": mechanism,
+                "production_calls": [{"path": "transform.py", "function": "transform", "calls": 6}],
+                "coverage_truncated": False, "cleanup_confirmed": True}
+    assert all(execution[key] == value for key, value in expected.items())
+    writing = [prompt for label, prompt in zip(provider.calls, provider.prompts, strict=True) if label == "ManuscriptDraft"]
+    reviews = [prompt for label, prompt in zip(provider.calls, provider.prompts, strict=True)
+               if label == "ScientificReview" and "Independently review the manuscript" in prompt]
+    assert len(writing) == len(reviews) == 2
+    for prompt in writing + reviews:
+        supplied = prompt.split("Actual controller execution evidence:\n", 1)[1].split("\n\n", 1)[0]
+        assert json.loads(supplied) == expected
+        assert planned_claim in prompt
+        assert "parameter placeholders describe planned requirements" in prompt
+        assert "Node V8 coverage is process-wide aggregate coverage" in prompt
+        assert "Python profiling counts are\nalso aggregated across the whole execution" in prompt
+        assert "Neither establishes per-invocation\ntiming endpoints, coverage snapshots" in prompt
+        assert "reject manuscript claims of, unsupported per-invocation\ntracing" in prompt
+        assert execution["private_unrelated_field"] not in prompt
 
 
 @pytest.mark.parametrize("claim", [

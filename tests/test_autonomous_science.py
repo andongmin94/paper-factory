@@ -146,6 +146,13 @@ def literature():
                           "excerpts": ["Independent test oracles compare software behavior against expected outcomes. Controlled fixtures can isolate specific behavioral properties but cannot establish population-wide failure rates."]}]}
 
 
+@pytest.fixture
+def execution():
+    return {"status": "succeeded", "coverage_mechanism": "python-profile",
+            "production_calls": [{"path": "transform.py", "function": "transform", "calls": 6}],
+            "coverage_truncated": False, "cleanup_confirmed": True}
+
+
 def valid_draft():
     # Synthetic prose is a validator fixture, never a purported research paper.
     paragraph = (
@@ -326,7 +333,7 @@ def test_finite_measurement_overflow_is_rejected_by_analysis_and_reproduction(tm
     assert not (original / "analysis-reproduced.json").exists()
 
 
-def test_manuscript_resolves_only_verified_references_and_injects_author_last(tmp_path, protocol, observations, literature):
+def test_manuscript_resolves_only_verified_references_and_injects_author_last(tmp_path, protocol, observations, literature, execution):
     analysis = science.analyze(observations, protocol, tmp_path / "analysis")
     draft = valid_draft()
     written = science.validate_and_render(draft, protocol, analysis, literature, tmp_path / "paper", author={"display_name": "Local Author", "email": "local@example.org"})
@@ -342,7 +349,7 @@ def test_manuscript_resolves_only_verified_references_and_injects_author_last(tm
     assert canonical["verified_result_refs"]["Abstract"] == ["error.paired_2_minus_1.mean"]
     assert canonical["citation_evidence"][0]["scope"] == "abstract"
     assert canonical["prose_word_count"] >= 1200
-    assert "local@example.org" not in science.writing_prompt(protocol, analysis, literature)
+    assert "local@example.org" not in science.writing_prompt(protocol, analysis, literature, execution)
 
 
 def test_native_manuscript_preserves_formula_and_scoped_package_as_literal_text(tmp_path, protocol, observations, literature, pandoc):
@@ -661,10 +668,10 @@ def test_plan_cannot_freeze_nonfinite_parameters(tmp_path, protocol):
         science.validate_plan(protocol, tmp_path)
 
 
-def test_instrumented_experiments_require_methods_disclosure(tmp_path, protocol, observations, literature):
+def test_instrumented_experiments_require_methods_disclosure(tmp_path, protocol, observations, literature, execution):
     protocol.parameters["execution_instrumentation"] = "Python profiling or Node V8 coverage is enabled; timing includes instrumentation overhead"
     analysis = science.analyze(observations, protocol, tmp_path / "analysis")
-    prompt = science.writing_prompt(protocol, analysis, literature)
+    prompt = science.writing_prompt(protocol, analysis, literature, execution)
     assert "{{parameter:setting.execution_instrumentation}}" in prompt
     assert "uninstrumented absolute" in prompt
     draft = valid_draft()
