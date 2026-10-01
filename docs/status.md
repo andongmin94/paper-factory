@@ -33,7 +33,7 @@ Frontend readiness now follows the actual subscription provider status, includin
 an existing CLI login, and clears stale connection information after failed
 refreshes. Default web paths use the native `PF_HOME` studies/web directories.
 
-The current Windows collection contains **1,236 cases: 1,222 passed, 14 skipped,
+The current Windows collection contains **1,242 cases: 1,228 passed, 14 skipped,
 0 failed and 0 uncovered**. Complete fresh file shards and final affected reruns
 were deduplicated against the exact current collection. Per-case evidence is
 preserved at
@@ -56,6 +56,17 @@ cleanup; its safe summary is preserved at
 `C:/Users/Public/Documents/ESTsoft/CreatorTemp/paperfactory-code-cleanup-model-tbig9yu1/safe-summary.json`.
 The live-model check is a bounded request; the full native pipeline integration
 evidence below still uses explicit synthetic model/literature inputs.
+
+The first live repository study exposed a contract mismatch: the application
+limited each condition name to 80 characters, but the model's output schema did
+not. The bound is now declared on the list items and preserved by the wire
+adapter. Six ASCII/Unicode boundary cases verify the original JSON schema,
+actual transmitted schema and Pydantic validation agree. The affected science
+and provider report contains 150 passes and five platform/privilege skips:
+`C:/Users/Public/Documents/ESTsoft/CreatorTemp/paperfactory-live-condition-schema.xml`.
+The invalid model proposal and its receipt remain unchanged; the live study
+resumes through the ordinary pipeline with cumulative budgets and fresh calls.
+This correction does not establish completion of a live autonomous paper.
 
 ## Native Windows verification
 
