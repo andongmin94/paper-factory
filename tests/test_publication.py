@@ -1,5 +1,4 @@
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
@@ -431,39 +430,31 @@ def test_deleting_preprint_record_cannot_hide_posting_before_first_attestation(p
 
 
 @pytest.mark.parametrize("operation", ["attestation", "receipt"])
-def test_database_commit_failure_rolls_back_owned_event_without_losing_history(prepared, mock_conversion, tmp_path, monkeypatch, operation):
+@pytest.mark.parametrize("after_commit", [False, True])
+def test_publication_commit_outcome_preserves_or_removes_only_owned_events(
+    prepared, mock_conversion, tmp_path, fail_transaction, operation, after_commit
+):
     ws, _, submission, handler = ready_case(prepared)
     if operation == "receipt":
         attest(ws, submission, handler)
     initial = ws.get("submission", submission.id, Submission).state
     count = len(ws.list("publication_event", PublicationEvent))
-    original = ws._database
-    failed = False
-
-    @contextmanager
-    def failure_at_commit():
-        nonlocal failed
-        with original() as db:
-            yield db
-            event_count = db.execute("SELECT count(*) FROM records WHERE kind='publication_event'").fetchone()[0]
-            if event_count > count and not failed:
-                failed = True
-                raise OSError("Synthetic transaction commit failure")
-
-    monkeypatch.setattr(ws, "_database", failure_at_commit)
-    with pytest.raises(OSError, match="Synthetic transaction commit failure"):
+    fail_transaction(ws, "publication_event", after_commit=after_commit)
+    with pytest.raises(OSError, match="Injected"):
         if operation == "attestation":
             attest(ws, submission, handler)
         else:
             receipt(ws, submission, SubmissionState.SUBMITTED, tmp_path)
-    assert ws.get("submission", submission.id, Submission).state == initial
-    assert len(ws.list("publication_event", PublicationEvent)) == count
+    expected = (SubmissionState.AUTHOR_ATTESTED if operation == "attestation" else SubmissionState.SUBMITTED) if after_commit else initial
+    assert ws.get("submission", submission.id, Submission).state == expected
+    assert len(ws.list("publication_event", PublicationEvent)) == count + int(after_commit)
     assert publication.check(ws, submission)["passed"]
-    if operation == "attestation":
-        attest(ws, submission, handler)
-    else:
-        receipt(ws, submission, SubmissionState.SUBMITTED, tmp_path)
-    assert publication.check(ws, submission)["passed"]
+    if not after_commit:
+        if operation == "attestation":
+            attest(ws, submission, handler)
+        else:
+            receipt(ws, submission, SubmissionState.SUBMITTED, tmp_path)
+        assert publication.check(ws, submission)["passed"]
 
 
 def test_competing_processes_atomically_reserve_only_one_candidate(prepared, mock_conversion, tmp_path):

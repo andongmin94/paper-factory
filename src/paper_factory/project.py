@@ -138,7 +138,7 @@ def ingest(source: str, workspace_root: Path | None = None) -> Workspace:
             try:
                 result = subprocess.run(["git", "clone", "--depth", "1", "--", source, str(source_path)], capture_output=True, text=True, check=False,
                                         timeout=300, env=clone_environment)
-            except subprocess.TimeoutExpired as error:
+            except subprocess.TimeoutExpired:
                 raise ValueError("Git clone timed out; check the network and repository access") from None
             if result.returncode:
                 # Git's diagnostics may echo URL credentials. Do not persist or display them.

@@ -3,7 +3,10 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import subprocess
 import zipfile
+
+import pytest
 
 from paper_factory.author import AuthorProfile
 
@@ -40,7 +43,7 @@ def test_export_author_uses_private_env_and_preserves_explicit_overrides(tmp_pat
 def test_reproduction_bundle_excludes_hidden_and_explicit_configuration(tmp_path):
     study = tmp_path / "study"
     study.mkdir()
-    (study / "results.csv").write_text("case,score\n1,42\n", encoding="utf-8")
+    (study / "results.csv").write_bytes(b"case,score\n1,42\n")
     (study / ".env").write_text("PF_OJS_API_TOKEN=private-placeholder\n", encoding="utf-8")
     explicit = study / "settings.txt"
     explicit.write_text("PF_OJS_API_TOKEN=another-private-placeholder\n", encoding="utf-8")
@@ -52,3 +55,18 @@ def test_reproduction_bundle_excludes_hidden_and_explicit_configuration(tmp_path
         assert "settings.txt" not in archive.namelist()
         for member in archive.namelist():
             assert b"private-placeholder" not in archive.read(member)
+
+
+def test_exporter_rejects_linked_ancestor_even_when_target_is_inside_study(tmp_path):
+    study = tmp_path / "study"
+    data = study / "data"
+    data.mkdir(parents=True)
+    (data / "results.csv").write_bytes(b"case,score\n1,42\n")
+    linked = study / "linked"
+    if os.name == "nt":
+        result = subprocess.run(["cmd", "/c", "mklink", "/J", str(linked), str(data)], capture_output=True)
+        assert result.returncode == 0, result.stderr
+    else:
+        linked.symlink_to(data, target_is_directory=True)
+    with pytest.raises(ValueError, match="symlinks or junctions"):
+        exporter().safe_file(study, "linked/results.csv")

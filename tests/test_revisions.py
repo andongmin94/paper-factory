@@ -1,4 +1,3 @@
-from contextlib import contextmanager
 import io
 import json
 from pathlib import Path
@@ -55,6 +54,32 @@ def test_actual_review_creates_distinct_editable_child_without_rewriting_submitt
     assert (root / "canonical.json").is_file()
     with pytest.raises(ValueError, match="already exists"):
         revisions.draft(ws, revision)
+
+
+@pytest.mark.parametrize("after_commit", [False, True])
+def test_revision_draft_commit_outcome_preserves_or_removes_only_its_owned_artifacts(
+    prepared, mock_conversion, tmp_path, fail_transaction, after_commit
+):
+    ws, base, _, revision, _, _ = review_case(prepared, tmp_path)
+    original = digest_file(ws.path(f"freezes/{base.id}/canonical.json"))
+    fail_transaction(ws, "paper", after_commit=after_commit)
+
+    with pytest.raises(OSError, match="Injected"):
+        revisions.draft(ws, revision)
+
+    root = ws.path(f"manuscripts/{revision.revised_paper_id}")
+    assert digest_file(ws.path(f"freezes/{base.id}/canonical.json")) == original
+    if after_commit:
+        child = ws.get("paper", revision.revised_paper_id, Paper)
+        assert digest_file(root / "canonical.json") == child.document_sha256
+        assert digest_file(root / "manuscript.md") == child.manuscript_sha256
+        manuscript.compile_manuscript(ws, child)
+        assert revisions.check(ws, revision)["drafted"]
+    else:
+        assert not root.exists()
+        assert all(paper.id != revision.revised_paper_id for paper in ws.list("paper", Paper))
+        child, _ = revisions.draft(ws, revision)
+        assert child.id == revision.revised_paper_id and revisions.check(ws, revision)["drafted"]
 
 
 @pytest.mark.parametrize("change,match", [
@@ -346,7 +371,10 @@ def test_response_remains_auditable_after_terminal_decision_but_cannot_be_prepar
 
 
 @pytest.mark.parametrize("operation", ["import", "response"])
-def test_database_commit_failure_removes_only_the_uncommitted_review_or_response(prepared, mock_conversion, tmp_path, monkeypatch, operation):
+@pytest.mark.parametrize("after_commit", [False, True])
+def test_review_and_response_commit_outcome_preserves_or_removes_only_owned_artifacts(
+    prepared, mock_conversion, tmp_path, fail_transaction, operation, after_commit
+):
     if operation == "import":
         ws, paper, submission, handler = ready_case(prepared)
         attest(ws, submission, handler)
@@ -362,26 +390,19 @@ def test_database_commit_failure_removes_only_the_uncommitted_review_or_response
         _, path = response_plan(ws, revision, tmp_path, "disagree", edit=False)
         kind = "revision_response"
     count = len(ws.list(kind, Revision if kind == "revision" else ResponseBuild))
-    original = ws._database
-    failed = False
-
-    @contextmanager
-    def fail_commit():
-        nonlocal failed
-        with original() as db:
-            yield db
-            current = db.execute("SELECT count(*) FROM records WHERE kind=?", (kind,)).fetchone()[0]
-            if current > count and not failed:
-                failed = True
-                raise OSError("Synthetic revision commit failure")
-
-    monkeypatch.setattr(ws, "_database", fail_commit)
-    with pytest.raises(OSError, match="Synthetic revision commit failure"):
+    fail_transaction(ws, kind, after_commit=after_commit)
+    with pytest.raises(OSError, match="Injected"):
         if operation == "import":
             revisions.import_review(ws, submission, spec, report, confirmed=True)
         else:
             revisions.build_response(ws, revision, path)
-    assert len(ws.list(kind, Revision if kind == "revision" else ResponseBuild)) == count
+    records = ws.list(kind, Revision if kind == "revision" else ResponseBuild)
+    assert len(records) == count + int(after_commit)
     revisions._registry(ws)
+    if after_commit:
+        if operation == "import":
+            assert revisions.verify_review(ws, records[-1]) == []
+        else:
+            assert revisions.verify_response(ws, records[-1])["passed"]
     if operation == "response":
         assert revisions.verify_review(ws, revision) == []

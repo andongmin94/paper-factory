@@ -103,7 +103,7 @@ def _review_records(ws: Workspace, delivery: RevisionDelivery):
     revision = ws.get("revision", delivery.revision_id, Revision)
     response = ws.get("revision_response", delivery.response_id, ResponseBuild)
     result = verify_response(ws, response, require_approved=True, require_active=False)
-    if not result.get("ready") or not result.get("passed", result.get("valid", False)):
+    if not result.get("ready") or not result.get("passed"):
         raise ValueError("Revision response is incomplete or changed: " + "; ".join(result.get("errors", [])))
     if (revision.base_submission_id != delivery.original_submission_id
             or revision.base_paper_id != delivery.base_paper_id
@@ -201,7 +201,7 @@ def prepare(ws: Workspace, revision, settings_path: Path, *, response=None,
             raise ValueError("Prepare a complete reviewer response before preparing revision delivery")
         response = responses[-1]
     report = verify_response(ws, response, require_approved=True, require_active=True)
-    if not report.get("ready") or not report.get("passed", report.get("valid", False)):
+    if not report.get("ready") or not report.get("passed"):
         raise ValueError("Revision delivery requires a complete reviewed response and approved child manuscript: " + "; ".join(report.get("errors", [])))
     original = ws.get("submission", revision.base_submission_id, Submission)
     if original.state != SubmissionState.REVISION:
@@ -276,10 +276,9 @@ def prepare(ws: Workspace, revision, settings_path: Path, *, response=None,
         return delivery, destination
     except BaseException:
         if published:
-            with ws._database() as db:
-                persisted = db.execute("SELECT 1 FROM records WHERE kind='revision_delivery' AND id=?", (data.id,)).fetchone()
-            if persisted is None:
-                shutil.rmtree(ws.path(f"revision-deliveries/{data.id}"))
+            ws.discard_uncommitted_artifact(destination, kind="revision_delivery",
+                record_id=delivery.id, field="manifest_sha256",
+                expected_value=delivery.manifest_sha256)
         raise
     finally:
         if stage.exists():

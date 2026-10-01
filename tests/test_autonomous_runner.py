@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 
@@ -127,13 +128,14 @@ def test_rejects_daemon_without_seccomp(monkeypatch):
 
 def test_exports_only_declared_artifact_with_hardened_options(fake_runner, inputs):
     runner, calls, _ = fake_runner
+    original_mode = inputs[0].stat().st_mode
     handles = []
     result = runner.run(*inputs, runtime="python", entrypoint="experiment.py", on_handle=handles.append)
     assert result["status"] == "succeeded"
     assert json.loads(Path(result["output_path"]).read_text()) == {"rows": [{"value": 1}]}
     assert result["artifacts"][0]["path"] == "observations.json"
     assert (inputs[0] / "witness.txt").read_text() == "frozen"
-    assert inputs[0].stat().st_mode & 0o777 == 0o700
+    assert inputs[0].stat().st_mode == original_mode
     create = next(call for call in calls if call[0] == "create")
     assert create[create.index("--network") + 1] == "none"
     assert create[create.index("--user") + 1] == "65532:65532"
@@ -142,7 +144,12 @@ def test_exports_only_declared_artifact_with_hardened_options(fake_runner, input
     mounts = [create[index + 1] for index, item in enumerate(create) if item == "--mount"]
     assert len(mounts) == 2 and all("readonly" in mount for mount in mounts)
     assert all("paper-factory-sandbox-" in mount for mount in mounts)
-    assert not any("docker.sock" in item or ".env" in item for item in create)
+    assert not any("docker.sock" in mount or ".env" in mount for mount in mounts)
+    environment = [create[index + 1] for index, item in enumerate(create) if item == "--env"]
+    assert set(environment) == {
+        "HOME=/work", "PYTHONDONTWRITEBYTECODE=1", "PYTHONNOUSERSITE=1", "PATH=/usr/local/bin:/usr/bin:/bin",
+    }
+    assert not any(option in create for option in {"--env-file", "-e", "-v", "--volume", "--volumes-from"})
     assert handles[0]["container_id"] == CONTAINER
     assert handles[0]["kind"] == "container"
     assert calls[-1][:2] == ["rm", "--force"]
@@ -160,16 +167,59 @@ def test_rejects_unsafe_entrypoint(inputs, entrypoint, runtime):
 
 
 def test_rejects_source_symlink_before_docker(monkeypatch, inputs):
-    (inputs[0] / "link").symlink_to("witness.txt")
+    try:
+        (inputs[0] / "link").symlink_to("witness.txt")
+    except OSError as error:
+        if os.name != "nt" or error.winerror != 1314:
+            raise
+        target = inputs[0].parent / "outside-directory"
+        target.mkdir()
+        linked = subprocess.run(["cmd", "/c", "mklink", "/J", str(inputs[0] / "link"), str(target)], capture_output=True)
+        if linked.returncode:
+            pytest.skip("This Windows account cannot create a symlink or junction")
     monkeypatch.setattr(module.subprocess, "Popen", lambda *_a, **_k: pytest.fail("must not execute"))
     with pytest.raises(ValueError, match="links"):
         DockerRunner(IMAGE).run(*inputs, runtime="python", entrypoint="experiment.py")
 
 
-@pytest.mark.parametrize("timeout", [0, -1, 1801, True, 1.5])
+@pytest.mark.parametrize("timeout", [0, -1, 3601, True, 1.5])
 def test_rejects_unbounded_deadline(inputs, timeout):
     with pytest.raises(ValueError, match="timeout"):
         DockerRunner(IMAGE).run(*inputs, runtime="python", entrypoint="experiment.py", timeout_seconds=timeout)
+
+
+@pytest.mark.parametrize("timeout", [1801, 3600])
+def test_accepts_full_pipeline_timeout_budget(fake_runner, inputs, timeout):
+    runner, _, _ = fake_runner
+    result = runner.run(*inputs, runtime="python", entrypoint="experiment.py", timeout_seconds=timeout)
+    assert result["status"] == "succeeded"
+    assert result["limits"]["timeout_seconds"] == timeout
+
+
+@pytest.mark.parametrize("failure", ["returncode", "timeout"])
+def test_container_cleanup_failure_retains_owned_handle(fake_runner, inputs, monkeypatch, failure):
+    runner, _, _ = fake_runner
+    original = runner._control
+    def control(args, **kwargs):
+        if args[0] == "rm":
+            if failure == "timeout":
+                raise subprocess.TimeoutExpired("docker rm", 5)
+            return response(stderr="Docker daemon unavailable", returncode=1)
+        return original(args, **kwargs)
+    monkeypatch.setattr(runner, "_control", control)
+    result = runner.run(*inputs, runtime="python", entrypoint="experiment.py")
+    assert result["status"] == "blocked" and result["code"] == "CLEANUP_UNCONFIRMED"
+    assert result["cleanup_confirmed"] is False
+    assert result["active_handle"]["container_id"] == CONTAINER
+    assert result["active_handle"]["container_name"].startswith(module.CONTAINER_PREFIX)
+    assert Path(result["output_path"]).is_file()
+
+
+def test_staging_does_not_require_posix_nofollow(fake_runner, inputs, monkeypatch):
+    monkeypatch.delattr(module.os, "O_NOFOLLOW", raising=False)
+    runner, _, _ = fake_runner
+    result = runner.run(*inputs, runtime="python", entrypoint="experiment.py")
+    assert result["status"] == "succeeded"
 
 
 def test_rejects_existing_output(inputs):
@@ -179,11 +229,23 @@ def test_rejects_existing_output(inputs):
         DockerRunner(IMAGE).run(*inputs, runtime="python", entrypoint="experiment.py")
 
 
+@pytest.mark.parametrize("root_index", [0, 1], ids=["source", "bundle"])
+def test_rejects_nested_output_without_mutating_inputs(inputs, monkeypatch, root_index):
+    runner = DockerRunner(IMAGE)
+    monkeypatch.setattr(runner, "status", lambda: pytest.fail("must reject before checking Docker"))
+    output = inputs[root_index] / "new-output"
+    original = sorted(path.relative_to(inputs[root_index]) for path in inputs[root_index].rglob("*"))
+    with pytest.raises(ValueError, match="separate"):
+        runner.run(inputs[0], inputs[1], output, runtime="python", entrypoint="experiment.py")
+    assert not output.exists()
+    assert sorted(path.relative_to(inputs[root_index]) for path in inputs[root_index].rglob("*")) == original
+
+
 @pytest.mark.parametrize("payload", [
     b"garbage", envelope(protocol="forged"), envelope(observation_b64="not-base64"),
     envelope(b"not json"), envelope(b'{"value": NaN}'), envelope(error="artifact was a link"),
     envelope(observation_b64="a" * (((MAX_ARTIFACT_BYTES + 2) // 3 * 4) + 1)),
-])
+], ids=["garbage", "protocol", "base64", "json", "nonfinite", "artifact-error", "oversized"])
 def test_rejects_invalid_transport_without_import(fake_runner, inputs, payload):
     runner, _, process = fake_runner
     process.stdout = io.BytesIO(payload)

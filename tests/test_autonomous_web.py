@@ -50,7 +50,7 @@ def autonomous_web(tmp_path, monkeypatch):
             item.update(status="completed", stage="done")
             output = ws.path(f"autonomous/{pipeline_id}/exports/paper.md")
             output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_text("# Endpoint fixture\n", encoding="utf-8")
+            output.write_text("# Endpoint fixture\n", encoding="utf-8", newline="\n")
             private = ws.path(f"autonomous/{pipeline_id}/context.json")
             private.write_text('{"private":"private-context"}', encoding="utf-8")
         return SimpleNamespace(**item)
@@ -211,11 +211,44 @@ def test_exports_cannot_follow_links_into_private_files(autonomous_web, tmp_path
     outside = tmp_path / "private.txt"
     outside.write_text("private-linked-content", encoding="utf-8")
     link = server.state.workspace_path("web-test") / f"autonomous/{pipeline_id}/exports/linked.txt"
-    link.symlink_to(outside)
+    try:
+        link.symlink_to(outside)
+    except OSError as error:
+        if getattr(error, "winerror", None) == 1314:
+            pytest.skip("Windows symlink creation requires Developer Mode or elevated permission")
+        raise
     response = client.get(f"/api/projects/web-test/pipelines/{pipeline_id}")
-    assert response.status_code == 400
+    assert response.status_code == 200
     assert "private-linked-content" not in response.text
-    assert client.get(f"/api/projects/web-test/files/autonomous/{pipeline_id}/exports/linked.txt").status_code == 400
+    assert any(item["path"].endswith("/exports/linked.txt") for item in response.json()["file_errors"])
+    assert client.get(f"/api/projects/web-test/files/autonomous/{pipeline_id}/exports/linked.txt").status_code == 404
+
+
+def test_large_reproduction_export_keeps_completed_web_job_successful(autonomous_web, monkeypatch):
+    import paper_factory.web as web
+    server, client, _, stored, _ = autonomous_web
+    monkeypatch.setattr(web, "MAX_FILE", 64)
+    monkeypatch.setattr(web, "MAX_BUNDLE", 96)
+
+    def completed_run(ws, pipeline_id):
+        stored[pipeline_id].update(status="completed", stage="done")
+        exports = ws.path(f"autonomous/{pipeline_id}/exports")
+        exports.mkdir(parents=True, exist_ok=True)
+        (exports / "reproducibility.zip").write_bytes(b"z" * 96)
+        (exports / "oversized.pdf").write_bytes(b"p" * 65)
+        (exports / "paper.md").write_text("# Reviewable paper\n", encoding="utf-8")
+        return SimpleNamespace(**stored[pipeline_id])
+
+    monkeypatch.setattr(autonomous.pipeline, "run", completed_run)
+    started = client.post("/api/projects/web-test/pipelines", json={"goal": "Export the full supported reproduction archive"}).json()
+    job = wait_job(client, started["job"]["id"])
+    assert job["status"] == "succeeded", job
+    assert job["result"]["status"] == "completed"
+    assert any(item["path"].endswith("oversized.pdf") for item in job["result"]["file_errors"])
+    detail = client.get("/api/projects/web-test").json()
+    archive = next(item for item in detail["files"] if item["path"].endswith("reproducibility.zip"))
+    response = client.get(archive["url"])
+    assert response.status_code == 200 and response.content == b"z" * 96
 
 
 def test_cancelled_queued_worker_does_not_start_research(autonomous_web, monkeypatch):

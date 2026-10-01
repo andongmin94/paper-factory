@@ -117,6 +117,32 @@ def test_actual_metric_results_do_not_license_unverified_claims_in_description(w
         manuscript.build(ws, study)
 
 
+@pytest.mark.parametrize("unit", ["files; accuracy improved 99 percent", "Latency reduced by ninety percent", "The first novel method", "See DOI: 10.1234/unverified"])
+def test_actual_metric_results_do_not_license_unverified_claims_in_unit(workspace_case, unit):
+    _, ws, study, source = workspace_case
+    manifest = source.model_copy(update={"id": uid("experiment")}, deep=True)
+    manifest.metrics[0].unit = unit
+    manifest_path = ws.path("metric-unit-test.json")
+    write_json(manifest_path, manifest)
+    experiments.register_manifest(ws, manifest_path)
+    assert experiments.run_experiment(ws, manifest).status == "SUCCEEDED"
+    with pytest.raises(ValueError, match="metric label"):
+        manuscript.build(ws, study)
+
+
+@pytest.mark.parametrize("unit", ["%", "m2", "ms", "files", "s^-1", "MiB/s"])
+def test_valid_measurement_units_still_render(workspace_case, unit):
+    _, ws, study, source = workspace_case
+    manifest = source.model_copy(update={"id": uid("experiment")}, deep=True)
+    manifest.metrics[0].unit = unit
+    manifest_path = ws.path("metric-unit-test.json")
+    write_json(manifest_path, manifest)
+    experiments.register_manifest(ws, manifest_path)
+    assert experiments.run_experiment(ws, manifest).status == "SUCCEEDED"
+    paper, _ = manuscript.build(ws, study)
+    assert integrity.check(ws, paper)["passed"]
+
+
 @pytest.mark.parametrize("description", ["P95 latency", "95th percentile latency", "F1 score", "Top-5 accuracy", "Accuracy (%)", "Percentage of successful recoveries", "Time to first byte"])
 def test_valid_numeric_metric_identifiers_and_units_still_render(workspace_case, description):
     _, ws, study, source = workspace_case
@@ -383,6 +409,30 @@ def test_explicit_freeze_is_content_bound_and_prevents_rebuilding(workspace_case
     assert ws.get("study", study.id, Study).novelty_status == "author_assessed"
     with pytest.raises(ValueError, match="frozen"):
         manuscript.build(ws, study)
+
+
+@pytest.mark.parametrize("after_commit", [False, True])
+def test_freeze_commit_outcome_preserves_or_rolls_back_its_artifacts(workspace_case, fail_transaction, after_commit):
+    ws, study, paper, _ = freeze_ready(workspace_case)
+    assert integrity.check(ws, paper)["passed"]
+    paper = ws.get("paper", paper.id, Paper)
+    fail_transaction(ws, "paper", after_commit=after_commit)
+    with pytest.raises(OSError, match="failure"):
+        integrity.approve(ws, paper, approved=True, assessment="Reviewed related work and limitations.")
+    current = ws.get("paper", paper.id, Paper)
+    frozen = ws.path(f"freezes/{paper.id}")
+    if after_commit:
+        assert current.state == PaperState.AUTHOR_APPROVED
+        assert frozen.is_dir()
+        assert current.freeze_digest == digest_file(frozen / "approval.json")
+        assert ws.get("study", study.id, Study).novelty_status == "author_assessed"
+        assert integrity.check_frozen(ws, current)["passed"]
+    else:
+        assert current.state == PaperState.INTEGRITY_CHECKED
+        assert current.freeze_digest is None
+        assert not frozen.exists()
+        integrity.approve(ws, current, approved=True, assessment="Reviewed related work and limitations.")
+        assert integrity.check_frozen(ws, ws.get("paper", paper.id, Paper))["passed"]
 
 
 def test_tampering_with_frozen_snapshot_is_detected(workspace_case):

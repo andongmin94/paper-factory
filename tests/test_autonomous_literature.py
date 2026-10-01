@@ -1,11 +1,22 @@
 import hashlib
 import json
+import os
 from pathlib import Path
+import subprocess
 
 import httpx
 import pytest
 
 from paper_factory.autonomous import literature
+
+
+def symlink(path, target, *, directory=False):
+    try:
+        path.symlink_to(target, target_is_directory=directory)
+    except OSError as error:
+        if os.name == "nt" and error.winerror == 1314:
+            pytest.skip("Creating symbolic links requires Windows developer mode or elevation")
+        raise
 
 
 def record(doi="10.1234/test", *, abstract=None, links=None):
@@ -133,12 +144,12 @@ def test_symbolic_links_are_rejected(tmp_path, monkeypatch, location):
     other.mkdir()
     root = tmp_path / "output"
     if location == "root":
-        root.symlink_to(other, target_is_directory=True)
+        symlink(root, other, directory=True)
         with pytest.raises(ValueError, match="symbolic links"):
             literature.collect(["query"], root)
     elif location == "directory":
         root.mkdir()
-        (root / "literature").symlink_to(other, target_is_directory=True)
+        symlink(root / "literature", other, directory=True)
         with pytest.raises(ValueError, match="symbolic link"):
             literature.collect(["query"], root)
     else:
@@ -146,10 +157,36 @@ def test_symbolic_links_are_rejected(tmp_path, monkeypatch, location):
         (root / "literature").mkdir()
         content = b"evidence"
         digest = hashlib.sha256(content).hexdigest()
-        (root / "literature" / f"source-{digest[:16]}.json").symlink_to(other / "private")
+        symlink(root / "literature" / f"source-{digest[:16]}.json", other / "private")
         with pytest.raises(ValueError, match="does not match"):
             literature._save(root, "source", "json", content)
         assert not (other / "private").exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows junction regression")
+@pytest.mark.parametrize("location", ["root", "directory", "replaced_directory"])
+def test_windows_junctions_are_rejected(tmp_path, monkeypatch, location):
+    other = tmp_path / "private"
+    other.mkdir()
+    root = tmp_path / "output"
+    if location == "root":
+        link = root
+    elif location == "directory":
+        root.mkdir()
+        link = root / "literature"
+    else:
+        literature._prepare_root(root)
+        link = root / "literature"
+        link.rmdir()
+    subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(other)],
+                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+    monkeypatch.setattr(literature.httpx, "Client", lambda **kwargs: pytest.fail("Junction reached network"))
+    with pytest.raises(ValueError, match="symbolic link|symlinks or junctions"):
+        if location == "replaced_directory":
+            literature._save(root, "source", "json", b"evidence")
+        else:
+            literature.collect(["query"], root)
+    assert list(other.iterdir()) == []
 
 
 def test_duplicate_doi_is_resolved_only_once(tmp_path, monkeypatch):
@@ -226,7 +263,8 @@ def test_proxy_bypass_does_not_skip_dns_validation(monkeypatch):
         literature._checked_url("https://api.crossref.org/works")
 
 
-def test_real_pdf_extracts_literal_text_in_bounded_child(monkeypatch):
+@pytest.fixture
+def controlled_pdf():
     import io
     PdfWriter = pytest.importorskip("pypdf").PdfWriter
     from pypdf.generic import DictionaryObject, NameObject, DecodedStreamObject
@@ -242,8 +280,76 @@ def test_real_pdf_extracts_literal_text_in_bounded_child(monkeypatch):
     page[NameObject("/Contents")] = writer._add_object(stream)
     buffer = io.BytesIO()
     writer.write(buffer)
-    text = literature._pdf_text(buffer.getvalue())
+    return buffer.getvalue(), sentence
+
+
+def test_real_pdf_extracts_literal_text_in_bounded_child(controlled_pdf):
+    content, sentence = controlled_pdf
+    text = literature._pdf_text(content)
     assert text.startswith("[Page 1]") and sentence.strip() in text
+
+
+def test_pdf_size_is_rejected_before_child_start(monkeypatch):
+    monkeypatch.setattr(literature.subprocess, "Popen", lambda *args, **kwargs: pytest.fail("Oversize PDF started a child"))
+    with pytest.raises(ValueError, match="size limit"):
+        literature._pdf_text(b"%PDF-" + b"x" * literature.MAX_PDF_BYTES)
+
+
+def test_pdf_deadline_terminates_child(monkeypatch):
+    original = subprocess.Popen
+    processes = []
+
+    def sleeping_child(command, **options):
+        process = original([command[0], "-I", "-c", "import time; time.sleep(60)"], **options)
+        communicate = process.communicate
+        process.communicate = lambda content, timeout: communicate(content, timeout=0.1)
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(literature.subprocess, "Popen", sleeping_child)
+    with pytest.raises(ValueError, match="resource limit"):
+        literature._pdf_text(b"%PDF-test")
+    assert len(processes) == 1 and processes[0].poll() is not None
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows job assignment regression")
+def test_pdf_job_assignment_failure_terminates_child_without_sending_input(monkeypatch):
+    original = subprocess.Popen
+    processes = []
+    jobs = []
+
+    def waiting_child(command, **options):
+        process = original(command, **options)
+        process.communicate = lambda *args, **kwargs: pytest.fail("PDF input sent before job assignment")
+        processes.append(process)
+        return process
+
+    class UnassignedJob(literature.WindowsJob):
+        def __init__(self, **options):
+            super().__init__(**options)
+            jobs.append(self)
+
+        def assign(self, handle):
+            raise OSError("Job assignment was refused")
+
+    monkeypatch.setattr(literature.subprocess, "Popen", waiting_child)
+    monkeypatch.setattr(literature, "WindowsJob", UnassignedJob)
+    with pytest.raises(ValueError, match="resource limit"):
+        literature._pdf_text(b"%PDF-test")
+    assert len(processes) == 1 and processes[0].poll() is not None
+    assert len(jobs) == 1 and jobs[0].handle is None
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows job cleanup regression")
+def test_pdf_unconfirmed_job_cleanup_rejects_extracted_text(controlled_pdf, monkeypatch):
+    class UnconfirmedJob(literature.WindowsJob):
+        def stop(self):
+            assert super().stop()
+            return False
+
+    monkeypatch.setattr(literature, "WindowsJob", UnconfirmedJob)
+    with pytest.raises(ValueError, match="cleanup could not be confirmed"):
+        literature._pdf_text(controlled_pdf[0])
 
 
 def test_later_query_can_replace_metadata_with_inspected_abstract(tmp_path, monkeypatch):

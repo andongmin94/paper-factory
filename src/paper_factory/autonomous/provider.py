@@ -18,6 +18,7 @@ import shutil
 import signal
 import stat
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -30,6 +31,7 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError
 
 from ..workspace import ensure_unlinked, pf_home, safe_relative, write_json
+from . import windows_runtime
 
 MAX_PROMPT_BYTES = 1024 * 1024
 MAX_SCHEMA_BYTES = 256 * 1024
@@ -45,6 +47,7 @@ DISABLED_FEATURES = (
 SAFE_ENV_NAMES = frozenset({
     "PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "SYSTEMROOT", "WINDIR",
     "SYSTEMDRIVE", "COMSPEC", "PATHEXT", "TMP", "TEMP", "TMPDIR", "CODEX_HOME",
+    "USERPROFILE", "LOCALAPPDATA", "APPDATA",
     "SSL_CERT_FILE", "SSL_CERT_DIR", "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY",
     "https_proxy", "http_proxy", "all_proxy", "no_proxy",
     "REQUESTS_CA_BUNDLE", "CODEX_PROXY_CERT", "NODE_EXTRA_CA_CERTS", "GRPC_DEFAULT_SSL_ROOTS_FILE_PATH",
@@ -54,9 +57,10 @@ SAFE_ENV_NAMES = frozenset({
 class ProviderBlocked(RuntimeError):
     """A classified model prerequisite, interruption, or invalid response."""
 
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, *, active_handle: dict | None = None):
         self.code = code
         self.message = message
+        self.active_handle = dict(active_handle) if active_handle is not None else None
         super().__init__(message)
 
 
@@ -72,7 +76,7 @@ def _private_directory(path: Path) -> Path:
     path = Path(path).expanduser().absolute()
     ensure_unlinked(path)
     metadata = path.stat()
-    if not stat.S_ISDIR(metadata.st_mode) or metadata.st_mode & 0o077 or (hasattr(os, "getuid") and metadata.st_uid != os.getuid()):
+    if not stat.S_ISDIR(metadata.st_mode) or not windows_runtime.is_private_path(path):
         raise ValueError("unsafe authentication profile directory")
     # Managed sandboxes can expose empty .git permission placeholders at their
     # writable roots. A checkout has a gitfile or a directory with HEAD state.
@@ -112,8 +116,8 @@ def resolve_auth_home(root: Path | None = None) -> Path | None:
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
         with os.fdopen(os.open(pointer, flags), "rb") as stream:
             metadata = os.fstat(stream.fileno())
-            if (not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 16384 or metadata.st_mode & 0o077 or
-                    hasattr(os, "getuid") and metadata.st_uid != os.getuid()):
+            if (not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 16384 or metadata.st_nlink != 1
+                    or not windows_runtime.is_private_path(pointer)):
                 raise ValueError("unsafe selection pointer")
             raw = stream.read(16385)
         if len(raw) > 16384:
@@ -184,6 +188,8 @@ def _bounded_text(text: str, maximum_bytes: int) -> str:
 
 
 def _start_ticks(pid: int) -> int | None:
+    if os.name == "nt":
+        return windows_runtime.process_ticks(pid)
     if os.name != "posix" or not Path("/proc").is_dir():
         return None
     try:
@@ -214,6 +220,15 @@ def _group_running(pgid: int) -> bool:
 
 def _stop(process: subprocess.Popen) -> bool:
     if os.name == "nt":
+        job = getattr(process, "_paper_factory_job", None)
+        if job is not None:
+            if job.handle is None:
+                return process.poll() is not None
+            confirmed = job.stop()
+            if confirmed:
+                process.wait(timeout=5)
+                job.close()
+            return confirmed
         subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], stdout=subprocess.DEVNULL,
                        stderr=subprocess.DEVNULL, timeout=15, check=False)
     else:
@@ -251,6 +266,64 @@ def _try_stop(process: subprocess.Popen) -> bool:
         return _stop(process)
     except (OSError, subprocess.TimeoutExpired):
         return False
+
+
+def _process_options(*, suspended: bool = False) -> dict:
+    if os.name == "nt":
+        flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+        return {"creationflags": flags | (0x4 if suspended else 0)}
+    return {"start_new_session": True}
+
+
+def _track_process(process: subprocess.Popen, *, suspended: bool = False) -> None:
+    if os.name == "nt":
+        job = None
+        try:
+            if suspended:
+                process._paper_factory_start_ticks = _start_ticks(process.pid)
+                if type(process._paper_factory_start_ticks) is not int or process._paper_factory_start_ticks <= 0:
+                    raise OSError("Suspended worker identity could not be verified")
+            job = windows_runtime.WindowsJob()
+            job.assign(process._handle)
+            process._paper_factory_job = job
+            if suspended:
+                windows_runtime.resume_process(process.pid)
+        except BaseException:
+            _try_stop(process)
+            if job is not None:
+                job.close()
+            raise
+
+
+def _worker_handle(process: subprocess.Popen) -> dict:
+    ticks = getattr(process, "_paper_factory_start_ticks", None)
+    handle = {"kind": "codex", "pid": process.pid, "pgid": process.pid,
+              "start_ticks": ticks if ticks is not None else _start_ticks(process.pid)}
+    if os.name == "nt":
+        job = getattr(process, "_paper_factory_job", None)
+        if job is not None:
+            handle["job_name"] = job.name
+    return handle
+
+
+def _cli_command(binary: str | Path) -> list[str]:
+    """Run an explicit Python fixture or npm's official CLI without a shell."""
+    path = Path(binary)
+    if path.suffix.lower() == ".py":
+        return [sys.executable, str(path)]
+    if os.name == "nt" and path.suffix.lower() in {".cmd", ".bat", ".ps1"}:
+        package_root = path.parent.parent if path.parent.name == ".bin" else path.parent / "node_modules"
+        script = package_root / "@openai" / "codex" / "bin" / "codex.js"
+        node = shutil.which("node")
+        if not node or not script.is_file():
+            raise OSError("The Windows Codex npm launcher requires Node.js and its official codex.js entry point")
+        return [node, str(script)]
+    return [str(path)]
+
+
+def _default_codex_executable() -> str:
+    local = Path(sys.prefix) / "codex" / "node_modules" / ".bin" / "codex.cmd"
+    return str(local) if os.name == "nt" and local.is_file() else "codex"
 
 
 def _classify(diagnostic: str) -> ProviderBlocked:
@@ -343,16 +416,14 @@ def _wire_schema(schema: dict) -> dict:
     return normalize(schema)
 
 
-def _restore(schema: dict, raw, *, original_root: dict | None = None, wire_root: dict | None = None):
+def _restore(schema: dict, raw, wire_schema: dict):
     """Restore map entry lists to caller JSON without accepting duplicate keys."""
-    original_root = original_root or schema
-    wire_root = wire_root or _wire_schema(original_root)
-    wire_validator = Draft202012Validator(wire_root)
+    wire_validator = Draft202012Validator(wire_schema)
 
     def reference(pointer):
         if not isinstance(pointer, str) or not pointer.startswith("#/"):
             raise ProviderBlocked("SCHEMA_ERROR", "The response schema uses an unsupported local reference.")
-        value = original_root
+        value = schema
         try:
             for part in pointer[2:].split("/"):
                 value = value[part.replace("~1", "/").replace("~0", "~")]
@@ -395,7 +466,7 @@ def _restore(schema: dict, raw, *, original_root: dict | None = None, wire_root:
 
 class CodexProvider:
     def __init__(self, executable: str | Path | None = None, *, auth_home: Path | None = None):
-        self.configured_executable = (str(executable) if executable is not None else os.environ.get("PF_CODEX_BIN")) or "codex"
+        self.configured_executable = (str(executable) if executable is not None else os.environ.get("PF_CODEX_BIN")) or _default_codex_executable()
         self._explicit_auth_home = Path(auth_home) if auth_home is not None else None
 
     def _child_environment(self) -> dict[str, str]:
@@ -406,6 +477,9 @@ class CodexProvider:
             raise ProviderBlocked("CONFIGURATION_ERROR", "The explicit Codex profile is unavailable or unsafe.") from None
 
     def _binary(self) -> str | None:
+        selected = Path(self.configured_executable)
+        if selected.suffix.lower() == ".py" and selected.is_file():
+            return str(selected.absolute())
         return shutil.which(self.configured_executable)
 
     def _cli_metadata(self, binary: str, environment: dict[str, str]) -> dict:
@@ -416,8 +490,8 @@ class CodexProvider:
             texts = {}
             for name, arguments in (("version", ["--version"]), ("global", ["--help"]),
                                     ("exec", ["exec", "--help"]), ("features", ["features", "list"])):
-                response = subprocess.run([binary, *arguments], env=environment, stdout=subprocess.PIPE,
-                                          stderr=subprocess.DEVNULL, timeout=10, check=False)
+                response = subprocess.run([*_cli_command(binary), *arguments], env=environment, stdout=subprocess.PIPE,
+                                          stderr=subprocess.DEVNULL, timeout=10, check=False, **_process_options())
                 if response.returncode:
                     missing.append(name + "_metadata")
                 texts[name] = response.stdout[:MAX_LOG_BYTES].decode("utf-8", errors="replace")
@@ -454,8 +528,8 @@ class CodexProvider:
                     "cli_version": None, "capabilities_supported": False, "missing_capabilities": []}
         metadata = self._cli_metadata(binary, environment)
         try:
-            response = subprocess.run([binary, "login", "status"], env=environment, stdout=subprocess.PIPE,
-                                      stderr=subprocess.PIPE, timeout=15, check=False)
+            response = subprocess.run([*_cli_command(binary), "login", "status"], env=environment, stdout=subprocess.PIPE,
+                                      stderr=subprocess.PIPE, timeout=15, check=False, **_process_options())
             diagnostic = (response.stdout + response.stderr).decode("utf-8", errors="replace").casefold()
             if "logged in" in diagnostic and "chatgpt" in diagnostic:
                 authentication = "chatgpt"
@@ -466,7 +540,7 @@ class CodexProvider:
             else:
                 authentication = "unknown"
             return {"executable_available": True, "authentication": authentication,
-                    "ready": metadata["capabilities_supported"] and response.returncode == 0 and authentication in {"chatgpt", "api_key"},
+                    "ready": metadata["capabilities_supported"] and response.returncode == 0 and authentication == "chatgpt",
                     **metadata}
         except (OSError, subprocess.TimeoutExpired):
             return {"executable_available": True, "authentication": "unknown", "ready": False, **metadata}
@@ -571,7 +645,11 @@ class CodexProvider:
         pid, pgid, ticks = (handle.get(key) for key in ("pid", "pgid", "start_ticks"))
         if any(isinstance(value, bool) or not isinstance(value, int) for value in (pid, pgid)) or pid <= 1 or pgid != pid:
             return False
-        if os.name != "posix" or isinstance(ticks, bool) or not isinstance(ticks, int) or ticks <= 0:
+        if isinstance(ticks, bool) or not isinstance(ticks, int) or ticks <= 0:
+            return False
+        if os.name == "nt":
+            return windows_runtime.stop(handle) and self._remove_container(name, identity)
+        if os.name != "posix":
             return False
         try:
             current_ticks = _start_ticks(pid)
@@ -655,18 +733,20 @@ class CodexProvider:
                 raise ProviderBlocked("CODEX_UNAVAILABLE", "Install or configure the official Codex CLI before starting generation.")
             if not status["capabilities_supported"]:
                 raise ProviderBlocked("CODEX_UNSUPPORTED", "The installed Codex CLI lacks required structured-only isolation capabilities; inspect the recorded capability names.")
+            if status["authentication"] == "api_key":
+                raise ProviderBlocked("SUBSCRIPTION_AUTH_REQUIRED", "This workflow requires official ChatGPT subscription authentication; API key generation is not allowed.")
             if not status["ready"]:
                 raise ProviderBlocked("AUTH_REQUIRED", "The official Codex CLI has no confirmed usable existing authentication.")
             with tempfile.TemporaryDirectory(prefix="paperfactory-codex-context-") as temporary:
                 work = Path(temporary)
                 runtime = safe_relative(root, "runtime")
                 runtime.mkdir()
-                command = [self._binary(), "--no-daemon", "-a", "never", "exec", "--ignore-user-config",
+                command = [*_cli_command(self._binary()), "--no-daemon", "-a", "never", "exec", "--ignore-user-config",
                            "--ignore-rules", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only",
                            "--json", "--color", "never", "-C", str(work), "--output-schema", str(root / "schema.json"),
                            "-o", str(output_path), "-c", "sqlite_home=" + json.dumps(str(runtime)),
                            "-c", "log_dir=" + json.dumps(str(runtime / "logs")), "-c", "web_search=\"disabled\"",
-                           "-c", "mcp_servers={}"]
+                           "-c", "mcp_servers={}", "-c", 'forced_login_method="chatgpt"']
                 for feature in DISABLED_FEATURES:
                     command.extend(["--disable", feature])
                 if requested_model:
@@ -679,7 +759,7 @@ class CodexProvider:
                 # failure. Network/model errors never dispatch a duplicate call.
                 readonly_initialization = re.search(r"(?:^|\n)(?:Error:\s*)?failed to initialize in-process app-server client:[^\n]*read-only file system",
                                                     diagnostic, re.I)
-                if code and readonly_initialization and not receipt.get("model_dispatch_observed") and receipt["usage"] is None and receipt["actual_model"] is None and not output_path.exists():
+                if os.name != "nt" and code and readonly_initialization and not receipt.get("model_dispatch_observed") and receipt["usage"] is None and receipt["actual_model"] is None and not output_path.exists():
                     for channel in ("stdout", "stderr"):
                         path = root / (channel + ".log")
                         if path.is_file():
@@ -728,7 +808,7 @@ class CodexProvider:
                             safe_decoded(child, depth + 1)
                 safe_decoded(model_output)
                 wire_validator.validate(model_output)
-                output = _restore(schema, model_output, original_root=schema, wire_root=wire_schema)
+                output = _restore(schema, model_output, wire_schema)
                 validator.validate(output)
                 if not isinstance(output, dict):
                     raise ValueError("response must be an object")
@@ -744,25 +824,40 @@ class CodexProvider:
             output_path.unlink(missing_ok=True)
             raise
         except (OSError, ValueError):
+            if receipt.get("cleanup_confirmed") is False and receipt.get("active_handle"):
+                # A live Windows worker can prevent its temporary cwd from
+                # being removed. Preserve process uncertainty over that error.
+                receipt.update(status="blocked", code="CLEANUP_UNCONFIRMED",
+                               message="Codex worker cleanup could not be confirmed; retain its execution handle before resuming.")
+                raise ProviderBlocked(receipt["code"], receipt["message"], active_handle=receipt["active_handle"]) from None
             receipt.update(status="blocked", code="CONFIGURATION_ERROR", message="Codex model call artifacts could not be accessed safely.")
             output_path.unlink(missing_ok=True)
             raise ProviderBlocked("CONFIGURATION_ERROR", receipt["message"]) from None
         finally:
             receipt.update(ended_at=_now(), elapsed_seconds=round(time.monotonic() - started, 3))
-            write_json(root / "receipt.json", receipt)
+            try:
+                write_json(root / "receipt.json", receipt)
+            except (OSError, ValueError):
+                if receipt.get("cleanup_confirmed") is False and receipt.get("active_handle"):
+                    raise ProviderBlocked("CLEANUP_UNCONFIRMED", "Codex worker cleanup could not be confirmed; retain its execution handle before resuming.",
+                                          active_handle=receipt["active_handle"]) from None
+                raise
 
     def _execute(self, command, prompt, root, work, receipt, sensitive, cancel, timeout, on_handle, container_name=None, environment=None):
-        options = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
+        options = _process_options(suspended=True)
         environment = dict(environment) if environment is not None else self._child_environment()
         if container_name:
             environment["DOCKER_CONFIG"] = str(safe_relative(root, "runtime/docker-config"))
+        receipt["cleanup_confirmed"] = False
         process = subprocess.Popen(command, cwd=work, env=environment, stdin=subprocess.PIPE,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, **options)
-        receipt["cleanup_confirmed"] = False
-        handle = {"kind": "codex", "pid": process.pid, "pgid": process.pid, "start_ticks": _start_ticks(process.pid)}
+        handle = {"kind": "codex", "pid": process.pid, "pgid": process.pid, "start_ticks": None}
         if container_name:
             handle["container_name"] = container_name
         try:
+            handle.update(_worker_handle(process))
+            _track_process(process, suspended=True)
+            handle.update(_worker_handle(process))
             write_json(root / "runtime-handle.json", handle)
             if on_handle:
                 on_handle(dict(handle))
@@ -771,7 +866,15 @@ class CodexProvider:
             container_confirmed = self._remove_container(container_name)
             receipt["cleanup_confirmed"] = group_confirmed and container_confirmed
             if not receipt["cleanup_confirmed"]:
-                raise ProviderBlocked("CLEANUP_UNCONFIRMED", "Codex worker cleanup could not be confirmed; retain its persisted handle and stop it before resuming.") from None
+                receipt["active_handle"] = handle
+                try:
+                    write_json(root / "runtime-handle.json", handle)
+                    if on_handle:
+                        on_handle(dict(handle))
+                except Exception:
+                    pass  # Keep the capability in the final receipt if its other stores failed.
+                raise ProviderBlocked("CLEANUP_UNCONFIRMED", "Codex worker cleanup could not be confirmed; retain its persisted handle and stop it before resuming.",
+                                      active_handle=handle) from None
             raise ProviderBlocked("CONFIGURATION_ERROR", "The model worker ownership could not be recorded.") from None
         logs = {"stdout": [], "stderr": []}
         sizes = {"stdout": 0, "stderr": 0}
@@ -855,8 +958,6 @@ class CodexProvider:
 
         threads = [threading.Thread(target=consume, args=(name, stream), daemon=True)
                    for name, stream in (("stdout", process.stdout), ("stderr", process.stderr))]
-        for thread in threads:
-            thread.start()
         def send_prompt():
             assert process.stdin is not None
             try:
@@ -869,10 +970,12 @@ class CodexProvider:
                 except OSError:
                     pass
         writer = threading.Thread(target=send_prompt, daemon=True)
-        writer.start()
         began = time.monotonic()
         failure = None
         try:
+            for thread in threads:
+                thread.start()
+            writer.start()
             while process.poll() is None:
                 if hard_blocker:
                     failure = hard_blocker[0]
@@ -893,25 +996,31 @@ class CodexProvider:
         except Exception:
             failure = ProviderBlocked("CONFIGURATION_ERROR", "The model call could not be supervised safely.")
         finally:
-            group_confirmed = False
-            if failure:
-                group_confirmed = _try_stop(process)
-            writer.join(timeout=2)
-            for thread in threads:
-                thread.join(timeout=2)
-            if any(thread.is_alive() for thread in threads):
-                group_confirmed = _try_stop(process)
-                for thread in threads:
-                    thread.join(timeout=2)
+            # Terminate the whole tree before draining pipes. A completed
+            # leader can leave descendants holding them open; thread startup
+            # failure must follow the same cleanup path as cancellation.
             group_confirmed = _try_stop(process)
-            for name in logs:
-                (root / (name + ".log")).write_text("".join(logs[name]), encoding="utf-8")
+            for thread in (writer, *threads):
+                if thread.ident is not None:
+                    thread.join(timeout=2)
+            for thread, stream in ((writer, process.stdin), (threads[0], process.stdout), (threads[1], process.stderr)):
+                if not thread.is_alive():
+                    try:
+                        stream.close()
+                    except OSError:
+                        pass  # Pipe errors cannot bypass authoritative worker cleanup.
             container_confirmed = self._remove_container(container_name)
             receipt["cleanup_confirmed"] = group_confirmed and container_confirmed
-            if not receipt["cleanup_confirmed"]:
-                interrupted = failure or _classify("".join(diagnostic))
-                receipt.update(interrupted_code=interrupted.code, interrupted_message=interrupted.message)
-                raise ProviderBlocked("CLEANUP_UNCONFIRMED", "Codex worker cleanup could not be confirmed; retain its persisted handle and stop it before resuming.")
+            try:
+                for name in logs:
+                    (root / (name + ".log")).write_text("".join(logs[name]), encoding="utf-8")
+            finally:
+                if not receipt["cleanup_confirmed"]:
+                    interrupted = failure or _classify("".join(diagnostic))
+                    receipt.update(interrupted_code=interrupted.code, interrupted_message=interrupted.message,
+                                   active_handle=handle)
+                    raise ProviderBlocked("CLEANUP_UNCONFIRMED", "Codex worker cleanup could not be confirmed; retain its persisted handle and stop it before resuming.",
+                                          active_handle=handle)
         if policy_violation.is_set() and failure is None:
             failure = ProviderBlocked("POLICY_VIOLATION", "Codex attempted a tool action during a structured-only model call.")
         if failure:

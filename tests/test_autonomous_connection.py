@@ -11,11 +11,10 @@ import pytest
 
 from paper_factory.autonomous.connection import ConnectionManager, DEVICE_URL, _challenge, _now
 from paper_factory.autonomous import connection
-from paper_factory.autonomous.provider import CodexProvider, ProviderBlocked, _start_ticks
+from paper_factory.autonomous import windows_runtime
+from paper_factory.autonomous.provider import CodexProvider, ProviderBlocked, _process_options, _start_ticks, _track_process, _worker_handle
+from paper_factory.autonomous.windows_runtime import is_private_path, private_path
 from paper_factory.workspace import write_json
-
-
-pytestmark = pytest.mark.skipif(os.name != "posix", reason="cloud connection manager requires POSIX locking")
 
 
 class FakeProvider:
@@ -46,7 +45,7 @@ class FakeProvider:
 
 
 def make_manager(tmp_path, monkeypatch, *, delay=0, diagnostic="", code=0, timeout=900, descendant=False, root=None, challenge=True):
-    executable = tmp_path / ("fake-codex-" + str(time.monotonic_ns()))
+    executable = tmp_path / ("fake-codex-" + str(time.monotonic_ns()) + ".py")
     observed = tmp_path / "observed.json"
     settings = {"delay": delay, "diagnostic": diagnostic, "code": code, "observed": str(observed), "descendant": descendant, "challenge": challenge}
     executable.write_text(
@@ -99,6 +98,25 @@ def test_status_is_local_and_side_effect_free(tmp_path, monkeypatch):
         manager.close()
 
 
+def test_shared_active_metadata_is_rejected(tmp_path, monkeypatch):
+    manager, _, _ = make_manager(tmp_path, monkeypatch)
+    profile = "profiles/" + "a" * 32
+    connection._private_directory(manager.root / profile)
+    active = manager.root / "active.json"
+    connection._write_metadata(active, {"version": 1, "profile": profile, "verified": True, "verified_at": _now()})
+    try:
+        assert manager.status()["connected"] is True
+        if os.name == "nt":
+            windows_runtime._set_acl(active, "(A;;FA;;;WD)")
+        else:
+            active.chmod(0o644)
+        assert manager.status()["code"] == "AUTH_STORAGE_INVALID"
+        assert manager.status()["connected"] is False
+    finally:
+        private_path(active)
+        manager.close()
+
+
 def test_device_login_transient_code_and_explicit_model_promotion(tmp_path, monkeypatch):
     platform = tmp_path / "platform"
     platform.mkdir()
@@ -112,27 +130,27 @@ def test_device_login_transient_code_and_explicit_model_promotion(tmp_path, monk
         manager.login()
         challenge = waiting(manager)
         assert challenge["verification_url"] == DEVICE_URL and challenge["user_code"] == "ABCD-EFGH"
-        assert "ABCD-EFGH" not in (manager.root / "operation.json").read_text()
+        assert "ABCD-EFGH" not in (manager.root / "operation.json").read_text(encoding="utf-8")
         assert not (manager.root / "active.json").exists()
         assert wait(manager, {"authenticated"})["model_available"] is False
         assert state["generate_calls"] == 0
-        public = json.loads(observed.read_text())
+        public = json.loads(observed.read_text(encoding="utf-8"))
         assert public["arguments"] == ["--no-daemon", "-c", 'cli_auth_credentials_store="file"', "login", "--device-auth"]
         assert public["private_env"] == []
         assert Path(public["home"]).parent == manager.root / "profiles"
         assert os.environ["CODEX_HOME"] == str(platform)
-        assert (platform / "auth.json").read_text() == "platform-fixture-untouched"
+        assert (platform / "auth.json").read_text(encoding="utf-8") == "platform-fixture-untouched"
         manager.probe()
         result = wait(manager, {"available"})
         assert result["model_available"] is True and result["connected"] is True
-        pointer = json.loads((manager.root / "active.json").read_text())
+        pointer = json.loads((manager.root / "active.json").read_text(encoding="utf-8"))
         assert set(pointer) == {"version", "profile", "verified", "verified_at"}
         assert pointer["verified"] is True
-        assert (manager.root / pointer["profile"]).stat().st_mode & 0o777 == 0o700
-        assert (manager.root / "active.json").stat().st_mode & 0o777 == 0o600
+        assert is_private_path(manager.root / pointer["profile"])
+        assert is_private_path(manager.root / "active.json")
         manager.disconnect()
         assert manager.status()["connected"] is False
-        assert (platform / "auth.json").read_text() == "platform-fixture-untouched"
+        assert (platform / "auth.json").read_text(encoding="utf-8") == "platform-fixture-untouched"
         assert (manager.root / pointer["profile"] / "auth.json").exists()
     finally:
         manager.close()
@@ -163,7 +181,7 @@ def test_failed_replacement_keeps_previous_verified_profile(tmp_path, monkeypatc
         assert result["connected"] and result["model_available"]
         assert (manager.root / "active.json").read_bytes() == old
         assert "raw-private" not in json.dumps(result)
-        assert "raw-private" not in (manager.root / "operation.json").read_text()
+        assert "raw-private" not in (manager.root / "operation.json").read_text(encoding="utf-8")
     finally:
         manager.close()
 
@@ -190,7 +208,7 @@ def test_login_errors_are_classified_without_raw_output(tmp_path, monkeypatch, d
         manager.login()
         result = wait(manager, {"blocked"})
         assert result["code"] == expected
-        assert "raw-private" not in json.dumps(result) + (manager.root / "operation.json").read_text()
+        assert "raw-private" not in json.dumps(result) + (manager.root / "operation.json").read_text(encoding="utf-8")
         assert result["user_code"] is None and result["verification_url"] is None
     finally:
         manager.close()
@@ -200,7 +218,7 @@ def test_timeout_and_cancel_stop_device_process(tmp_path, monkeypatch):
     manager, _, _ = make_manager(tmp_path, monkeypatch, delay=60, timeout=1)
     try:
         manager.login();waiting(manager)
-        handle = json.loads((manager.root / "operation.json").read_text())["handle"]
+        handle = json.loads((manager.root / "operation.json").read_text(encoding="utf-8"))["handle"]
         assert wait(manager, {"blocked"})["code"] == "LOGIN_TIMEOUT"
         assert _start_ticks(handle["pid"]) is None
     finally:
@@ -231,12 +249,12 @@ def test_cleanup_failure_preserves_handle_and_blocks_new_actions(tmp_path, monke
     try:
         manager.login()
         assert wait(manager, {"blocked"})["code"] == "CLEANUP_UNCONFIRMED"
-        old = json.loads((manager.root / "operation.json").read_text())["handle"]
+        old = json.loads((manager.root / "operation.json").read_text(encoding="utf-8"))["handle"]
         assert old is not None
         assert manager.cancel()["code"] == "CLEANUP_UNCONFIRMED"
         assert manager.login()["code"] == "CLEANUP_UNCONFIRMED"
         assert manager.disconnect()["code"] == "CLEANUP_UNCONFIRMED"
-        assert json.loads((manager.root / "operation.json").read_text())["handle"] == old
+        assert json.loads((manager.root / "operation.json").read_text(encoding="utf-8"))["handle"] == old
     finally:
         state["cleanup"] = True
         manager.close()
@@ -246,10 +264,45 @@ def test_successful_leader_exit_cleans_stubborn_descendants(tmp_path, monkeypatc
     manager, _, observed = make_manager(tmp_path, monkeypatch, descendant=True)
     try:
         manager.login();wait(manager, {"authenticated"})
-        child = int(Path(str(observed) + ".child").read_text())
-        info = Path(f"/proc/{child}/stat")
-        assert not info.exists() or info.read_text().rsplit(")", 1)[1].split()[0] == "Z"
+        child = int(Path(str(observed) + ".child").read_text(encoding="utf-8"))
+        if os.name == "nt":
+            assert _start_ticks(child) is None
+        else:
+            info = Path(f"/proc/{child}/stat")
+            assert not info.exists() or info.read_text(encoding="utf-8").rsplit(")", 1)[1].split()[0] == "Z"
     finally:
+        manager.close()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows original Job handle lifecycle")
+@pytest.mark.parametrize("confirmed", [True, False], ids=["confirmed", "unconfirmed"])
+def test_cleanup_of_exited_login_leader_closes_original_job_only_after_confirmation(tmp_path, monkeypatch, confirmed):
+    manager, _, _ = make_manager(tmp_path, monkeypatch)
+    profile = "profiles/" + "a" * 32
+    connection._private_directory(manager.root / profile)
+    assert manager._begin("login", profile)
+    process = subprocess.Popen([sys.executable, "-c", "pass"], **_process_options(suspended=True))
+    job = original_stop = None
+    try:
+        _track_process(process, suspended=True)
+        retained = _worker_handle(process)
+        manager._record_handle(retained)
+        process.wait(timeout=5)
+        assert process.poll() == 0
+        job = process._paper_factory_job
+        original_stop, original_handle = job.stop, job.handle
+        assert original_handle is not None
+        if not confirmed:
+            monkeypatch.setattr(job, "stop", lambda: False)
+        assert manager._confirm_cleanup(profile, process) is confirmed
+        assert job.handle == (None if confirmed else original_handle)
+        assert json.loads((manager.root / "operation.json").read_text(encoding="utf-8"))["handle"] == retained
+    finally:
+        # Reconcile the real controlled process even if the assertion above
+        # fails; this test never leaves a synthetic cleanup failure active.
+        if job is not None and original_stop is not None:
+            monkeypatch.setattr(job, "stop", original_stop)
+        assert connection._try_stop(process)
         manager.close()
 
 
@@ -272,7 +325,7 @@ def test_checkout_and_platform_home_are_not_adopted(tmp_path, monkeypatch):
         manager = ConnectionManager(root)
         assert manager.status()["code"] == "AUTH_STORAGE_INVALID"
         manager.close()
-    assert (platform / "auth.json").read_text() == "untouched"
+    assert (platform / "auth.json").read_text(encoding="utf-8") == "untouched"
 
 
 def test_placeholder_git_directory_is_not_a_checkout(tmp_path):
@@ -286,7 +339,11 @@ def test_placeholder_git_directory_is_not_a_checkout(tmp_path):
 
 def test_symlink_auth_root_is_rejected(tmp_path):
     target = tmp_path / "target";target.mkdir()
-    link = tmp_path / "link";link.symlink_to(target, target_is_directory=True)
+    link = tmp_path / "link"
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError:
+        pytest.skip("Creating symlinks is unavailable on this system")
     manager = ConnectionManager(link)
     try:
         assert manager.status()["code"] == "AUTH_STORAGE_INVALID"
@@ -296,17 +353,21 @@ def test_symlink_auth_root_is_rejected(tmp_path):
 
 def test_restart_recovers_only_unlocked_owned_worker(tmp_path):
     root = tmp_path / "auth";root.mkdir(mode=0o700);profile = "profiles/" + "a" * 32
+    private_path(root)
     (root / profile).mkdir(mode=0o700, parents=True)
-    process = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(60)"], start_new_session=True)
+    private_path(root / profile)
+    process = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(60)"], **_process_options())
+    _track_process(process)
     write_json(root / "operation.json", {"version": 1, "operation_id": "b" * 32, "kind": "login", "profile": profile,
         "status": "waiting_user", "authentication": "unknown", "started_at": _now(), "expires_at": _now(),
-        "handle": {"kind": "codex", "pid": process.pid, "pgid": process.pid, "start_ticks": _start_ticks(process.pid)},
+        "handle": _worker_handle(process),
         "code": None, "message": None})
+    private_path(root / "operation.json")
     manager = ConnectionManager(root)
     try:
         assert manager.status()["code"] == "INTERRUPTED"
         process.wait(timeout=2)
-        assert json.loads((root / "operation.json").read_text())["handle"] is None
+        assert json.loads((root / "operation.json").read_text(encoding="utf-8"))["handle"] is None
     finally:
         manager.close()
         if process.poll() is None: process.kill();process.wait()
@@ -345,9 +406,9 @@ def test_stale_cancel_intent_does_not_cancel_next_login(tmp_path, monkeypatch):
         first.login();waiting(first)
         second = ConnectionManager(first.root, provider_factory=lambda home: FakeProvider(home, state))
         second.cancel();wait(first, {"cancelled"})
-        old = json.loads((first.root / ".cancel.json").read_text())["operation_id"]
+        old = json.loads((first.root / ".cancel.json").read_text(encoding="utf-8"))["operation_id"]
         first.login();wait(first, {"authenticated"})
-        assert json.loads((first.root / "operation.json").read_text())["operation_id"] != old
+        assert json.loads((first.root / "operation.json").read_text(encoding="utf-8"))["operation_id"] != old
     finally:
         if second: second.close()
         first.close()
@@ -382,7 +443,7 @@ def test_no_challenge_has_separate_bounded_startup_deadline(tmp_path, monkeypatc
 def test_login_reader_start_exception_retains_unconfirmed_worker_handle(tmp_path, monkeypatch):
     manager, state, _ = make_manager(tmp_path, monkeypatch)
     profile = "profiles/" + "d" * 32
-    (manager.root / profile).mkdir(mode=0o700)
+    connection._private_directory(manager.root / profile)
     assert manager._begin("login", profile)
     state["cleanup"] = False
     class Process:
@@ -392,7 +453,10 @@ def test_login_reader_start_exception_retains_unconfirmed_worker_handle(tmp_path
         def poll(self):
             return None
     monkeypatch.setattr(connection.subprocess, "Popen", lambda *args, **kwargs: Process())
-    monkeypatch.setattr(connection, "_start_ticks", lambda pid: 1)
+    handle = {"kind": "codex", "pid": 999999, "pgid": 999999, "start_ticks": 1}
+    monkeypatch.setattr(connection, "_cli_command", lambda binary: [binary])
+    monkeypatch.setattr(connection, "_track_process", lambda process, **kwargs: None)
+    monkeypatch.setattr(connection, "_worker_handle", lambda process: handle)
     monkeypatch.setattr(connection, "_try_stop", lambda process: False)
     def failed_start(thread):
         raise RuntimeError("fixture-reader-start-failure")
@@ -400,11 +464,11 @@ def test_login_reader_start_exception_retains_unconfirmed_worker_handle(tmp_path
     try:
         manager._login_worker("fixture-codex", profile)
         assert manager.status()["code"] == "CLEANUP_UNCONFIRMED"
-        handle = json.loads((manager.root / "operation.json").read_text())["handle"]
+        handle = json.loads((manager.root / "operation.json").read_text(encoding="utf-8"))["handle"]
         assert handle == {"kind": "codex", "pid": 999999, "pgid": 999999, "start_ticks": 1}
         assert manager.cancel()["code"] == "CLEANUP_UNCONFIRMED"
         assert manager.disconnect()["code"] == "CLEANUP_UNCONFIRMED"
-        assert json.loads((manager.root / "operation.json").read_text())["handle"] == handle
+        assert json.loads((manager.root / "operation.json").read_text(encoding="utf-8"))["handle"] == handle
     finally:
         manager.close()
 
@@ -421,9 +485,35 @@ def test_probe_exception_retains_unconfirmed_worker_handle(tmp_path, monkeypatch
         monkeypatch.setattr(FakeProvider, "generate", failed_generate)
         manager.probe()
         assert wait(manager, {"blocked"})["code"] == "CLEANUP_UNCONFIRMED"
-        assert json.loads((manager.root / "operation.json").read_text())["handle"] == handle
+        assert json.loads((manager.root / "operation.json").read_text(encoding="utf-8"))["handle"] == handle
         assert not (manager.root / "active.json").exists()
         assert manager.cancel()["code"] == "CLEANUP_UNCONFIRMED"
+    finally:
+        manager.close()
+
+
+@pytest.mark.parametrize("valid_identity", [True, False], ids=["retained-identity", "missing-identity"])
+def test_probe_undelivered_cleanup_identity_preserves_receipts_and_blocks_new_workers(tmp_path, monkeypatch, valid_identity):
+    manager, state, _ = make_manager(tmp_path, monkeypatch)
+    retained = {"kind": "codex", "pid": 999999, "pgid": 999999, "start_ticks": 1 if valid_identity else None}
+    calls = []
+    def failed_generate(provider, prompt, schema, call_dir, **kwargs):
+        calls.append(Path(call_dir))
+        write_json(Path(call_dir) / "receipt.json", {"simulation": True, "active_handle": retained})
+        raise ProviderBlocked("CLEANUP_UNCONFIRMED", "Simulated ownership callback failure", active_handle=retained)
+    try:
+        manager.login(); wait(manager, {"authenticated"})
+        state["cleanup"] = False
+        monkeypatch.setattr(FakeProvider, "generate", failed_generate)
+        manager.probe()
+        assert wait(manager, {"blocked"})["code"] == "CLEANUP_UNCONFIRMED"
+        operation = json.loads((manager.root / "operation.json").read_text(encoding="utf-8"))
+        assert operation["handle"] == (retained if valid_identity else None)
+        assert (calls[0] / "receipt.json").is_file()
+        assert not (manager.root / "active.json").exists()
+        assert manager.login()["code"] == "CLEANUP_UNCONFIRMED"
+        assert manager.probe()["code"] == "CLEANUP_UNCONFIRMED"
+        assert len(calls) == 1
     finally:
         manager.close()
 

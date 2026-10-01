@@ -369,10 +369,9 @@ def import_review(ws: Workspace, submission: Submission, spec_path: Path, report
             return revision, destination
         except Exception:
             if published:
-                with ws._database() as db:
-                    persisted = db.execute("SELECT 1 FROM records WHERE kind='revision' AND id=?", (data.id,)).fetchone()
-                if not persisted:
-                    shutil.rmtree(ws.path(f"revisions/{data.id}"))
+                ws.discard_uncommitted_artifact(destination, kind="revision",
+                    record_id=revision.id, field="artifact_sha256",
+                    expected_value=revision.artifact_sha256)
             raise
         finally:
             if stage.exists():
@@ -453,7 +452,12 @@ def draft(ws: Workspace, revision: Revision, pandoc: str | None = None, pdf: boo
             write_json(root / "paper.json", paper)
             ws.save("paper", paper)
         except Exception:
-            shutil.rmtree(ws.path(f"manuscripts/{paper.id}"))
+            if paper.document_sha256:
+                ws.discard_uncommitted_artifact(root, kind="paper",
+                    record_id=paper.id, field="document_sha256",
+                    expected_value=paper.document_sha256)
+            else:
+                shutil.rmtree(ws.path(f"manuscripts/{paper.id}"))
             raise
         manuscript.compile_manuscript(ws, paper, pandoc=pandoc, pdf=pdf)
         return paper, root
@@ -670,10 +674,9 @@ def build_response(ws: Workspace, revision: Revision, plan_path: Path, pandoc: s
             return response, destination
         except Exception:
             if published:
-                with ws._database() as db:
-                    persisted = db.execute("SELECT 1 FROM records WHERE kind='revision_response' AND id=?", (data.id,)).fetchone()
-                if not persisted:
-                    shutil.rmtree(ws.path(f"revisions/{revision.id}/responses/{data.id}"))
+                ws.discard_uncommitted_artifact(destination, kind="revision_response",
+                    record_id=response.id, field="artifact_sha256",
+                    expected_value=response.artifact_sha256)
             raise
         finally:
             if stage.exists():

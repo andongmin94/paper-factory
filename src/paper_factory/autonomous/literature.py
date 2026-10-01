@@ -13,18 +13,23 @@ import ipaddress
 import json
 import os
 import re
+import signal
 import socket
 import subprocess
 import sys
+import sysconfig
 from pathlib import Path
 from typing import Callable
 from urllib.parse import quote, urljoin, urlsplit
 from urllib.request import getproxies_environment, proxy_bypass_environment
+from uuid import uuid4
 
 import httpx
 from bs4 import BeautifulSoup
 
 from ..literature import _doi, _metadata
+from ..workspace import ensure_unlinked, is_link
+from .windows_runtime import WindowsJob
 
 CROSSREF = "https://api.crossref.org"
 # Fixed provider boundaries prevent a metadata link from requesting local services.
@@ -122,13 +127,13 @@ def _fetch(
 def _prepare_root(root: Path) -> Path:
     root = Path(os.path.abspath(root))
     for part in (root, *root.parents):
-        if part.is_symlink():
+        if is_link(part):
             raise ValueError("Literature output path cannot contain symbolic links")
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     if not root.is_dir():
         raise ValueError("Literature output root is not a directory")
     destination = root / "literature"
-    if destination.is_symlink():
+    if is_link(destination):
         raise ValueError("Literature output directory cannot be a symbolic link")
     destination.mkdir(exist_ok=True, mode=0o700)
     return root
@@ -138,12 +143,14 @@ def _save(root: Path, prefix: str, suffix: str, content: bytes) -> tuple[str, st
     digest = hashlib.sha256(content).hexdigest()
     relative = f"literature/{prefix}-{digest[:16]}.{suffix}"
     path = root / relative
+    # Recheck directories in case a prepared output path was replaced by a link.
+    ensure_unlinked(path.parent)
     # Exclusive creation and NOFOLLOW keep an existing symlink from being followed.
     try:
         descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
     except FileExistsError:
-        if path.is_symlink() or not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
-            raise ValueError("Existing literature artifact does not match the fetched evidence")
+        if is_link(path) or not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+            raise ValueError("Existing literature artifact does not match the fetched evidence") from None
     else:
         with os.fdopen(descriptor, "wb") as stream:
             stream.write(content)
@@ -204,32 +211,79 @@ def _pdf_text(content: bytes) -> str:
     """Parse untrusted PDFs in a resource-limited child with no inherited secrets."""
     if not content.startswith(b"%PDF-"):
         raise ValueError("Open-access response is not a PDF document")
+    if len(content) > MAX_PDF_BYTES:
+        raise ValueError("Open-access PDF exceeds its size limit")
     source_directory = str(Path(__file__).resolve().parents[2])
+    package_directory = sysconfig.get_path("purelib")
     worker = f"""
-import json, resource, sys
-resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024, 512 * 1024 * 1024))
-resource.setrlimit(resource.RLIMIT_CPU, (8, 8))
-resource.setrlimit(resource.RLIMIT_NOFILE, (32, 32))
+import json, sys
+if sys.platform != "win32":
+    import resource
+    resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024, 512 * 1024 * 1024))
+    resource.setrlimit(resource.RLIMIT_CPU, (8, 8))
+    resource.setrlimit(resource.RLIMIT_NOFILE, (32, 32))
+# Input is supplied only after the controller has assigned the Windows job.
+content = sys.stdin.buffer.read({MAX_PDF_BYTES + 1})
+sys.path.insert(0, {package_directory!r})
 sys.path.insert(0, {source_directory!r})
 from paper_factory.autonomous.literature import _extract_pdf
 try:
-    text = _extract_pdf(sys.stdin.buffer.read({MAX_PDF_BYTES + 1}))
+    text = _extract_pdf(content)
     sys.stdout.write(json.dumps(text))
 except Exception:
     sys.exit(2)
 """
+    process = None
+    job = None
+    cleanup_confirmed = True
     try:
-        parsed = subprocess.run(
-            [sys.executable, "-I", "-c", worker], input=content,
+        if os.name == "nt":
+            job = WindowsJob(name="Local\\paper-factory-research-" + uuid4().hex,
+                             limits={"memory_bytes": 512 * 1024 * 1024, "pids": 1, "cpu_seconds": 8})
+        options = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW}
+                   if os.name == "nt" else {"start_new_session": True})
+        # Windows venv redirectors spawn a second process before job assignment.
+        # Start the native interpreter directly and add our installed packages above.
+        interpreter = str(Path(sys.base_prefix) / "python.exe") if os.name == "nt" else sys.executable
+        process = subprocess.Popen(
+            [interpreter, "-I", "-c", worker], stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            timeout=12, check=False, env={"PYTHONIOENCODING": "utf-8"},
+            env={"PYTHONIOENCODING": "utf-8"}, **options,
         )
+        if job is not None:
+            job.assign(process._handle)
+        output, _ = process.communicate(content, timeout=12)
+        returncode = process.returncode
     except (OSError, subprocess.TimeoutExpired) as error:
         raise ValueError("Open-access PDF extraction failed or exceeded its resource limit") from error
-    if parsed.returncode != 0 or len(parsed.stdout) > MAX_TEXT_CHARS * 8:
+    finally:
+        try:
+            if process is not None:
+                # A job assignment failure happens before any PDF input is sent.
+                if job is not None:
+                    cleanup_confirmed = job.stop()
+                elif process.poll() is None:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                if process.poll() is None:
+                    process.kill()
+                process.wait(timeout=5)
+                for stream in (process.stdin, process.stdout):
+                    if stream is not None:
+                        stream.close()
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise ValueError("Open-access PDF extraction cleanup could not be confirmed") from error
+        finally:
+            if job is not None:
+                job.close()
+    if not cleanup_confirmed:
+        raise ValueError("Open-access PDF extraction cleanup could not be confirmed")
+    if returncode != 0 or len(output) > MAX_TEXT_CHARS * 8:
         raise ValueError("Open-access PDF could not be safely extracted")
     try:
-        text = json.loads(parsed.stdout)
+        text = json.loads(output)
     except (ValueError, UnicodeDecodeError) as error:
         raise ValueError("Open-access PDF extraction returned invalid text") from error
     if not isinstance(text, str) or len(text) > MAX_TEXT_CHARS + 1000:

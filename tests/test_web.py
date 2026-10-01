@@ -10,7 +10,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from paper_factory.web import MAX_BODY, WebState, create_server
+from paper_factory.web import MAX_BODY, WebHandler, WebState, create_server
 from paper_factory.workspace import write_json
 
 
@@ -28,8 +28,8 @@ def web_case(tmp_path, monkeypatch):
     studies = tmp_path / "studies"
     study = studies / "sample-study"
     study.mkdir(parents=True)
-    (study / "manuscript.md").write_text("# Evidence-backed article\n", encoding="utf-8")
-    (study / "results.csv").write_text("metric,value\ncount,2\n", encoding="utf-8")
+    (study / "manuscript.md").write_text("# Evidence-backed article\n", encoding="utf-8", newline="\n")
+    (study / "results.csv").write_text("metric,value\ncount,2\n", encoding="utf-8", newline="\n")
     (study / "undeclared.txt").write_text("Not exposed", encoding="utf-8")
     write_json(study / "manifest.json", {"id": "sample-study", "title": "Sample study", "status": "complete", "repository": {"name": "owner/sample"}, "files": [{"path": "manuscript.md", "role": "manuscript"}, {"path": "results.csv", "role": "data"}]})
     server = create_server(port=0, studies_root=studies, data_root=tmp_path / "data", static_root=static, source_roots=[tmp_path])
@@ -72,6 +72,35 @@ def action_ok(client, project_id, action, **kwargs):
     return job["result"]
 
 
+def test_python_web_api_defaults_to_application_home(tmp_path, monkeypatch):
+    home = tmp_path / "application-home"
+    monkeypatch.setenv("PF_HOME", str(home))
+    server = create_server(port=0)
+    try:
+        assert server.state.studies_root == (home / "studies").resolve()
+        assert server.state.data_root == (home / "web").resolve()
+    finally:
+        server.server_close()
+
+
+def test_download_growth_cannot_exceed_declared_content_length(tmp_path):
+    path = tmp_path / "growing.txt"
+    original = b"Recorded observation\n"
+    path.write_bytes(original)
+    handler = object.__new__(WebHandler)
+    handler.command = "GET"
+    handler.wfile = BytesIO()
+    declared = []
+    def headers(status, mime, size, **kwargs):
+        declared.append(size)
+        with path.open("ab") as stream:
+            stream.write(b"New observations added during download\n")
+    handler._headers = headers
+    handler._file(path)
+    assert declared == [len(original)]
+    assert handler.wfile.getvalue() == original
+
+
 def test_catalog_static_download_and_bundle_are_useful(web_case):
     _, client, _, _ = web_case
     assert client.get("/").status_code == 200
@@ -103,7 +132,12 @@ def test_symlink_artifact_rejected_without_exposing_target(web_case):
     outside = temporary / "private.txt"
     outside.write_text("private-target-value", encoding="utf-8")
     symlink = server.state.studies_root / "sample-study" / "linked.txt"
-    symlink.symlink_to(outside)
+    try:
+        symlink.symlink_to(outside)
+    except OSError as error:
+        if getattr(error, "winerror", None) == 1314:
+            pytest.skip("Windows symlink creation requires Developer Mode or elevated permission")
+        raise
     write_json(symlink.parent / "manifest.json", {"title": "Unsafe", "files": [{"path": "linked.txt"}]})
     response = client.get("/api/studies/sample-study/files/linked.txt")
     assert response.status_code == 400
@@ -139,6 +173,78 @@ def test_import_restrictions_and_no_arbitrary_action(web_case):
     assert client.post(f"/api/projects/{project_id}/actions", json={"action": "research", "title": "Title", "question": "Question", "command": "x"}).status_code == 400
     assert client.get(f"/api/projects/{project_id}/files/records.sqlite3").status_code == 404
     assert not (server.state.workspace_path(project_id) / "source" / ".env").exists()
+
+
+def test_default_import_root_accepts_local_projects_under_home(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    source = home / "Desktop" / "project"
+    source.mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", lambda: home)
+    state = WebState(tmp_path / "studies", tmp_path / "web", tmp_path / "static", resume_jobs=False)
+    try:
+        assert state.source(str(source)) == str(source.resolve())
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        with pytest.raises(ValueError, match="configured import roots"):
+            state.source(str(outside))
+    finally:
+        state.close()
+
+
+def test_unavailable_project_artifact_does_not_block_other_downloads(web_case, monkeypatch):
+    import paper_factory.web as web
+    server, client, source, _ = web_case
+    project_id = import_project(client, source)
+    monkeypatch.setattr(web, "MAX_FILE", 64)
+    root = server.state.workspace_path(project_id)
+    oversized = root / "reports" / "large.csv"
+    oversized.write_bytes(b"x" * 65)
+    available = root / "reports" / "small.txt"
+    available.write_text("available", encoding="utf-8")
+    response = client.get(f"/api/projects/{project_id}")
+    assert response.status_code == 200, response.text
+    detail = response.json()
+    assert any(item["path"] == "reports/large.csv" for item in detail["file_errors"])
+    assert all(item["path"] != "reports/large.csv" for item in detail["files"])
+    assert client.get(f"/api/projects/{project_id}/files/reports/small.txt").text == "available"
+    assert client.get(f"/api/projects/{project_id}/files/reports/large.csv").status_code == 404
+
+
+def test_zip_downloads_use_bundle_limit(web_case, monkeypatch):
+    import paper_factory.web as web
+    server, client, source, _ = web_case
+    project_id = import_project(client, source)
+    monkeypatch.setattr(web, "MAX_FILE", 64)
+    monkeypatch.setattr(web, "MAX_BUNDLE", 96)
+    root = server.state.workspace_path(project_id)
+    accepted = root / "reports" / "reproducibility.zip"
+    accepted.write_bytes(b"z" * 96)
+    oversized = root / "reports" / "oversized.zip"
+    oversized.write_bytes(b"z" * 97)
+    detail = client.get(f"/api/projects/{project_id}").json()
+    assert any(item["path"] == "reports/reproducibility.zip" for item in detail["files"])
+    assert any(item["path"] == "reports/oversized.zip" for item in detail["file_errors"])
+    response = client.get(f"/api/projects/{project_id}/files/reports/reproducibility.zip")
+    assert response.status_code == 200
+    assert response.content == accepted.read_bytes()
+    assert client.head(f"/api/projects/{project_id}/files/reports/reproducibility.zip").headers["Content-Length"] == "96"
+    assert client.get(f"/api/projects/{project_id}/files/reports/oversized.zip").status_code == 404
+
+
+def test_oversized_processed_run_does_not_hide_project_records(web_case, monkeypatch):
+    import paper_factory.web as web
+    server, client, source, _ = web_case
+    project_id = import_project(client, source)
+    action_ok(client, project_id, "research", candidate="asset-inventory")
+    run = action_ok(client, project_id, "run")
+    relative = f"runs/{run['id']}/processed.json"
+    (server.state.workspace_path(project_id) / relative).write_bytes(b"x" * 65)
+    monkeypatch.setattr(web, "MAX_FILE", 64)
+    response = client.get(f"/api/projects/{project_id}")
+    assert response.status_code == 200, response.text
+    detail = response.json()
+    assert detail["records"]["run"][0]["id"] == run["id"]
+    assert any(item["path"] == relative for item in detail["file_errors"])
 
 
 def test_real_pipeline_can_create_run_build_edit_render_and_check(web_case):
@@ -414,34 +520,40 @@ def test_canonical_edit_uses_shared_cli_paper_lock(web_case):
 
 
 @pytest.mark.parametrize("explicit_override", [False, True])
-def test_bare_interpreter_invocation_selects_venv_tools_for_actual_pdf(web_case, monkeypatch, explicit_override):
+def test_bare_interpreter_invocation_preserves_pdf_tool_discovery(web_case, monkeypatch, explicit_override, pandoc):
     """No shell activation is required for a web job to find its PDF tools."""
     server, client, source, _ = web_case
     import os
     import shutil
     import sys
-    sibling = Path(sys.executable).absolute().parent / ("pandoc.exe" if os.name == "nt" else "pandoc")
-    if not sibling.is_file():
-        pytest.skip("The invoking Python environment has no sibling Pandoc; install the PDF toolchain")
+    interpreter_bin = Path(sys.executable).absolute().parent
+    pandoc_path = Path(pandoc).resolve()
     pytest.importorskip("typst")
     pypdf = pytest.importorskip("pypdf")
     # Deliberately omit the invoking virtualenv's bin directory, reproducing a
     # direct .venv/bin/paperfactory serve invocation from an unactivated shell.
-    inherited_path = os.pathsep.join(entry for entry in os.environ.get("PATH", "").split(os.pathsep)
-                                     if Path(entry).absolute() != sibling.parent)
+    inherited_entries = [
+        entry for entry in os.environ.get("PATH", "").split(os.pathsep)
+        if Path(entry).absolute() != interpreter_bin
+    ]
+    # Pandoc may be an external installation or supplied by pypandoc_binary.
+    # Preserve its external discovery path without activating the virtualenv.
+    if pandoc_path.parent != interpreter_bin:
+        inherited_entries.insert(0, str(pandoc_path.parent))
+    inherited_path = os.pathsep.join(inherited_entries)
     monkeypatch.setenv("PATH", inherited_path)
     monkeypatch.delenv("PYPANDOC_PANDOC", raising=False)
     if explicit_override:
-        monkeypatch.setenv("PYPANDOC_PANDOC", str(sibling))
+        monkeypatch.setenv("PYPANDOC_PANDOC", str(pandoc_path))
     executed = []
     original_execute = server.state._execute
     def inspect_execute(command, environment, timeout, job):
         if job["action"] in {"manuscript-build", "manuscript-render"}:
-            assert environment["PATH"].split(os.pathsep)[0] == str(sibling.parent)
-            assert environment["PATH"] == str(sibling.parent) + (os.pathsep + inherited_path if inherited_path else "")
-            assert Path(shutil.which("pandoc", path=environment["PATH"])).resolve() == sibling.resolve()
+            assert environment["PATH"].split(os.pathsep)[0] == str(interpreter_bin)
+            assert environment["PATH"] == str(interpreter_bin) + (os.pathsep + inherited_path if inherited_path else "")
+            assert Path(shutil.which("pandoc", path=environment["PATH"])).resolve() == pandoc_path
             if explicit_override:
-                assert command[command.index("--pandoc") + 1] == str(sibling.resolve())
+                assert command[command.index("--pandoc") + 1] == str(pandoc_path)
             else:
                 assert "--pandoc" not in command
             executed.append(job["action"])
@@ -452,7 +564,7 @@ def test_bare_interpreter_invocation_selects_venv_tools_for_actual_pdf(web_case,
     action_ok(client, project_id, "run")
     built = action_ok(client, project_id, "manuscript-build", pdf=True)
     assert built["compile_report"]["status"] == "COMPILED"
-    assert Path(built["compile_report"]["command"][0]).resolve() == sibling.resolve()
+    assert Path(built["compile_report"]["command"][0]).resolve() == pandoc_path
     paper_id = built["paper"]
     pdf_response = client.get(f"/api/projects/{project_id}/files/manuscripts/{paper_id}/manuscript.pdf")
     assert pdf_response.status_code == 200

@@ -9,31 +9,22 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
-import hashlib
 import json
 from pathlib import Path
 import re
 import shutil
 import subprocess
-import sys
 import zipfile
 
 from paper_factory.conversion import convert
 from paper_factory.author import load_author
 from paper_factory.config import load_env_file
-
-
-def digest(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def write_json(path: Path, value: object) -> None:
-    path.write_text(json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+from paper_factory.workspace import digest_file, is_link, safe_relative, write_json
 
 
 def safe_file(root: Path, relative: str) -> Path:
-    path = root / relative
-    if path.is_symlink() or not path.resolve().is_relative_to(root.resolve()) or not path.is_file():
+    path = safe_relative(root, relative)
+    if not path.is_file():
         raise ValueError(f"Missing or unsafe study file: {relative}")
     return path
 
@@ -83,13 +74,14 @@ def reproduce_bundle(root: Path, info: dict, *, private_files: tuple[Path, ...] 
         # omitting regenerable binary target trees from the recovery study.
         if relative.as_posix().startswith("experiment/cases/") and path.name not in {"fixture.json", "kill.json", "journal-before.jsonl"}:
             continue
-        if path.is_symlink() or not path.is_file() or path.suffix.lower() not in allowed_suffixes:
+        if is_link(path) or not path.is_file() or path.suffix.lower() not in allowed_suffixes:
             continue
         if relative.as_posix() in {"manifest.json", "bundle-inventory.json"}:
             continue
+        path = safe_file(root, relative.as_posix())
         if path.stat().st_size > 32 * 1024 * 1024:
             raise ValueError(f"Artifact too large for the review bundle: {relative}")
-        inventory.append({"path": relative.as_posix(), "bytes": path.stat().st_size, "sha256": digest(path)})
+        inventory.append({"path": relative.as_posix(), "bytes": path.stat().st_size, "sha256": digest_file(path)})
     write_json(root / "bundle-inventory.json", {
         "repository": info["repository"], "files": inventory,
         "excluded_regenerable_material": ["virtual environments", "node_modules", "large seeded per-case file/MIDI trees", "compiled dependency outputs"],
@@ -105,7 +97,7 @@ def reproduce_bundle(root: Path, info: dict, *, private_files: tuple[Path, ...] 
         temporary.unlink()
         raise ValueError("Reproducibility bundle exceeds the web artifact size limit")
     temporary.replace(target)
-    return {"path": target.name, "bytes": target.stat().st_size, "sha256": digest(target), "members": len(inventory) + 1}
+    return {"path": target.name, "bytes": target.stat().st_size, "sha256": digest_file(target), "members": len(inventory) + 1}
 
 
 def build(root: Path, author: dict, pandoc: str, bibliography: Path | None, compile_tex: bool,

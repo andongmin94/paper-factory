@@ -93,6 +93,28 @@ def delivery_case(prepared, tmp_path, *, additional_evidence=False, blind=False)
     return (*values, delivery, root)
 
 
+@pytest.mark.parametrize("after_commit", [False, True])
+def test_delivery_commit_outcome_preserves_or_removes_only_owned_artifacts(
+    prepared, mock_conversion, tmp_path, fail_transaction, after_commit
+):
+    ws, base, original, handler, revision, response, _ = revision_case(prepared, tmp_path)
+    base_digest = digest_file(ws.path(f"freezes/{base.id}/canonical.json"))
+    fail_transaction(ws, "revision_delivery", after_commit=after_commit)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(OSError, match="Injected"):
+            revision_submission.prepare(ws, revision, prepared[3], response=response, client=client)
+
+    deliveries = ws.list("revision_delivery", RevisionDelivery)
+    assert len(deliveries) == int(after_commit)
+    assert digest_file(ws.path(f"freezes/{base.id}/canonical.json")) == base_digest
+    assert ws.get("submission", original.id, Submission).state == SubmissionState.REVISION
+    assert {path.name for path in ws.path("revision-deliveries").iterdir()} == {item.id for item in deliveries}
+    if after_commit:
+        assert revision_submission.check(ws, deliveries[0])["passed"]
+    assert publication.check(ws, original)["passed"]
+
+
 def attest_delivery(ws, delivery, handler):
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         return revision_submission.attest(ws, delivery, author_values(), client=client)

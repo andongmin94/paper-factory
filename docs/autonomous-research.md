@@ -13,7 +13,25 @@ optionally inspects small manifests and READMEs. Persistent checkpoints connect
 protocol generation, literature, code generation/review, isolated execution,
 trusted analysis, manuscript generation/review and native export.
 
-Verification currently has distinct scopes:
+Verification has distinct scopes. On 2026-10-01, the native Windows controller
+completed an actual structured model request with the private official Codex CLI
+0.159.3: the application reported `verified: true` and the returned JSON contained
+`ready: true`. The request record is preserved in the temporary
+`paperfactory-windows-final-model-probe-7zl7jezw/call` evidence directory. This verifies
+the current account's model authentication and controller network access; it does
+not establish completion of a live model-generated study or paper.
+
+The production browser workflow also imported a synthetic local project,
+executed its descriptive inventory, generated a PDF and completed integrity
+verification. `scripts/start_windows.ps1` ran successfully from a repository path
+containing Korean characters. Unsaved manuscript edits survived result refresh
+and stage changes, and no browser CSP violations were observed. This is a
+local template workflow check, not evidence of autonomous live inference.
+Native isolation integration and the full test results are recorded separately
+in [status.md](status.md).
+
+The recorded checks below describe the earlier cloud environment; their
+authentication outcomes do not establish the current Windows account's state.
 
 | Check | Observed scope |
 |---|---|
@@ -26,7 +44,7 @@ Verification currently has distinct scopes:
 | Fresh source preparation | Actual public Git snapshots for madi, garak and mini-cast were imported, pinned source hashes verified and specified production functions included in bounded context. No new protocol, observations or paper exists yet |
 
 Simulation checks are not evidence of live model inference, production-call
-execution or container isolation. A saved network-configuration draft does not
+execution or platform isolation. A saved network-configuration draft does not
 apply settings to the current machine or verify connectivity. After the required
 runtime access is available, repeat the live run and its independent verification.
 The earlier three delivered studies were designed and executed outside this
@@ -39,6 +57,54 @@ produce a blocked/failed state instead of a successful paper. Final scientific
 approval belongs to the author. This workflow does not automatically submit to a
 journal, publish a preprint or attest authorship.
 
+## Native Windows setup
+
+Use Python 3.11+ (3.12 recommended), Git, and Node.js 24 with npm in PowerShell.
+The [Windows setup helper](../scripts/setup_windows.ps1) prepares the virtual
+environment, document/analysis dependencies and a private official Codex CLI.
+The equivalent manual installation is:
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev,pdf,research,automation]" pypandoc_binary -r scripts/research-runtime-requirements.txt
+npm.cmd install --prefix .venv/codex --no-audit --no-fund @openai/codex@0.159.3
+$env:PYPANDOC_PANDOC = (& .\.venv\Scripts\python.exe -c 'import json; from pathlib import Path; import pypandoc; p = Path(pypandoc.get_pandoc_path()); print(json.dumps(str(p if p.is_file() else p.with_suffix(".exe"))))') | ConvertFrom-Json
+Copy-Item .env.example .env
+.\.venv\Scripts\paperfactory.exe --env-file .env auto doctor
+```
+
+The private npm installation stays inside the virtual environment and preserves
+an existing global Codex CLI. The controller detects its private
+`codex.cmd` launcher and invokes Node with the official `codex.js` entry point;
+it does not run the launcher through a shell. `PF_CODEX_BIN` can select a different
+trusted installation. Python's full standard library is required; a small
+embedded interpreter without that library cannot serve as the experiment runtime.
+
+Windows generated experiments run in an AppContainer without network
+capabilities. Source, generated code and the staged interpreter are read-only;
+work/output/temp directories are private writable locations. A bounded Job Object
+owns the complete process tree, including timeout and cancellation cleanup.
+Windows requires neither Docker nor `PF_RESEARCH_IMAGE`, and does not invoke
+`build_autonomous_image.py`. If native isolation is unavailable, the pipeline
+blocks without unrestricted execution.
+
+Windows AppContainer grants access according to Windows ACLs, including shared
+standard OS resources. The execution receipt therefore records
+`read_only_root: false`. Disk usage is monitored in writable directories rather
+than enforced by a filesystem quota; memory, process and CPU limits use the Job
+Object. These enforcement details remain in the exported execution receipt.
+
+Only controller-approved package groups enter a generated experiment. The setup
+helper installs `scripts/research-runtime-requirements.txt` into its virtual environment;
+`auto doctor` lists the groups whose exact versions are available. NumPy and
+Matplotlib installed by the research extra support trusted controller analysis
+and do not make arbitrary experiment dependencies available.
+
+Linux retains the Docker research backend. Its optional image provisioner,
+`scripts/build_autonomous_image.py`, uses Linux runtime binaries and `ldd` and
+records an immutable `PF_RESEARCH_IMAGE=sha256:...` identity. Linux autonomous
+execution requires that provisioned image; Windows does not use it.
+
 ## Connect the official Codex CLI
 
 Use the official [Codex CLI](https://github.com/openai/codex) with an existing
@@ -46,6 +112,9 @@ supported ChatGPT subscription login. The CLI manages its own credentials.
 Paper Factory calls its noninteractive `codex exec` interface; it does not extract
 OAuth tokens, copy credential files or implement a separate subscription API.
 An OpenAI API key is not required for this subscription-backed adapter.
+Every model request rechecks ChatGPT authentication and sets the official CLI's
+`forced_login_method="chatgpt"`; changing to API-key authentication after an
+assessment checkpoint blocks subsequent generation, including resumed runs.
 Subscription usage limits still apply, and an unavailable login or model blocks
 the pipeline. Login begins only after the user clicks the web connection button
 or runs `paperfactory auto login`; setup and status checks never launch it.
@@ -86,10 +155,11 @@ Configure the following locally, alongside private author metadata:
 
 | Setting | Purpose |
 |---|---|
-| `PF_CODEX_BIN` | Optional path to the trusted official `codex` executable |
+| `PF_CODEX_BIN` | Optional trusted CLI path; defaults to the private venv npm installation, then `PATH` |
 | `PF_CODEX_MODEL` | Optional model available to the logged-in CLI account |
+| `PF_NODE_BIN` | Optional native Windows `node.exe` path; defaults to `PATH` |
 | `PF_CODEX_AUTH_HOME` | Optional private official-login connection root outside Git; default `PF_HOME/codex-auth` |
-| `PF_RESEARCH_IMAGE` | Provisioned local research image identified by immutable SHA-256 digest |
+| `PF_RESEARCH_IMAGE` | Linux Docker backend only: provisioned local image identified by immutable SHA-256 digest; unused on Windows |
 
 Select local configuration explicitly with `paperfactory --env-file .env ...`.
 Existing process settings take precedence over the selected dotenv file. Keep
@@ -122,11 +192,13 @@ credential store remains under its own control and never enters generated code.
    evidence must block unsupported discussion or final completion. Never claim
    novelty solely because a search returned few papers.
 4. **Generate and execute.** Keep generated code separate from the frozen imported
-   source. Execute only inside the provisioned Docker research runtime with no
-   network, non-root identity, read-only inputs and bounded CPU, memory, processes,
-   time and output. Do not fall back to host execution if Docker or the image is
-   unavailable. Never send model credentials or author configuration to generated
-   programs. Needed dependencies must already be provisioned in the image.
+   source. Windows selects the native AppContainer/Job Object runtime; Linux
+   selects the provisioned Docker runtime. Both deny network access, provide
+   read-only source/code/runtime inputs and bound memory, processes, time and
+   output. Keep each platform's enforcement and provenance in the execution
+   receipt. Unavailable isolation blocks the experiment. Never send model
+   credentials or author configuration to generated programs. Dependencies must
+   already be approved and available in the selected runtime.
    A separate model pass reviews code against the frozen plan and source before
    execution. This is assisted review and does not prove oracle independence.
 5. **Analyze and write.** Treat observed rows separately from proposed outcomes.
@@ -146,25 +218,28 @@ credential store remains under its own control and never enters generated code.
 
 ## Control, recovery and acceptance
 
-Use the installed commands from the same development environment:
+Use the installed commands from the same development environment. On Windows:
 
-```bash
-paperfactory --env-file .env auto doctor
-paperfactory --env-file .env auto select https://github.com/OWNER --count 3
-paperfactory --env-file .env auto run https://github.com/OWNER/REPOSITORY
-paperfactory --env-file .env auto batch https://github.com/OWNER --count 3
+```powershell
+.\.venv\Scripts\paperfactory.exe --env-file .env auto doctor
+.\.venv\Scripts\paperfactory.exe --env-file .env auto select https://github.com/OWNER --count 3
+.\.venv\Scripts\paperfactory.exe --env-file .env auto run https://github.com/OWNER/REPOSITORY
+.\.venv\Scripts\paperfactory.exe --env-file .env auto batch https://github.com/OWNER --count 3
 ```
 
 The run command reports its workspace and pipeline ID. To inspect or control an
 existing run, select that workspace explicitly; cancellation can be requested
 from another terminal while its worker is active:
 
-```bash
-paperfactory --env-file .env --workspace /path/to/workspace auto status PIPELINE_ID
-paperfactory --env-file .env --workspace /path/to/workspace auto cancel PIPELINE_ID
-paperfactory --env-file .env --workspace /path/to/workspace auto resume PIPELINE_ID
-paperfactory --env-file .env --workspace /path/to/workspace auto verify PIPELINE_ID
+```powershell
+.\.venv\Scripts\paperfactory.exe --env-file .env --workspace C:\research-workspaces\example auto status PIPELINE_ID
+.\.venv\Scripts\paperfactory.exe --env-file .env --workspace C:\research-workspaces\example auto cancel PIPELINE_ID
+.\.venv\Scripts\paperfactory.exe --env-file .env --workspace C:\research-workspaces\example auto resume PIPELINE_ID
+.\.venv\Scripts\paperfactory.exe --env-file .env --workspace C:\research-workspaces\example auto verify PIPELINE_ID
 ```
+
+With an activated Linux virtual environment, use `paperfactory` and an appropriate
+Linux workspace path for the same commands.
 
 Run and batch share the typed pipeline. A project permits one queued/running job.
 Resume verifies frozen source, code, observations and literature hashes and retries
@@ -186,4 +261,5 @@ recompute manuscript claims from the newly recorded raw observations. Exercise
 unavailable authentication/isolation, interrupted work, bad generated output and
 unsupported citations as well as successful completion. Mocked provider/runner
 tests verify orchestration contracts; they do not prove live model execution or
-container isolation. Record live checks separately and state anything unrun.
+platform isolation. Native AppContainer executions and Docker executions are
+separate acceptance evidence. Record live checks separately and state anything unrun.

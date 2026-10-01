@@ -484,11 +484,6 @@ main {
   border-color: #c6ceef;
   background: #fbfcff;
 }
-.button-quiet {
-  background: #f0f2fa;
-  color: #707b96;
-  border-color: #e8ebf5;
-}
 .button-small {
   padding: 7px 11px;
   min-height: 31px;
@@ -1405,6 +1400,10 @@ main {
   border-color: #abb8ee;
   background: white;
 }
+.field-count {
+  width: 70px;
+  padding: 9px;
+}
 .field-help {
   font-size: 10px;
   color: #a0a9bc;
@@ -1694,9 +1693,6 @@ main {
   color: #7c8da9;
   font-weight: 550;
 }
-.article-toggle {
-  margin-bottom: 15px;
-}
 .project-modal {
   width: min(880px, calc(100vw - 40px));
 }
@@ -1779,20 +1775,34 @@ main {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0 15px;
 }
-.workspace-form-grid .wide {
-  grid-column: 1/-1;
-}
 textarea.field {
   min-height: 90px;
   resize: vertical;
   line-height: 1.8;
 }
 .json-field {
+  margin-top: 12px;
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 11px;
   min-height: 260px !important;
   white-space: pre;
   line-height: 1.8;
+}
+.author-fields {
+  margin-top: 18px;
+}
+.manuscript-editor .record-card {
+  margin-top: 17px;
+}
+.manuscript-editor .record-card > .field-label:first-child {
+  margin-top: 0;
+}
+.manuscript-editor [data-action="add-paragraph"] {
+  margin-top: 13px;
+}
+.paper-aside .paper-kind,
+.paper-aside .button-small {
+  margin-top: 12px;
 }
 .inline-actions {
   display: flex;
@@ -1902,13 +1912,6 @@ textarea.field {
 .small-label {
   font-size: 10px;
   color: #9babca;
-}
-.result-summary {
-  font-size: 11px;
-  line-height: 1.8;
-  color: #9baecb;
-  margin-top: 12px;
-  overflow-wrap: anywhere;
 }
 .reading-tabs {
   display: flex;
@@ -2447,7 +2450,6 @@ textarea.field {
 .field-label,
 .record-card p,
 .literature-result p,
-.result-summary,
 .small-label {
   color: #78859b;
 }

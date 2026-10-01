@@ -25,37 +25,36 @@ Preprint upload remains manual.
 
 ## Install
 
-For the web and autonomous workflow, use **Linux or WSL2**, Python 3.12, Git,
-Node.js 24 with npm, and a running Docker engine. The current research-image
-builder uses Linux runtime binaries and `ldd`; connection management requires
-POSIX file locks. Run these commands from the cloned repository:
-
-```bash
-python3.12 -m venv .venv
-source .venv/bin/activate
-python -m pip install -e ".[dev,pdf,research,automation]" pypandoc_binary
-npm install -g @openai/codex@0.159.3
-export PYPANDOC_PANDOC="$(python -c 'import pypandoc; print(pypandoc.get_pandoc_path())')"
-cp .env.example .env
-chmod 600 .env
-paperfactory --help
-```
-
-Fill author settings in the private `.env` locally. The official CLI handles
-subscription credentials; do not put API keys or OAuth tokens in that file.
-Keep the environment activated, and repeat the `PYPANDOC_PANDOC` export in a new
-terminal if Pandoc is not on `PATH`.
-
-The base CLI supports Python 3.11+ on Windows/macOS as well. For a basic Windows
-installation:
+Use native **Windows**, Python 3.11+ (3.12 recommended), Git, and Node.js 24 with
+npm. Generated research experiments use Windows AppContainer isolation and a
+Job Object with resource limits. Windows does not require Docker, WSL2 or a
+research image. Run these commands in PowerShell from the cloned repository:
 
 ```powershell
-python -m venv .venv
-.venv\Scripts\python.exe -m pip install -e ".[dev,pdf]"
-.venv\Scripts\paperfactory.exe --help
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev,pdf,research,automation]" pypandoc_binary -r scripts/research-runtime-requirements.txt
+npm.cmd install --prefix .venv/codex --no-audit --no-fund @openai/codex@0.159.3
+$env:PYPANDOC_PANDOC = (& .\.venv\Scripts\python.exe -c 'import json; from pathlib import Path; import pypandoc; p = Path(pypandoc.get_pandoc_path()); print(json.dumps(str(p if p.is_file() else p.with_suffix(".exe"))))') | ConvertFrom-Json
+Copy-Item .env.example .env
+.\.venv\Scripts\paperfactory.exe --help
 ```
 
-Use WSL2 for the autonomous workflow on Windows. PDF uses
+Use `python -m venv .venv` if the Python launcher is unavailable. Fill author
+settings in the private `.env` locally. The official CLI handles subscription
+credentials; do not put API keys or OAuth tokens in that file. These commands use
+the virtual environment directly and do not require PowerShell activation.
+Repeat the `PYPANDOC_PANDOC` assignment in a new terminal if Pandoc is not on `PATH`.
+The [Windows setup helper](scripts/setup_windows.ps1) creates the virtual
+environment and installs its dependencies and private Codex CLI. The manual
+commands above install Codex inside `.venv/codex` and leave any existing global
+CLI unchanged. `PF_CODEX_BIN` is optional: the controller detects that private
+installation in its own virtual environment, then checks `PATH`. On Windows it
+resolves the official npm launcher to Node and its `codex.js` entry point without
+invoking a shell.
+
+The base CLI also supports Linux/macOS. Linux autonomous experiments use the
+separate Docker runtime described below; the image builder is a Linux-only
+provisioner. PDF uses
 [Pandoc](https://pandoc.org/installing.html) and the embedded Typst engine; no TeX
 distribution is required. Without Pandoc,
 canonical JSON, Markdown and `compile-command.json` are preserved and the status
@@ -64,8 +63,8 @@ is `COMPILE_READY`. Compiler failures preserve the source and fail the command.
 
 ```powershell
 .venv\Scripts\python.exe -m pip install pypandoc_binary
-.venv\Scripts\python.exe -c "import pypandoc; print(pypandoc.get_pandoc_path())"
-# Pass that executable to manuscript build --pandoc <path>.
+$env:PYPANDOC_PANDOC = (& .\.venv\Scripts\python.exe -c 'import json; from pathlib import Path; import pypandoc; p = Path(pypandoc.get_pandoc_path()); print(json.dumps(str(p if p.is_file() else p.with_suffix(".exe"))))') | ConvertFrom-Json
+# Pass $env:PYPANDOC_PANDOC to manuscript build --pandoc.
 ```
 
 Runtime dependencies are Pydantic, Typer, HTTPX, Beautiful Soup, python-dotenv and JSON Schema validation; the PDF extra
@@ -81,13 +80,15 @@ Upstream research and licenses are recorded in
 
 ## Open the web workspace
 
-After installation, run:
+After installation, run in PowerShell:
 
-```bash
-mkdir -p "$HOME/.paper-factory/studies"
-paperfactory --env-file .env serve --host 127.0.0.1 --port 8765 \
-  --studies "$HOME/.paper-factory/studies" \
-  --data "$HOME/.paper-factory/web"
+```powershell
+.\scripts\start_windows.ps1
+# With private author configuration: .\scripts\start_windows.ps1 -EnvFile .env
+# Direct CLI invocation after setting PYPANDOC_PANDOC:
+.\.venv\Scripts\paperfactory.exe --env-file .env serve --host 127.0.0.1 --port 8765
+# Optional: allow local projects below additional directories.
+# .\.venv\Scripts\paperfactory.exe --env-file .env serve --source-root C:\research --source-root D:\projects
 ```
 
 Open `http://127.0.0.1:8765` in a browser on that machine. A fresh clone has an
@@ -98,8 +99,11 @@ GitHub HTTPS repository, create a research question, register/run a Python
 experiment from the imported source, look up literature, then build/edit/render
 a manuscript and inspect its integrity report. Jobs preserve their logs and
 success/failure state; unfinished jobs are marked interrupted after restart.
-For local source directories, use the CLI `paperfactory start /path/to/project`;
-the current web local-import allowlist is configured for the cloud workspace.
+The default study library and web data live under `~/.paper-factory`; `PF_HOME`
+can select a different external root. Local web imports accept project folders
+below your home directory by default. Repeat `--source-root` to set explicit
+allowed parent directories. Authentication stores, internal web data and linked
+paths remain excluded. The CLI also accepts `paperfactory start <local-project>`.
 
 Research writes require a loopback connection with the server's matching origin.
 A nonloopback bind exposes an artifact-only preview. Registered web experiments
@@ -123,14 +127,31 @@ then click **실제 모델 요청 확인**. Only a successful model response sel
 new account for research. An earlier connection remains selected until that
 check passes. Login credentials stay in a private official CLI store outside Git;
 Paper Factory reads only its nonsecret connection metadata. No OpenAI API key is
-required. Configure the trusted CLI path/model and an immutable
-`PF_RESEARCH_IMAGE` in the explicit private dotenv file. Generated programs never
-receive this login, author settings or other controller credentials. Docker and
-a provisioned Python/Node image are required; there is no host execution fallback.
+required. Configure the optional trusted CLI path/model in the explicit private
+dotenv file. Generated programs never receive this login, author settings or
+other controller credentials. Every model call enforces ChatGPT authentication,
+including resumed research; API-key authentication blocks generation.
+Windows selects a native AppContainer worker,
+denies network capabilities, stages read-only source/code/runtime files, and
+uses a Job Object to bound and stop its process tree. If that boundary is
+unavailable, research blocks instead of running an unrestricted experiment.
+Dependencies available to generated programs are explicitly vetted; installing
+a package in the controller's virtual environment does not automatically expose
+it to an experiment. `auto doctor` reports the available runtimes and packages.
 
-Before starting autonomous jobs, build the local runtime from your Python 3.12
-and Node 24 installations. This example includes standard-library Python/Node
-and Mido; it does not install arbitrary project dependencies:
+For Windows, check the installation and connect your account:
+
+```powershell
+.\.venv\Scripts\paperfactory.exe --env-file .env auto doctor
+.\.venv\Scripts\paperfactory.exe --env-file .env auto login
+.\.venv\Scripts\paperfactory.exe --env-file .env auto connection
+.\.venv\Scripts\paperfactory.exe --env-file .env auto run https://github.com/OWNER/REPOSITORY
+```
+
+For Linux autonomous execution, install the same extras in a Python 3.12 virtual
+environment, install Node 24 and `@openai/codex@0.159.3`, and provision a Docker
+research image. The following Linux-only example includes standard-library
+Python/Node and Mido; it does not install arbitrary project dependencies:
 
 ```bash
 python scripts/build_autonomous_image.py \
@@ -138,11 +159,15 @@ python scripts/build_autonomous_image.py \
   --manifest "$HOME/.paper-factory/research-image.json"
 ```
 
-Replace the blank `PF_RESEARCH_IMAGE=` in `.env` with the printed immutable
+On Linux, replace the blank `PF_RESEARCH_IMAGE=` in `.env` with the printed immutable
 `PF_RESEARCH_IMAGE=sha256:...` value. For the vetted application dependencies,
 install [the pinned runtime requirements](scripts/research-runtime-requirements.txt)
 with `python -m pip install -r scripts/research-runtime-requirements.txt`, then
 add `--with-application-dependencies` when rebuilding the image.
+Windows ignores `PF_RESEARCH_IMAGE` and does not run this image builder. Its
+optional vetted Python package groups use the same pinned requirements; install
+them with `.\.venv\Scripts\python.exe -m pip install -r scripts/research-runtime-requirements.txt`
+when the proposed study needs those modules.
 
 ```bash
 paperfactory --env-file .env auto doctor
@@ -179,10 +204,11 @@ disclosed in the protocol and manuscript.
 The integration/native-export tests use explicit model and observation fixtures.
 Actual isolated source execution and live literature retrieval were checked
 separately. A live subscription-generated research paper has not yet been
-validated: this cloud recognized stored ChatGPT authentication, but actual model
-requests encountered proxy HTTP CONNECT 403 and, in the latest probe, HTTP 401.
-The new login flow uses a fresh private worker profile and preserves that injected
-cloud authentication. Device approval still requires the account owner.
+validated. Earlier cloud checks recognized stored ChatGPT authentication, but
+model requests encountered proxy HTTP CONNECT 403 and a subsequent HTTP 401.
+These historical results do not establish current Windows model access. The
+login flow uses a fresh private worker profile and preserves an existing injected
+authentication profile. Device approval still requires the account owner.
 See [setup, evidence and recovery instructions](docs/autonomous-research.md).
 
 ## Three executed empirical studies

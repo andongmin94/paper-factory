@@ -7,8 +7,8 @@ import copy
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
+import os
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 import threading
@@ -18,8 +18,8 @@ import pytest
 
 from paper_factory.author import AuthorProfile
 from paper_factory.autonomous import literature, pipeline, science
-from paper_factory.autonomous.models import PipelineRun
-from paper_factory.autonomous.provider import ProviderBlocked
+from paper_factory.autonomous.models import PipelineRun, ResearchPlan
+from paper_factory.autonomous.provider import CodexProvider, ProviderBlocked
 from paper_factory.project import ingest
 from paper_factory.workspace import digest_file, write_json
 
@@ -210,21 +210,43 @@ def blocked_at_write(workspace, components):
     return result
 
 
-def native_exports_available():
-    if not shutil.which("pandoc"):
-        pytest.skip("Pandoc unavailable; native export integration was not executed")
+def native_exports_available(pandoc, monkeypatch):
+    monkeypatch.setenv("PYPANDOC_PANDOC", pandoc)
     for module in ("typst", "pypdf", "docx"):
         pytest.importorskip(module)
 
 
 @pytest.mark.parametrize("authentication,ready,code", [("chatgpt", False, "CODEX_AUTH_REQUIRED"),
-                                                       ("api_key", True, "SUBSCRIPTION_AUTH_REQUIRED")])
+                                                       ("api_key", True, "SUBSCRIPTION_AUTH_REQUIRED"),
+                                                       ("api_key", False, "SUBSCRIPTION_AUTH_REQUIRED")])
 def test_no_authentication_or_api_key_cannot_start_subscription_study(workspace, components, authentication, ready, code):
     provider, runner, retrieved, _ = components
     provider.availability.update(authentication=authentication, ready=ready)
     result = launch(workspace, components)
     assert result.status == "blocked" and result.code == code
     assert not provider.calls and runner.calls == 0 and not retrieved
+
+
+def test_resume_after_assessment_rejects_changed_api_key_authentication(workspace, components, monkeypatch):
+    def interrupt_code_generation(label):
+        if label == "CodeBundle":
+            raise ProviderBlocked("NETWORK_ERROR", "Synthetic interruption after subscription assessment")
+
+    components[0].on_generate = interrupt_code_generation
+    interrupted = launch(workspace, components)
+    assert interrupted.stage == "generate" and interrupted.code == "NETWORK_ERROR"
+    plan_digest = interrupted.artifacts["plan"].sha256
+    provider = CodexProvider()
+    monkeypatch.setattr(provider, "_status", lambda environment: {
+        "executable_available": True, "authentication": "api_key", "ready": False,
+        "cli_version": "test", "capabilities_supported": True, "missing_capabilities": [],
+    })
+    monkeypatch.setattr(provider, "_execute", lambda *args, **kwargs: pytest.fail("API-authenticated model must not dispatch"))
+    pipeline.resume(workspace, interrupted.id)
+    resumed = pipeline.run(workspace, interrupted.id, provider=provider, runner=components[1])
+    assert resumed.status == "blocked" and resumed.code == "SUBSCRIPTION_AUTH_REQUIRED"
+    assert resumed.stage == "generate" and resumed.artifacts["plan"].sha256 == plan_digest
+    assert components[1].calls == 0
 
 
 def test_missing_isolation_has_no_host_fallback(workspace, components):
@@ -306,8 +328,8 @@ def test_invalid_observation_shape_uses_bounded_repairs_with_frozen_protocol(wor
     assert feedback["protocol_sha256"] == protocol_hash and "not" in feedback["notice"].lower()
 
 
-def test_completed_mock_wiring_reopens_native_exports_and_recomputes_raw_data(workspace, components, tmp_path):
-    native_exports_available()
+def test_completed_mock_wiring_reopens_native_exports_and_recomputes_raw_data(workspace, components, tmp_path, pandoc, monkeypatch):
+    native_exports_available(pandoc, monkeypatch)
     components[3]["value"] = "full_text"
     result = launch(workspace, components)
     assert result.status == "completed", (result.code, result.message)
@@ -343,8 +365,8 @@ def test_completed_mock_wiring_reopens_native_exports_and_recomputes_raw_data(wo
     assert canonical["publication_status"] == "not_submitted" and canonical["scientific_review"] == "required"
 
 
-def test_structural_repair_can_succeed_without_replanning(workspace, components):
-    native_exports_available()
+def test_structural_repair_can_succeed_without_replanning(workspace, components, pandoc, monkeypatch):
+    native_exports_available(pandoc, monkeypatch)
     components[1].outputs = [{"bad_shape": True}, observations()]
     result = launch(workspace, components, budget={"repair_attempts": 1})
     assert result.status == "completed", result.message
@@ -354,8 +376,8 @@ def test_structural_repair_can_succeed_without_replanning(workspace, components)
     assert len([key for key in result.artifacts if key.startswith("observations-")]) == 2
 
 
-def test_cancel_resume_after_successful_execution_does_not_rerun_it(workspace, components):
-    native_exports_available()
+def test_cancel_resume_after_successful_execution_does_not_rerun_it(workspace, components, pandoc, monkeypatch):
+    native_exports_available(pandoc, monkeypatch)
     provider, runner, _, _ = components
     created = pipeline.create(workspace, "Validate interruption after successful fixture execution.")
     runner.on_run = lambda: pipeline.cancel(workspace, created.id)
@@ -371,8 +393,8 @@ def test_cancel_resume_after_successful_execution_does_not_rerun_it(workspace, c
     assert provider.substantive_calls() == ["ResearchPlan", "CodeBundle", "ManuscriptDraft"]
 
 
-def test_restart_reconciliation_resumes_only_unfinished_manuscript(workspace, components):
-    native_exports_available()
+def test_restart_reconciliation_resumes_only_unfinished_manuscript(workspace, components, pandoc, monkeypatch):
+    native_exports_available(pandoc, monkeypatch)
     stopped = blocked_at_write(workspace, components)
     stopped.status = "running"
     stopped.attempts[-1].status = "running"
@@ -483,6 +505,67 @@ def test_cancel_preserves_unconfirmed_worker_and_resume_requires_cleanup(workspa
     assert resumed.status == "queued" and not resumed.active_handle and not resumed.cancellation_requested
 
 
+def test_provider_initialization_cleanup_identity_survives_undelivered_callback(workspace, components, monkeypatch):
+    from paper_factory.autonomous import provider as provider_module
+    retained = {"kind": "codex", "pid": 12345, "start_ticks": 67890,
+                "job_name": "Local\\paper-factory-codex-" + "a" * 32}
+    def initialization_failed(prompt, schema, call_dir, *, on_handle, **kwargs):
+        # A worker started, but initialization failed before the normal handle
+        # callback could deliver its capability to the pipeline checkpoint.
+        write_json(Path(call_dir) / "receipt.json", {"simulation": True, "code": "CLEANUP_UNCONFIRMED",
+                                                   "active_handle": retained})
+        raise ProviderBlocked("CLEANUP_UNCONFIRMED", "Synthetic ownership initialization and cleanup failure",
+                              active_handle=retained)
+    monkeypatch.setattr(components[0], "generate", initialization_failed)
+    result = launch(workspace, components)
+    assert result.status == "blocked" and result.code == "CLEANUP_UNCONFIRMED"
+    assert result.active_handle == retained
+    assert workspace.get("pipeline", result.id, PipelineRun).active_handle == retained
+    assert "model-call-1" in result.artifacts
+    monkeypatch.setattr(provider_module.CodexProvider, "cleanup_handle", lambda self, handle: False)
+    with pytest.raises(pipeline.PipelineBlocked, match="cleanup"):
+        pipeline.resume(workspace, result.id)
+    with pytest.raises(pipeline.PipelineBlocked, match="cleanup"):
+        pipeline.create(workspace, "A second job cannot bypass unresolved cleanup.")
+    monkeypatch.setattr(provider_module.CodexProvider, "cleanup_handle", lambda self, handle: handle == retained)
+    resumed = pipeline.resume(workspace, result.id)
+    assert resumed.status == "queued" and resumed.active_handle == {} and resumed.code is None
+
+
+@pytest.mark.parametrize("status", ["blocked", "running"])
+def test_cleanup_uncertainty_without_identity_never_resumes_or_creates_worker(workspace, monkeypatch, status):
+    created = pipeline.create(workspace, "Validate an unresolved worker whose capability could not be retained.")
+    created.status, created.code = status, "CLEANUP_UNCONFIRMED"
+    created.active_handle = {}
+    workspace.save("pipeline", created)
+    monkeypatch.setattr(pipeline, "_cleanup_handle", lambda handle: pytest.fail("An empty identity cannot prove worker cleanup"))
+    recovered = pipeline.recover(workspace, created.id)
+    assert recovered.status == "blocked" and recovered.code == "CLEANUP_UNCONFIRMED"
+    with pytest.raises(pipeline.PipelineBlocked, match="identity"):
+        pipeline.resume(workspace, created.id)
+    with pytest.raises(pipeline.PipelineBlocked, match="cleanup"):
+        pipeline.create(workspace, "A new job must preserve the unresolved cleanup boundary.")
+    assert pipeline.cancel(workspace, created.id)["code"] == "CLEANUP_UNCONFIRMED"
+
+
+def test_unrecognized_cleanup_capability_cannot_be_treated_as_terminated():
+    assert pipeline._cleanup_handle({"kind": "unrecognized", "job_name": "Local\\unowned"}) is False
+
+
+def test_resuming_another_job_cannot_bypass_unresolved_worker_cleanup(workspace):
+    stopped = pipeline.create(workspace, "A stopped research job can ordinarily resume.")
+    stopped.status, stopped.code = "blocked", "NETWORK_ERROR"
+    workspace.save("pipeline", stopped)
+    unresolved = pipeline.create(workspace, "A worker whose cleanup is unresolved blocks this project.")
+    unresolved.status, unresolved.code = "blocked", "CLEANUP_UNCONFIRMED"
+    unresolved.active_handle = {"kind": "codex", "pid": 12345, "start_ticks": 67890}
+    workspace.save("pipeline", unresolved)
+    with pytest.raises(pipeline.PipelineBlocked, match="cleanup"):
+        pipeline.resume(workspace, stopped.id)
+    assert workspace.get("pipeline", stopped.id, PipelineRun).status == "blocked"
+    assert workspace.get("pipeline", unresolved.id, PipelineRun).active_handle == unresolved.active_handle
+
+
 def test_recovery_preserves_handle_until_cleanup_is_confirmed(workspace, monkeypatch):
     from paper_factory.autonomous import provider as provider_module
     created = pipeline.create(workspace, "Validate recovery of a stopped scheduler worker.")
@@ -493,6 +576,132 @@ def test_recovery_preserves_handle_until_cleanup_is_confirmed(workspace, monkeyp
     recovered = pipeline.recover(workspace, created.id)
     assert recovered.status == "blocked" and recovered.code == "CLEANUP_UNCONFIRMED"
     assert recovered.active_handle == created.active_handle
+
+
+def test_execution_cleanup_failure_blocks_and_retains_handle(workspace, components, monkeypatch):
+    runner = components[1]
+    original = runner.run
+    retained = {"kind": "container", "container_id": "a" * 64,
+                "container_name": "paper-factory-research-" + "b" * 32}
+    def execute(*args, **kwargs):
+        receipt = original(*args, **kwargs)
+        return {**receipt, "status": "blocked", "code": "CLEANUP_UNCONFIRMED",
+                "error": "Synthetic Docker removal timeout", "active_handle": retained}
+    monkeypatch.setattr(runner, "run", execute)
+    result = launch(workspace, components)
+    assert result.status == "blocked" and result.code == "CLEANUP_UNCONFIRMED"
+    assert result.active_handle == retained and result.stage == "execute"
+    assert "execution" in result.artifacts and "analysis" not in result.artifacts
+    assert runner.calls == 1
+
+
+def test_generation_resume_preserves_partial_attempt_and_uses_fresh_code(workspace, components):
+    provider = components[0]
+    created = pipeline.create(workspace, "Validate fresh generation after a hard worker interruption.")
+    def interrupt(label):
+        if label == "CodeBundle":
+            pipeline.cancel(workspace, created.id)
+    provider.on_generate = interrupt
+    stopped = pipeline.run(workspace, created.id, provider=provider, runner=components[1])
+    assert stopped.status == "cancelled" and stopped.stage == "generate"
+    # Reconstruct the persisted state of a hard crash before the directory's
+    # allocation checkpoint; its partial source must never be reused.
+    stopped.code_attempt = 0
+    workspace.save("pipeline", stopped)
+    partial = workspace.root / "autonomous" / created.id / "generated" / "attempt-1" / "partial.py"
+    partial.parent.mkdir(parents=True, exist_ok=True)
+    partial.write_text("unreviewed partial generated source", encoding="utf-8")
+    provider.on_generate = None
+    provider.block_write = True
+    pipeline.resume(workspace, created.id)
+    result = pipeline.run(workspace, created.id, provider=provider, runner=components[1])
+    assert result.status == "blocked" and result.stage == "write"
+    assert result.code_attempt == 2 and components[1].calls == 1
+    assert partial.read_text(encoding="utf-8") == "unreviewed partial generated source"
+    assert "attempt-2" in result.artifacts["bundle"].path
+
+
+def test_maximum_plan_limitations_survive_instrumentation_disclosure(workspace, components):
+    components[0].plan["limitations"] = [f"Bounded fixture limitation {index}" for index in range(12)]
+    components[0].block_write = True
+    result = launch(workspace, components)
+    assert result.status == "blocked" and result.stage == "write"
+    plan = ResearchPlan.model_validate(pipeline._read(workspace, result, "plan"))
+    assert len(plan.limitations) == 12
+    assert "Production-call instrumentation" in plan.limitations[-1]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Actual native execution requires Windows")
+def test_native_pipeline_measures_source_and_verifies_exports(workspace, components, monkeypatch, pandoc):
+    """Simulated model/literature; actual Windows execution, analysis and exports."""
+    from paper_factory.autonomous.windows_runner import WindowsRunner
+    for dependency in ("typst", "pypdf", "docx"):
+        pytest.importorskip(dependency)
+    monkeypatch.setenv("PYPANDOC_PANDOC", pandoc)
+    provider = components[0]
+    provider.plan["title"] = "Measured Windows fixture integration with simulated model and literature"
+    provider.plan["comparator"] = "A deletion ablation removes the final annotated fixture value while preserving all other values."
+    provider.plan["limitations"] = ["Controlled fixtures do not establish natural input population behavior.",
+                                   "Model planning, review, manuscript and literature in this integration test are simulated."]
+    settings = {"seeds": provider.plan["seeds"], "sample_size": provider.plan["sample_size"],
+                "fixture_size": provider.plan["parameters"]["fixture_size"]}
+    code = '''import itertools, json, os, pathlib, random, sys
+sys.path.insert(0, os.environ['PF_SOURCE_ROOT'])
+from transform import transform
+settings = SETTINGS
+def violations(actual, expected):
+    missing = object()
+    return sum(left != right for left, right in itertools.zip_longest(actual, expected, fillvalue=missing))
+rows = []
+for seed in settings['seeds']:
+    generator = random.Random(seed)
+    for unit in range(settings['sample_size']):
+        values = [generator.randrange(10000) for _ in range(settings['fixture_size'])]
+        annotation = tuple(values)
+        actual = transform(values)
+        ablation = values[:-1]
+        for condition, result in [('production', actual), ('ablation', ablation)]:
+            rows.append({'unit_id': 'case-' + str(unit), 'seed': seed, 'condition': condition,
+                         'metric': 'error', 'value': violations(result, annotation)})
+controls = [
+    {'name': 'positive control', 'passed': violations(transform([7, 11]), (7, 11)) == 0,
+     'details': 'Actual production output agrees with the independently specified two-value annotation.'},
+    {'name': 'negative control', 'passed': violations([7], (7, 11)) > 0,
+     'details': 'The independent oracle detects a deliberate deletion from the known expected annotation.'}]
+pathlib.Path(os.environ['PF_OUTPUT_ROOT'], 'observations.json').write_text(
+    json.dumps({'observations': rows, 'controls': controls}), encoding='utf-8')
+'''.replace("SETTINGS", repr(settings))
+    original = provider.generate
+    def measured_bundle(prompt, schema, call_dir, **kwargs):
+        value = original(prompt, schema, call_dir, **kwargs)
+        if schema["title"] == "CodeBundle":
+            value["files"][0]["content"] = code
+            value["explanation"] = "Actual imported production calls and deletion ablation measured against independent fixture annotations."
+        elif schema["title"] == "ManuscriptDraft":
+            value["title"] = provider.plan["title"]
+            for section in value["sections"]:
+                section["text"] = section["text"].replace(
+                    "Its observations are simulated inputs for orchestration validation and cannot establish production correctness.",
+                    "Model and literature inputs are simulated, while the native Windows worker measures the actual imported production source.")
+        return value
+    monkeypatch.setattr(provider, "generate", measured_bundle)
+    created = pipeline.create(workspace, "Validate native controlled source execution through the complete export pipeline.")
+    result = pipeline.run(workspace, created.id, provider=provider, runner=WindowsRunner())
+    assert result.status == "completed", result.message
+    raw = pipeline._read(workspace, result, "observations")
+    assert len(raw["observations"]) == 12
+    assert {row["value"] for row in raw["observations"] if row["condition"] == "production"} == {0}
+    assert {row["value"] for row in raw["observations"] if row["condition"] == "ablation"} == {1}
+    execution = pipeline._read(workspace, result, "execution")
+    assert execution["backend"] == "windows-appcontainer" and execution["cleanup_confirmed"] is True
+    assert execution["production_calls"] == [{"path": "transform.py", "function": "transform", "calls": 7}]
+    assert "runtime-manifest" in result.artifacts
+    assert pipeline.verify(workspace, result.id)["passed"] is True
+    with zipfile.ZipFile(pipeline._artifact(workspace, result, "reproducibility")) as archive:
+        assert {"runtime-manifest.json", "observations.json", "paper.pdf", "paper.docx", "paper.tex"} <= set(archive.namelist())
+        instructions = archive.read("README.md").decode("utf-8")
+        assert "Windows AppContainer" in instructions and "Docker and WSL are not required" in instructions
+        assert "PF_SOURCE_ROOT" in instructions and "runtime-manifest.json" in instructions
 
 
 @pytest.mark.parametrize("stale_status", ["running", "completed"])

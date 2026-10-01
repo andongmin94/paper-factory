@@ -221,14 +221,14 @@ def _compliance(snapshot: Workspace, doc: Document, settings: CompilerSettings, 
         errors.append("No supported manuscript format is verified for this venue")
     if values.indexing == "unknown":
         warnings.append("SCIE/ESCI indexing has not been verified; no indexing claim is made")
-    for heading in getattr(values, "required_sections", None) or []:
+    for heading in values.required_sections or []:
         if heading.casefold() not in {section.heading.casefold() for section in doc.sections}:
             errors.append(f"Missing venue-required section: {heading}")
-    if getattr(values, "required_supplements", None):
+    if values.required_supplements:
         errors.append("Venue requires additional supplements that this canonical manuscript does not supply")
-    if getattr(values, "abstract_character_limit", None) is not None and len(abstract_text) > values.abstract_character_limit:
+    if values.abstract_character_limit is not None and len(abstract_text) > values.abstract_character_limit:
         errors.append("Abstract character limit exceeded")
-    if getattr(values, "title_character_limit", None) is not None and len(doc.title) > values.title_character_limit:
+    if values.title_character_limit is not None and len(doc.title) > values.title_character_limit:
         errors.append("Title character limit exceeded")
     warnings.append("Scope fit and factual declarations require author review; preparing a package does not constitute final submission attestation")
     warnings.append("Word counts use source text; the author must check the final cited document against the venue's reference/caption counting rules")
@@ -283,7 +283,7 @@ def compile_submission(ws: Workspace, submission: Submission, settings_path: Pat
                 errors.append("A verified citation style is required; supply an upstream CSL file and its license/source")
             reports = {}
             for suffix in ("pdf", "tex", "docx"):
-                reports[suffix] = convert(stage / "manuscript.md", stage / f"manuscript.{suffix}", pandoc=pandoc, bibliography=stage / "references.json", csl=csl, line_numbers=getattr(policy.values, "line_numbers_required", False) is True, page_numbers=getattr(policy.values, "page_numbers_required", True) is not False)
+                reports[suffix] = convert(stage / "manuscript.md", stage / f"manuscript.{suffix}", pandoc=pandoc, bibliography=stage / "references.json", csl=csl, line_numbers=policy.values.line_numbers_required is True, page_numbers=policy.values.page_numbers_required is not False)
             counts["rendered_manuscript"] = _rendered_word_count(stage)
             if policy.values.manuscript_word_limit is not None and counts["rendered_manuscript"] > policy.values.manuscript_word_limit:
                 errors.append("Manuscript word limit exceeded in the final cited PDF")

@@ -126,7 +126,9 @@ def context(source_dir: Path, assets: list[Any], goal: str) -> str:
             raise ValueError("Research source differs from its frozen asset digest")
         if b"\x00" in raw:
             continue
-        text = _redact_source(raw.decode("utf-8", errors="replace"))
+        # Normalize display newlines only; the immutable asset digest above
+        # still identifies the exact original source bytes on every platform.
+        text = _redact_source(raw.decode("utf-8", errors="replace").replace("\r\n", "\n"))
         available = min(MAX_FILE_CHARS, MAX_CONTEXT_CHARS - length - len(item["path"]) - 100)
         if available <= 0:
             break
@@ -179,18 +181,20 @@ Untrusted requested goal:
 
 def code_prompt(plan: Any, source_context: str, feedback: Any = None) -> str:
     prompt = """Implement exactly this frozen ResearchPlan as the requested CodeBundle JSON.
-Use the actual inspected production module/function from /input, never a copy or
-toy replacement asserted to be production. /input is immutable; generated code
-lives in /code and all measurements go to /output. No network, package
+Use the actual inspected production module/function from the PF_SOURCE_ROOT
+environment path, never a copy or toy replacement asserted to be production.
+PF_SOURCE_ROOT is immutable; generated code lives at PF_CODE_ROOT and all
+measurements go to PF_OUTPUT_ROOT. Read these paths from the environment and use
+portable path joins; the worker can run on Windows or Linux. No network, package
 installation, credential access, subprocess escape, or arbitrary host paths.
 Only approved installed dependencies are available. Save generated fixtures
-needed to reconstruct the observations within /output.
+needed to reconstruct the observations within PF_OUTPUT_ROOT.
 Import and actually call the declared production_entrypoint for each production
 measurement. The controller records a runtime source-invocation trace separately
 from model-authored observations. Merely opening a source file or writing its
 hash does not establish that its production function was executed.
 
-Output /output/observations.json with this exact shape:
+Output observations.json inside PF_OUTPUT_ROOT with this exact shape:
 {"observations":[{"unit_id":"unit label","seed":0,"condition":"frozen condition",
 "metric":"frozen metric name","value":0.0}],
 "controls":[{"name":"positive ...","passed":true,"details":"what was observed"},
@@ -281,11 +285,23 @@ Frozen protocol:\n""" + json.dumps(_dump(plan), ensure_ascii=False, indent=2) + 
 
 
 def _statistics(values: list[float]) -> dict[str, float | int]:
-    return {
-        "count": len(values), "mean": statistics.mean(values),
-        "median": statistics.median(values), "stdev": statistics.stdev(values),
-        "min": min(values), "max": max(values),
-    }
+    # Finite measurements can still overflow when paired differences, an even
+    # median, or the sample deviation are computed. Reject them before writing
+    # any result, including when this function runs in the reproduction script.
+    message = "Analysis overflowed; no nonfinite result may enter a manuscript"
+    if any(not math.isfinite(value) for value in values):
+        raise ValueError(message)
+    try:
+        summary = {
+            "count": len(values), "mean": statistics.mean(values),
+            "median": statistics.median(values), "stdev": statistics.stdev(values),
+            "min": min(values), "max": max(values),
+        }
+    except OverflowError as error:
+        raise ValueError(message) from error
+    if any(not math.isfinite(value) for value in summary.values()):
+        raise ValueError(message)
+    return summary
 
 
 def _compute(observations: dict, protocol: dict) -> dict:
@@ -383,8 +399,6 @@ def _compute(observations: dict, protocol: dict) -> dict:
                 results[key] = {"value": value, "unit": "pairs" if statistic == "count" else metric["unit"],
                                 "description": f"{statistic} of paired {metric_name} difference: {condition} minus {baseline}",
                                 "source": "observations.json"}
-    if any(not math.isfinite(item["value"]) for item in results.values()):
-        raise ValueError("Analysis overflowed; no nonfinite result may enter a manuscript")
     parameters = {
         "sample_size": protocol["sample_size"], "seed_count": len(protocol["seeds"]),
         "seed_list": ", ".join(str(seed) for seed in protocol["seeds"]),
@@ -449,7 +463,7 @@ def analyze(observations: dict, plan: ResearchPlan, output_root: Path) -> dict:
     write_json(safe_relative(output_root, "analysis-protocol.json"), protocol)
     write_json(safe_relative(output_root, "analysis-observations.json"), observations)
     safe_relative(output_root, "tables.md").write_text(_tables(analysis), encoding="utf-8")
-    for name, rows in (("tables.csv", analysis["summaries"]), ("descriptive.csv", analysis["summaries"]), ("paired-deltas.csv", analysis["paired_deltas"])):
+    for name, rows in (("tables.csv", analysis["summaries"]), ("paired-deltas.csv", analysis["paired_deltas"])):
         path = safe_relative(output_root, name)
         with path.open("w", encoding="utf-8", newline="") as stream:
             writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
@@ -526,10 +540,6 @@ def _citation_evidence(source: dict) -> dict:
         "title": source.get("title", ""), "raw_path": source["raw_path"], "sha256": digest,
         "excerpt_sha256": hashlib.sha256(json.dumps(excerpts, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest(),
     }
-
-
-def _reference_label(source: dict, index: int) -> str:
-    return f"[{index}]"
 
 
 def _plain_number_guard(text: str, heading: str) -> list[str]:
@@ -656,7 +666,7 @@ def validate_and_render(
         if kind == "parameter":
             value = parameters[key]
             return _number(value) if type(value) in {int, float} else str(value)
-        return _reference_label(sources[key], numbers[key])
+        return f"[{numbers[key]}]"
 
     parts = ["# " + document.title, ""]
     if identity:

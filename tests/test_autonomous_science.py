@@ -2,6 +2,7 @@
 import copy
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -129,6 +130,30 @@ def test_analysis_rejects_unpaired_units_even_with_complete_row_count(tmp_path, 
         science.analyze(observations, protocol, tmp_path)
 
 
+@pytest.mark.parametrize("arithmetic", ["paired_difference", "median", "sample_deviation"])
+def test_finite_measurement_overflow_is_rejected_by_analysis_and_reproduction(tmp_path, protocol, observations, arithmetic):
+    original = tmp_path / "original"
+    science.analyze(observations, protocol, original)
+    for row in observations["observations"]:
+        if arithmetic == "paired_difference":
+            extreme = row["seed"] == 11 and row["unit_id"] == "case-0"
+            row["value"] = (-1e308 if row["condition"] == "production" else 1e308) if extreme else 0
+        elif arithmetic == "median":
+            row["value"] = 1e308
+        else:
+            row["value"] = -1.7e308 if row["seed"] == 11 else 1.7e308
+    rejected = tmp_path / "rejected"
+    with pytest.raises(ValueError, match="Analysis overflowed"):
+        science.analyze(observations, protocol, rejected)
+    assert list(rejected.iterdir()) == []
+
+    (original / "analysis-observations.json").write_text(json.dumps(observations), encoding="utf-8")
+    completed = subprocess.run([sys.executable, str(original / "analysis.py")], capture_output=True, text=True, timeout=20)
+    assert completed.returncode != 0
+    assert "ValueError: Analysis overflowed" in completed.stderr
+    assert not (original / "analysis-reproduced.json").exists()
+
+
 def test_manuscript_resolves_only_verified_references_and_injects_author_last(tmp_path, protocol, observations, literature):
     analysis = science.analyze(observations, protocol, tmp_path / "analysis")
     draft = valid_draft()
@@ -211,9 +236,21 @@ def test_context_never_reads_traversal_or_linked_files(tmp_path):
     (tmp_path / "outside.py").write_text("outside_sensitive_value")
     with pytest.raises(ValueError, match="safe relative"):
         science.context(source, [{"path": "../outside.py", "size": 1, "kind": "code"}], "goal")
-    (source / "linked.py").symlink_to(tmp_path / "outside.py")
+    linked_path = "linked.py"
+    try:
+        (source / linked_path).symlink_to(tmp_path / "outside.py")
+    except OSError as error:
+        if os.name != "nt" or error.winerror != 1314:
+            raise
+        outside = tmp_path / "outside-directory"
+        outside.mkdir()
+        (outside / "outside.py").write_text("outside_sensitive_value")
+        link = subprocess.run(["cmd", "/c", "mklink", "/J", str(source / "linked-directory"), str(outside)], capture_output=True)
+        if link.returncode:
+            pytest.skip("This Windows account cannot create a symlink or junction")
+        linked_path = "linked-directory/outside.py"
     with pytest.raises(ValueError, match="symlink"):
-        science.context(source, [{"path": "linked.py", "size": 1, "kind": "code"}], "goal")
+        science.context(source, [{"path": linked_path, "size": 1, "kind": "code"}], "goal")
 
 
 def test_code_prompt_uses_runner_mount_and_structured_repair_feedback(protocol):
@@ -222,7 +259,9 @@ def test_code_prompt_uses_runner_mount_and_structured_repair_feedback(protocol):
         "notice": "Repair measurement code without changing the protocol.",
     })
     assert "/codebundle" not in prompt
-    assert "lives in /code " in prompt
+    assert "generated code lives at PF_CODE_ROOT" in prompt
+    assert "PF_SOURCE_ROOT" in prompt and "PF_OUTPUT_ROOT" in prompt
+    assert "portable path joins" in prompt
     assert '"reason": "Python syntax failed"' in prompt
     assert "Repair measurement code without changing the protocol." in prompt
 

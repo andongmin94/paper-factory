@@ -318,7 +318,7 @@ def connect(ws: Workspace, plan: StoredPlan, client: OJSClient, *, upload: bool)
                     path = ws.path(f"submissions/{current.id}/package/{mapping.path}")
                     if digest_file(path) != plan.files[mapping.path]:
                         raise ValueError("Upload artifact changed")
-                    _write(ws, plan, operation, lambda: client.upload_file(remote_id, path, mapping.genre_id,
+                    _write(ws, plan, operation, lambda path=path, mapping=mapping: client.upload_file(remote_id, path, mapping.genre_id,
                         expected_sha256=plan.files[mapping.path]),
                         {"path": mapping.path, "sha256": plan.files[mapping.path], "genre_id": mapping.genre_id})
             return _inspect(ws, plan, client, remote_id)

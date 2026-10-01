@@ -22,8 +22,6 @@ from .venue_policy import MAX_SOURCE_BYTES, _origin, _public_ip
 from .workspace import ensure_unlinked
 
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
-OJS_COMMIT = "040e9163780bcf9ca5c614d8588688f6c324d4da"
-PKP_COMMIT = "8809a197de7c5f677428172bf5e6b4a5013460d6"
 PositiveId = Annotated[int, Field(strict=True, gt=0)]
 _LOCALE = re.compile(r"[A-Za-z]{2,4}(?:[_-](?:[A-Za-z]{4,5}|[0-9]{4}))?(?:[_-](?:[A-Za-z]{2}|[0-9]{3}))?(?:@[a-z]{2,30}(?:[_-](?:[A-Za-z]{4,5}|[0-9]{4}))?)?")
 _PROGRESS = {"", "start", "details", "files", "contributors", "editors", "review"}

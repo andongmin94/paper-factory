@@ -9,7 +9,9 @@ from pathlib import Path
 
 import pytest
 
-from paper_factory.autonomous.provider import CodexProvider, ProviderBlocked, MAX_LOG_BYTES, DISABLED_FEATURES, auth_root, resolve_auth_home
+from paper_factory.autonomous.provider import CodexProvider, ProviderBlocked, MAX_LOG_BYTES, DISABLED_FEATURES, _start_ticks, auth_root, resolve_auth_home
+from paper_factory.autonomous import windows_runtime
+from paper_factory.autonomous.windows_runtime import private_path
 
 SCHEMA = {"type": "object", "properties": {"answer": {"type": "integer"}}, "required": ["answer"], "additionalProperties": False}
 
@@ -22,26 +24,30 @@ def private_auth_selection(tmp_path, monkeypatch):
 
 def connected_profile(root, identity="a" * 32, *, active=True):
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    private_path(root)
     profiles = root / "profiles"
     profiles.mkdir(mode=0o700, exist_ok=True)
+    private_path(profiles)
     home = profiles / identity
     home.mkdir(mode=0o700)
+    private_path(home)
     if active:
         pointer = root / "active.json"
         pointer.write_text(json.dumps({"version": 1, "profile": "profiles/" + identity, "verified": True,
                                        "verified_at": "2026-10-01T12:00:00+00:00"}))
-        pointer.chmod(0o600)
+        private_path(pointer)
     return home
 
 
 def fake_codex(tmp_path, *, output='{"answer":42}', diagnostic="", code=0, authentication="chatgpt", sleep=0, events=None, spawn_child=False, read_stdin=True, missing_capability=None, stubborn_child=False):
-    path = tmp_path / "codex-fake"
+    path = tmp_path / "codex-fake.py"
     settings = {"output": output, "diagnostic": diagnostic, "code": code, "authentication": authentication,
                 "sleep": sleep, "events": events if events is not None else [{"type": "turn.completed", "usage": {"input_tokens": 11, "cached_input_tokens": 3, "output_tokens": 7}, "model": "actual-model"}], "spawn_child": spawn_child, "read_stdin": read_stdin,
                 "missing_capability": missing_capability, "features": list(DISABLED_FEATURES), "stubborn_child": stubborn_child}
     path.write_text(
         f"#!{sys.executable}\n"
         "import json,os,sys,time,subprocess\nfrom pathlib import Path\n"
+        "sys.stdout.reconfigure(encoding='utf-8');sys.stderr.reconfigure(encoding='utf-8')\n"
         f"settings=json.loads({json.dumps(json.dumps(settings))})\n"
         "arguments=sys.argv[1:]\n"
         "if arguments==['--version']:print('codex-cli 1.2.3-test');sys.exit(0)\n"
@@ -71,7 +77,7 @@ def fake_codex(tmp_path, *, output='{"answer":42}', diagnostic="", code=0, authe
         "for event in settings['events']:print(json.dumps(event),flush=True)\n"
         "if settings['diagnostic']:print(settings['diagnostic'],file=sys.stderr,flush=True)\n"
         "time.sleep(settings['sleep'])\n"
-        "if settings['output'] is not None:destination.write_text(settings['output'])\n"
+        "if settings['output'] is not None:destination.write_text(settings['output'],encoding='utf-8')\n"
         "sys.exit(settings['code'])\n", encoding="utf-8",
     )
     path.chmod(0o755)
@@ -82,7 +88,7 @@ def test_status_reports_existing_authentication_without_raw_key(tmp_path):
     for auth in ("chatgpt", "api_key", "logged_out"):
         provider = fake_codex(tmp_path, authentication=auth)
         result = provider.status()
-        assert result == {"executable_available": True, "authentication": auth, "ready": auth != "logged_out",
+        assert result == {"executable_available": True, "authentication": auth, "ready": auth == "chatgpt",
                           "cli_version": "1.2.3-test", "capabilities_supported": True, "missing_capabilities": []}
         assert "sk-" not in json.dumps(result)
     assert CodexProvider(tmp_path / "missing").status() == {"executable_available": False, "authentication": "unknown", "ready": False,
@@ -100,7 +106,7 @@ def test_generation_validates_schema_and_records_real_usage_and_model(tmp_path, 
     prompt = "Generate the known answer without using any tools."
     result = fake_codex(tmp_path).generate(prompt, SCHEMA, call, model="requested-model", on_handle=handles.append)
     assert result == {"answer": 42}
-    receipt = json.loads((call / "receipt.json").read_text())
+    receipt = json.loads((call / "receipt.json").read_text(encoding="utf-8"))
     assert receipt["status"] == "completed"
     assert receipt["cli_version"] == "1.2.3-test" and receipt["capabilities_supported"] is True
     assert receipt["actual_model"] == "actual-model"
@@ -109,7 +115,7 @@ def test_generation_validates_schema_and_records_real_usage_and_model(tmp_path, 
     assert receipt["prompt_sha256"] == hashlib.sha256(prompt.encode()).hexdigest()
     assert receipt["output_sha256"] == hashlib.sha256((call / "output.json").read_bytes()).hexdigest()
     assert receipt["elapsed_seconds"] >= 0
-    observed = json.loads((call / "observed.json").read_text())
+    observed = json.loads((call / "observed.json").read_text(encoding="utf-8"))
     assert observed["private_env_present"] == []
     assert observed["codex_home_present"] is True
     assert observed["workspace_files"] == []
@@ -124,20 +130,21 @@ def test_generation_validates_schema_and_records_real_usage_and_model(tmp_path, 
     assert arguments[arguments.index("-a") + 1] == "never"
     assert "--dangerously-bypass-approvals-and-sandbox" not in arguments
     assert "--ephemeral" in arguments and "--ignore-user-config" in arguments
+    assert 'forced_login_method="chatgpt"' in arguments
     assert "shell_tool" in arguments and "unified_exec" in arguments and "plugins" in arguments
-    assert json.loads((call / "runtime-handle.json").read_text()) == handles[0]
+    assert json.loads((call / "runtime-handle.json").read_text(encoding="utf-8")) == handles[0]
     assert handles[0]["kind"] == "codex" and handles[0]["pid"] > 0
     if Path("/proc").is_dir():
         assert handles[0]["start_ticks"] > 0
     for log in (call / "stdout.log", call / "stderr.log"):
-        assert "private-publication-token" not in log.read_text()
-        assert "private-api-key" not in log.read_text()
+        assert "private-publication-token" not in log.read_text(encoding="utf-8")
+        assert "private-api-key" not in log.read_text(encoding="utf-8")
 
 
 def test_unknown_model_is_recorded_as_unknown_not_invented(tmp_path):
     call = tmp_path / "call"
     fake_codex(tmp_path, events=[{"type": "turn.completed", "usage": {"input_tokens": 1, "output_tokens": 2}}]).generate("Make an answer", SCHEMA, call)
-    receipt = json.loads((call / "receipt.json").read_text())
+    receipt = json.loads((call / "receipt.json").read_text(encoding="utf-8"))
     assert receipt["actual_model"] is None
     assert receipt["requested_model"] is None
 
@@ -148,7 +155,7 @@ def test_cli_failures_are_classified_without_partial_output(tmp_path, diagnostic
     with pytest.raises(ProviderBlocked) as raised:
         fake_codex(tmp_path, diagnostic=diagnostic, code=1).generate("Make an answer", SCHEMA, call)
     assert raised.value.code == expected
-    receipt = json.loads((call / "receipt.json").read_text())
+    receipt = json.loads((call / "receipt.json").read_text(encoding="utf-8"))
     assert receipt["code"] == expected
     assert receipt["status"] == "blocked"
     assert not (call / "output.json").exists()
@@ -179,13 +186,28 @@ def test_authentication_required_is_a_visible_blocker_without_login_attempt(tmp_
     assert not (tmp_path / "call" / "observed.json").exists()
 
 
+def test_generation_rechecks_subscription_when_existing_cli_authentication_changes(tmp_path):
+    provider = fake_codex(tmp_path)
+    assert provider.generate("Make an answer", SCHEMA, tmp_path / "first") == {"answer": 42}
+    fake_codex(tmp_path, authentication="api_key")
+    assert provider.status()["ready"] is False
+    call = tmp_path / "next"
+    with pytest.raises(ProviderBlocked) as raised:
+        provider.generate("Make another answer", SCHEMA, call)
+    assert raised.value.code == "SUBSCRIPTION_AUTH_REQUIRED"
+    assert not (call / "observed.json").exists()
+    receipt = json.loads((call / "receipt.json").read_text(encoding="utf-8"))
+    assert receipt["status"] == "blocked" and receipt["authentication"] == "api_key"
+    assert receipt["usage"] is None and not receipt.get("model_dispatch_observed")
+
+
 def test_tool_actions_are_rejected_even_when_cli_returns_valid_json(tmp_path):
     event = {"type": "item.started", "item": {"type": "command_execution", "command": "cat credentials"}}
     call = tmp_path / "call"
     with pytest.raises(ProviderBlocked) as raised:
         fake_codex(tmp_path, events=[event]).generate("Make an answer", SCHEMA, call)
     assert raised.value.code == "POLICY_VIOLATION"
-    assert "cat credentials" not in (call / "stdout.log").read_text()
+    assert "cat credentials" not in (call / "stdout.log").read_text(encoding="utf-8")
     assert not (call / "output.json").exists()
 
 
@@ -198,13 +220,16 @@ def test_cancellation_terminates_process_group_and_records_stable_handle(tmp_pat
     with pytest.raises(ProviderBlocked) as raised:
         provider.generate("Make an answer", SCHEMA, call, cancel=cancel, on_handle=handles.append)
     assert raised.value.code == "CANCELLED"
-    assert json.loads((call / "receipt.json").read_text())["status"] == "cancelled"
+    assert json.loads((call / "receipt.json").read_text(encoding="utf-8"))["status"] == "cancelled"
     assert handles
-    child_pid = int((call / "child.pid").read_text())
-    if Path("/proc").is_dir():
+    child_pid = int((call / "child.pid").read_text(encoding="utf-8"))
+    if os.name == "nt":
+        assert _start_ticks(child_pid) is None
+        assert handles[0]["job_name"].startswith("Local\\paper-factory-codex-")
+    elif Path("/proc").is_dir():
         child_stat = Path(f"/proc/{child_pid}/stat")
         # A briefly unreaped zombie has stopped executing too.
-        assert not child_stat.exists() or child_stat.read_text().rsplit(")", 1)[1].split()[0] == "Z"
+        assert not child_stat.exists() or child_stat.read_text(encoding="utf-8").rsplit(")", 1)[1].split()[0] == "Z"
 
 
 def test_timeout_terminates_running_call_and_retains_failure_receipt(tmp_path):
@@ -214,7 +239,7 @@ def test_timeout_terminates_running_call_and_retains_failure_receipt(tmp_path):
         fake_codex(tmp_path, sleep=60).generate("Make an answer", SCHEMA, call, timeout_seconds=1)
     assert raised.value.code == "TIMEOUT"
     assert time.monotonic() - started < 5
-    assert json.loads((call / "receipt.json").read_text())["code"] == "TIMEOUT"
+    assert json.loads((call / "receipt.json").read_text(encoding="utf-8"))["code"] == "TIMEOUT"
 
 
 def test_logs_are_bounded_and_secret_values_are_redacted(tmp_path, monkeypatch):
@@ -222,7 +247,7 @@ def test_logs_are_bounded_and_secret_values_are_redacted(tmp_path, monkeypatch):
     diagnostic = "x" * (MAX_LOG_BYTES * 2) + "test-private-token-value https://user:password@example.org bearer private-token"
     call = tmp_path / "call"
     fake_codex(tmp_path, diagnostic=diagnostic).generate("Make an answer", SCHEMA, call)
-    stderr = (call / "stderr.log").read_text()
+    stderr = (call / "stderr.log").read_text(encoding="utf-8")
     assert len(stderr) <= MAX_LOG_BYTES
     assert "test-private-token-value" not in stderr
     assert "user:password" not in stderr
@@ -233,7 +258,7 @@ def test_uninjected_cli_token_shapes_are_redacted_without_reading_auth_files(tmp
     jwt = "eyJ0ZXN0aW5nLXRva2Vu.e30.syntheticSignature"
     diagnostic = 'token failure {"refresh_token":"opaque-sensitive-credential"} ' + jwt
     fake_codex(tmp_path, diagnostic=diagnostic).generate("Make an answer", SCHEMA, call)
-    stderr = (call / "stderr.log").read_text()
+    stderr = (call / "stderr.log").read_text(encoding="utf-8")
     assert "opaque-sensitive-credential" not in stderr
     assert jwt not in stderr
     assert "[redacted]" in stderr
@@ -246,14 +271,14 @@ def test_existing_call_artifacts_are_never_overwritten(tmp_path):
     with pytest.raises(ProviderBlocked) as raised:
         fake_codex(tmp_path).generate("Make an answer", SCHEMA, call)
     assert raised.value.code == "INVALID_CALL_DIR"
-    assert (call / "output.json").read_text() == "original"
+    assert (call / "output.json").read_text(encoding="utf-8") == "original"
 
 
 def test_per_call_model_overrides_environment_and_prompt_secrets_never_leave(tmp_path, monkeypatch):
     monkeypatch.setenv("PF_CODEX_MODEL", "configured-model")
     call = tmp_path / "call"
     fake_codex(tmp_path).generate("Make an answer", SCHEMA, call, model="explicit-model")
-    observed = json.loads((call / "observed.json").read_text())
+    observed = json.loads((call / "observed.json").read_text(encoding="utf-8"))
     assert observed["arguments"][observed["arguments"].index("--model") + 1] == "explicit-model"
     monkeypatch.setenv("PRIVATE_TOKEN", "credential-do-not-send")
     with pytest.raises(ProviderBlocked) as raised:
@@ -268,7 +293,7 @@ def test_cli_error_items_are_diagnostics_not_tool_actions(tmp_path):
     with pytest.raises(ProviderBlocked) as raised:
         fake_codex(tmp_path, code=1, events=[event]).generate("Make an answer", SCHEMA, call)
     assert raised.value.code == "AUTH_REQUIRED"
-    assert '"item_type": "error"' in (call / "stdout.log").read_text()
+    assert '"item_type": "error"' in (call / "stdout.log").read_text(encoding="utf-8")
 
 
 def test_timeout_remains_effective_when_cli_never_reads_large_stdin(tmp_path):
@@ -319,10 +344,11 @@ def test_unsupported_cli_is_blocked_before_model_dispatch(tmp_path, missing):
         provider.generate("Make an answer", SCHEMA, call)
     assert raised.value.code == "CODEX_UNSUPPORTED"
     assert not (call / "observed.json").exists()
-    receipt = json.loads((call / "receipt.json").read_text())
+    receipt = json.loads((call / "receipt.json").read_text(encoding="utf-8"))
     assert receipt["code"] == "CODEX_UNSUPPORTED" and receipt["missing_capabilities"] == [missing]
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Optional Linux container specification")
 def test_isolated_runtime_keeps_auth_home_readonly_and_mounts_only_call_context(tmp_path, monkeypatch):
     provider = fake_codex(tmp_path)
     home = tmp_path / "injected-auth-home"
@@ -373,9 +399,16 @@ def test_only_known_pre_request_readonly_initialization_failure_uses_runtime_fal
         return 0, ""
     monkeypatch.setattr(provider, "_execute", execute)
     monkeypatch.setattr(provider, "_container_command", lambda command, root, **kwargs: (["docker", "fake"], "owned-container", "sha256:" + "a" * 64))
-    assert provider.generate("Make an answer", SCHEMA, call) == {"answer": 42}
-    assert invocations == [None, "owned-container"]
-    assert json.loads((call / "receipt.json").read_text())["runtime_backend"] == "docker"
+    if os.name == "nt":
+        with pytest.raises(ProviderBlocked) as raised:
+            provider.generate("Make an answer", SCHEMA, call)
+        assert raised.value.code == "CONFIGURATION_ERROR"
+        assert invocations == [None]
+        assert json.loads((call / "receipt.json").read_text(encoding="utf-8"))["runtime_backend"] == "host"
+    else:
+        assert provider.generate("Make an answer", SCHEMA, call) == {"answer": 42}
+        assert invocations == [None, "owned-container"]
+        assert json.loads((call / "receipt.json").read_text(encoding="utf-8"))["runtime_backend"] == "docker"
 
 
 def test_model_network_failure_does_not_dispatch_a_second_call(tmp_path, monkeypatch):
@@ -389,14 +422,16 @@ def test_model_network_failure_does_not_dispatch_a_second_call(tmp_path, monkeyp
 
 
 def test_blank_optional_codex_settings_keep_cli_defaults(tmp_path, monkeypatch):
+    from paper_factory.autonomous import provider as module
     monkeypatch.setenv("PF_CODEX_BIN", "")
     monkeypatch.setenv("PF_CODEX_MODEL", "")
-    assert CodexProvider().configured_executable == "codex"
+    monkeypatch.setattr(module, "_default_codex_executable", lambda: "fixture-default-codex")
+    assert CodexProvider().configured_executable == "fixture-default-codex"
     call = tmp_path / "call"
     fake_codex(tmp_path).generate("Make an answer", SCHEMA, call)
-    receipt = json.loads((call / "receipt.json").read_text())
+    receipt = json.loads((call / "receipt.json").read_text(encoding="utf-8"))
     assert receipt["requested_model"] is None
-    assert "--model" not in json.loads((call / "observed.json").read_text())["arguments"]
+    assert "--model" not in json.loads((call / "observed.json").read_text(encoding="utf-8"))["arguments"]
 
 
 def test_strict_wire_schema_roundtrips_nested_maps_refs_and_defaults(tmp_path):
@@ -410,16 +445,16 @@ def test_strict_wire_schema_roundtrips_nested_maps_refs_and_defaults(tmp_path):
     call = tmp_path / "call"
     output = fake_codex(tmp_path, output=json.dumps(raw)).generate("Create experiment settings", schema, call)
     assert output == {"parameters": {"run-a": {"measurement": 3.5, "tags": {"unit": "ms"}}}, "description": "Recorded data"}
-    wire = json.loads((call / "schema.json").read_text())
+    wire = json.loads((call / "schema.json").read_text(encoding="utf-8"))
     assert wire["required"] == ["parameters", "description"]
     assert "default" not in wire["properties"]["description"]
     assert wire["properties"]["parameters"]["type"] == "array"
     assert wire["properties"]["parameters"]["items"]["additionalProperties"] is False
     assert wire["$defs"]["Measurement"]["required"] == ["measurement", "tags"]
     assert "default" not in wire["$defs"]["Measurement"]["properties"]["tags"]
-    assert json.loads((call / "model-output.json").read_text()) == raw
-    assert json.loads((call / "output.json").read_text()) == output
-    receipt = json.loads((call / "receipt.json").read_text())
+    assert json.loads((call / "model-output.json").read_text(encoding="utf-8")) == raw
+    assert json.loads((call / "output.json").read_text(encoding="utf-8")) == output
+    receipt = json.loads((call / "receipt.json").read_text(encoding="utf-8"))
     assert receipt["raw_output_sha256"] != receipt["normalized_output_sha256"]
     assert schema["properties"]["description"]["default"] == "optional"
 
@@ -490,8 +525,8 @@ def test_socks_proxy_userinfo_is_redacted_in_logs(tmp_path, monkeypatch):
     monkeypatch.setenv("ALL_PROXY", proxy)
     call = tmp_path / "call"
     fake_codex(tmp_path, diagnostic=proxy).generate("Make an answer", SCHEMA, call)
-    assert "synthetic-user" not in (call / "stderr.log").read_text()
-    assert "synthetic-password" not in (call / "stderr.log").read_text()
+    assert "synthetic-user" not in (call / "stderr.log").read_text(encoding="utf-8")
+    assert "synthetic-password" not in (call / "stderr.log").read_text(encoding="utf-8")
 
 
 def test_post_request_initialization_text_does_not_repeat_model_dispatch(tmp_path, monkeypatch):
@@ -512,10 +547,13 @@ def test_cancellation_kills_descendant_ignoring_sigterm_after_leader_exits(tmp_p
     with pytest.raises(ProviderBlocked) as raised:
         provider.generate("Produce answer", SCHEMA, call, cancel=lambda: (call / "child.pid").exists())
     assert raised.value.code == "CANCELLED"
-    child = Path(f"/proc/{(call / 'child.pid').read_text()}/stat")
-    if Path("/proc").is_dir():
-        assert not child.exists() or child.read_text().rsplit(")", 1)[1].split()[0] == "Z"
-    assert json.loads((call / "receipt.json").read_text())["cleanup_confirmed"] is True
+    child_pid = int((call / "child.pid").read_text(encoding="utf-8"))
+    child = Path(f"/proc/{child_pid}/stat")
+    if os.name == "nt":
+        assert _start_ticks(child_pid) is None
+    elif Path("/proc").is_dir():
+        assert not child.exists() or child.read_text(encoding="utf-8").rsplit(")", 1)[1].split()[0] == "Z"
+    assert json.loads((call / "receipt.json").read_text(encoding="utf-8"))["cleanup_confirmed"] is True
 
 
 @pytest.mark.parametrize("mode", ["failure", "timeout"])
@@ -566,19 +604,170 @@ def test_unconfirmed_cleanup_blocks_output_and_preserves_recovery_handle(tmp_pat
     with pytest.raises(ProviderBlocked) as raised:
         provider.generate("Produce answer", SCHEMA, call)
     assert raised.value.code == "CLEANUP_UNCONFIRMED"
-    receipt = json.loads((call / "receipt.json").read_text())
+    receipt = json.loads((call / "receipt.json").read_text(encoding="utf-8"))
     assert receipt["cleanup_confirmed"] is False and receipt["code"] == "CLEANUP_UNCONFIRMED"
     assert (call / "runtime-handle.json").is_file()
     assert not (call / "output.json").exists()
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows worker ownership failure regression")
+@pytest.mark.parametrize("confirmed,store", [(True, "both"), (False, "both"), (False, "callback_fails"), (False, "file_fails"), (False, "receipt_fails")])
+def test_job_construction_failure_stops_worker_or_retains_unconfirmed_identity(tmp_path, monkeypatch, confirmed, store):
+    from paper_factory.autonomous import provider as module
+    provider = fake_codex(tmp_path, sleep=60)
+    call = tmp_path / "call"
+    processes, handles = [], []
+    original_popen = module.subprocess.Popen
+
+    def record_process(command, **options):
+        process = original_popen(command, **options)
+        if "-o" in command:
+            processes.append(process)
+        return process
+
+    def unavailable_job(**options):
+        raise OSError("Synthetic Windows job construction failure")
+
+    def retain_handle(handle):
+        handles.append(handle)
+        if store == "callback_fails":
+            raise RuntimeError("Synthetic ownership callback failure")
+
+    if store in {"file_fails", "receipt_fails"}:
+        original_write = module.write_json
+        def reject_handle_file(path, value):
+            if ((store == "file_fails" and path.name == "runtime-handle.json")
+                    or (store == "receipt_fails" and path.name == "receipt.json" and value.get("active_handle"))):
+                raise OSError("Synthetic ownership artifact failure")
+            return original_write(path, value)
+        monkeypatch.setattr(module, "write_json", reject_handle_file)
+    monkeypatch.setattr(module.subprocess, "Popen", record_process)
+    monkeypatch.setattr(module.windows_runtime, "WindowsJob", unavailable_job)
+    if not confirmed:
+        monkeypatch.setattr(module, "_try_stop", lambda process: False)
+    try:
+        with pytest.raises(ProviderBlocked) as raised:
+            provider.generate("Produce answer", SCHEMA, call, on_handle=retain_handle)
+        expected = "CONFIGURATION_ERROR" if confirmed else "CLEANUP_UNCONFIRMED"
+        assert raised.value.code == expected
+        receipt = json.loads((call / "receipt.json").read_text(encoding="utf-8"))
+        if store == "receipt_fails":
+            assert receipt["status"] == "running"
+        else:
+            assert receipt["code"] == expected and receipt["cleanup_confirmed"] is confirmed
+        assert len(processes) == 1
+        process = processes[0]
+        assert (process.poll() is not None) is confirmed
+        assert not (call / "output.json").exists()
+        if not confirmed:
+            handle = raised.value.active_handle
+            assert handle["pid"] == handle["pgid"] == process.pid
+            assert handle["start_ticks"] == module._start_ticks(process.pid)
+            assert "job_name" not in handle
+            if store != "receipt_fails":
+                assert receipt["active_handle"] == handle
+            if store == "file_fails":
+                assert not (call / "runtime-handle.json").exists() and handles == []
+            else:
+                assert json.loads((call / "runtime-handle.json").read_text(encoding="utf-8")) == handle
+                assert handles == [handle]
+    finally:
+        for process in processes:
+            assert module._stop(process)
+            for stream in (process.stdin, process.stdout, process.stderr):
+                stream.close()
+
+
+@pytest.mark.parametrize("channel", ["stdout", "stderr", "prompt"])
+@pytest.mark.parametrize("confirmed", [True, False], ids=["stopped", "unconfirmed"])
+def test_model_io_thread_start_failure_stops_worker_or_retains_identity(tmp_path, monkeypatch, channel, confirmed):
+    from paper_factory.autonomous import provider as module
+    provider = fake_codex(tmp_path, sleep=60)
+    call = tmp_path / "call"
+    processes, handles = [], []
+    original_popen, original_start = module.subprocess.Popen, module.threading.Thread.start
+    def record_process(command, **options):
+        process = original_popen(command, **options)
+        if "-o" in command:
+            processes.append(process)
+        return process
+    def failed_start(thread):
+        target = getattr(thread._target, "__name__", "")
+        if target == "send_prompt" and channel == "prompt" or target == "consume" and thread._args[0] == channel:
+            raise RuntimeError("Simulated model I/O thread startup failure")
+        return original_start(thread)
+    monkeypatch.setattr(module.subprocess, "Popen", record_process)
+    monkeypatch.setattr(module.threading.Thread, "start", failed_start)
+    if not confirmed:
+        monkeypatch.setattr(module, "_try_stop", lambda process: False)
+    try:
+        with pytest.raises(ProviderBlocked) as raised:
+            provider.generate("Produce answer", SCHEMA, call, on_handle=handles.append)
+        assert len(processes) == 1
+        assert raised.value.code == ("CONFIGURATION_ERROR" if confirmed else "CLEANUP_UNCONFIRMED")
+        receipt = json.loads((call / "receipt.json").read_text(encoding="utf-8"))
+        assert receipt["cleanup_confirmed"] is confirmed
+        assert not (call / "output.json").exists()
+        if not confirmed:
+            assert raised.value.active_handle == receipt["active_handle"] == handles[0]
+            assert receipt["active_handle"]["pid"] == processes[0].pid
+    finally:
+        for process in processes:
+            assert module._stop(process)
+            for stream in (process.stdin, process.stdout, process.stderr):
+                stream.close()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows preassignment descendant regression")
+def test_suspended_model_worker_cannot_spawn_before_delayed_job_assignment(tmp_path, monkeypatch):
+    from paper_factory.autonomous import provider as module
+    import time
+    provider = fake_codex(tmp_path, sleep=60, spawn_child=True)
+    call = tmp_path / "call"
+    original_job = module.windows_runtime.WindowsJob
+    observed = []
+
+    class DelayedJob(original_job):
+        def __init__(self, **options):
+            time.sleep(0.3)
+            observed.append((call / "observed.json").exists())
+            super().__init__(**options)
+
+    monkeypatch.setattr(module.windows_runtime, "WindowsJob", DelayedJob)
+    with pytest.raises(ProviderBlocked) as raised:
+        provider.generate("Produce answer", SCHEMA, call, cancel=lambda: (call / "child.pid").exists())
+    assert raised.value.code == "CANCELLED" and observed == [False]
+    child = int((call / "child.pid").read_text(encoding="utf-8"))
+    assert module._start_ticks(child) is None
+    assert json.loads((call / "receipt.json").read_text(encoding="utf-8"))["cleanup_confirmed"] is True
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows suspended worker activation regression")
+def test_failed_resume_stops_owned_worker_before_code_executes(tmp_path, monkeypatch):
+    from paper_factory.autonomous import provider as module
+    provider = fake_codex(tmp_path)
+    call = tmp_path / "call"
+    def refused(pid):
+        raise OSError("Synthetic initial thread resume failure")
+    monkeypatch.setattr(module.windows_runtime, "resume_process", refused)
+    with pytest.raises(ProviderBlocked) as raised:
+        provider.generate("Produce answer", SCHEMA, call)
+    assert raised.value.code == "CONFIGURATION_ERROR"
+    assert not (call / "observed.json").exists() and not (call / "output.json").exists()
+    assert json.loads((call / "receipt.json").read_text(encoding="utf-8"))["cleanup_confirmed"] is True
+
+
 def test_public_cleanup_rejects_foreign_name_and_reused_pid_is_not_signaled(tmp_path, monkeypatch):
     from paper_factory.autonomous import provider as module
     provider = fake_codex(tmp_path)
-    monkeypatch.setattr(module.os, "killpg", lambda *args: pytest.fail("Unrelated process must not be signaled"))
+    monkeypatch.setattr(module.os, "killpg", lambda *args: pytest.fail("Unrelated process must not be signaled"), raising=False)
     handle = {"kind": "codex", "pid": 12345, "pgid": 12345, "start_ticks": 10}
     assert provider.cleanup_handle({**handle, "container_name": "foreign-container"}) is False
-    monkeypatch.setattr(module, "_start_ticks", lambda pid: 11)
+    if os.name == "nt":
+        handle["job_name"] = "Local\\paper-factory-codex-" + "f" * 32
+        monkeypatch.setattr(windows_runtime, "process_ticks", lambda pid: 11)
+    else:
+        monkeypatch.setattr(module, "_start_ticks", lambda pid: 11)
     assert provider.cleanup_handle(handle) is True
 
 
@@ -641,11 +830,11 @@ def test_connected_profile_reaches_cli_without_mutating_supplied_auth_home(tmp_p
     provider = fake_codex(tmp_path)
     call = tmp_path / "call"
     assert provider.generate("Produce answer", SCHEMA, call) == {"answer": 42}
-    observed = json.loads((call / "observed.json").read_text())
+    observed = json.loads((call / "observed.json").read_text(encoding="utf-8"))
     assert observed["codex_home"] == str(home)
     assert os.environ["CODEX_HOME"] == str(tmp_path / "existing-managed-home")
     assert str(home) not in json.dumps(provider.status())
-    assert str(home) not in (call / "receipt.json").read_text()
+    assert str(home) not in (call / "receipt.json").read_text(encoding="utf-8")
 
 
 def test_explicit_profile_probe_bypasses_active_selection_and_never_implies_generation_success(tmp_path, monkeypatch):
@@ -659,8 +848,8 @@ def test_explicit_profile_probe_bypasses_active_selection_and_never_implies_gene
     with pytest.raises(ProviderBlocked) as raised:
         provider.generate("Probe structured response", SCHEMA, call)
     assert raised.value.code == "AUTH_REQUIRED"
-    assert json.loads((call / "observed.json").read_text())["codex_home"] == str(pending)
-    assert json.loads((call / "receipt.json").read_text())["status"] == "blocked"
+    assert json.loads((call / "observed.json").read_text(encoding="utf-8"))["codex_home"] == str(pending)
+    assert json.loads((call / "receipt.json").read_text(encoding="utf-8"))["status"] == "blocked"
     assert resolve_auth_home() == root / "profiles" / ("a" * 32)
 
 
@@ -678,7 +867,7 @@ def test_profile_is_pinned_across_status_and_generation_when_connection_changes(
     monkeypatch.setattr(provider, "_status", changing_status)
     call = tmp_path / "call"
     provider.generate("Produce answer", SCHEMA, call)
-    assert json.loads((call / "observed.json").read_text())["codex_home"] == str(first)
+    assert json.loads((call / "observed.json").read_text(encoding="utf-8"))["codex_home"] == str(first)
     assert resolve_auth_home() == second
 
 
@@ -709,21 +898,36 @@ def test_connection_paths_require_private_unlinked_directories_outside_git(tmp_p
     root = tmp_path / "connections"
     home = connected_profile(root)
     if unsafe == "root_permissions":
-        root.chmod(0o755)
+        if os.name == "nt":
+            windows_runtime._set_acl(root, "(A;;FA;;;WD)")
+        else:
+            root.chmod(0o755)
     elif unsafe == "profile_permissions":
-        home.chmod(0o755)
+        if os.name == "nt":
+            windows_runtime._set_acl(home, "(A;;FA;;;WD)")
+        else:
+            home.chmod(0o755)
     elif unsafe == "pointer_permissions":
-        (root / "active.json").chmod(0o644)
+        if os.name == "nt":
+            windows_runtime._set_acl(root / "active.json", "(A;;FA;;;WD)")
+        else:
+            (root / "active.json").chmod(0o644)
     elif unsafe == "pointer_symlink":
         pointer = root / "active.json"
         original = root / "previous.json"
         pointer.rename(original)
-        pointer.symlink_to(original)
+        try:
+            pointer.symlink_to(original)
+        except OSError:
+            pytest.skip("Creating symlinks is unavailable on this system")
     elif unsafe == "profile_symlink":
         home.rmdir()
         outside = tmp_path / "outside"
         outside.mkdir(mode=0o700)
-        home.symlink_to(outside, target_is_directory=True)
+        try:
+            home.symlink_to(outside, target_is_directory=True)
+        except OSError:
+            pytest.skip("Creating symlinks is unavailable on this system")
     elif unsafe == "git_ancestor":
         (tmp_path / ".git").mkdir()
         (tmp_path / ".git/HEAD").write_text("ref: refs/heads/main\n")
@@ -735,7 +939,10 @@ def test_connection_paths_require_private_unlinked_directories_outside_git(tmp_p
 def test_explicit_profile_requires_private_directory(tmp_path):
     home = tmp_path / "unsafe-profile"
     home.mkdir(mode=0o755)
-    home.chmod(0o755)
+    if os.name == "nt":
+        windows_runtime._set_acl(home, "(A;;FA;;;WD)")
+    else:
+        home.chmod(0o755)
     provider = fake_codex(tmp_path)
     explicit = CodexProvider(provider.configured_executable, auth_home=home)
     assert explicit.status()["code"] == "CONFIGURATION_ERROR"
@@ -744,6 +951,7 @@ def test_explicit_profile_requires_private_directory(tmp_path):
     assert raised.value.code == "CONFIGURATION_ERROR"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Optional Linux container specification")
 def test_selected_profile_is_same_home_mounted_into_isolated_runtime(tmp_path, monkeypatch):
     from paper_factory.autonomous import provider as module
     root = tmp_path / "connections"

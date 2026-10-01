@@ -210,6 +210,8 @@ class Workspace:
             target = self.path(relative)
             for path in target.rglob("*"):
                 ensure_unlinked(path)
+                if path.is_file():
+                    path.chmod(stat.S_IMODE(path.stat().st_mode) | stat.S_IWUSR)
             shutil.rmtree(target)
             return True
         except (OSError, ValueError, TypeError):

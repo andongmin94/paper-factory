@@ -95,11 +95,13 @@ def create(ws: Workspace, goal: str, *, model: str | None = None, budget: dict |
     with ws.lock("autonomous-create"):
         imported = ws.latest("project", Project)
         project.verify_snapshot(ws)
-        if any(record.status in {"queued", "running"} for record in ws.list("pipeline", PipelineRun)):
+        records = ws.list("pipeline", PipelineRun)
+        if any(record.code == "CLEANUP_UNCONFIRMED" for record in records):
+            raise PipelineBlocked("CLEANUP_UNCONFIRMED", "Previous worker cleanup remains unresolved; reconcile its retained execution identity before creating another research job")
+        if any(record.status in {"queued", "running"} for record in records):
             raise ValueError("An autonomous research job is already queued or running for this project")
         run = PipelineRun(project_id=imported.id, goal=goal, model=model, budget=Budget.model_validate(budget or {}))
         _root(ws, run).mkdir(parents=True, exist_ok=False)
-        ws.save("pipeline", run)
         _save(ws, run)
         return run
 
@@ -112,7 +114,10 @@ def _cleanup_handle(handle: dict) -> bool:
     if handle.get("kind") == "container":
         from .runner import DockerRunner
         return DockerRunner().stop(handle)
-    return not any(handle.get(key) for key in ("pid", "pgid", "container_name", "container_id", "name"))
+    if handle.get("kind") == "windows-experiment":
+        from .windows_runner import WindowsRunner
+        return WindowsRunner().stop(handle)
+    return not handle or handle.get("kind") == "fixture" and handle.get("simulation") is True
 
 
 def _reconcile(ws: Workspace, run: PipelineRun) -> PipelineRun:
@@ -124,8 +129,9 @@ def _reconcile(ws: Workspace, run: PipelineRun) -> PipelineRun:
             run = ws.get("pipeline", run.id, PipelineRun)
             if run.status != "running":
                 return run
-            if not _cleanup_handle(run.active_handle):
-                run.status, run.code, run.message = "blocked", "CLEANUP_UNCONFIRMED", "Previous worker cleanup could not be confirmed; restore Docker connectivity before resuming."
+            missing_identity = run.code == "CLEANUP_UNCONFIRMED" and not run.active_handle
+            if missing_identity or not _cleanup_handle(run.active_handle):
+                run.status, run.code, run.message = "blocked", "CLEANUP_UNCONFIRMED", "Previous worker cleanup could not be confirmed; restore the research runtime before resuming."
                 _save(ws, run)
                 return run
             run.active_handle = {}
@@ -177,9 +183,14 @@ def resume(ws: Workspace, pipeline_id: str) -> PipelineRun:
         record = ws.get("pipeline", pipeline_id, PipelineRun)
         if record.status in {"running", "queued", "completed"}:
             raise ValueError("Only stopped, blocked or failed research can be resumed")
-        if any(item.id != record.id and item.status in {"queued", "running"} for item in ws.list("pipeline", PipelineRun)):
+        records = ws.list("pipeline", PipelineRun)
+        if any(item.id != record.id and item.code == "CLEANUP_UNCONFIRMED" for item in records):
+            raise PipelineBlocked("CLEANUP_UNCONFIRMED", "Another research worker has unresolved cleanup; reconcile its execution identity before resuming this job")
+        if any(item.id != record.id and item.status in {"queued", "running"} for item in records):
             raise ValueError("Another autonomous research job is already queued or running for this project")
         _verify_artifacts(ws, record)
+        if record.code == "CLEANUP_UNCONFIRMED" and not record.active_handle:
+            raise PipelineBlocked("CLEANUP_UNCONFIRMED", "Previous worker cleanup is unconfirmed and its execution identity is unavailable; no new worker may start until that uncertainty is resolved")
         if not _cleanup_handle(record.active_handle):
             raise PipelineBlocked("CLEANUP_UNCONFIRMED", "Previous worker cleanup could not be confirmed; retained execution handle must be reconciled before resuming")
         record.active_handle = {}
@@ -208,7 +219,7 @@ def recover(ws: Workspace, pipeline_id: str) -> PipelineRun:
 def run(ws: Workspace, pipeline_id: str, *, provider=None, runner=None) -> PipelineRun:
     from . import literature, science
     from .provider import CodexProvider
-    from .runner import DockerRunner
+    from .runner import research_runner
 
     with ws.lock(f"pipeline-{pipeline_id}"):
         current = ws.get("pipeline", pipeline_id, PipelineRun)
@@ -218,7 +229,7 @@ def run(ws: Workspace, pipeline_id: str, *, provider=None, runner=None) -> Pipel
         if current.status != "queued":
             raise ValueError("Research must be queued before execution; resume a stopped job explicitly")
         provider = provider or CodexProvider()
-        runner = runner or DockerRunner()
+        runner = runner or research_runner()
         root = _root(ws, current)
         current.status = "running"
         current.started_at = current.started_at or now()
@@ -261,6 +272,10 @@ def run(ws: Workspace, pipeline_id: str, *, provider=None, runner=None) -> Pipel
                                            model=current.model, on_handle=handle)
             except Exception as exc:
                 cleanup_unconfirmed = getattr(exc, "code", None) == "CLEANUP_UNCONFIRMED"
+                if cleanup_unconfirmed:
+                    retained = getattr(exc, "active_handle", None)
+                    if isinstance(retained, dict) and retained:
+                        current.active_handle = retained.copy()
                 raise
             finally:
                 if not cleanup_unconfirmed:
@@ -293,10 +308,10 @@ def run(ws: Workspace, pipeline_id: str, *, provider=None, runner=None) -> Pipel
                         raise PipelineBlocked("CODEX_UNAVAILABLE", "Install or configure the official Codex CLI on this worker")
                     if not availability.get("capabilities_supported", True):
                         raise PipelineBlocked("CODEX_UNSUPPORTED", "Installed Codex CLI lacks the required structured-generation and tool-isolation capabilities")
-                    if not availability.get("ready"):
-                        raise PipelineBlocked("CODEX_AUTH_REQUIRED", "Official Codex CLI needs usable ChatGPT subscription authentication on this worker")
-                    if availability.get("authentication") != "chatgpt":
+                    if availability.get("authentication") == "api_key":
                         raise PipelineBlocked("SUBSCRIPTION_AUTH_REQUIRED", "This workflow uses official ChatGPT subscription authentication; API credentials are not selected")
+                    if not availability.get("ready") or availability.get("authentication") != "chatgpt":
+                        raise PipelineBlocked("CODEX_AUTH_REQUIRED", "Official Codex CLI needs usable ChatGPT subscription authentication on this worker")
                     isolation = runner.status()
                     if not isolation.get("ready"):
                         raise PipelineBlocked("ISOLATION_UNAVAILABLE", _sanitized(isolation.get("reason") or "The isolated research image is unavailable"))
@@ -324,12 +339,19 @@ def run(ws: Workspace, pipeline_id: str, *, provider=None, runner=None) -> Pipel
                     parts = plan.production_entrypoint.rsplit(":", 1)
                     if len(parts) != 2 or parts[0] not in plan.source_files or not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_.$]*", parts[1]):
                         raise PipelineBlocked("PRODUCTION_TARGET_REQUIRED", "Protocol must name an actual production source file and callable as relative/path:function")
-                    # Dependencies must already be present in the vetted immutable image.
-                    image_dependencies = set(runner.status().get("dependencies", []))
-                    if set(plan.dependencies) - image_dependencies:
-                        raise PipelineBlocked("RUNTIME_DEPENDENCY_UNAVAILABLE", "Research plan requires dependencies absent from the vetted image: " + ", ".join(sorted(set(plan.dependencies)-image_dependencies)))
+                    runtime_status = runner.status()
+                    if plan.runtime not in runtime_status.get("runtimes", ["python", "node"]):
+                        raise PipelineBlocked("RUNTIME_UNAVAILABLE", "Research plan requires a runtime unavailable in the enforced research worker")
+                    # Dependencies must already be present in the vetted runtime.
+                    runtime_dependencies = set(runtime_status.get("dependencies", []))
+                    if set(plan.dependencies) - runtime_dependencies:
+                        raise PipelineBlocked("RUNTIME_DEPENDENCY_UNAVAILABLE", "Research plan requires dependencies absent from the vetted runtime: " + ", ".join(sorted(set(plan.dependencies)-runtime_dependencies)))
                     plan.parameters["execution_instrumentation"] = "Python profiling or Node V8 coverage is enabled; timing includes instrumentation overhead"
-                    plan.limitations.append("Production-call instrumentation affects execution overhead. Timing results describe the instrumented harness and cannot establish uninstrumented production performance or unbiased relative overhead.")
+                    instrumentation_limitation = "Production-call instrumentation affects execution overhead. Timing results describe the instrumented harness and cannot establish uninstrumented production performance or unbiased relative overhead."
+                    if len(plan.limitations) == 12:
+                        plan.limitations[-1] += " " + instrumentation_limitation
+                    else:
+                        plan.limitations.append(instrumentation_limitation)
                     write_json(root / "protocol.json", plan)
                     _freeze(ws, current, "plan", root / "protocol.json")
                     if not current.study_id:
@@ -362,6 +384,14 @@ def run(ws: Workspace, pipeline_id: str, *, provider=None, runner=None) -> Pipel
                         raise ValueError("Generated runtime differs from frozen protocol")
                     current.code_attempt += 1
                     bundle_root = root / "generated" / f"attempt-{current.code_attempt}"
+                    # A hard interruption can leave an uncheckpointed partial
+                    # directory. Preserve it and allocate a fresh attempt rather
+                    # than accepting or overwriting any of its generated bytes.
+                    while bundle_root.exists():
+                        ensure_unlinked(bundle_root)
+                        current.code_attempt += 1
+                        bundle_root = root / "generated" / f"attempt-{current.code_attempt}"
+                    checkpoint()
                     bundle_root.mkdir(parents=True, exist_ok=False)
                     files = []
                     for generated in bundle.files:
@@ -406,12 +436,20 @@ def run(ws: Workspace, pipeline_id: str, *, provider=None, runner=None) -> Pipel
                     receipt = runner.run(ws.root / "source", _artifact(ws, current, "bundle").parent, output_root,
                                          runtime=metadata["runtime"], entrypoint=metadata["entrypoint"],
                                          timeout_seconds=current.budget.experiment_timeout_seconds, cancel=stopped, on_handle=handle)
-                    current.active_handle = {}
+                    cleanup_unconfirmed = receipt.get("code") == "CLEANUP_UNCONFIRMED"
+                    if cleanup_unconfirmed:
+                        current.active_handle = receipt.get("active_handle") or current.active_handle
+                    else:
+                        current.active_handle = {}
                     receipt.update(source_digest=metadata["source_digest"], protocol_sha256=metadata["protocol_sha256"],
                                    bundle_sha256=current.artifacts["bundle"].sha256)
                     write_json(output_root / "execution.json", receipt)
                     _freeze(ws, current, f"execution-{current.code_attempt}-{attempt.attempt}", output_root / "execution.json")
                     _freeze(ws, current, "execution", output_root / "execution.json")
+                    if (output_root / "runtime-manifest.json").is_file():
+                        _freeze(ws, current, "runtime-manifest", output_root / "runtime-manifest.json")
+                    if cleanup_unconfirmed:
+                        raise PipelineBlocked("CLEANUP_UNCONFIRMED", receipt.get("error") or "Research container removal could not be confirmed")
                     if receipt.get("status") != "succeeded":
                         if stopped() or receipt.get("status") == "cancelled":
                             raise PipelineBlocked("STOPPED", "Experiment was stopped")
@@ -504,7 +542,7 @@ def run(ws: Workspace, pipeline_id: str, *, provider=None, runner=None) -> Pipel
                     _bundle(ws, current)
                 elif stage == "verify":
                     _verify_artifacts(ws, current)
-                    verify(ws, current.id, update=False)
+                    verify(ws, current.id)
                     write_json(root / "exports" / "validation.json", {"passed": True, "source_digest": ws.latest("project", Project).snapshot_digest,
                                                                      "checks": ["source unchanged", "protocol and generated code hashes", "raw observations recomputed", "evidence-linked manuscript", "native export reopening", "reproducibility archive CRC"],
                                                                      "publication": "author review required; not submitted"})
@@ -552,7 +590,9 @@ def _bundle(ws: Workspace, run: PipelineRun) -> None:
     selection = {"protocol.json": _artifact(ws, run, "plan"), "observations.json": _artifact(ws, run, "observations"),
                  "analysis.json": _artifact(ws, run, "analysis"), "execution.json": _artifact(ws, run, "execution"),
                  "literature-evidence.json": _artifact(ws, run, "literature"), "paper.md": _artifact(ws, run, "manuscript"),
-                 "canonical.json": _artifact(ws, run, "canonical")}
+                  "canonical.json": _artifact(ws, run, "canonical")}
+    if "runtime-manifest" in run.artifacts:
+        selection["runtime-manifest.json"] = _artifact(ws, run, "runtime-manifest")
     for format in ("pdf", "docx", "tex"):
         selection["paper." + format] = _artifact(ws, run, "export-" + format)
     for path in _artifact(ws, run, "bundle").parent.rglob("*"):
@@ -568,12 +608,26 @@ def _bundle(ws: Workspace, run: PipelineRun) -> None:
         selection["source/" + asset.path] = safe_relative(ws.root / "source", asset.path)
     if sum(path.stat().st_size for path in selection.values()) > MAX_BUNDLE_BYTES:
         raise PipelineBlocked("REPRODUCTION_BUNDLE_TOO_LARGE", "Research snapshot exceeds the reproduction bundle size limit; use a smaller supported repository")
+    execution = _read(ws, run, "execution")
+    if execution.get("backend") == "windows-appcontainer":
+        runtime_instructions = (
+            "This experiment used native Windows AppContainer and a bounded Job Object. Docker and WSL are not required.\n"
+            "runtime-manifest.json records the staged interpreter, vetted dependency versions and exact runtime file hashes; "
+            "execution.json records its digest and enforced/monitored limits. Reprovision matching native runtimes and vetted packages before rerunning.\n")
+    elif execution.get("simulation"):
+        runtime_instructions = (
+            "The execution receipt is an explicitly simulated integration fixture and does not establish actual execution or isolation.\n"
+            "An actual rerun requires the platform's enforced research worker and verified runtime prerequisites.\n")
+    else:
+        runtime_instructions = (
+            "This experiment used the vetted Docker research runtime. Provision it with scripts/build_autonomous_image.py.\n"
+            "execution.json records the immutable image digest and resource policy; use that exact image for the recorded experiment.\n")
     readme = ("# Reproduce this controlled software study\n\n"
               "The sanitized source, frozen protocol, generated experiment, raw observations and deterministic analysis are included.\n"
-              "Install Paper Factory with its research/PDF extras and provision the vetted research image using scripts/build_autonomous_image.py.\n"
-              "execution.json records the exact image digest and resource policy; use that image for the recorded experiment.\n"
+              "Install Paper Factory with its research/PDF extras.\n" + runtime_instructions +
               "Run the bundled analysis script with its documented arguments to recompute reported values from observations.json.\n"
-              "Run generated code only in the isolated runner with source mounted at /input, code at /code, and output at /output.\n"
+              "Run generated code through the enforced research runner. It supplies platform-native PF_SOURCE_ROOT, PF_CODE_ROOT, "
+              "PF_OUTPUT_ROOT and PF_WORK environment paths, with read-only source/code and private writable output/work.\n"
               "No API credentials, subscription login state or private author configuration are included.\n"
               "The manuscript is a reviewable draft; scientific responsibility and journal submission require the author.\n")
     archive = exports / "reproducibility.zip"
@@ -601,7 +655,7 @@ def _append_figures(ws: Workspace, record: PipelineRun, markdown: Path) -> None:
             stream.write("\n## Computed figures\n\n" + "\n\n".join(entries) + "\n")
 
 
-def verify(ws: Workspace, pipeline_id: str, *, update: bool = False) -> dict:
+def verify(ws: Workspace, pipeline_id: str) -> dict:
     """Recompute measurements and reopen outputs independently of model success."""
     from . import science
     from docx import Document

@@ -44,7 +44,6 @@ def build(ws: Workspace, submission: Submission, *, client: httpx.Client | None 
         if policy_fingerprint(current) != policy_fingerprint(original):
             errors.append("Official policy content changed after compilation; reselect and recompile before readiness")
         ready = not errors
-        source = ws.path(f"submissions/{submission.id}/compiled")
         destination = ws.path(f"submissions/{submission.id}/package")
         if destination.exists():
             raise ValueError("Package already exists; select a new candidate for a new package")

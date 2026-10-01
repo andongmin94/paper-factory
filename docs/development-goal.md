@@ -4,6 +4,11 @@ The implemented scope extends beyond cloud setup: Paper Factory now provides a
 Korean web research workspace and three English empirical articles based on
 executed experiments against pinned, unchanged production components.
 
+The local runtime target is native Windows with Python 3.11+ (3.12 recommended),
+Node.js 24 and the official Codex CLI. Generated experiments use AppContainer
+isolation and a bounded Job Object; Docker and WSL2 are not Windows prerequisites.
+Linux keeps its separate Docker research backend and optional image provisioner.
+
 The additional goal is repository-to-manuscript automation without this Codex
 chat. The installed `auto` CLI and web workflow coordinate subscription-backed
 Codex proposals, isolated generated experiments, deterministic analysis,
@@ -12,14 +17,21 @@ runtime prerequisites are recorded in [autonomous research](autonomous-research.
 The earlier three articles were produced outside that pipeline. They must not be
 presented as proof of an autonomous app-generated paper. Actual model requests
 in this cloud encountered proxy CONNECT 403 and a later HTTP 401; a successful
-live end-to-end autonomous study remains unverified.
+live end-to-end autonomous study remains unverified. Those authentication results
+belong to the earlier cloud environment. Native Windows runtime validation and
+fresh model-generated research are distinct evidence and must be recorded separately.
 
 ## Use the workspace
 
-```bash
-paperfactory --env-file .env serve --host 127.0.0.1 --port 8765 \
-  --studies /workspace/paper-factory-deliverables/studies \
-  --data /workspace/paper-factory-data/web
+Run [the Windows setup helper](../scripts/setup_windows.ps1) or follow the manual
+PowerShell installation in [README](../README.md#install). The setup uses a private
+`@openai/codex@0.159.3` npm installation under `.venv/codex`; existing global CLI
+installations stay unchanged. `PF_CODEX_BIN` is optional when using that setup.
+
+```powershell
+.\.venv\Scripts\paperfactory.exe --env-file .env serve --host 127.0.0.1 --port 8765
+# Optional explicit local import parents; repeat the option as needed.
+# .\.venv\Scripts\paperfactory.exe --env-file .env serve --source-root C:\research --source-root D:\projects
 ```
 
 The browser workflow includes GitHub/local project import, research questions,
@@ -28,6 +40,12 @@ manuscript build/edit/render, integrity review and artifact downloads. Persisten
 jobs report queued, running, succeeded, failed or interrupted states and retain
 their logs. Restarting the server preserves project and job records; it does not
 silently repeat unfinished experiments.
+
+The default library is `~/.paper-factory/studies`; web projects and jobs live in
+`~/.paper-factory/web`. `PF_HOME`, `--studies` and `--data` can select other external
+locations. Local web imports allow projects below the user's home directory by
+default. `--source-root` selects explicit allowed parent directories. Generated
+workspaces and private CLI authentication remain outside the source repository.
 
 Write operations require loopback access and the server's matching origin.
 Nonloopback serving is an artifact-only preview. Web experiments use existing
@@ -92,7 +110,11 @@ alone does not support findings or an evaluation claim. The
 primary sources and precise reading scope. No full-text review is asserted for
 an inaccessible paper.
 
-## Working locations
+## Historical cloud evidence locations
+
+The following paths identify the earlier external deliverables. A Windows clone
+does not create these cloud folders or download their papers. Current local
+workspaces use `PF_HOME` and the web command's directory settings above.
 
 - Application source: `/workspace/paper-factory`.
 - Pinned source checkouts: `/workspace/paper-factory-deliverables/sources`.
@@ -105,14 +127,12 @@ an inaccessible paper.
 - Literature and bibliography: `/workspace/paper-factory-deliverables/literature`;
   [source-reading ledger](/workspace/paper-factory-deliverables/literature/source-verification.json).
 - Integration validation: `/workspace/paper-factory-deliverables/validation`.
-- Web projects and jobs in the command above: `/workspace/paper-factory-data/web`.
+- Historical web projects and jobs: `/workspace/paper-factory-data/web`.
 
-All cloud tasks are already isolated. Use existing checkouts; do not create a Git
-worktree unless explicitly requested. Preserve user changes and distinguish
-source development from generated research outputs. Local implementation and
-artifact completion do not publish the cloud environment or deploy a public
-site. External manuscript upload, factual attestations, venue-specific review and
-final submission require their own explicitly authorized actions.
+Preserve user changes and distinguish source development from generated research
+outputs. Local implementation and artifact completion do not deploy a public site.
+External manuscript upload, factual attestations, venue-specific review and final
+submission require their own explicitly authorized actions.
 
 Commit only the blank `.env.example` template. Keep real `.env` files, generated
 workspaces, web project/job data and private recipient drafts out of GitHub.

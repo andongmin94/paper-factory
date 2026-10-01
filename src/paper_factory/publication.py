@@ -430,19 +430,9 @@ def _write_transaction(ws: Workspace):
             yield db, published
     except BaseException:
         for event in published:
-            try:
-                # An unknown commit outcome must retain evidence. Cleanup is
-                # allowed only after the store confirms this event is absent.
-                with ws._database() as db:
-                    persisted = db.execute("SELECT 1 FROM records WHERE kind='publication_event' AND id=?", (event.id,)).fetchone()
-                if persisted is None:
-                    root = _event_root(ws, event)
-                    for path in root.rglob("*"):
-                        ensure_unlinked(path)
-                    shutil.rmtree(root)
-            except (ValueError, OSError):
-                # Preserved orphan evidence intentionally fails the next audit.
-                pass
+            ws.discard_uncommitted_artifact(ws.root / "publication" / event.submission_id / event.id,
+                kind="publication_event", record_id=event.id,
+                field="artifact_sha256", expected_value=event.artifact_sha256)
         raise
 
 

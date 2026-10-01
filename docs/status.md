@@ -1,5 +1,144 @@
 # Implementation status
 
+Current workspace: version 0.8.0 with native Windows automatic research.
+The Windows work below was verified on 2026-10-01 (Asia/Seoul); older release
+evidence is preserved separately.
+
+## Code cleanup and diagnosis
+
+The follow-up audit removed duplicated Python execution drivers, CLI connection
+handling, artifact digest/JSON helpers and rollback logic. Unused connection
+state, pipeline parameters, local variables, executable OJS version constants,
+frontend payload/readiness fallbacks and four unused CSS rule groups were
+removed. The duplicate descriptive-table CSV export was also removed; the
+canonical `tables.csv` remains. Existing workspace and runtime primitives are
+reused without adding project dependencies or a new abstraction layer.
+
+The audit reproduced and corrected deletion of a committed revision manuscript
+when its database acknowledgement failed. Model reader/writer thread startup
+failures now enter the same owned-process cleanup path as other execution
+failures, and connection probes retain uncertain worker ownership. Statistical
+analysis rejects nonfinite intermediate values or results caused by overflow of
+otherwise finite inputs. Reproducibility exports reject linked directory ancestors, and
+Windows observations are decoded strictly as UTF-8, validated and exported from
+the same read. Downloads stop at the opened file's declared response length.
+Both execution backends reject output directories inside their source/bundle
+before creating directories, preserving the input tree on invalid configuration.
+Real corrupt/locked SQLite regressions confirm that rollback preserves evidence
+and the original operation error when the durable store cannot be checked.
+The original Windows login Job handle is also released after an already-exited
+leader; failed termination retains the handle and persisted ownership capability.
+
+Frontend readiness now follows the actual subscription provider status, including
+an existing CLI login, and clears stale connection information after failed
+refreshes. Default web paths use the native `PF_HOME` studies/web directories.
+
+The current Windows collection contains **1,236 cases: 1,222 passed, 14 skipped,
+0 failed and 0 uncovered**. Complete fresh file shards and final affected reruns
+were deduplicated against the exact current collection. Per-case evidence is
+preserved at
+`C:/Users/Public/Documents/ESTsoft/CreatorTemp/paperfactory-code-cleanup-verification/result.json`.
+
+The initial broad run exposed an obsolete Docker fixture substring assertion;
+the corrected test checks actual mounts and environment bindings. One fake CLI
+login preparation also stopped with unconfirmed cleanup. Both affected variants
+passed on a focused repeat, and the final full connection report passed 37 cases
+with one privilege skip. That initial occurrence's direct cause remains
+unconfirmed after pytest removed its temporary metadata. The independently
+reproduced Job handle leak above has two real-worker regression cases. No timeout
+or cleanup confirmation check was relaxed.
+
+Ruff's Python error and bug checks (`F,B`), dependency validation, source
+compilation, JavaScript syntax and patch whitespace checks pass. Audit tools were
+installed only in a temporary external directory. A fresh actual ChatGPT
+subscription request also completed with confirmed model dispatch and worker
+cleanup; its safe summary is preserved at
+`C:/Users/Public/Documents/ESTsoft/CreatorTemp/paperfactory-code-cleanup-model-tbig9yu1/safe-summary.json`.
+The live-model check is a bounded request; the full native pipeline integration
+evidence below still uses explicit synthetic model/literature inputs.
+
+## Native Windows verification
+
+Windows automatic research selects AppContainer and a bounded Job Object.
+Docker, WSL and a Linux research image are unnecessary. The setup helper installs
+the existing vetted dependency pins and a private official Codex CLI; the start
+helper resolves the real Pandoc executable even in a Korean repository path.
+`auto doctor` reports ready for the local Python 3.12.14, Node 26.3.0 and official
+Codex 0.159.3 installation.
+
+The Windows implementation verification collection contains **1,199 cases: 1,185 passed, 14 skipped,
+0 failed and 0 uncovered**. Complete file shards and affected reruns were
+deduplicated against the current collection. Two skips target the Linux Docker
+controller, one requires a POSIX FIFO, and eleven require unavailable Windows
+symlink privileges. Real Windows junction rejection is covered independently.
+The exact per-case result is preserved at
+`C:/Users/Public/Documents/ESTsoft/CreatorTemp/paperfactory-windows-verification/result.json`.
+Dependency validation, source compilation, JavaScript syntax, PowerShell parsing
+and patch whitespace checks also pass. GitHub CI was configured for both
+Windows and Ubuntu; a new remote CI run was not dispatched during this work.
+
+Actual Python and Node generated-worker tests recorded production calls. Python
+could not read the private fixture file, mutate source, connect to loopback or
+inherit the controller's secret environment value. Cancellation removed a real
+descendant, and recovery restored the staging ACL before cleanup. A separate
+native Job Object test terminated a CPU-bound parser at its CPU deadline.
+Windows disk limits are monitored directory bounds rather than filesystem
+quotas; standard OS resources remain governed by Windows ACLs. Receipts record
+these platform details without claiming a read-only host filesystem.
+
+The complete native pipeline used explicitly synthetic model and literature
+inputs. Its source execution, seven production calls, twelve paired raw
+measurements, trusted analysis, PDF/DOCX/TeX exports, reproducibility ZIP and
+independent reanalysis were real. The corresponding runtime/pipeline/science
+regression report contains 149 passing cases and no skips:
+`C:/Users/Public/Documents/ESTsoft/CreatorTemp/paperfactory-native-runtime-regression.xml`.
+This is integration evidence, not a live model-generated autonomous paper.
+
+A separate actual structured model request returned `ready: true`, and the
+application probe reported `verified: true`, using the supplied ChatGPT login.
+The final repeat after worker ownership fixes completed with
+`cleanup_confirmed: true`; its bounded record is preserved at
+`C:/Users/Public/Documents/ESTsoft/CreatorTemp/paperfactory-windows-final-model-probe-7zl7jezw/call`.
+No credentials were copied into experiments, and no journal submission occurred.
+
+The follow-up subscription audit closed an authentication-change gap after the
+assessment checkpoint. Every model call now rejects API-key authentication and
+sets the official CLI's `forced_login_method="chatgpt"`, including resumed runs.
+The affected provider/connection/pipeline reports contain 151 passes and six
+platform/privilege skips; autonomous web checks add 18 passes and one skip.
+A fresh actual request after this change completed with ChatGPT authentication,
+`ready: true`, confirmed model dispatch and confirmed cleanup. Its safe summary
+is preserved at
+`C:/Users/Public/Documents/ESTsoft/CreatorTemp/paperfactory-subscription-final-0_nhu219/safe-summary.json`.
+
+Actual staged Mido 1.3.3, Pydantic 2.13.5 and HTTPX 0.28.1 operations also
+succeeded inside AppContainer: a MIDI roundtrip, valid/invalid input validation
+and construction of an HTTP request without network access. The production
+function was called once; the worker and temporary tree were removed. This
+exposed and verified the correction for transient staged SSL DLL deletion locks.
+The receipt and observations are preserved under
+`C:/Users/Public/Documents/ESTsoft/CreatorTemp/paperfactory-windows-dependencies-471_xdko/verified`.
+
+Production Chrome checks used `scripts/start_windows.ps1` from the Korean path.
+Local import, inventory experiment, template manuscript, PDF regeneration,
+download and integrity review succeeded. The downloaded PDF had four readable
+pages. Unsaved title/body edits survived automatic refresh and screen changes;
+the page produced no CSP violations. The temporary server and QA tab were closed.
+
+The audit also corrected approval rollback after database commit, readonly
+artifact cleanup, unsupported claims in metric units, Windows authentication
+locks/ACLs, junction rejection, bounded Windows literature PDF parsing, generated
+attempt recovery, execution cleanup accounting, oversized-file listings,
+reproducibility ZIP downloads and frontend draft/CSP handling.
+Login/model workers now start suspended, join their owned job and resume only
+after thread ownership is verified. Constructor, callback and artifact failures
+retain uncertain capabilities; unresolved cleanup blocks new/restarted workers.
+The final native cleanup/pipeline/dependency regression report contains 44
+passing cases with no skips, and the ownership/initialization reports cover 143
+distinct cases with 137 passes and six platform/privilege skips.
+
+## Historical version 0.5.0 release evidence
+
 Verified 2026-09-30 (Asia/Seoul). Version 0.5.0. The audited research and venue
 path includes evidence-linked revision, separately approved child manuscripts,
 immutable same-journal resubmission bundles, rejected-feedback retargeting and

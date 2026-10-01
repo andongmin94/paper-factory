@@ -346,7 +346,9 @@ def _approve(ws: Workspace, paper: Paper, assessment: str, author_values: dict |
         return destination
     except BaseException:
         if published:
-            _remove_staging(destination)
+            ws.discard_uncommitted_artifact(destination, kind="paper",
+                record_id=current.id, field="freeze_digest",
+                expected_value=current.freeze_digest)
         raise
     finally:
         if staging is not None:

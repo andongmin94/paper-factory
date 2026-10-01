@@ -7,6 +7,7 @@ after an explicitly requested, tools-disabled model probe succeeds.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import errno
 import json
 import os
 from pathlib import Path
@@ -23,11 +24,14 @@ from uuid import uuid4
 
 try:
     import fcntl
-except ImportError:  # Explicit fail-closed behavior on unsupported platforms.
+except ImportError:
     fcntl = None
+if os.name == "nt":
+    import msvcrt
 
 from ..workspace import ensure_unlinked, write_json
-from .provider import CodexProvider, ProviderBlocked, _environment, _start_ticks, _try_stop
+from .provider import CodexProvider, ProviderBlocked, _cli_command, _environment, _process_options, _track_process, _try_stop, _worker_handle
+from .windows_runtime import is_private_path, private_path
 
 
 MAX_DIAGNOSTIC_BYTES = 64 * 1024
@@ -39,6 +43,7 @@ PROBE_SCHEMA = {"type": "object", "properties": {"ready": {"type": "boolean", "e
 MESSAGES = {
     "AUTH_REQUIRED": "Codex 구독 로그인이 필요합니다. 공식 로그인 후 연결 확인을 다시 실행하세요.",
     "API_KEY_UNSUPPORTED": "API 키 로그인은 사용할 수 없습니다. ChatGPT 구독 계정으로 로그인하세요.",
+    "SUBSCRIPTION_AUTH_REQUIRED": "API 키로 모델을 요청할 수 없습니다. ChatGPT 구독 계정으로 다시 연결하세요.",
     "NETWORK_ERROR": "Codex 인증·모델 서버에 연결하지 못했습니다. 프록시 또는 네트워크 연결을 확인하세요.",
     "PROXY_BLOCKED": "환경 프록시가 Codex 연결을 차단했습니다(HTTP 403).",
     "RATE_LIMITED": "구독 사용량 제한으로 연결 확인을 완료하지 못했습니다. 이용 가능해진 뒤 다시 확인하세요.",
@@ -52,7 +57,7 @@ MESSAGES = {
     "CLEANUP_UNCONFIRMED": "이전 연결 작업자의 종료를 확인하지 못했습니다. 연결 작업을 재시작하기 전에 정리가 필요합니다.",
     "CONNECTION_BUSY": "다른 연결 작업이 진행 중입니다. 해당 작업이 끝난 뒤 다시 시도하세요.",
     "AUTH_STORAGE_INVALID": "구독 연결 저장 경로 또는 메타데이터가 안전한 개인 경로가 아닙니다.",
-    "UNSUPPORTED_PLATFORM": "이 클라우드의 구독 연결 관리에는 POSIX 파일 잠금이 필요합니다.",
+    "UNSUPPORTED_PLATFORM": "이 플랫폼은 구독 연결의 파일 잠금을 지원하지 않습니다.",
     "CANCELLED": "구독 연결 작업을 취소했습니다.",
     "CODEX_FAILED": "공식 Codex 연결 작업을 완료하지 못했습니다.",
     "DEVICE_AUTH_UNAVAILABLE": "현재 Codex 서버에서 기기 로그인을 지원하지 않습니다. 공식 서버 설정을 확인하세요.",
@@ -75,18 +80,49 @@ def _private_directory(path: Path) -> None:
     info = path.stat()
     if not stat.S_ISDIR(info.st_mode) or (hasattr(os, "getuid") and info.st_uid != os.getuid()):
         raise ValueError("not an owned directory")
-    path.chmod(0o700)
+    private_path(path)
+
+
+def _locking_available() -> bool:
+    return os.name == "nt" or fcntl is not None
+
+
+def _lock_file(descriptor: int, *, blocking: bool = False) -> bool:
+    try:
+        if os.name == "nt":
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            msvcrt.locking(descriptor, msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK, 1)
+        else:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+        return True
+    except OSError as exc:
+        if exc.errno in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+            return False
+        raise
+
+
+def _unlock_file(descriptor: int) -> None:
+    if os.name == "nt":
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+    else:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+
+
+def _write_metadata(path: Path, value: dict) -> None:
+    write_json(path, value)
+    private_path(path)
 
 
 def _read_metadata(path: Path) -> dict | None:
     ensure_unlinked(path)
     if not path.exists():
         return None
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0))
     try:
         info = os.fstat(descriptor)
         if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > 16 * 1024
-                or info.st_mode & 0o077 or (hasattr(os, "getuid") and info.st_uid != os.getuid())):
+                or not is_private_path(path) or (hasattr(os, "getuid") and info.st_uid != os.getuid())):
             raise ValueError("not private metadata")
         with os.fdopen(descriptor, "rb", closefd=False) as stream:
             data = stream.read(16 * 1024 + 1)
@@ -132,7 +168,7 @@ class ConnectionManager:
             if isinstance(timeout, bool) or not isinstance(timeout, int) or not 1 <= timeout <= 1800:
                 raise ValueError("connection timeouts must be bounded positive integers")
         self.root = Path(root).expanduser().absolute()
-        self.executable = str(executable or os.environ.get("PF_CODEX_BIN") or "codex")
+        self.executable = str(executable or os.environ.get("PF_CODEX_BIN") or CodexProvider().configured_executable)
         self.provider_factory = provider_factory or (lambda home: CodexProvider(self.executable, auth_home=home))
         self.login_timeout_seconds = login_timeout_seconds
         self.probe_timeout_seconds = probe_timeout_seconds
@@ -140,7 +176,6 @@ class ConnectionManager:
         self._mutex = threading.RLock()
         self._worker: threading.Thread | None = None
         self._cancel = threading.Event()
-        self._process: subprocess.Popen | None = None
         self._verification_url = self._user_code = None
         self._initial_error: str | None = None
         self._lock_fd: int | None = None
@@ -164,18 +199,28 @@ class ConnectionManager:
             _private_directory(self.root / ".probe-runtime")
             lock = self.root / ".connection.lock"
             ensure_unlinked(lock)
-            self._lock_fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+            new_lock = not lock.exists()
+            self._lock_fd = os.open(lock, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0), 0o600)
+            if new_lock:
+                private_path(lock)
             info = os.fstat(self._lock_fd)
-            if (info.st_nlink != 1 or not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077
+            if (info.st_nlink != 1 or not stat.S_ISREG(info.st_mode) or not is_private_path(lock)
                     or (hasattr(os, "getuid") and info.st_uid != os.getuid())):
                 raise ValueError("unsafe operation lock")
+            if os.name == "nt" and info.st_size == 0:
+                os.write(self._lock_fd, b"\0")
             state_lock = self.root / ".state.lock"
             ensure_unlinked(state_lock)
-            self._state_fd = os.open(state_lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+            new_lock = not state_lock.exists()
+            self._state_fd = os.open(state_lock, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0), 0o600)
+            if new_lock:
+                private_path(state_lock)
             info = os.fstat(self._state_fd)
-            if (info.st_nlink != 1 or not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077
+            if (info.st_nlink != 1 or not stat.S_ISREG(info.st_mode) or not is_private_path(state_lock)
                     or (hasattr(os, "getuid") and info.st_uid != os.getuid())):
                 raise ValueError("unsafe state lock")
+            if os.name == "nt" and info.st_size == 0:
+                os.write(self._state_fd, b"\0")
             # A lock held by another manager is authoritative ownership. Merely
             # opening status in another server must never interrupt its login.
             if self._acquire():
@@ -187,34 +232,28 @@ class ConnectionManager:
             self._initial_error = "AUTH_STORAGE_INVALID"
 
     def _acquire(self) -> bool:
-        if fcntl is None or self._lock_fd is None:
+        if not _locking_available() or self._lock_fd is None:
             return False
         if self._owns_lock:
             return True
-        try:
-            fcntl.flock(self._lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if _lock_file(self._lock_fd):
             self._owns_lock = True
             return True
-        except BlockingIOError:
-            return False
+        return False
 
     def _release(self) -> None:
         if self._owns_lock and self._lock_fd is not None:
-            fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
+            _unlock_file(self._lock_fd)
             self._owns_lock = False
 
     def _state_acquire(self, *, blocking: bool = False) -> bool:
-        if fcntl is None or self._state_fd is None:
+        if not _locking_available() or self._state_fd is None:
             return False
-        try:
-            fcntl.flock(self._state_fd, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
-            return True
-        except BlockingIOError:
-            return False
+        return _lock_file(self._state_fd, blocking=blocking)
 
     def _state_release(self) -> None:
         if self._state_fd is not None:
-            fcntl.flock(self._state_fd, fcntl.LOCK_UN)
+            _unlock_file(self._state_fd)
 
     def _home(self, profile: str) -> Path:
         if not isinstance(profile, str) or not PROFILE.fullmatch(profile):
@@ -222,7 +261,7 @@ class ConnectionManager:
         home = self.root / profile
         ensure_unlinked(home)
         info = home.stat()
-        if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o077 or (hasattr(os, "getuid") and info.st_uid != os.getuid()):
+        if not stat.S_ISDIR(info.st_mode) or not is_private_path(home) or (hasattr(os, "getuid") and info.st_uid != os.getuid()):
             raise ValueError("unsafe profile home")
         return home
 
@@ -255,7 +294,7 @@ class ConnectionManager:
         return value
 
     def _write(self, operation: dict) -> None:
-        write_json(self.root / "operation.json", operation)
+        _write_metadata(self.root / "operation.json", operation)
 
     def _update(self, **changes) -> None:
         with self._mutex:
@@ -266,7 +305,7 @@ class ConnectionManager:
             self._write(operation)
 
     def _record_handle(self, handle: dict) -> None:
-        allowed = {"kind", "pid", "pgid", "start_ticks", "container_name", "container_id"}
+        allowed = {"kind", "pid", "pgid", "start_ticks", "container_name", "container_id", "job_name"}
         if not isinstance(handle, dict) or set(handle) - allowed or handle.get("kind") != "codex":
             raise ValueError("unsafe worker handle")
         for field in ("pid", "pgid", "start_ticks"):
@@ -278,12 +317,18 @@ class ConnectionManager:
             raise ValueError("unsafe container identity")
         if handle.get("container_id") is not None and not re.fullmatch(r"[a-f0-9]{64}", handle["container_id"]):
             raise ValueError("unsafe container digest")
+        if handle.get("job_name") is not None and (os.name != "nt" or not isinstance(handle["job_name"], str)
+                or not re.fullmatch(r"Local\\paper-factory-codex-[a-f0-9]{32}", handle["job_name"])):
+            raise ValueError("unsafe Windows worker job")
         self._update(handle=dict(handle))
 
     def _confirm_cleanup(self, profile: str, process: subprocess.Popen | None = None) -> bool:
         """Confirm ownership cleanup before clearing any persisted capability."""
         try:
-            if process is not None and process.poll() is None and not _try_stop(process):
+            # A reaped leader can still own the original Windows Job handle.
+            if (process is not None
+                    and (process.poll() is None or getattr(process, "_paper_factory_job", None) is not None)
+                    and not _try_stop(process)):
                 return False
             operation = self._operation()
             handle = operation.get("handle") if operation else None
@@ -346,7 +391,7 @@ class ConnectionManager:
     def status(self) -> dict:
         """Return only local safe metadata; no CLI, model, or token inspection."""
         with self._mutex:
-            error = self._initial_error or ("UNSUPPORTED_PLATFORM" if fcntl is None else None)
+            error = self._initial_error or ("UNSUPPORTED_PLATFORM" if not _locking_available() else None)
             try:
                 active = self._active() if not error else None
                 operation = self._operation() if not error else None
@@ -373,7 +418,7 @@ class ConnectionManager:
         return {**self.status(), "code": "CONNECTION_BUSY", "message": MESSAGES["CONNECTION_BUSY"]}
 
     def _begin(self, kind: str, profile: str) -> bool:
-        if self._closed or self._initial_error or fcntl is None or (self._worker and self._worker.is_alive()) or not self._acquire():
+        if self._closed or self._initial_error or not _locking_available() or (self._worker and self._worker.is_alive()) or not self._acquire():
             return False
         self._cancel = threading.Event()
         self._verification_url = self._user_code = None
@@ -386,7 +431,7 @@ class ConnectionManager:
 
     def login(self) -> dict:
         with self._mutex:
-            if self._initial_error or fcntl is None:
+            if self._initial_error or not _locking_available():
                 return self.status()
             if (self._worker and self._worker.is_alive()) or not self._acquire():
                 return self._busy()
@@ -400,6 +445,8 @@ class ConnectionManager:
                 self._release()
                 return self.status()
             binary = shutil.which(self.executable)
+            if not binary and Path(self.executable).suffix.casefold() == ".py" and Path(self.executable).is_file():
+                binary = str(Path(self.executable).resolve())
             if not binary:
                 self._release()
                 return {**self.status(), "status": "blocked", "code": "CODEX_NOT_FOUND", "message": MESSAGES["CODEX_NOT_FOUND"]}
@@ -422,12 +469,11 @@ class ConnectionManager:
         try:
             home = self._home(profile)
             environment = _environment(home)
-            command = [binary, "--no-daemon", "-c", 'cli_auth_credentials_store="file"', "login", "--device-auth"]
+            command = [*_cli_command(binary), "--no-daemon", "-c", 'cli_auth_credentials_store="file"', "login", "--device-auth"]
             process = subprocess.Popen(command, cwd=home, env=environment, stdin=subprocess.DEVNULL,
-                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
-            self._process = process
-            self._record_handle({"kind": "codex", "pid": process.pid, "pgid": process.pid,
-                                 "start_ticks": _start_ticks(process.pid)})
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, **_process_options(suspended=True))
+            _track_process(process, suspended=True)
+            self._record_handle(_worker_handle(process))
             operation_id = self._operation()["operation_id"]
             def drain(pipe) -> None:
                 try:
@@ -507,13 +553,12 @@ class ConnectionManager:
                 _try_stop(process)
             diagnostics.clear()
             with self._mutex:
-                self._process = None
                 self._verification_url = self._user_code = None
                 self._release()
 
     def probe(self) -> dict:
         with self._mutex:
-            if self._initial_error or fcntl is None:
+            if self._initial_error or not _locking_available():
                 return self.status()
             if (self._worker and self._worker.is_alive()) or not self._acquire():
                 return self._busy()
@@ -538,6 +583,8 @@ class ConnectionManager:
                 return {**self.status(), "status": "blocked", "code": "AUTH_STORAGE_INVALID", "message": MESSAGES["AUTH_STORAGE_INVALID"]}
 
     def _probe_worker(self, profile: str) -> None:
+        temporary = None
+        cleanup_unconfirmed = False
         try:
             provider = self.provider_factory(self._home(profile))
             public = provider.status()
@@ -546,11 +593,11 @@ class ConnectionManager:
             if authentication != "chatgpt" or public.get("ready") is not True:
                 self._probe_failure(profile, "API_KEY_UNSUPPORTED" if authentication == "api_key" else "AUTH_REQUIRED")
                 return
-            with tempfile.TemporaryDirectory(prefix="probe-", dir=self.root / ".probe-runtime") as temporary:
-                response = provider.generate("Without using tools, return exactly the JSON object {\"ready\":true} to confirm that this subscription can make a model request.",
-                                             PROBE_SCHEMA, Path(temporary) / "call", cancel=self._cancel_requested,
-                                             timeout_seconds=self.probe_timeout_seconds,
-                                             on_handle=self._record_handle)
+            temporary = Path(tempfile.mkdtemp(prefix="probe-", dir=self.root / ".probe-runtime"))
+            response = provider.generate("Without using tools, return exactly the JSON object {\"ready\":true} to confirm that this subscription can make a model request.",
+                                         PROBE_SCHEMA, temporary / "call", cancel=self._cancel_requested,
+                                         timeout_seconds=self.probe_timeout_seconds,
+                                         on_handle=self._record_handle)
             if self._cancel_requested():
                 self._probe_failure(profile, "CANCELLED", status="cancelled")
                 return
@@ -569,16 +616,34 @@ class ConnectionManager:
                         self._failure("CANCELLED", status="cancelled")
                         return
                     verified = _now()
-                    write_json(self.root / "active.json", {"version": 1, "profile": profile, "verified": True, "verified_at": verified})
+                    _write_metadata(self.root / "active.json", {"version": 1, "profile": profile, "verified": True, "verified_at": verified})
                     self._update(status="available", authentication="chatgpt", handle=None, code=None,
                                  message="구독 모델의 실제 응답을 확인했습니다.")
                 finally:
                     self._state_release()
         except ProviderBlocked as exc:
-            self._probe_failure(profile, exc.code, status="cancelled" if exc.code == "CANCELLED" else "blocked")
+            cleanup_unconfirmed = exc.code == "CLEANUP_UNCONFIRMED"
+            if cleanup_unconfirmed:
+                # Initialization can fail before the normal callback delivers
+                # its capability. Keep it and its private receipts until an
+                # explicit recovery confirms the worker tree has terminated.
+                if exc.active_handle:
+                    try:
+                        self._record_handle(exc.active_handle)
+                    except (OSError, ValueError, TypeError):
+                        pass  # Missing or unpersistable identity must still block recovery.
+                self._failure("CLEANUP_UNCONFIRMED")
+            else:
+                self._probe_failure(profile, exc.code, status="cancelled" if exc.code == "CANCELLED" else "blocked")
         except Exception:
             self._probe_failure(profile, "CONFIGURATION_ERROR")
         finally:
+            if temporary is not None and not cleanup_unconfirmed and self._confirm_cleanup(profile):
+                try:
+                    ensure_unlinked(temporary)
+                    shutil.rmtree(temporary)
+                except (OSError, ValueError):
+                    self._probe_failure(profile, "CONFIGURATION_ERROR")
             with self._mutex:
                 self._verification_url = self._user_code = None
                 self._release()
@@ -599,7 +664,7 @@ class ConnectionManager:
                     try:
                         operation = self._operation()
                         if operation and operation["status"] in {"starting", "waiting_user", "probing"}:
-                            write_json(self.root / ".cancel.json", {"version": 1, "operation_id": operation["operation_id"], "requested_at": _now()})
+                            _write_metadata(self.root / ".cancel.json", {"version": 1, "operation_id": operation["operation_id"], "requested_at": _now()})
                             return {**self.status(), "code": "CANCEL_REQUESTED", "message": MESSAGES["CANCEL_REQUESTED"]}
                         return self.status()
                     finally:

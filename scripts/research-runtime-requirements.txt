@@ -1,5 +1,5 @@
-# Vetted modules copied into the isolated Python 3.12 research image.
-# These pins are checked by build_autonomous_image.py; no generated installs.
+# Vetted modules copied into native Windows workers and the Linux research image.
+# Both runners verify these exact versions; generated programs cannot install packages.
 pydantic==2.13.5
 pydantic_core==2.46.5
 annotated_types==0.8.0

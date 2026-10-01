@@ -122,8 +122,8 @@ def start(ctx: typer.Context, source: Annotated[str, typer.Argument(help="Local 
 def auto_doctor():
     """Inspect official CLI authentication and the provisioned isolated runtime."""
     from .autonomous.provider import CodexProvider
-    from .autonomous.runner import DockerRunner
-    codex, isolation = CodexProvider().status(), DockerRunner().status()
+    from .autonomous.runner import research_runner
+    codex, isolation = CodexProvider().status(), research_runner().status()
     output({"codex": codex, "isolation": isolation, "ready": codex.get("authentication") == "chatgpt" and codex.get("ready") and isolation.get("ready")})
 
 
@@ -172,30 +172,24 @@ def auto_connection():
 @handled
 def auto_login():
     """Start official device login, then verify a real bounded model response."""
-    manager = _connection_manager()
-    try:
-        started = manager.login()
-        if started and started.get("code"):
-            output(started)
-            raise typer.Exit(1)
-        result = _wait_connection(manager, authenticate=True)
-        if result.get("status") != "available":
-            raise typer.Exit(1)
-    finally:
-        manager.close()
+    _connect_subscription(login=True)
 
 
 @auto_app.command("probe")
 @handled
 def auto_probe():
     """Explicitly verify model access for the authenticated worker connection."""
+    _connect_subscription(login=False)
+
+
+def _connect_subscription(*, login: bool) -> None:
     manager = _connection_manager()
     try:
-        started = manager.probe()
+        started = manager.login() if login else manager.probe()
         if started and started.get("code"):
             output(started)
             raise typer.Exit(1)
-        result = _wait_connection(manager, authenticate=False)
+        result = _wait_connection(manager, authenticate=login)
         if result.get("status") != "available":
             raise typer.Exit(1)
     finally:
@@ -964,15 +958,16 @@ def serve_web(
     port: Annotated[int, typer.Option(min=1, max=65535, help="Local HTTP server port.")] = 8765,
     studies: Annotated[Path | None, typer.Option(help="Directory containing study artifacts and manifests.")] = None,
     data: Annotated[Path | None, typer.Option(help="Directory for web projects and persistent jobs.")] = None,
+    source_root: Annotated[list[Path] | None, typer.Option("--source-root", help="Allowed local import directory; repeat to allow several roots. Defaults to your home directory.")] = None,
 ):
     """Open the research workspace, run experiments and review paper artifacts."""
     from . import web
     from .workspace import pf_home
 
-    studies_root = studies or Path("/workspace/paper-factory-deliverables/studies")
+    studies_root = studies or pf_home() / "studies"
     data_root = data or pf_home() / "web"
     typer.echo(f"Paper Factory research workspace: {host}, port {port}")
-    web.serve(host=host, port=port, studies_root=studies_root, data_root=data_root)
+    web.serve(host=host, port=port, studies_root=studies_root, data_root=data_root, source_roots=source_root)
 
 
 if __name__ == "__main__":

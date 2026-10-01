@@ -125,13 +125,14 @@ def validate_document(ws: Workspace, doc: Document) -> list[str]:
                         if claim.study_id != doc.study_id:
                             issues.append(f"Claim {claim.id} belongs to a different study")
                         issues.extend(verify_claim(ws, claim))
-                        if quantitative_label(claim.description):
-                            issues.append(f"Unsupported quantitative metric label: {claim.description[:100]}")
-                        if CITATION_TOKEN.search(claim.description):
-                            issues.append("Unverified inline citation in metric label; use a citation record block")
-                        novelty_label = re.sub(r"\b(?:time[ -]to[ -])?first[ -]byte\b", "response byte", claim.description, flags=re.I)
-                        if NOVELTY.search(novelty_label):
-                            issues.append(f"Unsupported novelty/conclusion wording in metric label: {claim.description[:100]}")
+                        for label in (claim.description, claim.unit):
+                            if quantitative_label(label):
+                                issues.append(f"Unsupported quantitative metric label: {label[:100]}")
+                            if CITATION_TOKEN.search(label):
+                                issues.append("Unverified inline citation in metric label; use a citation record block")
+                            novelty_label = re.sub(r"\b(?:time[ -]to[ -])?first[ -]byte\b", "response byte", label, flags=re.I)
+                            if NOVELTY.search(novelty_label):
+                                issues.append(f"Unsupported novelty/conclusion wording in metric label: {label[:100]}")
                         claim_sections[section.heading].add(claim.id)
                     else:
                         citation = ws.get("citation", block.ref, Citation)

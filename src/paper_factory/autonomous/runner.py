@@ -1,7 +1,7 @@
 """Fail-closed, resource-bounded execution of generated research programs.
 
-The Docker daemon is a trusted controller dependency. Generated code only runs
-inside an explicitly provisioned immutable image; there is no host fallback.
+Windows selects the native AppContainer worker; Linux selects a provisioned
+immutable Docker image. Unavailable isolation blocks generated execution.
 Only observations.json and a controller-managed execution receipt cross the
 sandbox boundary, through a bounded stream. The receipt catches accidental
 replacement of production functions; it is not adversarial code attestation.
@@ -24,6 +24,8 @@ import time
 from typing import Callable
 import uuid
 
+from ..workspace import ensure_unlinked, is_link
+
 
 IMAGE_LABEL = "org.paper-factory.research-runtime"
 PROTOCOL = "paper-factory-runner-v1"
@@ -42,18 +44,11 @@ LIMITS = {
     "network": "none", "uid": 65532, "read_only_root": True,
 }
 
-# This controller-owned program runs INSIDE Docker. It neither receives model
-# credentials nor executes on the host. The generated child sees fixed paths.
-_LAUNCHER = r'''
-import base64, json, os, pathlib, signal, stat, subprocess, sys, threading, urllib.parse
-runtime, entrypoint, timeout = sys.argv[1], sys.argv[2], int(sys.argv[3])
-artifact_limit, log_limit = int(sys.argv[4]), int(sys.argv[5])
-commands = {"python": "/usr/local/bin/python3", "node": "/usr/local/bin/node"}
-env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": "/work", "LANG": "C.UTF-8",
-       "PF_INPUT": "/input", "PF_OUTPUT": "/output", "PF_WORK": "/work",
-       "PYTHONHASHSEED": "0", "PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1"}
-python_driver = r"""
+# Both isolated backends execute the same controller-owned Python profiler.
+_PYTHON_DRIVER = r'''
 import json, os, pathlib, runpy, sys, threading
+source = pathlib.Path(os.environ['PF_SOURCE_ROOT']).resolve()
+output = pathlib.Path(os.environ['PF_OUTPUT_ROOT'])
 calls, filenames = {}, {}
 truncated = False
 def profile(frame, event, argument):
@@ -64,7 +59,7 @@ def profile(frame, event, argument):
     if filename not in filenames:
         try:
             actual = pathlib.Path(filename).resolve()
-            filenames[filename] = actual.relative_to('/input').as_posix()
+            filenames[filename] = actual.relative_to(source).as_posix()
         except (ValueError, OSError): filenames[filename] = None
     path = filenames[filename]
     if path is None or len(path) > 256: return
@@ -80,17 +75,30 @@ threading.setprofile(profile)
 try:
     # Match direct-script argv/sys.path while retaining the trusted profiler.
     sys.argv = [sys.argv[1]]
-    sys.path[0] = str(pathlib.Path(sys.argv[0]).parent)
+    sys.path.insert(0, str(pathlib.Path(sys.argv[0]).parent))
     runpy.run_path(sys.argv[0], run_name='__main__')
 finally:
     sys.setprofile(None)
     threading.setprofile(None)
     payload = {'calls':[{'path':path,'function':name,'calls':count}
                         for (path,name),count in sorted(calls.items())], 'truncated':truncated}
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
-    descriptor = os.open('/output/.paper-factory-python-calls.json', flags, 0o600)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0)
+    descriptor = os.open(output / '.paper-factory-python-calls.json', flags, 0o600)
     with os.fdopen(descriptor,'w',encoding='utf-8') as stream: json.dump(payload,stream)
-"""
+'''
+
+# This controller-owned program runs INSIDE Docker. It neither receives model
+# credentials nor executes on the host. The generated child sees fixed paths.
+_LAUNCHER = r'''
+import base64, json, os, pathlib, signal, stat, subprocess, sys, threading, urllib.parse
+runtime, entrypoint, timeout = sys.argv[1], sys.argv[2], int(sys.argv[3])
+artifact_limit, log_limit = int(sys.argv[4]), int(sys.argv[5])
+commands = {"python": "/usr/local/bin/python3", "node": "/usr/local/bin/node"}
+env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": "/work", "LANG": "C.UTF-8",
+       "PF_INPUT": "/input", "PF_OUTPUT": "/output", "PF_WORK": "/work",
+       "PF_SOURCE_ROOT": "/input", "PF_CODE_ROOT": "/code", "PF_OUTPUT_ROOT": "/output",
+       "PYTHONHASHSEED": "0", "PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1"}
+''' + '\npython_driver = ' + repr(_PYTHON_DRIVER) + r'''
 def read_json(path, limit):
     descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
@@ -191,7 +199,8 @@ sys.exit(0 if result["exit_code"] == 0 and not result["error"] and not result["t
 
 
 def _safe_tree(path: Path, label: str) -> Path:
-    if path.is_symlink() or not path.is_dir():
+    ensure_unlinked(path)
+    if is_link(path) or not path.is_dir():
         raise ValueError(f"{label} must be a real directory")
     resolved = path.resolve()
     if "," in str(resolved) or "\n" in str(resolved):
@@ -201,7 +210,7 @@ def _safe_tree(path: Path, label: str) -> Path:
         for name in directories + files:
             item = Path(parent) / name
             info = item.lstat()
-            if stat.S_ISLNK(info.st_mode) or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
+            if is_link(item) or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
                 raise ValueError(f"{label} must not contain links or special files")
             if stat.S_ISREG(info.st_mode):
                 count += 1
@@ -232,17 +241,20 @@ def _stage_tree(source: Path, target: Path) -> None:
         relative = Path(parent).relative_to(source)
         for name in directories:
             actual = Path(parent) / name
-            if actual.is_symlink():
+            if is_link(actual):
                 raise ValueError("sandbox input changed to a symbolic link")
             destination = target / relative / name
             destination.mkdir(mode=0o755)
             destination.chmod(0o755)
         for name in files:
             actual = Path(parent) / name
-            descriptor = os.open(actual, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            ensure_unlinked(actual)
+            before = actual.stat(follow_symlinks=False)
+            descriptor = os.open(actual, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
             try:
                 info = os.fstat(descriptor)
-                if not stat.S_ISREG(info.st_mode):
+                ensure_unlinked(actual)
+                if not stat.S_ISREG(info.st_mode) or (info.st_dev, info.st_ino) != (before.st_dev, before.st_ino):
                     raise ValueError("sandbox input changed to a special file")
                 with os.fdopen(descriptor, "rb", closefd=False) as stream:
                     destination = target / relative / name
@@ -377,8 +389,8 @@ class DockerRunner:
             entrypoint: str, timeout_seconds: int = 300, production_entrypoint: str = "",
             cancel: Callable[[], bool] | None = None,
             on_handle: Callable[[dict], None] | None = None) -> dict:
-        if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, int) or not 1 <= timeout_seconds <= 1800:
-            raise ValueError("experiment timeout must be between 1 and 1800 seconds")
+        if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, int) or not 1 <= timeout_seconds <= 3600:
+            raise ValueError("experiment timeout must be between 1 and 3600 seconds")
         source = _safe_tree(Path(source_dir), "source")
         bundle = _safe_tree(Path(bundle_dir), "bundle")
         entrypoint = _entrypoint(entrypoint, runtime, bundle)
@@ -390,16 +402,15 @@ class DockerRunner:
                     or not source.joinpath(*relative.parts).is_file()):
                 raise ValueError("production entrypoint must identify a source file and qualified callable")
         output = Path(output_dir)
-        if output.is_symlink():
-            raise ValueError("output directory must not be a link")
-        output.mkdir(parents=True, exist_ok=True)
-        if not output.is_dir() or any(output.iterdir()):
-            raise ValueError("output directory must be empty")
+        ensure_unlinked(output)
         output = output.resolve()
         if output == source or source in output.parents or output == bundle or bundle in output.parents:
             raise ValueError("output directory must be separate from source and bundle")
+        output.mkdir(parents=True, exist_ok=True)
+        if not output.is_dir() or any(output.iterdir()):
+            raise ValueError("output directory must be empty")
         prerequisite = self.status()
-        result = {"status": "failed", "image_digest": prerequisite["image_digest"],
+        result = {"status": "failed", "backend": "docker", "image_digest": prerequisite["image_digest"],
                   "command": [runtime, f"/code/{entrypoint}"], "limits": {**LIMITS, "timeout_seconds": timeout_seconds},
                   "artifacts": [], "output_path": None, "stdout": "", "stderr": "", "exit_code": None}
         result.update({"production_entrypoint": production_entrypoint or None, "production_calls": [],
@@ -435,6 +446,7 @@ class DockerRunner:
                    entrypoint, str(timeout_seconds), str(MAX_ARTIFACT_BYTES), str(MAX_LOG_BYTES)]
         started = time.monotonic()
         process = None
+        container_id = None
         overflow = threading.Event()
         streams = {"stdout": bytearray(), "stderr": bytearray()}
         threads: list[threading.Thread] = []
@@ -519,7 +531,7 @@ class DockerRunner:
                     raise ValueError("observation is empty or exceeds size limit")
                 json.loads(data.decode("utf-8"), parse_constant=lambda value: (_ for _ in ()).throw(ValueError("nonfinite JSON value: " + value)))
                 path = output / "observations.json"
-                descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
                 with os.fdopen(descriptor, "wb") as stream:
                     stream.write(data)
                 result["artifacts"] = [{"path": "observations.json", "size": len(data),
@@ -534,13 +546,32 @@ class DockerRunner:
             return result
         finally:
             if process is not None and process.poll() is None:
-                process.kill()
-                process.wait(timeout=5)
+                try:
+                    process.kill()
+                    process.wait(timeout=5)
+                except (OSError, subprocess.TimeoutExpired):
+                    # The Docker removal below is the authoritative cleanup.
+                    pass
             try:
-                self._control(["rm", "--force", name], timeout=5)
+                removed = self._control(["rm", "--force", name], timeout=5)
+                cleanup_confirmed = removed.returncode == 0 or "No such container" in removed.stderr
             except (OSError, subprocess.TimeoutExpired):
-                pass
+                cleanup_confirmed = False
+            result["cleanup_confirmed"] = cleanup_confirmed
+            if not cleanup_confirmed:
+                result.update(status="blocked", code="CLEANUP_UNCONFIRMED",
+                              error="Research container removal could not be confirmed; restore Docker connectivity before resuming.",
+                              active_handle={"kind": "container", "container_id": container_id,
+                                             "container_name": name, "image_digest": prerequisite["image_digest"]})
             staging.cleanup()
             result["stdout"] = _bounded_log(result["stdout"])
             result["stderr"] = _bounded_log(result["stderr"])
             result["duration_seconds"] = round(time.monotonic() - started, 3)
+
+
+def research_runner():
+    """Select the platform's enforced research boundary without a host fallback."""
+    if os.name == "nt":
+        from .windows_runner import WindowsRunner
+        return WindowsRunner()
+    return DockerRunner()

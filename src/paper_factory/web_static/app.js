@@ -235,7 +235,7 @@ function visible(items) {
           item.question,
           item.research_question,
           list(item.research_questions).join(" "),
-          typeof item.repository === "object"
+          item.repository && typeof item.repository === "object"
             ? item.repository.name
             : item.repository,
           item.source,
@@ -297,7 +297,7 @@ function studyQuestion(study) {
 }
 function repo(study) {
   const raw = textValue(
-    typeof study.repository === "object"
+    study.repository && typeof study.repository === "object"
       ? study.repository.name || study.repository.url
       : study.repository || study.repo || study.source,
   );
@@ -371,11 +371,20 @@ function agentReadiness() {
   if (!state.agent) return `<div class="notice">${e(state.agentError || "구독 모델 연결과 실험 환경을 확인하고 있습니다.")}</div>`;
   const provider = state.agent.provider || {};
   const runner = state.agent.runner || {};
-  const providerReady = state.modelConnection ? state.modelConnection.connected === true || state.modelConnection.authentication === "chatgpt" : provider.ready === true || (provider.available === true && provider.authenticated === true);
-  const authentication = state.modelConnection?.authentication || provider.authentication;
-  const providerMessage = state.modelConnection ? providerReady ? "연구 작업자의 공식 로그인을 확인했습니다. 아래에서 실제 모델 요청을 확인하세요." : "아래 구독 연결에서 연구 작업자의 공식 로그인을 진행하세요." : provider.message || provider.reason || (providerReady ? "공식 CLI 로그인을 확인했습니다. 실제 모델 요청 가능 여부는 연구 시작 시 확인합니다." : "서버 환경에서 공식 Codex CLI 로그인 상태를 확인하세요.");
+  const providerReady = provider.ready === true;
+  let providerMessage = provider.reason;
+  if (!providerMessage) {
+    if (provider.executable_available === false)
+      providerMessage = "공식 Codex CLI를 찾지 못했습니다. CLI 설치 또는 PF_CODEX_BIN 설정을 확인하세요.";
+    else if (provider.capabilities_supported === false)
+      providerMessage = `설치된 Codex CLI가 필요한 기능을 지원하지 않습니다. 지원되는 CLI로 업데이트하세요.${list(provider.missing_capabilities).length ? ` 누락된 기능: ${list(provider.missing_capabilities).join(", ")}` : ""}`;
+    else if (provider.authentication === "api_key")
+      providerMessage = "현재 CLI는 API 키로 로그인되어 있습니다. 연구를 시작하려면 ChatGPT 구독으로 로그인하세요.";
+    else
+      providerMessage = providerReady ? "현재 사용되는 ChatGPT 구독 로그인을 확인했습니다. 실제 모델 요청 가능 여부는 연구 시작 시 확인합니다." : "공식 Codex CLI의 ChatGPT 구독 로그인 상태를 확인하세요.";
+  }
   const runnerReady = runner.ready === true;
-  return `<div class="agent-readiness"><article class="record-card"><strong>${icon("spark")}Codex ${authentication === "chatgpt" ? "구독 로그인" : "CLI 로그인"} ${badge(providerReady ? "ready" : "warning", providerReady ? "로그인 확인" : "확인 필요")}</strong><p>${e(providerMessage)}</p></article><article class="record-card"><strong>${icon("shield")}격리 실험 환경 ${badge(runnerReady ? "ready" : "warning", runnerReady ? "사용 가능" : "확인 필요")}</strong><p>${e(runner.message || runner.reason || (runnerReady ? "생성한 실험 코드를 자원 제한이 있는 별도 환경에서 실행합니다." : "격리 실행 환경이 준비되어야 생성 코드를 실행할 수 있습니다."))}</p></article></div>`;
+  return `<div class="agent-readiness"><article class="record-card"><strong>${icon("spark")}Codex 모델 실행 ${badge(providerReady ? "ready" : "warning", providerReady ? "준비됨" : "확인 필요")}</strong><p>${e(providerMessage)}</p></article><article class="record-card"><strong>${icon("shield")}${runner.backend === "windows-appcontainer" ? "Windows 네이티브 실험 환경" : "Docker 격리 실험 환경"} ${badge(runnerReady ? "ready" : "warning", runnerReady ? "사용 가능" : "확인 필요")}</strong><p>${e(runner.reason || (runnerReady ? "생성한 실험 코드를 자원 제한이 있는 별도 환경에서 실행합니다." : "격리 실행 환경이 준비되어야 생성 코드를 실행할 수 있습니다."))}</p></article></div>`;
 }
 const connectionStates = {
   idle: "연결 전", disconnected: "연결 해제", starting: "로그인 준비 중",
@@ -394,13 +403,14 @@ function connectionPanel() {
   const readOnly = state.health?.writes_enabled === false;
   const status = connection?.status || "idle";
   const authentic = connection?.authentication === "chatgpt" || connection?.connected === true;
+  const existingLogin = state.agent?.provider.ready === true && !authentic;
   const modelAvailable = connection?.model_available === true;
   const waiting = status === "waiting_user";
   const active = ["starting", "waiting_user", "probing"].includes(status);
   const blocked = readOnly || state.modelConnectionBusy;
   const verificationURL = waiting ? officialVerificationURL(connection?.verification_url) : "";
   const userCode = waiting && typeof connection?.user_code === "string" && /^[A-Za-z0-9-]{4,32}$/.test(connection.user_code) ? connection.user_code : "";
-  return `<section class="model-connection panel" aria-label="ChatGPT 구독 연결"><div class="section-heading"><div><h2>연구 작업자에 ChatGPT 구독 연결</h2><p class="section-caption">공식 로그인 페이지에서 계정을 승인하고 실제 모델 요청을 확인하세요.</p></div>${badge(active ? "running" : ["blocked", "failed"].includes(status) ? "warning" : modelAvailable ? "ready" : "warning", connectionStates[status] || (modelAvailable ? "모델 요청 확인 완료" : "연결 확인 필요"))}</div><div class="connection-checks"><span>${authentic ? icon("check") : icon("clock")}구독 로그인: <strong>${authentic ? "확인" : "확인 필요"}</strong></span><span>${modelAvailable ? icon("check") : icon("clock")}실제 모델 요청: <strong>${modelAvailable ? "확인" : status === "probing" ? "확인 중" : "미확인"}</strong></span></div>${connection?.verified_at && modelAvailable ? `<p class="field-help">마지막 실제 요청 확인: ${e(date(connection.verified_at))}</p>` : ""}${waiting ? `<div class="official-login"><strong>공식 페이지에서 아래 일회용 코드를 입력하세요.</strong>${userCode ? `<div class="device-code" aria-label="일회용 로그인 코드"><code>${e(userCode)}</code></div>` : '<p class="field-help">로그인 코드를 기다리고 있습니다.</p>'}${verificationURL ? `<a class="button button-primary" href="${e(verificationURL)}" target="_blank" rel="noopener noreferrer">공식 로그인 페이지 열기 ${icon("external")}</a>` : '<p class="field-help">공식 로그인 주소를 확인한 뒤 링크를 표시합니다.</p>'}<p class="field-help">비밀번호와 계정 승인은 공식 페이지에서 진행합니다. OpenAI에서 로그인을 완료한 뒤 이 화면에서 연결 상태를 확인하세요.</p></div>` : ""}${connection?.message ? `<p class="connection-message" role="status">${e(connection.message)}</p>` : ""}${pipelineHelp(connection || {})}${state.modelConnectionError || state.modelConnectionFetchError ? `<div class="form-error" role="alert">${e(state.modelConnectionError || state.modelConnectionFetchError)}</div>` : ""}${readOnly ? '<p class="field-help">현재는 논문 열람 모드입니다. 구독 연결은 로컬 주소로 연 연구 작업실에서 사용할 수 있습니다.</p>' : ""}<div class="inline-actions">${!active ? `<button class="button ${authentic ? "button-secondary" : "button-primary"}" data-action="connect-model" ${blocked ? "disabled" : ""}>${icon("link")}${authentic ? "계정 다시 연결" : "ChatGPT 구독으로 연결"}</button>` : ""}${authentic && !active ? `<button class="button button-secondary" data-action="probe-model" ${blocked ? "disabled" : ""}>${icon("activity")}실제 모델 요청 확인</button>` : ""}${active ? `<button class="button button-secondary" data-action="cancel-model-connection" ${blocked ? "disabled" : ""}>연결 작업 중단</button>` : ""}${authentic && !active ? `<button class="button button-secondary" data-action="disconnect-model" ${blocked ? "disabled" : ""}>연구 작업자 연결 해제</button>` : ""}</div><p class="field-help">로그인 확인과 모델 사용 가능 여부를 따로 검증합니다. 사용량 제한이나 네트워크 오류가 발생하면 원인을 확인하고 다시 요청할 수 있습니다.</p></section>`;
+  return `<section class="model-connection panel" aria-label="ChatGPT 구독 연결"><div class="section-heading"><div><h2>연구 작업자에 ChatGPT 구독 연결</h2><p class="section-caption">${existingLogin ? "현재 구독 로그인을 사용할 수 있습니다. 아래에서 다른 연구 계정을 연결할 수 있습니다." : "공식 로그인 페이지에서 계정을 승인하고 실제 모델 요청을 확인하세요."}</p></div>${badge(active ? "running" : ["blocked", "failed"].includes(status) ? "warning" : modelAvailable ? "ready" : "warning", existingLogin && status === "disconnected" ? "새 계정 연결 전" : connectionStates[status] || (modelAvailable ? "모델 요청 확인 완료" : "연결 확인 필요"))}</div><div class="connection-checks"><span>${authentic ? icon("check") : icon("clock")}${existingLogin ? "새 연결의 구독 로그인" : "구독 로그인"}: <strong>${authentic ? "확인" : "확인 필요"}</strong></span><span>${modelAvailable ? icon("check") : icon("clock")}실제 모델 요청: <strong>${modelAvailable ? "확인" : status === "probing" ? "확인 중" : "미확인"}</strong></span></div>${connection?.verified_at && modelAvailable ? `<p class="field-help">마지막 실제 요청 확인: ${e(date(connection.verified_at))}</p>` : ""}${waiting ? `<div class="official-login"><strong>공식 페이지에서 아래 일회용 코드를 입력하세요.</strong>${userCode ? `<div class="device-code" aria-label="일회용 로그인 코드"><code>${e(userCode)}</code></div>` : '<p class="field-help">로그인 코드를 기다리고 있습니다.</p>'}${verificationURL ? `<a class="button button-primary" href="${e(verificationURL)}" target="_blank" rel="noopener noreferrer">공식 로그인 페이지 열기 ${icon("external")}</a>` : '<p class="field-help">공식 로그인 주소를 확인한 뒤 링크를 표시합니다.</p>'}<p class="field-help">비밀번호와 계정 승인은 공식 페이지에서 진행합니다. OpenAI에서 로그인을 완료한 뒤 이 화면에서 연결 상태를 확인하세요.</p></div>` : ""}${connection?.message ? `<p class="connection-message" role="status">${e(connection.message)}</p>` : ""}${pipelineHelp(connection || {})}${state.modelConnectionError || state.modelConnectionFetchError ? `<div class="form-error" role="alert">${e(state.modelConnectionError || state.modelConnectionFetchError)}</div>` : ""}${readOnly ? '<p class="field-help">현재는 논문 열람 모드입니다. 구독 연결은 로컬 주소로 연 연구 작업실에서 사용할 수 있습니다.</p>' : ""}<div class="inline-actions">${!active ? `<button class="button ${authentic ? "button-secondary" : "button-primary"}" data-action="connect-model" ${blocked ? "disabled" : ""}>${icon("link")}${authentic ? "계정 다시 연결" : "ChatGPT 구독으로 연결"}</button>` : ""}${authentic && !active ? `<button class="button button-secondary" data-action="probe-model" ${blocked ? "disabled" : ""}>${icon("activity")}실제 모델 요청 확인</button>` : ""}${active ? `<button class="button button-secondary" data-action="cancel-model-connection" ${blocked ? "disabled" : ""}>연결 작업 중단</button>` : ""}${authentic && !active ? `<button class="button button-secondary" data-action="disconnect-model" ${blocked ? "disabled" : ""}>연구 작업자 연결 해제</button>` : ""}</div><p class="field-help">로그인 확인과 모델 사용 가능 여부를 따로 검증합니다. 사용량 제한이나 네트워크 오류가 발생하면 원인을 확인하고 다시 요청할 수 있습니다.</p></section>`;
 }
 async function changeModelConnection(operation) {
   if (state.modelConnectionBusy || state.health?.writes_enabled === false) return;
@@ -410,7 +420,7 @@ async function changeModelConnection(operation) {
   if ($("#project-dialog").open && state.stage === "autonomous") renderProject();
   try {
     const result = await api(`/api/agent/connection/${operation}`, {method: "POST", body: JSON.stringify({})});
-    state.modelConnection = result.connection || result;
+    state.modelConnection = result;
   } catch (error) {
     state.modelConnectionError = error.message;
   } finally {
@@ -592,10 +602,11 @@ async function refresh({ silent = false } = {}) {
     state.agentError = results[4].reason.message;
   }
   if (results[5].status === "fulfilled") {
-    state.modelConnection = results[5].value.connection || results[5].value;
+    state.modelConnection = results[5].value;
     state.modelConnectionFetchError = "";
-  } else if (state.health?.writes_enabled !== false) {
-    state.modelConnectionFetchError = results[5].reason.message;
+  } else {
+    state.modelConnection = null;
+    state.modelConnectionFetchError = state.health?.writes_enabled === false ? "" : results[5].reason.message;
   }
   state.loading = false;
   state.refreshing = false;
@@ -761,7 +772,7 @@ function renderPaper(study) {
         ? JSON.stringify(study.abstract, null, 2)
         : "";
   $("#paper-dialog-body").innerHTML =
-    `<div class="paper-detail-layout"><div class="paper-main"><div class="reading-tabs"><button class="active" data-reading="overview">연구 개요</button><button data-reading="article" ${manuscript ? "" : "disabled"}>원고 읽기</button><button data-reading="data">근거 자료</button></div><div id="paper-overview"><section class="detail-section"><h3>연구 질문</h3><div class="question-callout">${e(studyQuestion(study) || "연구 질문 미등록")}</div></section>${abstract ? `<section class="detail-section"><h3>초록</h3><p>${e(abstract)}</p></section>` : ""}${data.length ? `<section class="detail-section"><h3>핵심 측정 결과</h3><div class="detail-metrics">${data.map((item) => `<div class="detail-metric"><strong>${e(number(item.value))} ${e(item.unit)}</strong><small>${e(item.label)}</small>${item.description ? `<p>${e(item.description)}</p>` : ""}</div>`).join("")}</div></section>` : ""}${figureMarkup(study) ? `<section class="detail-section"><h3>그림과 결과</h3>${figureMarkup(study)}</section>` : ""}${list(study.tables).map(tableMarkup).join("")}${limitations.length ? `<section class="detail-section"><h3>연구 범위와 한계</h3><ul>${limitations.map((item) => `<li>${e(typeof item === "string" ? item : JSON.stringify(item))}</li>`).join("")}</ul></section>` : ""}</div><div id="paper-article" hidden><div class="article-content" id="article-content">${manuscript ? '<div class="loading-state"><span class="spinner"></span>원고를 불러오는 중입니다.</div>' : empty("읽을 수 있는 원고가 없습니다", "PDF 또는 DOCX 파일을 내려받아 원고를 검토하세요.")}</div></div><div id="paper-data" hidden><section class="detail-section"><h3>실험 자료와 원고 파일</h3><p>등록된 원고, 결과 데이터, 그림과 재현 자료를 확인하세요.</p></section>${files.length ? fileList(files) : empty("등록된 파일이 없습니다", "연구 산출물 등록을 기다리고 있습니다.")}</div></div><aside class="paper-aside"><section class="detail-section"><p class="aside-label">DOWNLOADS</p><div class="download-list">${docs.map((file) => downloadItem(file, extension(file) === "PDF" ? "논문 PDF" : extension(file) === "DOCX" ? "편집용 Word 원고" : "LaTeX 원고")).join("")}${localURL(study.bundle_url) ? `<a class="download-item" href="${e(localURL(study.bundle_url))}" download><span class="download-filetype">ZIP</span><span class="download-copy"><strong>전체 재현 자료</strong><small>원고 · 데이터 · 그림</small></span>${icon("download")}</a>` : ""}</div>${!docs.length ? "<p>원고 파일이 아직 등록되지 않았습니다.</p>" : ""}</section><section class="detail-section"><p class="aside-label">RESEARCH DETAILS</p>${paperStatus(study)}<p style="margin-top:12px">${e(study.kind || study.study_type || "재현 가능한 경험적 연구")}</p>${externalURL(typeof study.repository === "object" ? study.repository.url : study.repository) ? `<a class="button button-secondary button-small" style="margin-top:12px" href="${e(externalURL(typeof study.repository === "object" ? study.repository.url : study.repository))}" target="_blank" rel="noopener noreferrer">저장소 보기 ${icon("external")}</a>` : ""}</section>${study.author ? `<section class="detail-section"><p class="aside-label">AUTHOR</p><p>${e(typeof study.author === "string" ? study.author : study.author.display_name || study.author.name || "")}</p>${typeof study.author === "object" && study.author.orcid ? `<a class="small-label" href="https://orcid.org/${e(study.author.orcid)}" target="_blank" rel="noopener noreferrer">ORCID ${e(study.author.orcid)}</a>` : ""}</section>` : ""}</aside></div>`;
+    `<div class="paper-detail-layout"><div class="paper-main"><div class="reading-tabs"><button class="active" data-reading="overview">연구 개요</button><button data-reading="article" ${manuscript ? "" : "disabled"}>원고 읽기</button><button data-reading="data">근거 자료</button></div><div id="paper-overview"><section class="detail-section"><h3>연구 질문</h3><div class="question-callout">${e(studyQuestion(study) || "연구 질문 미등록")}</div></section>${abstract ? `<section class="detail-section"><h3>초록</h3><p>${e(abstract)}</p></section>` : ""}${data.length ? `<section class="detail-section"><h3>핵심 측정 결과</h3><div class="detail-metrics">${data.map((item) => `<div class="detail-metric"><strong>${e(number(item.value))} ${e(item.unit)}</strong><small>${e(item.label)}</small>${item.description ? `<p>${e(item.description)}</p>` : ""}</div>`).join("")}</div></section>` : ""}${figureMarkup(study) ? `<section class="detail-section"><h3>그림과 결과</h3>${figureMarkup(study)}</section>` : ""}${list(study.tables).map(tableMarkup).join("")}${limitations.length ? `<section class="detail-section"><h3>연구 범위와 한계</h3><ul>${limitations.map((item) => `<li>${e(typeof item === "string" ? item : JSON.stringify(item))}</li>`).join("")}</ul></section>` : ""}</div><div id="paper-article" hidden><div class="article-content" id="article-content">${manuscript ? '<div class="loading-state"><span class="spinner"></span>원고를 불러오는 중입니다.</div>' : empty("읽을 수 있는 원고가 없습니다", "PDF 또는 DOCX 파일을 내려받아 원고를 검토하세요.")}</div></div><div id="paper-data" hidden><section class="detail-section"><h3>실험 자료와 원고 파일</h3><p>등록된 원고, 결과 데이터, 그림과 재현 자료를 확인하세요.</p></section>${files.length ? fileList(files) : empty("등록된 파일이 없습니다", "연구 산출물 등록을 기다리고 있습니다.")}</div></div><aside class="paper-aside"><section class="detail-section"><p class="aside-label">DOWNLOADS</p><div class="download-list">${docs.map((file) => downloadItem(file, extension(file) === "PDF" ? "논문 PDF" : extension(file) === "DOCX" ? "편집용 Word 원고" : "LaTeX 원고")).join("")}${localURL(study.bundle_url) ? `<a class="download-item" href="${e(localURL(study.bundle_url))}" download><span class="download-filetype">ZIP</span><span class="download-copy"><strong>전체 재현 자료</strong><small>원고 · 데이터 · 그림</small></span>${icon("download")}</a>` : ""}</div>${!docs.length ? "<p>원고 파일이 아직 등록되지 않았습니다.</p>" : ""}</section><section class="detail-section"><p class="aside-label">RESEARCH DETAILS</p>${paperStatus(study)}<p class="paper-kind">${e(study.kind || study.study_type || "재현 가능한 경험적 연구")}</p>${externalURL(study.repository && typeof study.repository === "object" ? study.repository.url : study.repository) ? `<a class="button button-secondary button-small" href="${e(externalURL(study.repository && typeof study.repository === "object" ? study.repository.url : study.repository))}" target="_blank" rel="noopener noreferrer">저장소 보기 ${icon("external")}</a>` : ""}</section>${study.author ? `<section class="detail-section"><p class="aside-label">AUTHOR</p><p>${e(typeof study.author === "string" ? study.author : study.author.display_name || study.author.name || "")}</p>${typeof study.author === "object" && study.author.orcid ? `<a class="small-label" href="https://orcid.org/${e(study.author.orcid)}" target="_blank" rel="noopener noreferrer">ORCID ${e(study.author.orcid)}</a>` : ""}</section>` : ""}</aside></div>`;
   if (manuscript && localURL(manuscript.url)) {
     fetch(localURL(manuscript.url), { headers: { Accept: "text/plain" } })
       .then((response) => {
@@ -934,7 +945,7 @@ function pipelineHelp(run) {
     AUTH_REQUIRED: "서버 환경에서 공식 Codex CLI에 로그인한 뒤 재개하세요.",
     CODEX_UNAVAILABLE: "서버 환경에 공식 Codex CLI를 설치하거나 실행 경로를 설정한 뒤 재개하세요.",
     RATE_LIMITED: "구독 계정의 사용량 제한이 해제된 뒤 재개하세요. 완료된 단계는 보존됩니다.",
-    ISOLATION_UNAVAILABLE: "격리 실험 런타임을 준비한 뒤 재개하세요. 생성 코드는 호스트에서 실행하지 않습니다.",
+    ISOLATION_UNAVAILABLE: "선택된 실험 환경을 준비한 뒤 재개하세요. 생성 코드는 해당 환경의 격리와 자원 제한 안에서 실행됩니다.",
     NETWORK_ERROR: `모델 서비스의 네트워크 접근 설정을 확인한 뒤 재개하세요.${/403/.test(run.message || "") ? " HTTP CONNECT 403은 환경 프록시가 모델 요청을 거부했다는 뜻입니다." : ""} CLI 로그인 확인과 실제 모델 요청 가능 여부는 별도로 확인됩니다.`,
   };
   return help[run.code] ? `<p class="field-help pipeline-help">${e(help[run.code])}</p>` : "";
@@ -1026,25 +1037,27 @@ function experimentStage() {
           )
           .join("")}</div>`
       : ""
-  }<hr class="form-divider"><form data-form="register"><label class="field-label" for="manifest-json">새 실험 계획 · JSON</label><p class="field-help">아래는 작성용 예시입니다. 분석 스크립트 경로와 입력·출력·지표를 프로젝트에 맞게 수정하세요. 실행할 스크립트는 가져온 프로젝트에 포함되어 있어야 합니다.</p><textarea id="manifest-json" name="manifest" class="field json-field" spellcheck="false" required style="margin-top:12px">${e(state.drafts[`${state.selectedProject}:manifest`] || manifestTemplate())}</textarea>${formError()}<div class="inline-actions"><button type="submit" class="button button-secondary" ${records("study").length ? "" : "disabled"}>실험 계획 등록</button></div></form>`;
+  }<hr class="form-divider"><form data-form="register"><label class="field-label" for="manifest-json">새 실험 계획 · JSON</label><p class="field-help">아래는 작성용 예시입니다. 분석 스크립트 경로와 입력·출력·지표를 프로젝트에 맞게 수정하세요. 실행할 스크립트는 가져온 프로젝트에 포함되어 있어야 합니다.</p><textarea id="manifest-json" name="manifest" class="field json-field" spellcheck="false" required>${e(state.drafts[`${state.selectedProject}:manifest`] || manifestTemplate())}</textarea>${formError()}<div class="inline-actions"><button type="submit" class="button button-secondary" ${records("study").length ? "" : "disabled"}>실험 계획 등록</button></div></form>`;
 }
 function literatureStage() {
   const citations = records("citation");
-  return `<h3 class="workspace-section-heading">연구를 기존 문헌과 연결하세요.</h3><p class="workspace-section-intro">Crossref에서 관련 문헌을 찾거나 DOI로 서지 정보를 확인합니다. 검색 결과와 원문 내용을 함께 검토해 연구의 맥락을 작성하세요.</p><form data-form="literature-search">${records("study").length ? studySelect("study", "literature-study") : ""}<label class="field-label" for="literature-query">검색어 <span class="required">*</span></label><input name="query" id="literature-query" class="field" required placeholder="연구 주제, 방법론, 또는 논문 제목"><div class="inline-actions"><button type="submit" class="button button-primary">${icon("search")}관련 문헌 검색</button><label class="small-label" for="literature-limit">검색 수</label><select name="limit" id="literature-limit" class="field" style="width:70px;padding:9px"><option value="5">5</option><option value="10">10</option><option value="20">20</option></select></div></form><hr class="form-divider"><form data-form="literature-doi"><label class="field-label" for="literature-doi">DOI로 문헌 추가</label><input name="doi" id="literature-doi" class="field" required placeholder="10.xxxx/identifier">${records("study").length ? studySelect("study", "doi-study") : ""}<div class="inline-actions"><button type="submit" class="button button-secondary">${icon("link")}DOI 확인 및 연결</button></div></form>${formError()}<h4 class="field-label">확인된 문헌 ${citations.length}</h4>${citations.length ? citations.map((citation) => `<article class="literature-result"><h4>${e(citation.title)}</h4><p>${e(list(citation.authors).join(", "))}${citation.year ? ` · ${e(citation.year)}` : ""}</p><p>${e(citation.doi)}</p><a href="https://doi.org/${e(encodeURIComponent(citation.doi).replace(/%2F/g, "/"))}" target="_blank" rel="noopener noreferrer">원문 확인 ↗</a><p>검증 범위: 서지 정보 · 원문 내용은 직접 검토하세요.</p></article>`).join("") : empty("확인된 문헌이 없습니다", "검색 또는 DOI 확인 결과가 이곳에 표시됩니다.", "", "book")}`;
+  return `<h3 class="workspace-section-heading">연구를 기존 문헌과 연결하세요.</h3><p class="workspace-section-intro">Crossref에서 관련 문헌을 찾거나 DOI로 서지 정보를 확인합니다. 검색 결과와 원문 내용을 함께 검토해 연구의 맥락을 작성하세요.</p><form data-form="literature-search">${records("study").length ? studySelect("study", "literature-study") : ""}<label class="field-label" for="literature-query">검색어 <span class="required">*</span></label><input name="query" id="literature-query" class="field" required placeholder="연구 주제, 방법론, 또는 논문 제목"><div class="inline-actions"><button type="submit" class="button button-primary">${icon("search")}관련 문헌 검색</button><label class="small-label" for="literature-limit">검색 수</label><select name="limit" id="literature-limit" class="field field-count"><option value="5">5</option><option value="10">10</option><option value="20">20</option></select></div></form><hr class="form-divider"><form data-form="literature-doi"><label class="field-label" for="literature-doi">DOI로 문헌 추가</label><input name="doi" id="literature-doi" class="field" required placeholder="10.xxxx/identifier">${records("study").length ? studySelect("study", "doi-study") : ""}<div class="inline-actions"><button type="submit" class="button button-secondary">${icon("link")}DOI 확인 및 연결</button></div></form>${formError()}<h4 class="field-label">확인된 문헌 ${citations.length}</h4>${citations.length ? citations.map((citation) => `<article class="literature-result"><h4>${e(citation.title)}</h4><p>${e(list(citation.authors).join(", "))}${citation.year ? ` · ${e(citation.year)}` : ""}</p><p>${e(citation.doi)}</p><a href="https://doi.org/${e(encodeURIComponent(citation.doi).replace(/%2F/g, "/"))}" target="_blank" rel="noopener noreferrer">원문 확인 ↗</a><p>검증 범위: 서지 정보 · 원문 내용은 직접 검토하세요.</p></article>`).join("") : empty("확인된 문헌이 없습니다", "검색 또는 DOI 확인 결과가 이곳에 표시됩니다.", "", "book")}`;
 }
 function manuscriptStage() {
   const papers = records("paper");
   const files = list(state.projectDetail.files);
-  return `<h3 class="workspace-section-heading">근거에서 원고를 완성하세요.</h3><p class="workspace-section-intro">실험 결과와 연결된 근거로 검토용 원고를 생성합니다. 본문을 편집한 뒤 파일을 다시 만들고 무결성을 검토하세요.</p><form data-form="manuscript-build">${records("study").length ? studySelect("study", "manuscript-study") : empty("연구 질문을 먼저 등록하세요", "실험 결과가 준비된 연구에서 원고를 만들 수 있습니다.", "", "article")}<details style="margin-top:18px"><summary class="small-label">저자 정보 · 선택</summary><p class="field-help">제공한 정보만 원고에 반영됩니다. ORCID는 공개 연구자 식별자이며 이름·소속·이메일을 대신하지 않습니다.</p><div class="workspace-form-grid"><label class="field-label">표기 이름<input class="field" name="author_name" placeholder="논문에 표기할 성명"></label><label class="field-label">ORCID<input class="field" name="author_orcid" placeholder="0000-0000-0000-0000"></label><label class="field-label">소속<input class="field" name="author_affiliation" placeholder="소속 기관"></label><label class="field-label">공개 이메일<input class="field" name="author_email" type="email" placeholder="연락용 이메일"></label></div></details><label class="checkbox-field"><input name="pdf" type="checkbox" checked>PDF 파일 포함</label><div class="inline-actions"><button type="submit" class="button button-primary" ${records("study").length ? "" : "disabled"}>${icon("article")}검토용 원고 생성</button></div></form>${papers.length ? `<hr class="form-divider"><label class="field-label" for="paper-select">생성된 원고</label><select class="field" id="paper-select">${papers.map((paper) => `<option value="${e(paper.id)}">${e(paper.title)} · ${e(statusLabels[paper.state] || paper.state)}</option>`).join("")}</select><div class="inline-actions"><button class="button button-secondary" data-action="edit-manuscript">원고 편집</button><button class="button button-secondary" data-action="render-manuscript">${icon("refresh")}파일 다시 만들기</button><button class="button button-secondary" data-action="check-integrity">${icon("shield")}무결성 검토</button></div><div id="manuscript-editor"></div><h4 class="field-label">원고 산출물</h4>${fileList(files.filter((file) => file.path.startsWith("manuscripts/")))}` : ""}${formError()}`;
+  return `<h3 class="workspace-section-heading">근거에서 원고를 완성하세요.</h3><p class="workspace-section-intro">실험 결과와 연결된 근거로 검토용 원고를 생성합니다. 본문을 편집한 뒤 파일을 다시 만들고 무결성을 검토하세요.</p><form data-form="manuscript-build">${records("study").length ? studySelect("study", "manuscript-study") : empty("연구 질문을 먼저 등록하세요", "실험 결과가 준비된 연구에서 원고를 만들 수 있습니다.", "", "article")}<details class="author-fields"><summary class="small-label">저자 정보 · 선택</summary><p class="field-help">제공한 정보만 원고에 반영됩니다. ORCID는 공개 연구자 식별자이며 이름·소속·이메일을 대신하지 않습니다.</p><div class="workspace-form-grid"><label class="field-label">표기 이름<input class="field" name="author_name" placeholder="논문에 표기할 성명"></label><label class="field-label">ORCID<input class="field" name="author_orcid" placeholder="0000-0000-0000-0000"></label><label class="field-label">소속<input class="field" name="author_affiliation" placeholder="소속 기관"></label><label class="field-label">공개 이메일<input class="field" name="author_email" type="email" placeholder="연락용 이메일"></label></div></details><label class="checkbox-field"><input name="pdf" type="checkbox" checked>PDF 파일 포함</label><div class="inline-actions"><button type="submit" class="button button-primary" ${records("study").length ? "" : "disabled"}>${icon("article")}검토용 원고 생성</button></div></form>${papers.length ? `<hr class="form-divider"><label class="field-label" for="paper-select">생성된 원고</label><select class="field" id="paper-select">${papers.map((paper) => `<option value="${e(paper.id)}" ${state.canonical?.paper_id === paper.id ? "selected" : ""}>${e(paper.title)} · ${e(statusLabels[paper.state] || paper.state)}</option>`).join("")}</select><div class="inline-actions"><button class="button button-secondary" data-action="edit-manuscript">원고 편집</button><button class="button button-secondary" data-action="render-manuscript">${icon("refresh")}파일 다시 만들기</button><button class="button button-secondary" data-action="check-integrity">${icon("shield")}무결성 검토</button></div><div id="manuscript-editor"></div><h4 class="field-label">원고 산출물</h4>${fileList(files.filter((file) => file.path.startsWith("manuscripts/")))}` : ""}${formError()}`;
 }
 function filesStage() {
   const files = list(state.projectDetail.files);
-  return `<h3 class="workspace-section-heading">근거와 산출물</h3><p class="workspace-section-intro">원고, 실험 계획, 결과 데이터와 검토 보고서를 내려받으세요. 파일은 실제 연구 작업에서 생성된 자료입니다.</p>${files.length ? fileList(files) : empty("아직 생성된 산출물이 없습니다", "연구 질문을 정하고 실험을 수행하면 결과 자료가 나타납니다.", "", "folder")}`;
+  const errors = list(state.projectDetail.file_errors);
+  return `<h3 class="workspace-section-heading">근거와 산출물</h3><p class="workspace-section-intro">원고, 실험 계획, 결과 데이터와 검토 보고서를 내려받으세요. 파일은 실제 연구 작업에서 생성된 자료입니다.</p>${errors.length ? `<div class="form-error" role="status">일부 파일은 크기 제한 또는 접근 문제로 내려받을 수 없습니다.<ul>${errors.map(error => `<li>${e(error.path)}</li>`).join("")}</ul></div>` : ""}${files.length ? fileList(files) : empty("아직 생성된 산출물이 없습니다", "연구 질문을 정하고 실험을 수행하면 결과 자료가 나타납니다.", "", "folder")}`;
 }
 function renderProject() {
   const detail = state.projectDetail;
   if (!detail) return;
-  const focused = state.stage === "autonomous" && document.activeElement?.closest('[data-form="autonomous"]') ? {id: document.activeElement.id, start: document.activeElement.selectionStart, end: document.activeElement.selectionEnd} : null;
+  collectCanonical();
+  const focused = document.activeElement?.closest('[data-form="autonomous"], #canonical-form') ? {id: document.activeElement.id, start: document.activeElement.selectionStart, end: document.activeElement.selectionEnd} : null;
   document
     .querySelectorAll(".workflow-tabs [data-stage]")
     .forEach((button) =>
@@ -1074,6 +1087,8 @@ function renderProject() {
     document
       .querySelectorAll(".workflow-tabs [data-stage]")
       .forEach((button) => (button.disabled = false));
+  if (state.stage === "manuscript" && state.canonical && $("#manuscript-editor"))
+    renderCanonical();
   decorate($("#project-dialog-body"));
   updateProjectJob();
   if (focused && document.getElementById(focused.id)) {
@@ -1215,6 +1230,11 @@ async function pipelineRequest(suffix, payload, button) {
 async function loadCanonical() {
   const paperId = $("#paper-select")?.value;
   if (!paperId) return;
+  collectCanonical();
+  if (state.canonical?.paper_id === paperId) {
+    renderCanonical();
+    return;
+  }
   const file = list(state.projectDetail.files).find(
     (item) => item.path === `manuscripts/${paperId}/canonical.json`,
   );
@@ -1265,7 +1285,7 @@ function renderCanonical() {
     )
       .map(
         (section, si) =>
-          `<section class="record-card" style="margin-top:17px"><label class="field-label" style="margin-top:0" for="section-${si}">절 제목</label><input class="field" id="section-${si}" value="${e(section.heading)}" data-section-heading="${si}" required>${list(
+          `<section class="record-card"><label class="field-label" for="section-${si}">절 제목</label><input class="field" id="section-${si}" value="${e(section.heading)}" data-section-heading="${si}" required>${list(
             section.blocks,
           )
             .map((block, bi) =>
@@ -1275,7 +1295,7 @@ function renderCanonical() {
             )
             .join(
               "",
-            )}<button class="text-button" type="button" data-action="add-paragraph" data-index="${si}" style="margin-top:13px">+ 본문 문단 추가</button></section>`,
+            )}<button class="text-button" type="button" data-action="add-paragraph" data-index="${si}">+ 본문 문단 추가</button></section>`,
       )
       .join(
         "",

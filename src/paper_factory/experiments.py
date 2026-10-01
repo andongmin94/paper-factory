@@ -282,7 +282,7 @@ def _run_experiment(ws: Workspace, manifest: ExperimentManifest) -> ExperimentRu
         run.processed_sha256 = digest_file(directory / "processed.json")
         verify_snapshot(ws)
         run.status = "SUCCEEDED"
-    except subprocess.TimeoutExpired as error:
+    except subprocess.TimeoutExpired:
         run.status, run.error = "FAILED", f"Experiment timed out after {manifest.timeout_seconds} seconds"
     except Exception as error:
         run.status, run.error = "FAILED", str(error)

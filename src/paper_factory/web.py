@@ -13,6 +13,7 @@ import os
 import re
 import signal
 import sqlite3
+import stat
 import subprocess
 import sys
 import threading
@@ -31,7 +32,7 @@ from .experiments import _credential_name
 from .manuscript import Document, validate_document
 from .models import ExperimentManifest, Paper, PaperState
 from .research import INVENTORY_SCRIPT
-from .workspace import Workspace, ensure_unlinked, safe_relative, write_json
+from .workspace import Workspace, ensure_unlinked, pf_home, safe_relative, write_json
 
 MAX_BODY = 1024 * 1024
 MAX_FILE = 64 * 1024 * 1024
@@ -93,11 +94,22 @@ def _redactor():
 
 def _file_entry(root: Path, relative: str, prefix: str, extra: dict | None = None) -> dict:
     path = safe_relative(root, relative)
-    if path.suffix.lower() not in FILE_TYPES or not path.is_file() or path.stat().st_size > MAX_FILE:
+    if path.suffix.lower() not in FILE_TYPES or not path.is_file() or path.stat().st_size > _file_limit(path):
         raise ValueError("Artifact is missing, unsupported, or too large")
     return {**(extra or {}), "path": relative, "name": path.name, "size": path.stat().st_size,
             "mime": mimetypes.guess_type(path.name)[0] or "application/octet-stream",
             "url": prefix + quote(relative, safe="/")}
+
+
+def _file_limit(path: Path) -> int:
+    return MAX_BUNDLE if path.suffix.lower() == ".zip" else MAX_FILE
+
+
+def _append_file(root: Path, relative: str, prefix: str, files: list, errors: list):
+    try:
+        files.append(_file_entry(root, relative, prefix))
+    except (OSError, ValueError):
+        errors.append({"path": relative, "error": "Artifact is unavailable or exceeds the download limit"})
 
 
 class WebState:
@@ -108,7 +120,7 @@ class WebState:
         self.studies_root = studies_root.resolve()
         self.data_root = data_root.resolve()
         self.static_root = static_root.resolve()
-        self.source_roots = [root.resolve() for root in (source_roots or [Path("/workspace")])]
+        self.source_roots = [root.expanduser().resolve() for root in (source_roots if source_roots is not None else [Path.home()])]
         self.data_root.mkdir(parents=True, exist_ok=True)
         for directory in ("jobs", "projects", ".home"):
             safe_relative(self.data_root, directory).mkdir(exist_ok=True)
@@ -240,30 +252,29 @@ class WebState:
             if kind == "run":
                 record.pop("environment", None)
             records.setdefault(kind, []).append(record)
-        files = []
+        files, file_errors = [], []
+        prefix = f"/api/projects/{project_id}/files/"
         for directory in ("manuscripts", "reports", "experiments"):
             base = safe_relative(root, directory)
             if base.is_dir():
                 for path in sorted(base.rglob("*")):
                     if path.suffix.lower() in FILE_TYPES and path.is_file():
-                        files.append(_file_entry(root, path.relative_to(root).as_posix(), f"/api/projects/{project_id}/files/"))
+                        _append_file(root, path.relative_to(root).as_posix(), prefix, files, file_errors)
                         if len(files) >= 500:
                             break
         for record in records.get("run", []):
             for entry in record.get("artifacts", []):
                 relative = entry.get("path", "")
                 if relative.startswith(f"runs/{_identifier(record['id'])}/raw/"):
-                    try:
-                        files.append(_file_entry(root, relative, f"/api/projects/{project_id}/files/"))
-                    except ValueError:
-                        pass
+                    _append_file(root, relative, prefix, files, file_errors)
             relative = f"runs/{record['id']}/processed.json"
-            if safe_relative(root, relative).is_file():
-                files.append(_file_entry(root, relative, f"/api/projects/{project_id}/files/"))
+            if (root / relative).is_file():
+                _append_file(root, relative, prefix, files, file_errors)
         pipelines = self.pipelines(project_id)
         for pipeline in pipelines:
             files.extend(pipeline["files"])
-        return {**value, "records": records, "files": files, "pipelines": pipelines}
+            file_errors.extend(pipeline["file_errors"])
+        return {**value, "records": records, "files": files, "file_errors": file_errors, "pipelines": pipelines}
 
     def project_file(self, project_id: str, relative: str) -> Path:
         detail = self.project_detail(project_id)
@@ -337,10 +348,9 @@ class WebState:
     def agent_status(self) -> dict:
         """Expose readiness only; never CLI output, login files or credentials."""
         from .autonomous.provider import CodexProvider
-        from .autonomous.runner import DockerRunner
+        from .autonomous.runner import research_runner
         provider = CodexProvider().status()
-        provider.setdefault("generation_probe", "unknown")
-        return {"provider": provider, "runner": DockerRunner().status()}
+        return {"provider": provider, "runner": research_runner().status()}
 
     def connection_manager(self):
         with self.lock:
@@ -384,6 +394,7 @@ class WebState:
             "model_calls", "elapsed_seconds", "code_attempt", "cancellation_requested",
         ) if key in value}
         public["files"] = []
+        public["file_errors"] = []
         exports = safe_relative(root, f"autonomous/{_identifier(pipeline_id)}/exports")
         if exports.is_dir():
             for path in sorted(exports.rglob("*")):
@@ -391,7 +402,7 @@ class WebState:
                     relative = path.relative_to(root).as_posix()
                     if any(part.startswith(".") for part in Path(relative).parts):
                         continue
-                    public["files"].append(_file_entry(root, relative, f"/api/projects/{project_id}/files/"))
+                    _append_file(root, relative, f"/api/projects/{project_id}/files/", public["files"], public["file_errors"])
                     if len(public["files"]) >= 100:
                         break
         # The pipeline stores bounded, normalized errors; apply the server's
@@ -831,17 +842,25 @@ class WebHandler(BaseHTTPRequestHandler):
 
     def _file(self, path: Path, *, download: bool = False):
         ensure_unlinked(path)
-        if not path.is_file() or path.stat().st_size > MAX_FILE:
+        if not path.is_file():
             raise KeyError("Unknown or oversized file")
-        size = path.stat().st_size
         mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         if path.suffix.lower() in {".md", ".tex", ".bib"}:
             mime = "text/plain; charset=utf-8"
-        self._headers(200, mime, size, attachment=path.name if download or path.suffix.lower() == ".zip" else None)
-        if self.command != "HEAD":
-            with path.open("rb") as stream:
-                while chunk := stream.read(65536):
+        with path.open("rb") as stream:
+            info = os.fstat(stream.fileno())
+            ensure_unlinked(path)
+            if not stat.S_ISREG(info.st_mode) or info.st_size > _file_limit(path):
+                raise KeyError("Unknown or oversized file")
+            self._headers(200, mime, info.st_size, attachment=path.name if download or path.suffix.lower() == ".zip" else None)
+            if self.command != "HEAD":
+                remaining = info.st_size
+                while remaining:
+                    chunk = stream.read(min(65536, remaining))
+                    if not chunk:
+                        break
                     self.wfile.write(chunk)
+                    remaining -= len(chunk)
 
     def _parts(self) -> list[str]:
         parsed = urlsplit(self.path)
@@ -885,10 +904,14 @@ class WebHandler(BaseHTTPRequestHandler):
         if self.headers.get("Transfer-Encoding"):
             raise ValueError("Chunked request bodies are unsupported")
         length = self.headers.get("Content-Length")
-        if not length or not length.isdigit() or not 0 < int(length) <= MAX_BODY:
+        if not length or not length.isdigit() or int(length) <= 0:
             raise ValueError("Request body must be between 1 byte and 1 MiB")
         self.connection.settimeout(10)
-        data = self.rfile.read(int(length))
+        # Consume a bounded overflow byte before replying. Closing with an
+        # unread body can reset the Windows connection and hide the HTTP error.
+        data = self.rfile.read(min(int(length), MAX_BODY + 1))
+        if int(length) > MAX_BODY:
+            raise ValueError("Request body must be between 1 byte and 1 MiB")
         if len(data) != int(length):
             raise ValueError("Incomplete request body")
         def invalid(value):
@@ -1008,8 +1031,8 @@ class WebHandler(BaseHTTPRequestHandler):
 
 
 def create_server(host: str = "127.0.0.1", port: int = 8765, *,
-                  studies_root: Path | str = "/workspace/paper-factory-deliverables/studies",
-                  data_root: Path | str = "/workspace/paper-factory-data/web",
+                  studies_root: Path | str | None = None,
+                  data_root: Path | str | None = None,
                   static_root: Path | str | None = None,
                   source_roots: list[Path] | None = None) -> WebServer:
     """Create a server; nonloopback binds expose an artifact-only preview."""
@@ -1023,7 +1046,10 @@ def create_server(host: str = "127.0.0.1", port: int = 8765, *,
     # failed bind must not launch model work in an inaccessible new server.
     server = WebServer((host, port), WebHandler)
     try:
-        state = WebState(Path(studies_root), Path(data_root), Path(static_root) if static_root else Path(__file__).parent / "web_static", source_roots, resume_jobs=writes_enabled)
+        state = WebState(Path(studies_root) if studies_root is not None else pf_home() / "studies",
+                         Path(data_root) if data_root is not None else pf_home() / "web",
+                         Path(static_root) if static_root is not None else Path(__file__).parent / "web_static",
+                         source_roots, resume_jobs=writes_enabled)
     except Exception:
         server.server_close()
         raise
