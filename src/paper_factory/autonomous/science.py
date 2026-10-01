@@ -217,6 +217,11 @@ PF_SOURCE_ROOT is immutable; generated code lives at PF_CODE_ROOT and all
 measurements go to PF_OUTPUT_ROOT. Read these paths from the environment and use
 portable path joins; the worker can run on Windows or Linux. No network, package
 installation, credential access, subprocess escape, or arbitrary host paths.
+PF_CODE_ROOT is also immutable. Create temporary inputs and working files only
+under the writable PF_WORK environment path or the configured TEMP directory.
+Read the exact environment paths; never derive a writable directory from
+__file__.parent or PF_CODE_ROOT. Working files disappear during worker cleanup;
+retain their required raw bytes in observations.json as described below.
 Only approved installed dependencies are available. The controller preserves
 only observations.json from PF_OUTPUT_ROOT. Separate output files are discarded
 when the isolated worker is cleaned up. Retain the exact input fixtures, mutation

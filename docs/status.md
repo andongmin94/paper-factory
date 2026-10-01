@@ -123,6 +123,12 @@ explicitly prohibit resetting/disabling the controller profiler; runtime
 version capabilities are also passed to planning. Probe receipts are preserved
 at `C:/Users/Public/Documents/ESTsoft/CreatorTemp/paperfactory-native-ts-profile-z3lmeqpg`.
 
+A later live harness tried to create input fixtures beside its immutable code.
+The worker correctly denied the write. Generation now identifies `PF_WORK` and
+the configured `TEMP` as writable locations and requires reading their exact
+environment paths. The focused prompt contract checks passed twice; the failed
+bundle and execution receipt remain preserved for the ordinary repair process.
+
 ## Native Windows verification
 
 Windows automatic research selects AppContainer and a bounded Job Object.
