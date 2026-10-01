@@ -547,6 +547,31 @@ def test_missing_instrumented_production_execution_blocks_replacement_study(work
     assert result.code_attempt == 1 and components[1].calls == 1
 
 
+def test_utf8_execution_feedback_repairs_under_a_legacy_windows_locale(workspace, components, monkeypatch):
+    provider, runner, _, _ = components
+    provider.block_write = True
+    original_read = Path.read_text
+    def legacy_read(path, *args, **kwargs):
+        if path.name == "repair-feedback.json" and not args and kwargs.get("encoding") is None:
+            kwargs["encoding"] = "cp949"
+        return original_read(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "read_text", legacy_read)
+    original_run = runner.run
+    diagnostic = "연구 실행 실패: 🧪 파일 접근 오류"
+    def failed_first_run(*args, **kwargs):
+        receipt = original_run(*args, **kwargs)
+        if runner.calls == 1:
+            receipt.update(status="failed", exit_code=1, stderr=diagnostic)
+        return receipt
+    monkeypatch.setattr(runner, "run", failed_first_run)
+    result = launch(workspace, components)
+    assert result.code == "NETWORK_ERROR" and result.stage == "write"
+    assert runner.calls == 2 and result.code_attempt == 2
+    code_prompts = [prompt for label, prompt in zip(provider.calls, provider.prompts, strict=True) if label == "CodeBundle"]
+    assert diagnostic in code_prompts[1]
+    assert "analysis" in result.artifacts
+
+
 def test_invalid_observation_shape_uses_bounded_repairs_with_frozen_protocol(workspace, components):
     components[1].outputs = [{"unrecognized": []}]
     result = launch(workspace, components, budget={"repair_attempts": 1})

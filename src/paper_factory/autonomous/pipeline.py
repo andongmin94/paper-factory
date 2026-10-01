@@ -399,7 +399,7 @@ def run(ws: Workspace, pipeline_id: str, *, provider=None, runner=None) -> Pipel
                 elif stage == "generate":
                     plan = ResearchPlan.model_validate(_read(ws, current, "plan"))
                     context = _artifact(ws, current, "context").read_text(encoding="utf-8")
-                    feedback = json.loads((root / "repair-feedback.json").read_text()) if (root / "repair-feedback.json").is_file() else None
+                    feedback = json.loads((root / "repair-feedback.json").read_text(encoding="utf-8")) if (root / "repair-feedback.json").is_file() else None
                     bundle = CodeBundle.model_validate(ask(science.code_prompt(plan, context, feedback), CodeBundle.model_json_schema(), "code"))
                     if bundle.runtime != plan.runtime:
                         raise ValueError("Generated runtime differs from frozen protocol")

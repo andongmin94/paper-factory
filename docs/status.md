@@ -33,7 +33,7 @@ Frontend readiness now follows the actual subscription provider status, includin
 an existing CLI login, and clears stale connection information after failed
 refreshes. Default web paths use the native `PF_HOME` studies/web directories.
 
-The current Windows collection contains **1,335 cases: 1,321 passed, 14 skipped,
+The current Windows collection contains **1,336 cases: 1,322 passed, 14 skipped,
 0 failed and 0 uncovered**. Complete fresh file shards and final affected reruns
 were deduplicated against the exact current collection. Per-case evidence is
 preserved at
@@ -163,6 +163,13 @@ PermissionError. Lock acquisition no longer writes that region; locks past EOF
 are supported by the actual Windows runtime. Workspace and concurrent pipeline
 checks passed six cases, including refusal of a competing operation and successful
 acquisition after release. Earlier failed reports remain preserved.
+
+A live Python harness attempted strict canonicalization of an already-checked
+source root, which requires host-ancestor inspection unavailable in AppContainer.
+Generation now uses the supplied absolute roots directly. Its retained Unicode
+Windows diagnostic also exposed a default-codec read of UTF-8 repair feedback.
+The read is now explicit UTF-8; a legacy cp949 regression preserves Korean and
+emoji diagnostics through ordinary repair and analysis without changing protocol.
 
 ## Native Windows verification
 

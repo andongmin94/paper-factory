@@ -437,6 +437,8 @@ def test_code_prompt_uses_runner_mount_and_structured_repair_feedback(protocol):
     assert "writable PF_WORK environment path or the configured TEMP directory" in prompt
     assert "__file__.parent or PF_CODE_ROOT" in prompt
     assert "retain their required raw bytes in observations.json" in prompt
+    assert "PF environment roots are already absolute, checked paths" in prompt
+    assert "pathlib.Path.resolve, os.path.realpath or fs.realpath" in prompt
     assert "portable path joins" in prompt
     assert '"reason": "Python syntax failed"' in prompt
     assert "Repair measurement code without changing the protocol." in prompt

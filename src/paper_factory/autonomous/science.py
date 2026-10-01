@@ -231,6 +231,10 @@ under the writable PF_WORK environment path or the configured TEMP directory.
 Read the exact environment paths; never derive a writable directory from
 __file__.parent or PF_CODE_ROOT. Working files disappear during worker cleanup;
 retain their required raw bytes in observations.json as described below.
+PF environment roots are already absolute, checked paths. Use them directly;
+do not call pathlib.Path.resolve, os.path.realpath or fs.realpath on these roots
+or walk their host ancestors. Native Windows restrictions permit the supplied
+trees without granting filesystem inspection of drive and host ancestors.
 Only approved installed dependencies are available. The controller preserves
 only observations.json from PF_OUTPUT_ROOT. Separate output files are discarded
 when the isolated worker is cleaned up. Retain the exact input fixtures, mutation
