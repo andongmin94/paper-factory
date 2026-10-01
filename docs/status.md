@@ -33,7 +33,7 @@ Frontend readiness now follows the actual subscription provider status, includin
 an existing CLI login, and clears stale connection information after failed
 refreshes. Default web paths use the native `PF_HOME` studies/web directories.
 
-The current Windows collection contains **1,362 cases: 1,348 passed, 14 skipped,
+The current Windows collection contains **1,366 cases: 1,352 passed, 14 skipped,
 0 failed and 0 uncovered**. Complete fresh file shards and final affected reruns
 were deduplicated against the exact current collection. Per-case evidence is
 preserved at
@@ -43,7 +43,10 @@ The first live PDF exposed missing blank lines between trusted statistical
 captions and pipe tables, followed by overlapping long identifiers in wide
 native tables. Rendering now uses valid, narrow statistic-by-condition tables
 with at most three columns and unchanged numeric values. Metric labels use native
-headings to keep them with the following table across page breaks. Conversion reads the
+headings to keep them with the following table across page breaks. Literal prose
+and protocol values are escaped before Markdown rendering, preserving formula
+operators, underscores and scoped package names instead of interpreting them as
+emphasis or bibliography citations. Conversion reads the
 actual Markdown directly and refuses a manuscript changed during conversion;
 the temporary normalization fallback was removed. Native PDF/Typst, Word and
 LaTeX regressions plus completed export/recompute passed 19 cases. Reproduction packages now
@@ -80,6 +83,14 @@ The affected science/pipeline report passed 174 cases, including positive
 unsupported claims rejected before export even when a reviewer returned an
 acceptance flag with issues. Completed experiment evidence is never regenerated
 to repair prose.
+
+Generation and preexecution review now state the same retention contract:
+the controller preserves authoritative protocol bytes and hashes; workers must
+retain every actual unit input, optionally compressed losslessly with complete
+decoding metadata and hashes bound to the stored bytes. The static review prompt
+moved into the existing science prompt module. No measurement, control, sampling
+or manuscript gate changed. The final affected science/conversion/pipeline report
+passed 196 cases, including native literal formula/package exports.
 
 The initial broad run exposed an obsolete Docker fixture substring assertion;
 the corrected test checks actual mounts and environment bindings. One fake CLI

@@ -345,6 +345,37 @@ def test_manuscript_resolves_only_verified_references_and_injects_author_last(tm
     assert "local@example.org" not in science.writing_prompt(protocol, analysis, literature)
 
 
+def test_native_manuscript_preserves_formula_and_scoped_package_as_literal_text(tmp_path, protocol, observations, literature, pandoc):
+    from docx import Document
+    from pypdf import PdfReader
+    from paper_factory import conversion
+
+    formula = r"state=(1664525*state+1013904223) modulo 2^32; uniform_scale; @types/node; [literal]; C:\fixtures"
+    protocol.parameters["formula"] = formula
+    analysis = science.analyze(observations, protocol, tmp_path / "analysis")
+    draft = valid_draft()
+    draft["title"] += " for @types/node"
+    next(section for section in draft["sections"] if section["heading"] == "Method")["text"] += (
+        " The scoped package is @types/node. Frozen expression: {{parameter:setting.formula}}."
+    )
+    rendered = science.validate_and_render(draft, protocol, analysis, literature, tmp_path / "paper")
+    source = Path(rendered["markdown_path"])
+    original = source.read_bytes()
+    word = source.with_suffix(".docx")
+    conversion.convert(source, word, pandoc=pandoc)
+    paragraphs = "\n".join(paragraph.text for paragraph in Document(word).paragraphs)
+    assert formula in paragraphs and draft["title"] in paragraphs
+    pdf = source.with_suffix(".pdf")
+    conversion.convert(source, pdf, pandoc=pandoc)
+    text = " ".join(page.extract_text() or "" for page in PdfReader(pdf).pages)
+    for literal in ("1664525*state+1013904223", "2^32", "uniform_scale", "@types/node", "[literal]", r"C:\fixtures"):
+        assert literal in text
+    assert "#cite(" not in pdf.with_suffix(".typ").read_text(encoding="utf-8")
+    assert source.read_bytes() == original
+    canonical = json.loads(Path(rendered["canonical_path"]).read_text(encoding="utf-8"))
+    assert canonical["sections"] == draft["sections"] and canonical["title"] == draft["title"]
+
+
 @pytest.mark.parametrize("suffix,reason", [
     ("The failure count was 17.", "literal numerical"),
     ("The failure count was seventeen percent.", "written numerical"),
@@ -498,6 +529,53 @@ def test_model_prompts_explain_existing_protocol_and_generation_boundaries(proto
         assert "file origins and native" in prompt
         assert "Unsupported native syntax or unavailable dependencies make the study" in prompt
         assert "copied-source fallback" in prompt
+
+
+@pytest.mark.parametrize("role", ["generation", "review"])
+def test_code_prompts_assign_protocol_provenance_to_controller_and_allow_exact_compressed_inputs(protocol, role):
+    bundle = {"runtime": "python", "entrypoint": "experiment.py",
+              "files": [{"path": "experiment.py", "content": "# Unexecuted synthetic fixture\n"}],
+              "explanation": "Prompt payload fixture; no execution or measurements."}
+    source = "Inspected Unicode production excerpt: 한글"
+    prompt = science.code_prompt(protocol, source) if role == "generation" else science.code_review_prompt(protocol, bundle, source)
+    compact = " ".join(prompt.split())
+    assert "controller preserves the authoritative frozen protocol.json bytes and SHA-256" in compact
+    assert "records that hash in the generated bundle and execution receipt" in compact
+    assert "includes the exact protocol.json in the reproducibility ZIP" in compact
+    assert "do not require duplicate embedding or rehashing by the worker" in compact
+    assert "A reconstructed summary is not the authoritative protocol" in compact
+    assert "Lossless compression, such as gzip, is allowed for each actual serialized unit input" in compact
+    assert "Base64-encode the compressed bytes and hash those compressed bytes in fixture.sha256" in compact
+    assert "codec, original byte length, original SHA-256 and complete decoding procedure" in compact
+    assert "linked to the input fixture label" in compact
+    assert "fixture record's exact four fields" in compact
+    assert "inside retained fixture bytes" in compact
+    assert "baseline plus mutation recipes" in compact and "insufficient" in compact
+    assert source in prompt
+
+
+def test_code_review_prompt_preserves_static_audit_gates_and_supplied_payloads(protocol):
+    bundle = {"runtime": "python", "entrypoint": "experiment.py",
+              "files": [{"path": "experiment.py", "content": "# Unexecuted synthetic fixture\n"}],
+              "explanation": "Audit the proposed code before isolated execution."}
+    source = "def transform(value): return value + 1"
+    prompt = science.code_review_prompt(protocol, bundle, source)
+    compact = " ".join(prompt.split())
+    supplied_plan, rest = prompt.split("\n\nGenerated code:\n")
+    assert json.loads(supplied_plan.split("\nProtocol:\n")[1]) == protocol.model_dump(mode="json")
+    supplied_bundle, supplied_source = rest.split("\n\nOriginal source excerpts:\n")
+    assert json.loads(supplied_bundle) == bundle
+    assert supplied_source == source
+    assert "BEFORE execution" in prompt and "static code audit" in compact
+    assert "Do not demand observations.json or an execution receipt" in compact
+    assert "A static acceptance does not establish execution or successful results" in compact
+    assert "actual controls, the raw sampling matrix, production-call trace, runtime limits and retained fixture bytes" in compact
+    assert "calls the declared production callable" in compact
+    assert "independently computes the oracle" in compact
+    assert "frozen conditions, seeds, unit counts and metrics" in compact
+    assert "forced-passing controls" in prompt
+    assert "sys.setprofile, threading.setprofile or node:inspector Profiler" in compact
+    assert "Do not demand favorable outcomes" in compact
 
 
 @pytest.mark.parametrize("defect", ["none", "empty-matrix", "missing-fixtures", "malformed-rows"])
