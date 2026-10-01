@@ -7,6 +7,8 @@ frozen protocol parameters and inspected literature excerpts.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import csv
 import hashlib
 import inspect
@@ -215,8 +217,11 @@ PF_SOURCE_ROOT is immutable; generated code lives at PF_CODE_ROOT and all
 measurements go to PF_OUTPUT_ROOT. Read these paths from the environment and use
 portable path joins; the worker can run on Windows or Linux. No network, package
 installation, credential access, subprocess escape, or arbitrary host paths.
-Only approved installed dependencies are available. Save generated fixtures
-needed to reconstruct the observations within PF_OUTPUT_ROOT.
+Only approved installed dependencies are available. The controller preserves
+only observations.json from PF_OUTPUT_ROOT. Separate output files are discarded
+when the isolated worker is cleaned up. Retain the exact input fixtures, mutation
+logs, oracle expectations and manifests needed to reconstruct all measurements
+inside observations.json, rather than merely saving those files beside it.
 Every generated files[].path and entrypoint must be a portable relative path
 using / separators. Do not use absolute paths, . or .. components, backslashes,
 control characters, Windows-reserved device names, trailing dots or spaces, or
@@ -232,12 +237,28 @@ Import and actually call the declared production_entrypoint for each production
 measurement. The controller records a runtime source-invocation trace separately
 from model-authored observations. Merely opening a source file or writing its
 hash does not establish that its production function was executed.
+Use the controller's production-call profiling; its execution receipt satisfies
+protocol requirements for a source-invocation trace. Do not add competing
+profiling or coverage sessions or reset or disable the controller's profiler.
+Do not call sys.setprofile, threading.setprofile, or node:inspector Profiler
+coverage start, take, stop or disable operations. Those operations can erase the
+controller's evidence even when the production function really ran.
 
 Output observations.json inside PF_OUTPUT_ROOT with this exact shape:
 {"observations":[{"unit_id":"unit label","seed":0,"condition":"frozen condition",
 "metric":"frozen metric name","value":0.0}],
 "controls":[{"name":"positive ...","passed":true,"details":"what was observed"},
-{"name":"negative ...","passed":true,"details":"intentional fault and detected failure"}]}
+{"name":"negative ...","passed":true,"details":"intentional fault and detected failure"}],
+"fixtures":[{"label":"input, log or manifest label","encoding":"base64",
+"content":"BASE64_OF_ACTUAL_RAW_BYTES","sha256":"MATCHING_LOWERCASE_SHA256"}]}
+The fixtures array must be nonempty. Every fixture has exactly label, encoding,
+content and sha256. Use unique nonempty labels of at most two hundred characters,
+without control characters. Labels are metadata, not host extraction paths.
+Encode every fixture's exact bytes in canonical standard Base64, including
+UTF-8 text and JSON logs or manifests, and hash those decoded bytes with SHA-256.
+Do not substitute digests or descriptions for the actual bytes. The entire
+observations.json, including observations, controls and fixtures, must fit within
+the controller's existing eight MiB (8388608-byte) artifact transport limit.
 Each frozen seed has exactly units_per_seed distinct unit_id values, never a
 fraction of that number shared across seeds. Total sampling units are
 units_per_seed * len(seeds), and every unit is measured under ALL conditions
@@ -348,10 +369,11 @@ def _statistics(values: list[float]) -> dict[str, float | int]:
 
 def _compute(observations: dict, protocol: dict) -> dict:
     """Pure trusted analyzer, also copied verbatim into the reproduction script."""
-    if not isinstance(observations, dict) or set(observations) != {"observations", "controls"}:
-        raise ValueError("Experiment must emit exactly observations and controls")
+    if not isinstance(observations, dict) or set(observations) != {"observations", "controls", "fixtures"}:
+        raise ValueError("Experiment must emit exactly observations, controls and fixtures")
     rows = observations["observations"]
     controls = observations["controls"]
+    fixtures = observations["fixtures"]
     if not isinstance(rows, list) or not isinstance(controls, list):
         raise ValueError("Observations and controls must be lists")
     expected_count = len(protocol["seeds"]) * protocol["units_per_seed"] * len(protocol["conditions"]) * len(protocol["metrics"])
@@ -379,6 +401,33 @@ def _compute(observations: dict, protocol: dict) -> dict:
         raise ValueError("A named positive control is required")
     if not any(re.search(r"(?:^|[ _-])negative(?:$|[ _-])", name) for name in names):
         raise ValueError("A named intentional-fault negative control is required")
+
+    # A reported failed control stops the study before fixture-format defects
+    # can turn it into a repair request for a potentially more favorable rerun.
+    if not isinstance(fixtures, list) or not fixtures:
+        raise ValueError("Experiment fixtures must be a nonempty list of retained raw bytes")
+    labels = set()
+    for fixture in fixtures:
+        if not isinstance(fixture, dict) or set(fixture) != {"label", "encoding", "content", "sha256"}:
+            raise ValueError("Fixture records require exactly label, encoding, content and sha256")
+        label, encoding, content, digest = (fixture[key] for key in ("label", "encoding", "content", "sha256"))
+        if not isinstance(label, str) or not label.strip() or len(label) > 200 or re.search(r"[\x00-\x1f\x7f-\x9f]", label):
+            raise ValueError("Fixture label must be bounded nonempty text without control characters")
+        if label in labels:
+            raise ValueError("Fixture labels must be distinct")
+        labels.add(label)
+        if encoding != "base64" or not isinstance(content, str):
+            raise ValueError("Fixture encoding must be base64 with string content")
+        if not isinstance(digest, str) or not re.fullmatch(r"[a-f0-9]{64}", digest):
+            raise ValueError("Fixture sha256 must be a lowercase hexadecimal digest")
+        try:
+            raw = base64.b64decode(content, validate=True)
+        except (ValueError, binascii.Error):
+            raise ValueError("Fixture content must be valid canonical Base64") from None
+        if base64.b64encode(raw).decode("ascii") != content:
+            raise ValueError("Fixture content must be valid canonical Base64")
+        if hashlib.sha256(raw).hexdigest() != digest:
+            raise ValueError("Fixture sha256 does not match its retained raw bytes")
 
     metrics = {item["name"]: item for item in protocol["metrics"]}
     seeds = set(protocol["seeds"])
@@ -514,7 +563,7 @@ def analyze(observations: dict, plan: ResearchPlan, output_root: Path) -> dict:
     # Reproduction executes precisely the trusted computation used above, with
     # no dependency on Paper Factory, model access, or a live provider login.
     script = '"""Reproduce deterministic analysis using only Python standard library."""\n'
-    script += "import argparse\nimport hashlib\nimport json\nimport math\nimport re\nimport statistics\nfrom pathlib import Path\n\n"
+    script += "import argparse\nimport base64\nimport binascii\nimport hashlib\nimport json\nimport math\nimport re\nimport statistics\nfrom pathlib import Path\n\n"
     script += "ANALYSIS_SCOPE = " + repr(ANALYSIS_SCOPE) + "\n\n"
     script += inspect.getsource(ControlFailure) + "\n" + inspect.getsource(_statistics) + "\n" + inspect.getsource(_compute) + "\n"
     script += "if __name__ == '__main__':\n    parser = argparse.ArgumentParser()\n"

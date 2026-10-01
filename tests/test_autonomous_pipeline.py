@@ -3,6 +3,7 @@
 These tests verify orchestration, not live inference, container isolation,
 production execution or a real scientific paper. No credentials are needed.
 """
+import base64
 import copy
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
@@ -53,7 +54,12 @@ def observations():
     ], "controls": [
         {"name": "positive control", "passed": True, "details": "Synthetic input agrees with its independently annotated expected result."},
         {"name": "negative control", "passed": True, "details": "An intentional synthetic deletion is detected by the fixture oracle."},
-    ]}
+    ], "fixtures": [embedded_fixture("synthetic-inputs.json", b'{"synthetic":true,"annotations":[0,1,2]}')]}
+
+
+def embedded_fixture(label, payload):
+    return {"label": label, "encoding": "base64", "content": base64.b64encode(payload).decode("ascii"),
+            "sha256": hashlib.sha256(payload).hexdigest()}
 
 
 def manuscript():
@@ -256,7 +262,7 @@ def test_missing_isolation_has_no_host_fallback(workspace, components):
     assert not components[0].calls and components[1].calls == 0
 
 
-def test_planning_receives_configured_execution_limits_and_trusted_analysis_scope(workspace, components):
+def test_planning_receives_configured_execution_limits_and_trusted_analysis_scope(workspace, components, monkeypatch):
     from paper_factory.autonomous.runner import LIMITS
 
     def stop_after_planning_context(label):
@@ -264,6 +270,8 @@ def test_planning_receives_configured_execution_limits_and_trusted_analysis_scop
             raise ProviderBlocked("NETWORK_ERROR", "Synthetic stop after capturing the planning context")
 
     provider, runner, _, _ = components
+    runtime_status = {**runner.status(), "versions": {"python": "3.12.14", "node": "26.3.0", "mido": "1.3.3"}}
+    monkeypatch.setattr(runner, "status", lambda: runtime_status)
     provider.on_generate = stop_after_planning_context
     result = launch(workspace, components, budget={"experiment_timeout_seconds": 37})
     assert result.status == "blocked" and result.stage == "plan" and result.code == "NETWORK_ERROR"
@@ -278,6 +286,7 @@ def test_planning_receives_configured_execution_limits_and_trusted_analysis_scop
     assert "uid" not in capabilities["limits"]
     assert "read_only_root" not in capabilities["limits"]
     assert capabilities["runtimes"] == runner.status()["runtimes"]
+    assert capabilities["versions"] == runtime_status["versions"]
     assert capabilities["dependencies"] == runner.status()["dependencies"]
     assert capabilities["network"] == "disabled during experiments"
     scope = capabilities["trusted_analysis"].casefold()
@@ -308,9 +317,12 @@ def test_metadata_only_cannot_support_related_work(workspace, components):
     assert (workspace.root / "autonomous" / result.id / "literature" / "fixture-source.json").is_file()
 
 
-def test_false_control_preserves_evidence_without_favorable_regeneration(workspace, components):
+@pytest.mark.parametrize("invalid_fixtures", [False, True], ids=["valid-fixtures", "invalid-fixtures"])
+def test_false_control_preserves_evidence_without_favorable_regeneration(workspace, components, invalid_fixtures):
     failed = observations()
     failed["controls"][0]["passed"] = False
+    if invalid_fixtures:
+        failed["fixtures"][0]["sha256"] = "0" * 64
     components[1].outputs = [failed, observations()]
     result = launch(workspace, components, budget={"repair_attempts": 3})
     assert result.status == "blocked" and result.code == "CONTROL_FAILED"
@@ -326,6 +338,82 @@ def test_rejected_code_review_blocks_execution_with_no_repair_budget(workspace, 
     assert result.status == "blocked" and result.code == "EXPERIMENT_REPAIRS_EXHAUSTED"
     assert components[1].calls == 0 and "observations" not in result.artifacts
     assert components[0].calls.count("ScientificReview") == 1
+
+
+def test_repeated_python_syntax_rejection_exhausts_repairs_without_review_or_execution(workspace, components, monkeypatch):
+    provider, runner, _, _ = components
+    generate = provider.generate
+    def invalid_python(prompt, schema, call_dir, **kwargs):
+        value = generate(prompt, schema, call_dir, **kwargs)
+        if schema["title"] == "CodeBundle":
+            value["files"][0]["content"] = "def broken(:\n"
+        return value
+    monkeypatch.setattr(provider, "generate", invalid_python)
+    result = launch(workspace, components, budget={"repair_attempts": 2})
+    assert result.status == "blocked" and result.code == "EXPERIMENT_REPAIRS_EXHAUSTED"
+    assert result.stage == "generate" and result.code_attempt == 3
+    assert provider.calls == ["ResearchPlan", "CodeBundle", "CodeBundle", "CodeBundle"]
+    assert runner.calls == 0
+    assert {f"bundle-{attempt}" for attempt in range(1, 4)} <= set(result.artifacts)
+    assert not any(key.startswith(("code-review", "execution", "observations")) for key in result.artifacts)
+
+
+@pytest.mark.parametrize("review", [
+    {"accepted": False, "issues": [], "checks": []},
+    {"accepted": True, "issues": ["Synthetic review found an invalid independent oracle."], "checks": []},
+], ids=["not-accepted", "accepted-with-issues"])
+def test_repeated_code_review_rejection_exhausts_repairs_without_execution(workspace, components, review):
+    provider, runner, _, _ = components
+    provider.reviews = [review]
+    result = launch(workspace, components, budget={"repair_attempts": 2})
+    assert result.status == "blocked" and result.code == "EXPERIMENT_REPAIRS_EXHAUSTED"
+    assert result.stage == "generate" and result.code_attempt == 3
+    assert provider.calls.count("CodeBundle") == 3
+    assert provider.calls.count("ScientificReview") == 3
+    assert provider.calls.count("ResearchPlan") == 1
+    assert runner.calls == 0
+    assert not any(key.startswith(("execution", "observations")) for key in result.artifacts)
+    assert {f"bundle-{attempt}" for attempt in range(1, 4)} <= set(result.artifacts)
+    assert {f"code-review-{attempt}" for attempt in range(1, 4)} <= set(result.artifacts)
+    for attempt in range(1, 4):
+        assert pipeline._read(workspace, result, f"code-review-{attempt}") == review
+
+
+def test_code_review_repair_executes_only_fresh_approved_bundle(workspace, components, monkeypatch):
+    provider, runner, _, _ = components
+    provider.reviews = [{"accepted": False, "issues": ["Synthetic oracle requires repair."], "checks": []},
+                        {"accepted": True, "issues": [], "checks": ["Repaired oracle was independently checked."]}]
+    provider.block_write = True
+    generate = provider.generate
+    def distinct_bundle(prompt, schema, call_dir, **kwargs):
+        value = generate(prompt, schema, call_dir, **kwargs)
+        if schema["title"] == "CodeBundle":
+            value["files"][0]["content"] += f"# Bundle attempt {provider.calls.count('CodeBundle')}\n"
+        return value
+    monkeypatch.setattr(provider, "generate", distinct_bundle)
+    execute = runner.run
+    executed = []
+    def capture_execution(source_dir, bundle_dir, output_dir, **kwargs):
+        executed.append(Path(bundle_dir))
+        return execute(source_dir, bundle_dir, output_dir, **kwargs)
+    monkeypatch.setattr(runner, "run", capture_execution)
+    result = launch(workspace, components, budget={"repair_attempts": 2})
+    assert result.status == "blocked" and result.code == "NETWORK_ERROR" and result.stage == "write"
+    assert result.code_attempt == 2 and runner.calls == 1
+    assert provider.calls.count("CodeBundle") == 2 and provider.calls.count("ScientificReview") == 2
+    assert provider.calls.count("ResearchPlan") == 1
+    first = pipeline._artifact(workspace, result, "bundle-1")
+    approved = pipeline._artifact(workspace, result, "bundle-2")
+    assert executed == [approved.parent] and first.parent not in executed
+    assert result.artifacts["bundle"].sha256 == result.artifacts["bundle-2"].sha256
+    assert result.artifacts["bundle-1"].sha256 != result.artifacts["bundle-2"].sha256
+    execution = pipeline._read(workspace, result, "execution")
+    assert execution["bundle_sha256"] == result.artifacts["bundle-2"].sha256
+    assert pipeline._read(workspace, result, "code-review-1")["accepted"] is False
+    assert pipeline._read(workspace, result, "code-review-2")["accepted"] is True
+    for name in ("bundle-1", "bundle-2"):
+        assert pipeline._read(workspace, result, name)["protocol_sha256"] == result.artifacts["plan"].sha256
+    assert "analysis" in result.artifacts
 
 
 def test_rejected_manuscript_review_does_not_regenerate_successful_experiment(workspace, components):
@@ -695,31 +783,47 @@ def test_native_pipeline_measures_source_and_verifies_exports(workspace, compone
                                    "Model planning, review, manuscript and literature in this integration test are simulated."]
     settings = {"seeds": provider.plan["seeds"], "units_per_seed": provider.plan["units_per_seed"],
                 "fixture_size": provider.plan["parameters"]["fixture_size"]}
-    code = '''import itertools, json, os, pathlib, random, sys
+    code = '''import base64, hashlib, itertools, json, os, pathlib, random, sys
 sys.path.insert(0, os.environ['PF_SOURCE_ROOT'])
 from transform import transform
 settings = SETTINGS
+def fixture(label, payload):
+    return {'label': label, 'encoding': 'base64', 'content': base64.b64encode(payload).decode('ascii'),
+            'sha256': hashlib.sha256(payload).hexdigest()}
 def violations(actual, expected):
     missing = object()
     return sum(left != right for left, right in itertools.zip_longest(actual, expected, fillvalue=missing))
-rows = []
+source = pathlib.Path(os.environ['PF_SOURCE_ROOT'], 'transform.py').read_bytes()
+fixtures = [fixture('production-source.py', source)]
+rows, logs = [], []
 for seed in settings['seeds']:
     generator = random.Random(seed)
     for unit in range(settings['units_per_seed']):
-        values = [generator.randrange(10000) for _ in range(settings['fixture_size'])]
+        input_bytes = json.dumps({'seed': seed, 'unit_id': 'case-' + str(unit),
+                                  'values': [generator.randrange(10000) for _ in range(settings['fixture_size'])]}).encode('utf-8')
+        fixtures.append(fixture('input-' + str(seed) + '-' + str(unit) + '.json', input_bytes))
+        values = json.loads(input_bytes)['values']
         annotation = tuple(values)
         actual = transform(values)
         ablation = values[:-1]
         for condition, result in [('production', actual), ('ablation', ablation)]:
             rows.append({'unit_id': 'case-' + str(unit), 'seed': seed, 'condition': condition,
                          'metric': 'error', 'value': violations(result, annotation)})
+            logs.append({'unit_id': 'case-' + str(unit), 'seed': seed, 'condition': condition,
+                         'actual': result, 'expected': list(annotation)})
+control_bytes = json.dumps({'input': [7, 11], 'expected': [7, 11], 'deletion': [7]}).encode('utf-8')
+fixtures.append(fixture('control-inputs.json', control_bytes))
+control_input = json.loads(control_bytes)
 controls = [
-    {'name': 'positive control', 'passed': violations(transform([7, 11]), (7, 11)) == 0,
+    {'name': 'positive control', 'passed': violations(transform(control_input['input']), control_input['expected']) == 0,
      'details': 'Actual production output agrees with the independently specified two-value annotation.'},
-    {'name': 'negative control', 'passed': violations([7], (7, 11)) > 0,
+    {'name': 'negative control', 'passed': violations(control_input['deletion'], control_input['expected']) > 0,
      'details': 'The independent oracle detects a deliberate deletion from the known expected annotation.'}]
+fixtures.append(fixture('measurement-log.json', json.dumps({'measurements': logs, 'controls': controls}).encode('utf-8')))
+fixtures.append(fixture('fixture-manifest.json', json.dumps({'settings': settings,
+    'source_sha256': hashlib.sha256(source).hexdigest(), 'oracle': 'exact independently retained values'}).encode('utf-8')))
 pathlib.Path(os.environ['PF_OUTPUT_ROOT'], 'observations.json').write_text(
-    json.dumps({'observations': rows, 'controls': controls}), encoding='utf-8')
+    json.dumps({'observations': rows, 'controls': controls, 'fixtures': fixtures}), encoding='utf-8')
 '''.replace("SETTINGS", repr(settings))
     original = provider.generate
     def measured_bundle(prompt, schema, call_dir, **kwargs):
@@ -742,6 +846,22 @@ pathlib.Path(os.environ['PF_OUTPUT_ROOT'], 'observations.json').write_text(
     assert len(raw["observations"]) == 12
     assert {row["value"] for row in raw["observations"] if row["condition"] == "production"} == {0}
     assert {row["value"] for row in raw["observations"] if row["condition"] == "ablation"} == {1}
+    embedded = {item["label"]: base64.b64decode(item["content"], validate=True) for item in raw["fixtures"]}
+    assert embedded["production-source.py"] == (workspace.root / "source" / "transform.py").read_bytes()
+    for item in raw["fixtures"]:
+        assert hashlib.sha256(embedded[item["label"]]).hexdigest() == item["sha256"]
+    inputs = [json.loads(payload) for label, payload in embedded.items() if label.startswith("input-")]
+    assert {(item["seed"], item["unit_id"]) for item in inputs} == {
+        (seed, f"case-{unit}") for seed in settings["seeds"] for unit in range(settings["units_per_seed"])}
+    logs = json.loads(embedded["measurement-log.json"])
+    assert logs["controls"] == raw["controls"]
+    assert len(logs["measurements"]) == len(raw["observations"])
+    for record in logs["measurements"]:
+        retained_input = next(item["values"] for item in inputs
+                              if (item["seed"], item["unit_id"]) == (record["seed"], record["unit_id"]))
+        assert record["expected"] == retained_input
+        assert record["actual"] == (retained_input if record["condition"] == "production" else retained_input[:-1])
+    assert json.loads(embedded["fixture-manifest.json"])["settings"] == settings
     execution = pipeline._read(workspace, result, "execution")
     assert execution["backend"] == "windows-appcontainer" and execution["cleanup_confirmed"] is True
     assert execution["production_calls"] == [{"path": "transform.py", "function": "transform", "calls": 7}]
@@ -749,6 +869,7 @@ pathlib.Path(os.environ['PF_OUTPUT_ROOT'], 'observations.json').write_text(
     assert pipeline.verify(workspace, result.id)["passed"] is True
     with zipfile.ZipFile(pipeline._artifact(workspace, result, "reproducibility")) as archive:
         assert {"runtime-manifest.json", "observations.json", "paper.pdf", "paper.docx", "paper.tex"} <= set(archive.namelist())
+        assert json.loads(archive.read("observations.json"))["fixtures"] == raw["fixtures"]
         instructions = archive.read("README.md").decode("utf-8")
         assert "Windows AppContainer" in instructions and "Docker and WSL are not required" in instructions
         assert "PF_SOURCE_ROOT" in instructions and "runtime-manifest.json" in instructions

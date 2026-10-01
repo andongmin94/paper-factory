@@ -1,4 +1,6 @@
 """Scientific integrity checks for generated research, beyond schema validity."""
+import base64
+import hashlib
 import json
 import os
 import subprocess
@@ -128,7 +130,12 @@ def observations():
     return {"observations": rows, "controls": [
         {"name": "positive control", "passed": True, "details": "Known correct fixture agrees with the independent oracle."},
         {"name": "negative control", "passed": True, "details": "An intentional deletion is detected by the independent oracle."},
-    ]}
+    ], "fixtures": [embedded_fixture("synthetic-inputs.json", b'{"synthetic":true,"annotations":[0,1,2]}')]}
+
+
+def embedded_fixture(label, payload):
+    return {"label": label, "encoding": "base64", "content": base64.b64encode(payload).decode("ascii"),
+            "sha256": hashlib.sha256(payload).hexdigest()}
 
 
 @pytest.fixture
@@ -188,6 +195,79 @@ def test_analysis_recomputes_paired_measurements_without_model_values(tmp_path, 
     assert reproduced["parameters"]["units_per_seed"] == 3
     assert reproduced["parameters"]["unit_count"] == 6
     assert reproduced["parameters"]["observation_count"] == 12
+
+
+def test_analysis_preserves_embedded_fixture_bytes_without_extracting_labels(tmp_path, protocol, observations):
+    payload = b'\x00\xff\r\n{"measurement_input":"exact bytes"}'
+    observations["fixtures"] = [embedded_fixture("../never-extract.bin", payload),
+                                embedded_fixture("nested/never-extract.bin", b""),
+                                embedded_fixture("\uac00" * 200, b"bounded label")]
+    output = tmp_path / "analysis"
+    result = science.analyze(observations, protocol, output)
+    raw_path = output / "analysis-observations.json"
+    retained_text = raw_path.read_text(encoding="utf-8")
+    retained = json.loads(retained_text)
+    assert retained == observations
+    assert base64.b64decode(retained["fixtures"][0]["content"], validate=True) == payload
+    assert retained["fixtures"][1]["content"] == ""
+    expected_digest = hashlib.sha256(json.dumps(observations, sort_keys=True, separators=(",", ":"),
+                                               ensure_ascii=False, allow_nan=False).encode()).hexdigest()
+    assert result["observation_digest"] == expected_digest
+    before = {path.relative_to(tmp_path) for path in tmp_path.rglob("*")}
+    completed = subprocess.run([sys.executable, str(output / "analysis.py")],
+                               capture_output=True, text=True, timeout=20)
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads((output / "analysis-reproduced.json").read_text(encoding="utf-8")) == result
+    assert raw_path.read_text(encoding="utf-8") == retained_text
+    assert {path.relative_to(tmp_path) for path in tmp_path.rglob("*")} == before | {Path("analysis/analysis-reproduced.json")}
+    assert not (tmp_path / "never-extract.bin").exists()
+    assert not (output / "nested").exists()
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda value: value.pop("fixtures"),
+    lambda value: value.update(fixtures=[]),
+    lambda value: value.update(fixtures={"label": "unrecognized"}),
+    lambda value: value.update(unrecognized=[]),
+    lambda value: value["fixtures"][0].update(unrecognized=True),
+    lambda value: value["fixtures"][0].pop("sha256"),
+    lambda value: value["fixtures"].append(value["fixtures"][0].copy()),
+    lambda value: value["fixtures"][0].update(encoding="hex"),
+    lambda value: value["fixtures"][0].update(content="not base64!"),
+    lambda value: value["fixtures"][0].update(content="YQ"),
+    lambda value: value["fixtures"][0].update(content="YQ==\n"),
+    lambda value: value["fixtures"][0].update(content="Zh==", sha256=hashlib.sha256(b"f").hexdigest()),
+    lambda value: value["fixtures"][0].update(content="YQ===", sha256=hashlib.sha256(b"a").hexdigest()),
+    lambda value: value["fixtures"][0].update(content=None),
+    lambda value: value["fixtures"][0].update(sha256="0" * 64),
+    lambda value: value["fixtures"][0].update(sha256="A" * 64),
+    lambda value: value["fixtures"][0].update(sha256="0" * 63),
+    lambda value: value["fixtures"][0].update(label=""),
+    lambda value: value["fixtures"][0].update(label="   "),
+    lambda value: value["fixtures"][0].update(label="x" * 201),
+    lambda value: value["fixtures"][0].update(label=None),
+    lambda value: value["fixtures"][0].update(label="invalid\nlabel"),
+    lambda value: value["fixtures"][0].update(label="invalid\x7flabel"),
+    lambda value: value["fixtures"][0].update(label="invalid\x85label"),
+], ids=["missing-array", "empty-array", "wrong-array-type", "unknown-root-field", "unknown-fixture-field",
+        "missing-fixture-field", "duplicate-label", "bad-encoding", "bad-base64", "bad-padding",
+        "base64-whitespace", "noncanonical-pad-bits", "excess-padding", "non-string-content", "altered-hash",
+        "uppercase-hash", "short-hash", "empty-label", "blank-label", "long-label", "non-string-label",
+        "newline-label", "delete-label", "c1-control-label"])
+def test_invalid_fixtures_are_rejected_before_analysis_and_by_standalone(tmp_path, protocol, observations, mutate):
+    original = tmp_path / "original"
+    science.analyze(observations, protocol, original)
+    mutate(observations)
+    rejected = tmp_path / "rejected"
+    with pytest.raises(ValueError):
+        science.analyze(observations, protocol, rejected)
+    assert list(rejected.iterdir()) == []
+    (original / "analysis-observations.json").write_text(json.dumps(observations), encoding="utf-8")
+    completed = subprocess.run([sys.executable, str(original / "analysis.py")],
+                               capture_output=True, text=True, timeout=20)
+    assert completed.returncode != 0
+    assert "ValueError" in completed.stderr
+    assert not (original / "analysis-reproduced.json").exists()
 
 
 @pytest.mark.parametrize("mutate,reason", [
@@ -374,6 +454,20 @@ def test_model_prompts_explain_existing_protocol_and_generation_boundaries(proto
     assert "do not generate .ts or .tsx files" in generation
     assert "512 KiB (524288 UTF-8 bytes)" in generation
     assert "262144-character" in generation
+    example, _ = json.JSONDecoder().raw_decode(generation[generation.index('{"observations":'):])
+    assert set(example) == {"observations", "controls", "fixtures"}
+    assert set(example["fixtures"][0]) == {"label", "encoding", "content", "sha256"}
+    assert example["fixtures"][0]["encoding"] == "base64"
+    assert "only observations.json from PF_OUTPUT_ROOT" in generation
+    assert "Separate output files are discarded" in generation
+    assert "The fixtures array must be nonempty" in generation
+    assert "canonical standard Base64" in generation
+    assert "hash those decoded bytes with SHA-256" in generation
+    assert "eight MiB (8388608-byte)" in generation
+    assert "Labels are metadata, not host extraction paths" in generation
+    assert "its execution receipt satisfies" in generation
+    assert "reset or disable the controller's profiler" in generation
+    assert "sys.setprofile, threading.setprofile, or node:inspector Profiler" in generation
 
 
 def test_real_failed_controls_are_distinct_from_repairable_format_errors(tmp_path, protocol, observations):

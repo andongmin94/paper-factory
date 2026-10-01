@@ -33,7 +33,7 @@ Frontend readiness now follows the actual subscription provider status, includin
 an existing CLI login, and clears stale connection information after failed
 refreshes. Default web paths use the native `PF_HOME` studies/web directories.
 
-The current Windows collection contains **1,268 cases: 1,254 passed, 14 skipped,
+The current Windows collection contains **1,298 cases: 1,284 passed, 14 skipped,
 0 failed and 0 uncovered**. Complete fresh file shards and final affected reruns
 were deduplicated against the exact current collection. Per-case evidence is
 preserved at
@@ -95,6 +95,33 @@ skips, including actual DOCX image inclusion and standalone reanalysis:
 An earlier export test hit a transient PNG PermissionError; its direct locking
 cause remains unconfirmed, and its failed report was preserved. Existing frozen
 development protocols using the previous field are not rewritten or migrated.
+
+Live repository execution exposed a scientific-review gate defect: repair from
+the generate stage stayed on that same stage, so the common advance logic could
+execute a rejected bundle. Syntax/review rejection now checkpoints its blocked
+attempt and continues generation explicitly; rejected bundles never reach the
+runner. Regression cases cover rejection, acceptance with issues, exhausted
+repairs and execution only after a newly accepted bundle. The rejected live
+execution remains preserved as excluded evidence and produced no paper.
+
+Only `observations.json` crosses the research worker boundary. The required raw
+contract now includes `fixtures`, retaining exact input, mutation-log, oracle
+expectation and manifest bytes as canonical Base64 with verified SHA-256. These
+records are metadata and are not extracted to host paths. They stay inside the
+existing eight-MiB artifact bound and survive native execution, independent
+reanalysis and the reproduction ZIP. Failed scientific controls retain priority
+over fixture-format repairs. Old two-key development payloads are not migrated.
+The latest affected collection has 240 passes and five skips, with every current
+case covered by the full report and final affected reruns:
+`C:/Users/Public/Documents/ESTsoft/CreatorTemp/paperfactory-review-fixtures-final-regressions.xml`.
+
+A real native TypeScript probe recorded its original `add` function once. An
+otherwise identical probe using a competing Node inspector coverage session
+erased the controller trace. This reproduced the empty trace in the rejected
+live bundle without rerunning that experiment. Generation and review now
+explicitly prohibit resetting/disabling the controller profiler; runtime
+version capabilities are also passed to planning. Probe receipts are preserved
+at `C:/Users/Public/Documents/ESTsoft/CreatorTemp/paperfactory-native-ts-profile-z3lmeqpg`.
 
 ## Native Windows verification
 
