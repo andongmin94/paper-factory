@@ -1,6 +1,4 @@
 """Scientific integrity checks for generated research, beyond schema validity."""
-import copy
-import hashlib
 import json
 import os
 import subprocess
