@@ -45,6 +45,107 @@ def test_cli_help_exposes_phase_one_commands():
         assert command in result.output
 
 
+def test_cli_official_device_login_waits_for_actual_probe(monkeypatch):
+    from paper_factory import cli
+
+    class FixtureConnection:
+        def __init__(self):
+            self.states = iter([
+                {"status": "waiting_user", "model_available": False, "user_code": "TEST-CODE", "verification_url": "https://auth.openai.com/codex/device"},
+                {"status": "authenticated", "model_available": False},
+                {"status": "probing", "model_available": False},
+                {"status": "available", "model_available": True},
+            ])
+            self.calls = []
+
+        def login(self):
+            self.calls.append("login")
+
+        def status(self):
+            return next(self.states)
+
+        def probe(self):
+            self.calls.append("probe")
+
+        def close(self):
+            self.calls.append("close")
+
+    connection = FixtureConnection()
+    monkeypatch.setattr(cli, "_connection_manager", lambda: connection)
+    monkeypatch.setattr(cli.time, "sleep", lambda delay: None)
+    result = CliRunner().invoke(app, ["auto", "login"])
+    assert result.exit_code == 0, result.output
+    assert connection.calls == ["login", "probe", "close"]
+    assert "https://auth.openai.com/codex/device" in result.stdout
+    assert '"model_available": true' in result.stdout
+
+
+def test_cli_probe_failure_is_not_success_with_an_existing_connection(monkeypatch):
+    from paper_factory import cli
+
+    class FixtureConnection:
+        closed = False
+
+        def probe(self):
+            pass
+
+        def status(self):
+            return {"status": "blocked", "code": "AUTH_REQUIRED", "model_available": True,
+                    "message": "Synthetic pending probe failed; the earlier connection is retained."}
+
+        def close(self):
+            self.closed = True
+
+    connection = FixtureConnection()
+    monkeypatch.setattr(cli, "_connection_manager", lambda: connection)
+    result = CliRunner().invoke(app, ["auto", "probe"])
+    assert result.exit_code == 1 and connection.closed
+    assert '"code": "AUTH_REQUIRED"' in result.stdout
+
+
+def test_cli_login_preflight_failure_does_not_wait_on_someone_else_session(monkeypatch):
+    from paper_factory import cli
+
+    class FixtureConnection:
+        closed = False
+
+        def login(self):
+            return {"status": "waiting_user", "code": "CONNECTION_BUSY", "message": "Synthetic other login already running"}
+
+        def status(self):
+            pytest.fail("A preflight failure must not poll the existing login")
+
+        def close(self):
+            self.closed = True
+
+    connection = FixtureConnection()
+    monkeypatch.setattr(cli, "_connection_manager", lambda: connection)
+    result = CliRunner().invoke(app, ["auto", "login"])
+    assert result.exit_code == 1 and connection.closed
+    assert '"code": "CONNECTION_BUSY"' in result.stdout
+
+
+@pytest.mark.parametrize("command,method", [("connection", "status"), ("disconnect", "disconnect"), ("login-cancel", "cancel")])
+def test_cli_connection_controls_do_not_generate_models(monkeypatch, command, method):
+    from paper_factory import cli
+
+    class FixtureConnection:
+        def __init__(self):
+            self.calls = []
+
+        def __getattr__(self, name):
+            def action():
+                self.calls.append(name)
+                return {"status": "disconnected", "model_available": False}
+            return action
+
+    connection = FixtureConnection()
+    monkeypatch.setattr(cli, "_connection_manager", lambda: connection)
+    result = CliRunner().invoke(app, ["auto", command])
+    assert result.exit_code == 0, result.output
+    assert connection.calls == [method, "close"]
+
+
 def test_cli_local_end_to_end_keeps_source_separate(cli_case):
     runner, source, destination = cli_case
     before = project.inventory(source)
@@ -265,3 +366,110 @@ def test_cli_render_preserves_author_edit_and_ai_record_has_study_scope(cli_case
     activity = invoke_ok(runner, ["record-ai-use", "language editing", "--tool", "Fixture AI", "--model", "fixture-only"])
     record = Workspace(destination).get("provenance", activity["activity"], Provenance)
     assert record.inputs == [study["study"]]
+
+
+def test_cli_explicit_env_file_supplies_author_but_explicit_json_still_wins(cli_case, monkeypatch):
+    runner, source, destination = cli_case
+    for field in AuthorProfile.model_fields:
+        monkeypatch.delenv(f"PF_AUTHOR_{field.upper()}", raising=False)
+    env_file = destination.parent / "private-author.env"
+    env_file.write_text("PF_AUTHOR_DISPLAY_NAME=Private Researcher\nPF_AUTHOR_EMAIL=private@example.org\nPF_AUTHOR_AFFILIATION=Independent Research\n", encoding="utf-8")
+    invoke_ok(runner, ["--workspace", str(destination), "start", str(source)])
+    invoke_ok(runner, ["research"])
+    invoke_ok(runner, ["experiment", "run"])
+    built = invoke_ok(runner, ["--env-file", str(env_file), "manuscript", "build"])
+    canonical_path = destination / "manuscripts" / built["paper"] / "canonical.json"
+    canonical = json.loads(canonical_path.read_text(encoding="utf-8"))
+    assert canonical["author"]["display_name"] == "Private Researcher"
+    assert canonical["author"]["email"] == "private@example.org"
+    assert canonical["author"]["affiliation"] == "Independent Research"
+    override = {"display_name": "Explicit Researcher"}
+    invoke_ok(runner, ["--env-file", str(env_file), "manuscript", "build", "--author-json", json.dumps(override)])
+    canonical = json.loads(canonical_path.read_text(encoding="utf-8"))
+    assert canonical["author"]["display_name"] == "Explicit Researcher"
+    assert canonical["author"]["email"] == "private@example.org"
+    assert env_file.read_text(encoding="utf-8").startswith("PF_AUTHOR_DISPLAY_NAME=Private Researcher")
+
+
+def test_cli_does_not_discover_dotenv_or_print_malformed_secret(cli_case, monkeypatch):
+    runner, source, destination = cli_case
+    current_directory = destination.parent / "current-directory"
+    current_directory.mkdir()
+    (current_directory / ".env").write_text("PF_AUTHOR_EMAIL=unexpected@example.org\n", encoding="utf-8")
+    monkeypatch.chdir(current_directory)
+    import os
+    before = os.environ["PF_AUTHOR_EMAIL"]
+    invoke_ok(runner, ["--workspace", str(destination), "start", str(source)])
+    assert os.environ["PF_AUTHOR_EMAIL"] == before
+    malformed = current_directory / "malformed.env"
+    malformed.write_text("PF_AUTHOR_EMAIL='private-secret-value\n", encoding="utf-8")
+    result = runner.invoke(app, ["--env-file", str(malformed), "status"])
+    assert result.exit_code == 1
+    assert "line 1" in result.output
+    assert "private-secret-value" not in result.output
+    assert "Traceback" not in result.output
+
+
+def test_cli_env_file_is_inherited_by_real_web_cli_workers(cli_case, monkeypatch):
+    """Startup configuration reaches worker subprocesses without file discovery."""
+    runner, source, destination = cli_case
+    for field in AuthorProfile.model_fields:
+        monkeypatch.delenv(f"PF_AUTHOR_{field.upper()}", raising=False)
+    monkeypatch.delenv("PF_HOME", raising=False)
+    monkeypatch.setenv("PF_OJS_API_TOKEN", "temporary-before-test")
+    monkeypatch.delenv("PF_OJS_API_TOKEN", raising=False)
+    home = destination.parent / "private-home"
+    env_file = destination.parent / "private-web.env"
+    env_file.write_text(
+        "PF_AUTHOR_DISPLAY_NAME=Web Private Researcher\nPF_AUTHOR_EMAIL=web-private@example.org\n"
+        "PF_AUTHOR_AFFILIATION=Independent Research\nPF_OJS_API_TOKEN=secret-must-not-appear-in-jobs\n"
+        f"PF_HOME={home}\n", encoding="utf-8",
+    )
+    from paper_factory import web
+    import threading
+    import time
+    verified = {}
+
+    def exercise_web_startup(**kwargs):
+        assert kwargs["data_root"] == home / "web"
+        server = web.create_server(port=0, data_root=kwargs["data_root"], studies_root=destination.parent / "studies", source_roots=[destination.parent])
+        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True)
+        thread.start()
+        address = f"http://127.0.0.1:{server.server_port}"
+        try:
+            with httpx.Client(base_url=address, headers={"Origin": address}, timeout=20) as client:
+                def wait(job):
+                    deadline = time.monotonic() + 20
+                    while time.monotonic() < deadline:
+                        value = client.get(f"/api/jobs/{job}").json()
+                        if value["status"] not in {"queued", "running"}:
+                            assert value["status"] == "succeeded", value
+                            assert "secret-must-not-appear-in-jobs" not in value["log"]
+                            return value["result"]
+                        time.sleep(0.02)
+                    pytest.fail("Configured web job did not complete")
+                response = client.post("/api/projects", json={"source": str(source)})
+                assert response.status_code == 202, response.text
+                value = response.json()
+                project_id = value["project"]["id"]
+                wait(value["job"]["id"])
+                built = None
+                for payload in ({"action": "research", "candidate": "asset-inventory"}, {"action": "run"}, {"action": "manuscript-build", "pdf": False}):
+                    response = client.post(f"/api/projects/{project_id}/actions", json=payload)
+                    assert response.status_code == 202, response.text
+                    built = wait(response.json()["job"]["id"])
+                canonical = client.get(f"/api/projects/{project_id}/files/manuscripts/{built['paper']}/canonical.json").json()
+                verified["author"] = canonical["author"]
+                assert not (server.state.workspace_path(project_id) / "source" / env_file.name).exists()
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    monkeypatch.setattr(web, "serve", exercise_web_startup)
+    result = runner.invoke(app, ["--env-file", str(env_file), "serve"])
+    assert result.exit_code == 0, result.output
+    assert verified["author"]["display_name"] == "Web Private Researcher"
+    assert verified["author"]["email"] == "web-private@example.org"
+    assert verified["author"]["affiliation"] == "Independent Research"
+    assert "secret-must-not-appear-in-jobs" not in result.output

@@ -14,8 +14,13 @@ from urllib.parse import urlsplit, urlunsplit
 from .models import Asset, Project, uid
 from .workspace import Workspace, digest_file, ensure_unlinked, is_link, pf_home, write_json
 
-IGNORED_DIRECTORIES = {".git", "node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
+IGNORED_DIRECTORIES = {".git", ".codex", "codex-auth", "node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
 SECRET_NAMES = {"credentials", "credentials.json", "token.json", "auth.json", "secrets.json", "secrets.yaml", "secrets.yml", "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", ".netrc", "_netrc", ".npmrc", ".pypirc", ".git-credentials"}
+
+
+def _authentication_root() -> Path:
+    configured = os.environ.get("PF_CODEX_AUTH_HOME")
+    return (Path(configured).expanduser() if configured and configured.strip() else pf_home() / "codex-auth").absolute()
 
 
 def _secret(path: Path) -> bool:
@@ -46,6 +51,7 @@ def inventory(root: Path, *, sanitize: bool = False) -> list[Asset]:
     if not root.is_dir():
         raise ValueError("Snapshot root is missing or is not a directory")
     assets: list[Asset] = []
+    authentication = _authentication_root() if sanitize else None
     def inaccessible(error: OSError) -> None:
         raise error
     for directory, dirs, files in os.walk(root, followlinks=False, onerror=inaccessible):
@@ -56,7 +62,7 @@ def inventory(root: Path, *, sanitize: bool = False) -> list[Asset]:
                 if not sanitize:
                     raise ValueError("Snapshot contains a symlink")
                 dirs.remove(name)
-            elif sanitize and (name.casefold() in IGNORED_DIRECTORIES or _secret(path)):
+            elif sanitize and (name.casefold() in IGNORED_DIRECTORIES or _secret(path) or path.absolute().is_relative_to(authentication)):
                 dirs.remove(name)
         for name in files:
             path = base / name
@@ -110,6 +116,10 @@ def ingest(source: str, workspace_root: Path | None = None) -> Workspace:
     if not is_remote:
         ensure_unlinked(local)
     source_path = local.resolve() if not is_remote else None
+    if source_path is not None:
+        authentication = _authentication_root()
+        if source_path.is_relative_to(authentication):
+            raise ValueError("Private ChatGPT authentication directories cannot be imported as research projects")
     safe_source = _safe_source(source) if is_remote else str(source_path)
     name = Path(urlsplit(safe_source).path if "://" in safe_source else safe_source).name.removesuffix(".git") or "project"
     slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", name).strip("-") or "project"

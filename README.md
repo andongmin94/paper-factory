@@ -1,7 +1,14 @@
 # Paper Factory
 
-Paper Factory is a local, evidence-first research CLI. It connects project
-ingestion, study discovery, literature metadata, real experiments, English drafts,
+Paper Factory is a local web research workspace and evidence-first CLI. The Korean
+web interface supports project import, study creation, experiment execution,
+literature lookup, manuscript editing and artifact downloads. An autonomous
+workflow calls the official Codex CLI with ChatGPT subscription authentication
+to propose research, generate isolated experiments and write grounded manuscripts.
+Three separately executed repository studies have external English papers and
+reproducible results; those earlier articles are not proof of app autonomy.
+The CLI also connects project ingestion, study discovery, literature metadata,
+real experiments, English drafts,
 scientific author approval, live venue discovery and policy evidence, venue
 compilation, verified local submission packages, author attestations and
 receipt-backed publication/preprint tracking (Phases 1–3), and evidence-linked
@@ -9,38 +16,51 @@ manuscript revision with local same-journal resubmission bundles and an explicit
 OJS 3.5 author submission API adapter.
 
 It does **not** guarantee novelty, scientific correctness, publication quality,
-acceptance or complete literature coverage. The automatic study is a descriptive
-asset inventory. Substantive research needs an appropriate question, actual
-analysis scripts, baselines and scientific interpretation. Journal upload and
+acceptance or complete literature coverage. The original `research` command's
+automatic study is a descriptive asset inventory. The `auto` workflow requires
+a feasible production component, independent oracle, comparator, inspected
+literature and actual observations, and blocks when these cannot be established. Journal upload and
 final Submit require separate explicit commands and factual author approval.
 Preprint upload remains manual.
 
 ## Install
 
-Use Python 3.11+ and Git for repository inputs:
+For the web and autonomous workflow, use **Linux or WSL2**, Python 3.12, Git,
+Node.js 24 with npm, and a running Docker engine. The current research-image
+builder uses Linux runtime binaries and `ldd`; connection management requires
+POSIX file locks. Run these commands from the cloned repository:
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[dev,pdf,research,automation]" pypandoc_binary
+npm install -g @openai/codex@0.159.3
+export PYPANDOC_PANDOC="$(python -c 'import pypandoc; print(pypandoc.get_pandoc_path())')"
+cp .env.example .env
+chmod 600 .env
+paperfactory --help
+```
+
+Fill author settings in the private `.env` locally. The official CLI handles
+subscription credentials; do not put API keys or OAuth tokens in that file.
+Keep the environment activated, and repeat the `PYPANDOC_PANDOC` export in a new
+terminal if Pandoc is not on `PATH`.
+
+The base CLI supports Python 3.11+ on Windows/macOS as well. For a basic Windows
+installation:
 
 ```powershell
 python -m venv .venv
-.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.venv\Scripts\python.exe -m pip install -e ".[dev,pdf]"
 .venv\Scripts\paperfactory.exe --help
 ```
 
-On Linux/macOS use `.venv/bin/python` and `.venv/bin/paperfactory`. After activating
-the environment, use `paperfactory` as below. If Windows points `python` at a Store
-alias, use your actual Python executable. This checkout already has a working
-`.venv` from implementation validation.
-
-Install [Pandoc](https://pandoc.org/installing.html) for standalone `.tex` output.
-Install the optional PDF extra for `manuscript build --pdf` and Phase 2:
-
-```powershell
-.venv\Scripts\python.exe -m pip install -e ".[dev,pdf]"
-```
-
-PDF uses Pandoc and the embedded Typst engine; no TeX distribution is required. Without Pandoc,
+Use WSL2 for the autonomous workflow on Windows. PDF uses
+[Pandoc](https://pandoc.org/installing.html) and the embedded Typst engine; no TeX
+distribution is required. Without Pandoc,
 canonical JSON, Markdown and `compile-command.json` are preserved and the status
 is `COMPILE_READY`. Compiler failures preserve the source and fail the command.
-Validation used `pypandoc_binary` only to obtain an external Pandoc executable:
+`pypandoc_binary` provides an external Pandoc executable:
 
 ```powershell
 .venv\Scripts\python.exe -m pip install pypandoc_binary
@@ -48,22 +68,186 @@ Validation used `pypandoc_binary` only to obtain an external Pandoc executable:
 # Pass that executable to manuscript build --pandoc <path>.
 ```
 
-Runtime dependencies are Pydantic, Typer, HTTPX and Beautiful Soup; the PDF extra
-adds Typst, pypdf and python-docx. Upstream research and licenses are recorded in
+Runtime dependencies are Pydantic, Typer, HTTPX, Beautiful Soup, python-dotenv and JSON Schema validation; the PDF extra
+adds Typst, pypdf and python-docx. The optional `research` extra adds NumPy and
+Matplotlib for study figures; individual study protocols specify their own pinned
+runtimes and dependencies. Install all development/export/figure extras with
+`python -m pip install -e ".[dev,pdf,research,automation]"`; `automation` adds
+the pinned Mido dependency for the optional MIDI research runtime.
+Upstream research and licenses are recorded in
 [Phase 1 reuse](docs/reuse-decisions.md), [Phase 2 reuse](docs/phase2-reuse.md),
 [Phase 3 reuse](docs/phase3-reuse.md), [Phase 4 reuse](docs/phase4-reuse.md) and
 [document conversion](docs/pdf-reuse.md) and [OJS API reuse](docs/submission-reuse.md).
 
+## Open the web workspace
+
+After installation, run:
+
+```bash
+mkdir -p "$HOME/.paper-factory/studies"
+paperfactory --env-file .env serve --host 127.0.0.1 --port 8765 \
+  --studies "$HOME/.paper-factory/studies" \
+  --data "$HOME/.paper-factory/web"
+```
+
+Open `http://127.0.0.1:8765` in a browser on that machine. A fresh clone has an
+empty study library; paper files and earlier study folders are external
+deliverables and are not included in Git. Pass an existing exported study folder
+to `--studies` to browse its papers and results. In **새 프로젝트**, import a
+GitHub HTTPS repository, create a research question, register/run a Python
+experiment from the imported source, look up literature, then build/edit/render
+a manuscript and inspect its integrity report. Jobs preserve their logs and
+success/failure state; unfinished jobs are marked interrupted after restart.
+For local source directories, use the CLI `paperfactory start /path/to/project`;
+the current web local-import allowlist is configured for the cloud workspace.
+
+Research writes require a loopback connection with the server's matching origin.
+A nonloopback bind exposes an artifact-only preview. Registered web experiments
+execute existing imported Python scripts in separate working copies, with the
+invoking user's permissions. They are not a hostile-code sandbox. Automatic
+inventory and template drafting remain available; project-specific analysis and
+scientific interpretation supply substantive research.
+
+## Autonomous research with a subscription CLI
+
+In the web's **자동 연구** view, import a repository or request up to three
+recommendations from a public GitHub account. Supply a goal and budget, then
+start the research worker. Progress, cancellation, resumption, account/network
+blockers and final artifact downloads are available in that view. Interrupted
+autonomous jobs resume verified checkpoints after the server restarts; explicit
+cancellations and account/network blockers require deliberate resumption.
+
+Use **ChatGPT 구독으로 연결** in the web automatic-research view to start the
+official Codex device login. Open the official link and enter the one-time code,
+then click **실제 모델 요청 확인**. Only a successful model response selects the
+new account for research. An earlier connection remains selected until that
+check passes. Login credentials stay in a private official CLI store outside Git;
+Paper Factory reads only its nonsecret connection metadata. No OpenAI API key is
+required. Configure the trusted CLI path/model and an immutable
+`PF_RESEARCH_IMAGE` in the explicit private dotenv file. Generated programs never
+receive this login, author settings or other controller credentials. Docker and
+a provisioned Python/Node image are required; there is no host execution fallback.
+
+Before starting autonomous jobs, build the local runtime from your Python 3.12
+and Node 24 installations. This example includes standard-library Python/Node
+and Mido; it does not install arbitrary project dependencies:
+
+```bash
+python scripts/build_autonomous_image.py \
+  --mido-site-packages "$(python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')" \
+  --manifest "$HOME/.paper-factory/research-image.json"
+```
+
+Replace the blank `PF_RESEARCH_IMAGE=` in `.env` with the printed immutable
+`PF_RESEARCH_IMAGE=sha256:...` value. For the vetted application dependencies,
+install [the pinned runtime requirements](scripts/research-runtime-requirements.txt)
+with `python -m pip install -r scripts/research-runtime-requirements.txt`, then
+add `--with-application-dependencies` when rebuilding the image.
+
+```bash
+paperfactory --env-file .env auto doctor
+paperfactory --env-file .env auto login
+paperfactory --env-file .env auto connection
+paperfactory --env-file .env auto run https://github.com/andongmin94/madi \
+  --goal "Evaluate apps/desktop/src/renderer/llm/proposalDiff.ts:createLlmProposalReview for Unicode reconstruction and bounded fallback with seeded fixtures, a declared comparator and an independent oracle"
+paperfactory --env-file .env auto select https://github.com/OWNER --count 3
+paperfactory --env-file .env auto batch OWNER --count 3
+paperfactory --env-file .env --workspace /path/to/workspace auto status
+paperfactory --env-file .env --workspace /path/to/workspace auto resume PIPELINE_ID
+paperfactory --env-file .env --workspace /path/to/workspace auto verify PIPELINE_ID
+```
+
+`auto login` displays the official approval URL and one-time code, waits for
+your approval, then verifies an actual model response. Alternatively, use the
+web connection button and its separate model-check button. Use `auto probe` to
+recheck model access and `auto disconnect` to deactivate the worker connection.
+Small Node repositories
+such as [madi](https://github.com/andongmin94/madi),
+[garak](https://github.com/andongmin94/garak) and
+[mini-cast](https://github.com/andongmin94/mini-cast) provide production components
+for the initial runtime; feasibility checks still determine whether each proposed
+study can execute with its available dependencies.
+
+Successful runs export PDF, DOCX, standalone TeX, Markdown, tables, figures,
+measured observations and a reproducibility ZIP. Numerical statements and
+citations use checked evidence references; a failed scientific control retains
+its results and stops rather than generating more favorable observations.
+Source-call traces detect an accidentally substituted implementation. They are
+not an adversarial proof of truthful measurements, and their timing overhead is
+disclosed in the protocol and manuscript.
+
+The integration/native-export tests use explicit model and observation fixtures.
+Actual isolated source execution and live literature retrieval were checked
+separately. A live subscription-generated research paper has not yet been
+validated: this cloud recognized stored ChatGPT authentication, but actual model
+requests encountered proxy HTTP CONNECT 403 and, in the latest probe, HTTP 401.
+The new login flow uses a fresh private worker profile and preserves that injected
+cloud authentication. Device approval still requires the account owner.
+See [setup, evidence and recovery instructions](docs/autonomous-research.md).
+
+## Three executed empirical studies
+
+These output folders are external deliverables, not files in the repository.
+The validation cloud used `/workspace/paper-factory-deliverables/studies`;
+local clones do not create or download that directory. Each study pins its unchanged
+production source and retains experiment scripts, raw results, summaries,
+figures, an English manuscript and reproduction instructions.
+
+| Repository | Executed study | Main evidence |
+|---|---|---|
+| [frontron](https://github.com/andongmin94/frontron) | Process-failure recovery and whole-set conflict preflight | 855 killed writers; 1,305 recovery observations |
+| [premiere-ai-harness](https://github.com/andongmin94/premiere-ai-harness) | Transcript editing: recovery of expendable time versus protected speech | 1,920 derived synthetic fixtures; 28,800 comparison rows |
+| [music-producer-kit](https://github.com/andongmin94/music-producer-kit) | Bounded MIDI edits and preservation of non-target events | 108 fixtures; 648 timed calls; 288 invalid-edit refusals |
+
+When you have those deliverables, open each study's `README.md` or `PROTOCOL.md`
+for the recorded environment and exact reproduction commands.
+
+The web catalog links each study's `paper.md`, `paper.pdf`, `paper.docx`,
+`paper.tex`, bibliography, results, export validation and `reproducibility.zip`.
+The study protocol explains which large generated case files are regenerated
+instead of included in the compact bundle. See the
+[development goal and evidence locations](docs/development-goal.md).
+
+The [research export helper](scripts/build_research_artifacts.py) reads actual
+manuscripts, `study-info.json`, user-confirmed author metadata and the verified
+CSL bibliography. It exports native files, reopens PDF/DOCX, records hashes and
+builds the web manifests and compact bundles:
+
+```bash
+python scripts/build_research_artifacts.py \
+  /path/to/studies \
+  --env-file .env \
+  --bibliography /path/to/bibliography.json
+```
+
+The helper reads author fields from the explicitly selected environment file.
+An optional `--author <JSON file>` supplies explicit author fields with precedence
+over environment values and remains compatible with existing export commands.
+Use `--pandoc <executable>` to select the installed Pandoc binary; optional
+`--compile-tex` additionally validates standalone TeX with XeLaTeX. Exporting does
+not rerun experiments or assert scientific approval. Literature provenance
+distinguishes inspected full text, inspected abstracts and metadata-only records.
+The studies use controlled generated inputs: their results do not establish
+natural-recording error rates, musical quality, native Adobe/Ableton acceptance,
+power-loss durability, publication or journal acceptance.
+
 ## Author environment
 
-Export [.env.example](.env.example) variables in your shell. Real `.env` files are
-ignored by Git; the CLI does not automatically load them:
+Copy the blank [.env.example](.env.example) to `.env` and fill your actual author
+metadata locally. On Linux/macOS:
 
-```powershell
-$env:PF_AUTHOR_DISPLAY_NAME = "Your actual author name"
-$env:PF_AUTHOR_EMAIL = "your-address@example.org"
-$env:PF_AUTHOR_AFFILIATION = "Your actual affiliation"
+```bash
+cp .env.example .env
+chmod 600 .env
+# Edit .env, then explicitly select it before the command:
+paperfactory --env-file .env status
+paperfactory --env-file .env manuscript build --pdf
 ```
+
+On Windows, use `Copy-Item .env.example .env` and restrict the file to your account.
+There is no automatic `.env` discovery. Existing process environment bindings,
+including empty ones, take precedence over values in the selected file. You may
+also export `PF_AUTHOR_*` variables directly in your shell without `--env-file`.
 
 Given/family names, ORCID, department, city, country, Scholar ID, GitHub and homepage
 are supported. ORCID format/checksum and supplied email/URLs are validated.
@@ -75,6 +259,12 @@ Freeze requires display name (or given + family), email and affiliation.
 Exploratory drafts permit missing metadata with review warnings. Author files
 stay in the external workspace. An explicit override must match at approval;
 changing identity requires rebuilding and reviewing the draft.
+
+Git ignores real `.env` files and keeps only the blank `.env.example` template.
+Keep generated workspaces, web project/job data and private recipient drafts out
+of source commits. A dotenv file is plain text, not encryption: generated papers
+and their reproduction bundles still include the author identity and correspondence
+required for those artifacts. Review that information before sharing the outputs.
 
 ## Start from a local project or Git repository
 
@@ -563,11 +753,12 @@ Back up the SQLite database and artifact directory together. No migrations exist
 workspaces without pinned working-directory/run records must be freshly ingested
 and re-executed rather than treated as compatible verified evidence.
 
-The next valuable increment is exercising a substantive existing analysis with
-full-text related-work assessment and one fully reviewed target venue. The
-evidence-linked revision and OJS initial submission workflows are implemented.
-Journal-specific revision upload requirements and authenticated acceptance against
-an actual target remain to be verified. All final attestations and final Submit
-remain explicit human actions; no actual journal submission was performed during
-development. See [status](docs/status.md)
-for the implemented safeguards, measured verification and remaining limits.
+The web workspace and three executed studies are documented in
+[development goal](docs/development-goal.md). Scientific author review and a
+fully reviewed target venue remain separate from completing these local
+artifacts. The evidence-linked revision and OJS initial submission workflows are
+implemented; journal-specific revision uploads and authenticated acceptance
+against an actual target remain to be verified. Final attestations and Submit
+remain explicit human actions. No actual journal submission was performed during
+development. See [status](docs/status.md) for the earlier CLI verification and
+remaining venue-integration limits.

@@ -3,6 +3,7 @@
 import functools
 import json
 import sqlite3
+import time
 from pathlib import Path
 from typing import Annotated
 
@@ -10,6 +11,7 @@ import httpx
 import typer
 
 from . import __version__
+from .autonomous.provider import ProviderBlocked
 from . import experiments, integrity, literature, manuscript, project, research as research_engine
 from . import venues, venue_policy, venue_compiler, submission_package, publication, preprints, revisions, revision_submission, portal
 from .evidence import claims_for_run, study_readiness_errors
@@ -28,6 +30,7 @@ preprint_app = typer.Typer(no_args_is_help=True, help="Prepare permitted preprin
 revision_app = typer.Typer(no_args_is_help=True, help="Link actual referee comments to verified manuscript changes and responses.")
 revision_submission_app = typer.Typer(no_args_is_help=True, help="Prepare and record a revised delivery within the original journal submission.")
 portal_app = typer.Typer(no_args_is_help=True, help="Explicit OJS 3.5 draft upload, inspected final Submit and read-only reconciliation.")
+auto_app = typer.Typer(no_args_is_help=True, help="Autonomous research using official Codex subscription authentication and isolated experiments.")
 app.add_typer(experiment_app, name="experiment")
 app.add_typer(literature_app, name="literature")
 app.add_typer(manuscript_app, name="manuscript")
@@ -39,6 +42,7 @@ app.add_typer(preprint_app, name="preprint")
 app.add_typer(revision_app, name="revision")
 revision_app.add_typer(revision_submission_app, name="submission")
 submission_app.add_typer(portal_app, name="portal")
+app.add_typer(auto_app, name="auto")
 
 
 def handled(function):
@@ -46,7 +50,7 @@ def handled(function):
     def wrapped(*args, **kwargs):
         try:
             return function(*args, **kwargs)
-        except (ValueError, OSError, sqlite3.Error, httpx.HTTPError) as exc:
+        except (ValueError, OSError, sqlite3.Error, httpx.HTTPError, ProviderBlocked) as exc:
             typer.echo(f"Error: {exc}", err=True)
             raise typer.Exit(1) from None
     return wrapped
@@ -94,7 +98,13 @@ def editable_destination(ws: Workspace, destination: Path) -> Path:
 
 
 @app.callback()
-def main(ctx: typer.Context, workspace: Annotated[Path | None, typer.Option("--workspace", "-w", help="External workspace; defaults to last imported project.")] = None):
+@handled
+def main(ctx: typer.Context,
+         workspace: Annotated[Path | None, typer.Option("--workspace", "-w", help="External workspace; defaults to last imported project.")] = None,
+         env_file: Annotated[Path | None, typer.Option("--env-file", help="Explicit private dotenv file; existing process settings take precedence. No automatic .env lookup.")] = None):
+    if env_file is not None:
+        from .config import load_env_file
+        load_env_file(env_file)
     ctx.obj = {"workspace": workspace}
 
 
@@ -105,6 +115,206 @@ def start(ctx: typer.Context, source: Annotated[str, typer.Argument(help="Local 
     ws.make_current()
     record = ws.latest("project", Project)
     output({"project": record.id, "workspace": str(ws.root), "assets": len(record.assets), "source_commit": record.source_commit, "snapshot_digest": record.snapshot_digest, "next": "paperfactory research"})
+
+
+@auto_app.command("doctor")
+@handled
+def auto_doctor():
+    """Inspect official CLI authentication and the provisioned isolated runtime."""
+    from .autonomous.provider import CodexProvider
+    from .autonomous.runner import DockerRunner
+    codex, isolation = CodexProvider().status(), DockerRunner().status()
+    output({"codex": codex, "isolation": isolation, "ready": codex.get("authentication") == "chatgpt" and codex.get("ready") and isolation.get("ready")})
+
+
+def _connection_manager():
+    from .autonomous.connection import ConnectionManager
+    from .autonomous.provider import auth_root
+    return ConnectionManager(auth_root())
+
+
+def _wait_connection(manager, *, authenticate: bool) -> dict:
+    deadline = time.monotonic() + 1080
+    previous = None
+    while time.monotonic() < deadline:
+        state = manager.status()
+        marker = (state.get("status"), state.get("user_code"), state.get("code"))
+        if marker != previous:
+            output(state)
+            previous = marker
+        if authenticate and state.get("status") == "authenticated":
+            started = manager.probe()
+            if started and started.get("code"):
+                if started["code"] != "CONNECTION_BUSY":
+                    output(started)
+                    return started
+            else:
+                authenticate = False
+        elif state.get("status") not in {"starting", "waiting_user", "authenticated", "probing"}:
+            return state
+        time.sleep(0.2)
+    manager.cancel()
+    return manager.status()
+
+
+@auto_app.command("connection")
+@handled
+def auto_connection():
+    """Show the selected official ChatGPT worker connection without a model call."""
+    manager = _connection_manager()
+    try:
+        output(manager.status())
+    finally:
+        manager.close()
+
+
+@auto_app.command("login")
+@handled
+def auto_login():
+    """Start official device login, then verify a real bounded model response."""
+    manager = _connection_manager()
+    try:
+        started = manager.login()
+        if started and started.get("code"):
+            output(started)
+            raise typer.Exit(1)
+        result = _wait_connection(manager, authenticate=True)
+        if result.get("status") != "available":
+            raise typer.Exit(1)
+    finally:
+        manager.close()
+
+
+@auto_app.command("probe")
+@handled
+def auto_probe():
+    """Explicitly verify model access for the authenticated worker connection."""
+    manager = _connection_manager()
+    try:
+        started = manager.probe()
+        if started and started.get("code"):
+            output(started)
+            raise typer.Exit(1)
+        result = _wait_connection(manager, authenticate=False)
+        if result.get("status") != "available":
+            raise typer.Exit(1)
+    finally:
+        manager.close()
+
+
+@auto_app.command("disconnect")
+@handled
+def auto_disconnect():
+    """Deactivate the managed worker connection; preserve platform authentication."""
+    manager = _connection_manager()
+    try:
+        output(manager.disconnect())
+    finally:
+        manager.close()
+
+
+@auto_app.command("login-cancel")
+@handled
+def auto_login_cancel():
+    """Cancel the pending official login or model-access verification."""
+    manager = _connection_manager()
+    try:
+        output(manager.cancel())
+    finally:
+        manager.close()
+
+
+@auto_app.command("run")
+@handled
+def auto_run(ctx: typer.Context,
+             source: Annotated[str | None, typer.Argument(help="Optional repository URL/local directory; otherwise use the selected workspace.")] = None,
+             goal: Annotated[str, typer.Option(help="Research goal; the app selects a feasible substantive controlled software study.")] = "Conduct a controlled empirical study of actual production software behavior with an independent oracle and a meaningful comparator.",
+             model: Annotated[str | None, typer.Option(help="Optional Codex model identifier; otherwise the official CLI default.")] = None,
+             max_model_calls: Annotated[int, typer.Option(min=1, max=40)] = 12,
+             repair_attempts: Annotated[int, typer.Option(min=0, max=5)] = 2,
+             wall_seconds: Annotated[int, typer.Option(min=60, max=86400)] = 3600,
+             experiment_timeout: Annotated[int, typer.Option(min=1, max=3600)] = 300):
+    """Import, design, execute, analyze, write and export one study without this chat."""
+    from .autonomous import pipeline
+    ws = project.ingest(source, ctx.obj.get("workspace")) if source else workspace(ctx)
+    record = pipeline.create(ws, goal, model=model, budget={"max_model_calls": max_model_calls, "repair_attempts": repair_attempts,
+                                                          "wall_seconds": wall_seconds, "experiment_timeout_seconds": experiment_timeout})
+    typer.echo(f"Autonomous research {record.id}; workspace {ws.root}", err=True)
+    result = pipeline.run(ws, record.id)
+    output(pipeline.status(ws, result.id))
+    if result.status != "completed":
+        raise typer.Exit(1)
+
+
+@auto_app.command("status")
+@handled
+def auto_status(ctx: typer.Context, pipeline_id: Annotated[str | None, typer.Argument()] = None):
+    from .autonomous import pipeline
+    ws = workspace(ctx)
+    output(pipeline.status(ws, pipeline_id) if pipeline_id else {"pipelines": pipeline.list_runs(ws)})
+
+
+@auto_app.command("cancel")
+@handled
+def auto_cancel(ctx: typer.Context, pipeline_id: str):
+    from .autonomous import pipeline
+    output(pipeline.cancel(workspace(ctx), pipeline_id))
+
+
+@auto_app.command("resume")
+@handled
+def auto_resume(ctx: typer.Context, pipeline_id: str):
+    from .autonomous import pipeline
+    ws = workspace(ctx)
+    record = pipeline.resume(ws, pipeline_id)
+    result = pipeline.run(ws, record.id)
+    output(pipeline.status(ws, result.id))
+    if result.status != "completed":
+        raise typer.Exit(1)
+
+
+@auto_app.command("verify")
+@handled
+def auto_verify(ctx: typer.Context, pipeline_id: str):
+    from .autonomous import pipeline
+    output(pipeline.verify(workspace(ctx), pipeline_id))
+
+
+@auto_app.command("select")
+@handled
+def auto_select(owner: str, count: Annotated[int, typer.Option(min=1, max=3)] = 3):
+    from .autonomous.repositories import select_repositories
+    output(select_repositories(owner, count=count))
+
+
+@auto_app.command("batch")
+@handled
+def auto_batch(owner: str,
+               goal: Annotated[str, typer.Option()] = "Conduct a controlled empirical study of actual production software behavior with an independent oracle and a meaningful comparator.",
+               count: Annotated[int, typer.Option(min=1, max=3)] = 3,
+               max_model_calls: Annotated[int, typer.Option(min=1, max=40)] = 12,
+               model: Annotated[str | None, typer.Option()] = None):
+    """Select repositories from a public GitHub profile and run separate studies."""
+    from .autonomous import pipeline
+    from .autonomous.repositories import select_repositories
+    selected = select_repositories(owner, count=count)
+    results = []
+    shared_blocker = None
+    for repository in selected["repositories"]:
+        if shared_blocker:
+            results.append({"repository": repository["name"], "status": "not_started", "code": "SHARED_PROVIDER_BLOCKER",
+                            "message": f"The shared subscription worker is blocked by {shared_blocker}; no additional model request was attempted."})
+            continue
+        ws = project.ingest(repository["url"])
+        record = pipeline.create(ws, goal, model=model, budget={"max_model_calls": max_model_calls})
+        result = pipeline.run(ws, record.id)
+        results.append({"repository": repository["name"], "workspace": str(ws.root), "pipeline": result.id,
+                        "status": result.status, "code": result.code, "message": result.message})
+        if result.code in {"CODEX_AUTH_REQUIRED", "SUBSCRIPTION_AUTH_REQUIRED", "AUTH_REQUIRED", "NETWORK_ERROR", "RATE_LIMITED", "CODEX_UNAVAILABLE", "CODEX_UNSUPPORTED", "ISOLATION_UNAVAILABLE", "CLEANUP_UNCONFIRMED"}:
+            shared_blocker = result.code
+    output({"selection": selected, "results": results})
+    if len(results) != count or any(item["status"] != "completed" for item in results):
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -745,6 +955,24 @@ def check_portal(ctx: typer.Context, plan: str):
     output(report)
     if not report["passed"]:
         raise typer.Exit(1)
+
+
+@app.command("serve")
+@handled
+def serve_web(
+    host: Annotated[str, typer.Option(help="Loopback address for the local research workspace.")] = "127.0.0.1",
+    port: Annotated[int, typer.Option(min=1, max=65535, help="Local HTTP server port.")] = 8765,
+    studies: Annotated[Path | None, typer.Option(help="Directory containing study artifacts and manifests.")] = None,
+    data: Annotated[Path | None, typer.Option(help="Directory for web projects and persistent jobs.")] = None,
+):
+    """Open the research workspace, run experiments and review paper artifacts."""
+    from . import web
+    from .workspace import pf_home
+
+    studies_root = studies or Path("/workspace/paper-factory-deliverables/studies")
+    data_root = data or pf_home() / "web"
+    typer.echo(f"Paper Factory research workspace: {host}, port {port}")
+    web.serve(host=host, port=port, studies_root=studies_root, data_root=data_root)
 
 
 if __name__ == "__main__":
