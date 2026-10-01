@@ -352,7 +352,6 @@ def test_manuscript_resolves_only_verified_references_and_injects_author_last(tm
     ("The fixture size was {{parameter:invented}}.", "unknown protocol"),
     ("Prior work established this {{citation:invented}}.", "unknown citation"),
     ("The mean was {{result:error.condition_1.mean } }.", "malformed"),
-    ("The difference was statistically significant.", "unsupported inferential"),
     ("Prior work is available at https://example.org.", "direct citations"),
 ])
 def test_manuscript_rejects_ungrounded_facts_without_outputs(tmp_path, protocol, observations, literature, suffix, reason):
@@ -362,6 +361,22 @@ def test_manuscript_rejects_ungrounded_facts_without_outputs(tmp_path, protocol,
     with pytest.raises(ValueError, match=reason):
         science.validate_and_render(draft, protocol, analysis, literature, tmp_path / "paper")
     assert not (tmp_path / "paper" / "manuscript.md").exists()
+
+
+@pytest.mark.parametrize("limitation", [
+    "No hypothesis tests, confidence intervals or population inference were used.",
+    "The analysis is descriptive, without confidence intervals or significance tests.",
+    "Source-call evidence does not independently prove the harness correct.",
+    "This draft makes no claim of first-ever novelty or guaranteed publication.",
+])
+def test_integrity_renderer_preserves_explicit_limits_for_scientific_review(tmp_path, protocol, observations, literature, limitation):
+    analysis = science.analyze(observations, protocol, tmp_path / "analysis")
+    draft = valid_draft()
+    draft["sections"][-1]["text"] += " " + limitation
+    rendered = science.validate_and_render(draft, protocol, analysis, literature, tmp_path / "paper")
+    assert limitation in Path(rendered["markdown_path"]).read_text(encoding="utf-8")
+    canonical = json.loads(Path(rendered["canonical_path"]).read_text(encoding="utf-8"))
+    assert canonical["scientific_review"] == "required"
 
 
 def test_metadata_is_not_reading_and_unseen_abstract_claims_are_rejected(tmp_path, protocol, observations, literature):

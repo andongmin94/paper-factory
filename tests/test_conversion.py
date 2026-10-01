@@ -67,10 +67,10 @@ def test_pdf_export_native_numbering_matches_requested_flags(source, pandoc, ena
 
 
 @pytest.mark.parametrize("suffix", [".docx", ".tex", ".pdf"])
-def test_pipe_tables_after_captions_convert_to_native_tables_without_editing_source(source, pandoc, suffix):
-    source.write_text("# Controlled results\n\nDescriptive statistics.\n"
+def test_pipe_tables_convert_to_native_tables_without_editing_source(source, pandoc, suffix):
+    source.write_text("# Controlled results\n\nDescriptive statistics.\n\n"
                       "| Metric | Condition | Count | Mean |\n| --- | --- | ---: | ---: |\n"
-                      "| accuracy | production | 12 | 1 |\n\nPaired differences.\n"
+                      "| accuracy | production | 12 | 1 |\n\nPaired differences.\n\n"
                       "| Metric | Baseline | Pairs | Mean delta |\n| --- | --- | ---: | ---: |\n"
                       "| accuracy | production | 12 | -1 |\n", encoding="utf-8")
     original = source.read_bytes()
@@ -78,8 +78,6 @@ def test_pipe_tables_after_captions_convert_to_native_tables_without_editing_sou
     receipt = conversion.convert(source, output, pandoc=pandoc)
     assert source.read_bytes() == original
     assert receipt["input_sha256"] == hashlib.sha256(original).hexdigest()
-    assert receipt["pandoc_input_sha256"] == hashlib.sha256(conversion._table_spacing(original.decode()).encode()).hexdigest()
-    assert receipt["pandoc_input_sha256"] != receipt["input_sha256"]
     if suffix == ".docx":
         from docx import Document
         tables = Document(output).tables
@@ -101,17 +99,6 @@ def test_pipe_tables_after_captions_convert_to_native_tables_without_editing_sou
     assert conversion.verify_receipts(source, {suffix[1:]: output}, receipts) == []
 
 
-def test_pipe_table_spacing_preserves_fenced_indented_and_already_spaced_code():
-    text = ("Caption\r\n\r\n| Metric | n |\r\n| --- | ---: |\r\n| x | 2 |\r\n\r\n"
-            "```markdown\nCaption\n| Metric | n |\n| --- | ---: |\n```\n\n"
-            "~~~~text\nCaption\n| Metric | n |\n| --- | ---: |\n~~~~\n\n"
-            "    Literal caption\n    | Metric | n |\n    | --- | ---: |\n")
-    assert conversion._table_spacing(text) == text
-    changed = conversion._table_spacing("Caption\n| Metric | n |\n| --- | ---: |\n| x | 2 |\n")
-    assert changed.startswith("Caption\n\n| Metric")
-    assert conversion._table_spacing(changed) == changed
-
-
 def test_trusted_statistics_renderer_separates_tables_before_pandoc_parsing(pandoc):
     from paper_factory.autonomous import science
     summaries = [{"metric": "accuracy", "condition": "production", "unit": "fraction",
@@ -119,10 +106,31 @@ def test_trusted_statistics_renderer_separates_tables_before_pandoc_parsing(pand
     paired = [{"metric": "accuracy", "condition": "ablation", "baseline": "production",
                "count": 12, "mean": -1, "median": -1, "stdev": 0, "min": -1, "max": -1}]
     text = science._tables({"summaries": summaries, "paired_deltas": paired})
-    assert conversion._table_spacing(text) == text
     parsed = subprocess.run([pandoc, "--from=markdown-smart-raw_tex-raw_html", "--to=json"],
                             input=text, text=True, capture_output=True, encoding="utf-8", check=True)
     assert sum(block["t"] == "Table" for block in json.loads(parsed.stdout)["blocks"]) == 2
+
+
+@pytest.mark.parametrize("condition_count", [2, 8])
+def test_statistics_export_keeps_long_metric_names_outside_narrow_numeric_tables(source, pandoc, condition_count):
+    from docx import Document
+    from paper_factory.autonomous import science
+
+    summaries = [{"metric": "canonicalization_invariance_with_long_identifiers", "condition": f"condition_{index}",
+                  "unit": "nanoseconds", "count": 36, "mean": 115465.25, "median": 67037.5,
+                  "stdev": 284341.7243, "min": 40880, "max": 1770754} for index in range(condition_count)]
+    paired = [{"metric": summaries[0]["metric"], "condition": "condition_1", "baseline": "condition_0",
+               "count": 36, "mean": -114053.8611, "median": -65711, "stdev": 284346.453, "min": -1769431, "max": -39989}]
+    source.write_text("# Controlled statistics\n\n" + science._tables({"summaries": summaries, "paired_deltas": paired}), encoding="utf-8")
+    output = source.with_suffix(".docx")
+    conversion.convert(source, output, pandoc=pandoc)
+    document = Document(output)
+    assert len(document.tables) == condition_count // 2 + 1
+    assert all(len(table.columns) <= 3 for table in document.tables)
+    assert summaries[0]["metric"] in " ".join(paragraph.text for paragraph in document.paragraphs)
+    for table in document.tables[:-1]:
+        assert [cell.text for cell in table.rows[2].cells] == ["Mean", "115465.25", "115465.25"]
+    assert [cell.text for cell in document.tables[-1].rows[2].cells] == ["Mean delta", "-114053.8611"]
 
 
 def test_missing_converter_cannot_leave_a_stale_successful_artifact(source, monkeypatch):

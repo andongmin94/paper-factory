@@ -1,8 +1,6 @@
 """Use Pandoc and Typst, rather than implementing document conversion/rendering."""
 
-import hashlib
 import json
-import re
 import shutil
 import subprocess
 from datetime import datetime, timezone
@@ -80,28 +78,6 @@ def pandoc_binary(explicit: str | None = None) -> str:
     return str(Path(binary).resolve())
 
 
-def _table_spacing(markdown: str) -> str:
-    """Separate pipe tables from preceding prose without touching literal code."""
-    lines = markdown.splitlines(keepends=True)
-    separator = re.compile(r"^ {0,3}\|(?:\s*:?-{3,}:?\s*\|)+\s*$")
-    fence = None
-    parts = []
-    for index, line in enumerate(lines):
-        marker = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line.rstrip("\r\n"))
-        if marker:
-            token, tail = marker.groups()
-            if fence is None:
-                fence = (token[0], len(token))
-            elif token[0] == fence[0] and len(token) >= fence[1] and not tail.strip():
-                fence = None
-        elif (fence is None and re.match(r"^ {0,3}\|.*\|\s*$", line.rstrip("\r\n"))
-              and index + 1 < len(lines) and separator.fullmatch(lines[index + 1].rstrip("\r\n"))
-              and index > 0 and lines[index - 1].strip()):
-            parts.append("\n")
-        parts.append(line)
-    return "".join(parts)
-
-
 def convert(markdown: Path, output: Path, *, pandoc: str | None = None, bibliography: Path | None = None, csl: Path | None = None, metadata: dict | None = None, line_numbers: bool = False, page_numbers: bool = True) -> dict:
     suffix = output.suffix.lower()
     if suffix not in {".pdf", ".tex", ".docx"}:
@@ -111,12 +87,8 @@ def convert(markdown: Path, output: Path, *, pandoc: str | None = None, bibliogr
     target = output.with_suffix(".typ") if suffix == ".pdf" else output
     target.unlink(missing_ok=True)
     binary = pandoc_binary(pandoc)
-    source_data = markdown.read_bytes()
-    source_digest = hashlib.sha256(source_data).hexdigest()
-    pandoc_input = _table_spacing(source_data.decode("utf-8"))
-    if digest_file(markdown) != source_digest:
-        raise ValueError("Manuscript changed while preparing the conversion input")
-    command = [binary, "-", "--from=markdown-smart-raw_tex-raw_html", "--standalone", "--to=" + {".pdf": "typst", ".tex": "latex", ".docx": "docx"}[suffix], "-o", str(target.resolve())]
+    source_digest = digest_file(markdown)
+    command = [binary, str(markdown.resolve()), "--from=markdown-smart-raw_tex-raw_html", "--standalone", "--to=" + {".pdf": "typst", ".tex": "latex", ".docx": "docx"}[suffix], "-o", str(target.resolve())]
     if bibliography:
         command += ["--citeproc", "--bibliography", str(bibliography.resolve())]
     if csl:
@@ -144,7 +116,7 @@ def convert(markdown: Path, output: Path, *, pandoc: str | None = None, bibliogr
     else:
         command += ["-V", "geometry:margin=1in"]
     try:
-        result = subprocess.run(command, input=pandoc_input, cwd=markdown.parent, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, check=False)
+        result = subprocess.run(command, cwd=markdown.parent, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, check=False)
     except subprocess.TimeoutExpired as exc:
         target.unlink(missing_ok=True)
         raise ValueError("Pandoc conversion timed out after 120 seconds") from exc
@@ -189,5 +161,4 @@ def convert(markdown: Path, output: Path, *, pandoc: str | None = None, bibliogr
         output.unlink(missing_ok=True)
         raise ValueError("Manuscript changed during conversion")
     return {"command": command, "engine": engine, "input_sha256": source_digest,
-            "pandoc_input_sha256": hashlib.sha256(pandoc_input.encode("utf-8")).hexdigest(),
-            "input_normalization": "blank lines before pipe tables", "output_sha256": digest_file(output), "diagnostics": result.stderr}
+            "output_sha256": digest_file(output), "diagnostics": result.stderr}

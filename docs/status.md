@@ -33,19 +33,19 @@ Frontend readiness now follows the actual subscription provider status, includin
 an existing CLI login, and clears stale connection information after failed
 refreshes. Default web paths use the native `PF_HOME` studies/web directories.
 
-The current Windows collection contains **1,343 cases: 1,329 passed, 14 skipped,
+The current Windows collection contains **1,362 cases: 1,348 passed, 14 skipped,
 0 failed and 0 uncovered**. Complete fresh file shards and final affected reruns
 were deduplicated against the exact current collection. Per-case evidence is
 preserved at
 `C:/Users/Public/Documents/ESTsoft/CreatorTemp/paperfactory-code-cleanup-verification/result.json`.
 
 The first live PDF exposed missing blank lines between trusted statistical
-captions and pipe tables. Rendering now writes valid table separation; conversion
-also records any whitespace normalization of its Pandoc input while preserving
-the original manuscript bytes and digest. Native PDF/Typst, Word and LaTeX
-regressions verify real tables and preserved literal code. The conversion report
-passed 17 cases, and the affected scientific renderer plus completed synthetic
-pipeline export/recompute report passed 110 cases. Reproduction packages now
+captions and pipe tables, followed by overlapping long identifiers in wide
+native tables. Rendering now uses valid, narrow statistic-by-condition tables
+with at most three columns and unchanged numeric values. Conversion reads the
+actual Markdown directly and refuses a manuscript changed during conversion;
+the temporary normalization fallback was removed. Native PDF/Typst, Word and
+LaTeX regressions plus completed export/recompute passed 19 cases. Reproduction packages now
 include repository URL, pinned commit, snapshot digest and retained license/notice
 paths in an inventoried source-provenance record, with license assessment
 explicitly unperformed. Two repository/notice variants passed native export and
@@ -53,6 +53,32 @@ independent verification. Their first run omitted the test's Pandoc environment;
 the corrected run then encountered one transient Windows lock on a verification
 PNG during temporary-directory cleanup. A complete focused repeat passed both;
 no cleanup or scientific gate was relaxed. Original reports remain preserved.
+
+Two further live failures were reproduced with separate synthetic workers.
+Python's deep-recursion profile error silently detached its callback; the
+driver now marks that trace incomplete, and both analysis and independent
+verification refuse incomplete or absent continuity records without remeasuring.
+Windows Python's special `mkdir(0700)` DACL also removed the AppContainer SID
+from newly created temporary directories. A Windows-only bootstrap preserves
+the existing private inherited ACL for that mode strictly inside the captured
+work, output and temporary roots. Environment changes, different drives, path
+prefixes and parent traversal cannot expand its scope. No host ACL or network
+permission is added. The native/Docker runner report passed 110 cases, including
+actual AppContainer recursion and temporary-directory byte roundtrips, source
+immutability, private/network denial and confirmed cleanup. An initial driver
+unit fixture omitted the required PF_WORK environment; correcting that fixture
+produced the complete passing report.
+
+Live manuscripts also exposed a phrase regex that rejected explicit statements
+that confidence intervals, novelty and guarantees were absent. That unsound
+meaning check was removed. Numeric placeholders and inspected-citation integrity
+remain strict; the mandatory independent scientific review decides interpretation
+and must accept with no issues before export. Its prompt explicitly covers
+unsupported confidence intervals and p-values and distinguishes denied claims.
+The affected science/pipeline report passed 174 cases, including positive
+unsupported claims rejected before export even when a reviewer returned an
+acceptance flag with issues. Completed experiment evidence is never regenerated
+to repair prose.
 
 The initial broad run exposed an obsolete Docker fixture substring assertion;
 the corrected test checks actual mounts and environment bindings. One fake CLI

@@ -277,6 +277,101 @@ def _real_native_worker():
     return runner, status
 
 
+def test_private_mkdir_adapter_is_scoped_to_captured_windows_roots():
+    import ast
+    import ntpath
+    from types import SimpleNamespace
+    from paper_factory.autonomous.runner import _PYTHON_DRIVER
+
+    calls = []
+    environment = {"PF_WORK": r"C:\sandbox\work", "PF_OUTPUT_ROOT": r"C:\sandbox\output",
+                   "TEMP": r"C:\sandbox\temp"}
+    def mkdir(path, mode=0o777, *, dir_fd=None):
+        calls.append((path, mode, dir_fd))
+    isolated_os = SimpleNamespace(name="nt", mkdir=mkdir, environ=environment,
+                                  path=ntpath, fsdecode=os.fsdecode)
+    setup = next(node for node in ast.parse(_PYTHON_DRIVER).body if isinstance(node, ast.If))
+    # Execute only the trusted bootstrap with a recording OS, never research code.
+    exec(compile(ast.Module(body=[setup], type_ignores=[]), "trusted-mkdir-bootstrap", "exec"), {"os": isolated_os})
+    environment.update(PF_WORK=r"D:\private", PF_OUTPUT_ROOT=r"C:\sandbox\source", TEMP=r"C:\outside")
+    cases = [
+        (r"C:\sandbox\work\nested", 0o700, None, 0o777),
+        (r"C:\SANDBOX\OUTPUT\nested", 0o700, None, 0o777),
+        (b"C:\\sandbox\\temp\\nested", 0o700, None, 0o777),
+        (r"C:\sandbox\work\..\source\nested", 0o700, None, 0o700),
+        (r"C:\sandbox\work-other\nested", 0o700, None, 0o700),
+        (r"C:\sandbox\work", 0o700, None, 0o700),
+        (r"D:\private\nested", 0o700, None, 0o700),
+        (r"C:\outside\nested", 0o700, None, 0o700),
+        (r"C:\sandbox\source\nested", 0o700, None, 0o700),
+        (r"C:\sandbox\work\nested", 0o750, None, 0o750),
+        (r"C:\sandbox\work\nested", 0o700, 3, 0o700),
+    ]
+    for path, mode, dir_fd, expected in cases:
+        isolated_os.mkdir(path, mode, dir_fd=dir_fd)
+        assert calls[-1] == (path, expected, dir_fd)
+    posix_os = SimpleNamespace(name="posix", mkdir=mkdir)
+    exec(compile(ast.Module(body=[setup], type_ignores=[]), "trusted-mkdir-bootstrap", "exec"), {"os": posix_os})
+    assert posix_os.mkdir is mkdir
+
+
+def test_actual_native_temporary_directories_inherit_private_acl_without_expanding_roots(tmp_path):
+    runner, _ = _real_native_worker()
+    source, code, output = (tmp_path / name for name in ("source", "code", "output"))
+    source.mkdir()
+    code.mkdir()
+    original = b"def transform(value):\n    return value + 1\n"
+    (source / "production.py").write_bytes(original)
+    private = tmp_path / "private-outside"
+    private.mkdir()
+    windows_runtime.private_path(private)
+    code_text = '''import json, os, pathlib, sys, tempfile
+sys.path.insert(0, os.environ['PF_SOURCE_ROOT'])
+from production import transform
+output = pathlib.Path(os.environ['PF_OUTPUT_ROOT'])
+work = pathlib.Path(os.environ['PF_WORK'])
+source = pathlib.Path(os.environ['PF_SOURCE_ROOT'])
+code = pathlib.Path(os.environ['PF_CODE_ROOT'])
+result = {'value': transform(1), 'temporary_directories': {}}
+for label, root in [('work', work), ('output', output), ('default', None)]:
+    with tempfile.TemporaryDirectory(prefix='native-temp-', dir=root) as directory:
+        folder = pathlib.Path(directory)
+        nested = folder / 'mode-0700'
+        nested.mkdir(mode=0o700)
+        data = nested / 'input.bin'
+        data.write_bytes(b'temporary data roundtrip')
+        result['temporary_directories'][label] = {'roundtrip': data.read_bytes() == b'temporary data roundtrip'}
+    result['temporary_directories'][label]['cleanup'] = not folder.exists()
+os.environ['PF_WORK'] = str(source)
+os.environ['PF_OUTPUT_ROOT'] = str(code)
+os.environ['TEMP'] = PRIVATE_OUTSIDE
+result['outside_denied'] = {}
+for label, folder in [('source', source / 'forbidden'), ('code', code / 'forbidden'),
+                      ('private', pathlib.Path(PRIVATE_OUTSIDE) / 'forbidden'),
+                      ('escape', work / '..' / 'source' / 'forbidden')]:
+    try:
+        os.mkdir(folder, 0o700)
+        result['outside_denied'][label] = False
+    except PermissionError:
+        result['outside_denied'][label] = True
+output.joinpath('observations.json').write_text(json.dumps(result), encoding='utf-8')
+'''.replace("PRIVATE_OUTSIDE", repr(str(private)))
+    (code / "experiment.py").write_text(code_text, encoding="utf-8")
+    result = runner.run(source, code, output, runtime="python", entrypoint="experiment.py", timeout_seconds=30,
+                        production_entrypoint="production.py:transform")
+    assert result["status"] == "succeeded" and result["exit_code"] == 0, result["stderr"]
+    assert result["cleanup_confirmed"] is True
+    assert json.loads(Path(result["output_path"]).read_text(encoding="utf-8")) == {
+        "value": 2,
+        "temporary_directories": {name: {"roundtrip": True, "cleanup": True} for name in ("work", "output", "default")},
+        "outside_denied": {name: True for name in ("source", "code", "private", "escape")},
+    }
+    assert result["production_calls"] == [{"path": "production.py", "function": "transform", "calls": 1}]
+    assert (source / "production.py").read_bytes() == original
+    assert not (source / "forbidden").exists() and not (code / "forbidden").exists()
+    assert not list(private.iterdir())
+
+
 def test_actual_native_python_denies_private_reads_writes_network_and_host_environment(tmp_path):
     import socket
     runner, _ = _real_native_worker()
@@ -401,6 +496,36 @@ def test_actual_native_node_records_production_calls(tmp_path):
     assert result["cleanup_confirmed"] is True
     assert json.loads(Path(result["output_path"]).read_text(encoding="utf-8")) == {"value": 3}
     assert result["production_calls"] == [{"path": "production.js", "function": "transform", "calls": 1}]
+
+
+def test_actual_native_recursion_profile_loss_retains_raw_and_marks_coverage_incomplete(tmp_path):
+    runner, _ = _real_native_worker()
+    source, code, output = (tmp_path / name for name in ("source", "code", "output"))
+    source.mkdir()
+    code.mkdir()
+    (source / "production.py").write_text(
+        "def marker(): return 1\n"
+        "def recurse(depth):\n"
+        "    if depth: return recurse(depth - 1)\n"
+        "    return 0\n", encoding="utf-8")
+    (code / "experiment.py").write_text(
+        "import json, os, pathlib, sys\n"
+        "sys.path.insert(0, os.environ['PF_SOURCE_ROOT'])\n"
+        "import production\n"
+        "raw = {'profile_before': sys.getprofile() is not None, 'markers': production.marker()}\n"
+        "try: production.recurse(sys.getrecursionlimit() + 100)\n"
+        "except RecursionError: raw['exception'] = 'RecursionError'\n"
+        "raw['profile_after'] = sys.getprofile() is not None\n"
+        "raw['markers'] += production.marker()\n"
+        "pathlib.Path(os.environ['PF_OUTPUT_ROOT'], 'observations.json').write_text(json.dumps(raw), encoding='utf-8')\n",
+        encoding="utf-8")
+    result = runner.run(source, code, output, runtime="python", entrypoint="experiment.py", timeout_seconds=20,
+                        production_entrypoint="production.py:marker")
+    assert result["status"] == "succeeded" and result["cleanup_confirmed"] is True, result["stderr"]
+    assert result["coverage_truncated"] is True
+    raw = json.loads(Path(result["output_path"]).read_text(encoding="utf-8"))
+    assert raw == {"profile_before": True, "markers": 2, "exception": "RecursionError", "profile_after": False}
+    assert next(call["calls"] for call in result["production_calls"] if call["function"] == "marker") == 1
 
 
 def test_actual_native_cancellation_terminates_descendant(tmp_path):

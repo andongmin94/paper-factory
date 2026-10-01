@@ -466,3 +466,41 @@ def test_accepts_node_entrypoint_extensions(fake_runner, inputs, extension):
 def test_rejects_invalid_selected_production_entrypoint(inputs, selected):
     with pytest.raises(ValueError, match="production entrypoint"):
         DockerRunner(IMAGE).run(*inputs, runtime="python", entrypoint="experiment.py", production_entrypoint=selected)
+
+
+@pytest.mark.parametrize("deep", [False, True], ids=["continuous", "recursion-detached"])
+def test_python_driver_reports_detached_profile_without_discarding_output(tmp_path, deep):
+    source, code, output = (tmp_path / name for name in ("source", "code", "output"))
+    work, temporary = tmp_path / "work", tmp_path / "temp"
+    for path in (source, code, output, work, temporary):
+        path.mkdir()
+    (source / "production.py").write_text(
+        "def marker(): return 1\n"
+        "def recurse(depth):\n"
+        "    if depth: return recurse(depth - 1)\n"
+        "    return 0\n", encoding="utf-8")
+    (code / "probe.py").write_text(
+        "import json, os, pathlib, sys\n"
+        "sys.path.insert(0, os.environ['PF_SOURCE_ROOT'])\n"
+        "import production\n"
+        "result = {'before': sys.getprofile() is not None, 'markers': production.marker()}\n"
+        f"depth = {'sys.getrecursionlimit() + 100' if deep else '32'}\n"
+        "try: production.recurse(depth)\n"
+        "except RecursionError: result['exception'] = 'RecursionError'\n"
+        "result['after'] = sys.getprofile() is not None\n"
+        "result['markers'] += production.marker()\n"
+        "pathlib.Path(os.environ['PF_OUTPUT_ROOT'], 'observations.json').write_text(json.dumps(result), encoding='utf-8')\n",
+        encoding="utf-8")
+    completed = subprocess.run(
+        [sys.executable, "-I", "-B", "-c", module._PYTHON_DRIVER, str(code / "probe.py")],
+        env={**os.environ, "PF_SOURCE_ROOT": str(source), "PF_OUTPUT_ROOT": str(output),
+             "PF_WORK": str(work), "TEMP": str(temporary)},
+        capture_output=True, text=True, timeout=20, check=False)
+    assert completed.returncode == 0, completed.stderr
+    raw = json.loads((output / "observations.json").read_text(encoding="utf-8"))
+    trace = json.loads((output / ".paper-factory-python-calls.json").read_text(encoding="utf-8"))
+    assert raw["markers"] == 2 and raw["before"] is True
+    assert raw["after"] is not deep
+    assert (raw.get("exception") == "RecursionError") is deep
+    assert trace["truncated"] is deep
+    assert next(call["calls"] for call in trace["calls"] if call["function"] == "marker") == (1 if deep else 2)

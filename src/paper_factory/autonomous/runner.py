@@ -50,6 +50,25 @@ _PYTHON_DRIVER = r'''
 import json, os, pathlib, runpy, sys, threading
 source = pathlib.Path(os.environ['PF_SOURCE_ROOT']).resolve()
 output = pathlib.Path(os.environ['PF_OUTPUT_ROOT'])
+if os.name == 'nt':
+    def inherit_private_directory_acl():
+        # Windows 0700 replaces the inherited DACL and drops the AppContainer SID.
+        # Other modes inherit the controller's private writable-root permissions.
+        mkdir = os.mkdir
+        roots = tuple(os.path.normcase(os.path.abspath(os.environ[name]))
+                      for name in ('PF_WORK', 'PF_OUTPUT_ROOT', 'TEMP'))
+        def private_mkdir(path, mode=0o777, *, dir_fd=None):
+            if type(mode) is int and mode == 0o700 and dir_fd is None:
+                try:
+                    candidate = os.path.normcase(os.path.abspath(os.fsdecode(path)))
+                    if any(candidate != root and os.path.commonpath((candidate, root)) == root
+                           for root in roots):
+                        mode = 0o777
+                except (TypeError, ValueError):
+                    pass
+            return mkdir(path, mode, dir_fd=dir_fd)
+        os.mkdir = private_mkdir
+    inherit_private_directory_acl()
 calls, filenames = {}, {}
 truncated = False
 def profile(frame, event, argument):
@@ -79,6 +98,9 @@ try:
     sys.path.insert(0, str(pathlib.Path(sys.argv[0]).parent))
     runpy.run_path(sys.argv[0], run_name='__main__')
 finally:
+    # Callback errors (including deep recursion) silently detach Python's hook.
+    # Retain the measured output, but never describe the partial trace as complete.
+    truncated = truncated or sys.getprofile() is not profile
     sys.setprofile(None)
     threading.setprofile(None)
     payload = {'calls':[{'path':path,'function':name,'calls':count}

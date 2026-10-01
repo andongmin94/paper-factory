@@ -154,6 +154,7 @@ class FixtureRunner:
         if self.on_run:
             self.on_run()
         return {"status": "succeeded", "simulation": True, "image_digest": "sha256:" + "1" * 64,
+                "coverage_truncated": False,
                 "production_calls": [{"path": "transform.py", "function": "transform", "calls": 6}] if self.production_calls else [],
                 "stdout": "synthetic runner fixture", "stderr": "", "exit_code": 0}
 
@@ -540,6 +541,34 @@ def test_rejected_manuscript_review_does_not_regenerate_successful_experiment(wo
     assert "manuscript" not in result.artifacts
 
 
+@pytest.mark.parametrize("claim", [
+    "The difference was statistically significant.",
+    "Confidence intervals establish a population effect.",
+    "The result guarantees first-ever novelty and guaranteed publication.",
+    "The experiment proves that the implementation is universally safe.",
+])
+@pytest.mark.parametrize("accepted", [False, True])
+def test_unsupported_positive_claims_require_clean_independent_review_before_export(workspace, components, monkeypatch, claim, accepted):
+    original = manuscript
+
+    def unsupported_draft():
+        draft = original()
+        draft["sections"][0]["text"] += " " + claim
+        return draft
+
+    monkeypatch.setattr(sys.modules[__name__], "manuscript", unsupported_draft)
+    components[0].reviews = [{"accepted": True, "issues": [], "checks": []},
+                             {"accepted": accepted, "issues": ["Unsupported positive scientific claim: " + claim], "checks": []}]
+    result = launch(workspace, components, budget={"repair_attempts": 0})
+    assert result.status == "blocked" and result.code == "MANUSCRIPT_EVIDENCE_INVALID"
+    assert result.stage == "write" and components[1].calls == 1
+    assert "analysis" in result.artifacts and "manuscript-review-1" in result.artifacts
+    assert "manuscript" not in result.artifacts and "export-pdf" not in result.artifacts
+    review_prompt = components[0].prompts[-1]
+    assert claim in review_prompt and "confidence intervals or p-values absent from the trusted analysis" in review_prompt
+    assert "Distinguish a claim" in review_prompt
+
+
 def test_missing_instrumented_production_execution_blocks_replacement_study(workspace, components):
     components[1].production_calls = False
     result = launch(workspace, components)
@@ -672,6 +701,29 @@ def test_reproduction_retains_source_identity_without_inventing_license_permissi
         assert "source-provenance.json" in archive.read("README.md").decode()
         entry = json.loads(archive.read("inventory.json"))["source-provenance.json"]
         assert entry["sha256"] == hashlib.sha256(archive.read("source-provenance.json")).hexdigest()
+
+
+@pytest.mark.parametrize("coverage_truncated", [True, None])
+def test_incomplete_profiling_blocks_without_remeasuring_or_writing(workspace, components, monkeypatch, coverage_truncated):
+    runner = components[1]
+    original_run = runner.run
+
+    def incomplete_run(*args, **kwargs):
+        receipt = original_run(*args, **kwargs)
+        if coverage_truncated is None:
+            receipt.pop("coverage_truncated")
+        else:
+            receipt["coverage_truncated"] = coverage_truncated
+        return receipt
+
+    monkeypatch.setattr(runner, "run", incomplete_run)
+    result = launch(workspace, components)
+    assert result.status == "blocked" and result.code == "PRODUCTION_EXECUTION_UNVERIFIED"
+    assert result.stage == "analyze" and runner.calls == 1
+    assert "observations" in result.artifacts and "analysis" not in result.artifacts
+    assert "ManuscriptDraft" not in components[0].calls
+    retained = pipeline._read(workspace, result, "observations")
+    assert retained == observations()
 
 
 def test_structural_repair_can_succeed_without_replanning(workspace, components, pandoc, monkeypatch):
