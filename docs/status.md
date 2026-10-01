@@ -42,7 +42,8 @@ preserved at
 The first live PDF exposed missing blank lines between trusted statistical
 captions and pipe tables, followed by overlapping long identifiers in wide
 native tables. Rendering now uses valid, narrow statistic-by-condition tables
-with at most three columns and unchanged numeric values. Conversion reads the
+with at most three columns and unchanged numeric values. Metric labels use native
+headings to keep them with the following table across page breaks. Conversion reads the
 actual Markdown directly and refuses a manuscript changed during conversion;
 the temporary normalization fallback was removed. Native PDF/Typst, Word and
 LaTeX regressions plus completed export/recompute passed 19 cases. Reproduction packages now

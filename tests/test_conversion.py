@@ -108,7 +108,12 @@ def test_trusted_statistics_renderer_separates_tables_before_pandoc_parsing(pand
     text = science._tables({"summaries": summaries, "paired_deltas": paired})
     parsed = subprocess.run([pandoc, "--from=markdown-smart-raw_tex-raw_html", "--to=json"],
                             input=text, text=True, capture_output=True, encoding="utf-8", check=True)
-    assert sum(block["t"] == "Table" for block in json.loads(parsed.stdout)["blocks"]) == 2
+    blocks = json.loads(parsed.stdout)["blocks"]
+    assert sum(block["t"] == "Table" for block in blocks) == 2
+    for index, block in enumerate(blocks):
+        if block["t"] == "Table":
+            assert blocks[index - 1]["t"] == "Header"
+            assert blocks[index - 1]["c"][0] == 3
 
 
 @pytest.mark.parametrize("condition_count", [2, 8])
@@ -128,6 +133,9 @@ def test_statistics_export_keeps_long_metric_names_outside_narrow_numeric_tables
     assert len(document.tables) == condition_count // 2 + 1
     assert all(len(table.columns) <= 3 for table in document.tables)
     assert summaries[0]["metric"] in " ".join(paragraph.text for paragraph in document.paragraphs)
+    captions = [paragraph for paragraph in document.paragraphs if paragraph.text.startswith("Metric:")]
+    assert len(captions) == 2 and all(paragraph.style.name == "Heading 3" for paragraph in captions)
+    assert all(paragraph.style.paragraph_format.keep_with_next for paragraph in captions)
     for table in document.tables[:-1]:
         assert [cell.text for cell in table.rows[2].cells] == ["Mean", "115465.25", "115465.25"]
     assert [cell.text for cell in document.tables[-1].rows[2].cells] == ["Mean delta", "-114053.8611"]

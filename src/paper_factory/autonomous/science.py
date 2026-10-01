@@ -566,7 +566,7 @@ def _tables(analysis: dict) -> str:
     parts = ["Descriptive statistics of the measured observations.", ""]
     for metric in dict.fromkeys(row["metric"] for row in analysis["summaries"]):
         rows = [row for row in analysis["summaries"] if row["metric"] == metric]
-        parts += [f"**Metric:** {_cell(metric)}. **Unit:** {_cell(rows[0]['unit'])}.", ""]
+        parts += [f"### Metric: {_cell(metric)}. Unit: {_cell(rows[0]['unit'])}.", ""]
         # Keep native tables narrow enough for portrait pages and full numeric values.
         for start in range(0, len(rows), 2):
             group = rows[start:start + 2]
@@ -577,7 +577,7 @@ def _tables(analysis: dict) -> str:
             parts.append("")
     parts += ["Paired differences are condition minus the first protocol condition.", ""]
     for row in analysis["paired_deltas"]:
-        parts += [f"**Metric:** {_cell(row['metric'])}. **Difference:** {_cell(row['condition'])} minus {_cell(row['baseline'])}.", "",
+        parts += [f"### Metric: {_cell(row['metric'])}. Difference: {_cell(row['condition'])} minus {_cell(row['baseline'])}.", "",
                   "| Statistic | Value |", "| --- | ---: |"]
         for label, key in statistics:
             label = {"Count": "Pairs", "Mean": "Mean delta", "Median": "Median delta"}.get(label, label)
