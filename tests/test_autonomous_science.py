@@ -8,8 +8,11 @@ import sys
 from pathlib import Path
 
 import pytest
+from jsonschema import Draft202012Validator
+from pydantic import ValidationError
 
 from paper_factory.autonomous.models import ResearchPlan
+from paper_factory.autonomous.provider import _wire_schema
 from paper_factory.autonomous import science
 from paper_factory.project import inventory
 
@@ -32,6 +35,34 @@ def protocol():
         limitations=["Synthetic cases cannot establish behavior in natural input populations.", "One source snapshot does not establish universal software correctness."],
         literature_queries=["software testing independent oracle controlled study"],
     )
+
+
+@pytest.mark.parametrize("condition,accepted", [
+    ("", False),
+    ("x", True),
+    ("x" * 80, True),
+    ("x" * 81, False),
+    ("\uac00" * 80, True),
+    ("\uac00" * 81, False),
+], ids=["empty", "minimum", "maximum", "over-maximum", "unicode-maximum", "unicode-over-maximum"])
+def test_condition_name_boundaries_match_model_and_actual_wire_schema(protocol, condition, accepted):
+    schema = ResearchPlan.model_json_schema()
+    wire_schema = _wire_schema(schema)
+    expected_item = {"type": "string", "minLength": 1, "maxLength": 80}
+    assert schema["properties"]["conditions"]["items"] == expected_item
+    assert wire_schema["properties"]["conditions"]["items"] == expected_item
+    original = protocol.model_dump(mode="json")
+    original["conditions"] = [condition, "comparator"]
+    wire = {**original, "parameters": [{"key": key, "value": value}
+                                      for key, value in original["parameters"].items()]}
+    assert Draft202012Validator(schema).is_valid(original) is accepted
+    assert Draft202012Validator(wire_schema).is_valid(wire) is accepted
+    if accepted:
+        assert ResearchPlan.model_validate(original).conditions == original["conditions"]
+    else:
+        with pytest.raises(ValidationError) as raised:
+            ResearchPlan.model_validate(original)
+        assert raised.value.errors()[0]["loc"] == ("conditions", 0)
 
 
 @pytest.fixture

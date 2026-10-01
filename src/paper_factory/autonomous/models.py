@@ -1,6 +1,6 @@
 """Typed contracts shared by research workers, model adapters and the web UI."""
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, field_validator, model_validator
 
@@ -30,7 +30,7 @@ class ResearchPlan(Record):
     source_files: list[str] = Field(min_length=1, max_length=20)
     production_entrypoint: str = Field(default="", max_length=300)
     dependencies: list[str] = Field(default_factory=list, max_length=20)
-    conditions: list[str] = Field(min_length=2, max_length=6)
+    conditions: list[Annotated[str, Field(min_length=1, max_length=80)]] = Field(min_length=2, max_length=6)
     metrics: list[Measure] = Field(min_length=1, max_length=8)
     comparator: str = Field(min_length=12, max_length=3000)
     independent_oracle: str = Field(min_length=12, max_length=3000)
@@ -48,8 +48,6 @@ class ResearchPlan(Record):
         for values in (self.conditions, self.seeds, self.source_files, [m.name for m in self.metrics]):
             if len(values) != len(set(values)):
                 raise ValueError("Protocol identifiers, conditions, seeds and metrics must be distinct")
-        if any(not value or len(value) > 80 for value in self.conditions):
-            raise ValueError("Conditions must be nonempty bounded names")
         if any(len(key) > 100 or not key for key in self.parameters):
             raise ValueError("Protocol parameter names must be bounded")
         return self
