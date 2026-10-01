@@ -372,6 +372,15 @@ def test_repeated_code_review_rejection_exhausts_repairs_without_execution(works
     assert provider.calls.count("ScientificReview") == 3
     assert provider.calls.count("ResearchPlan") == 1
     assert runner.calls == 0
+    review_prompts = [prompt for label, prompt in zip(provider.calls, provider.prompts, strict=True) if label == "ScientificReview"]
+    assert len(review_prompts) == 3
+    for prompt in review_prompts:
+        assert "BEFORE execution" in prompt and "static code audit" in prompt
+        assert "derive and retain genuine measurements when run" in prompt
+        assert "Do not demand observations.json or an execution receipt" in prompt
+        assert "A static acceptance does not establish execution or successful results" in prompt
+        assert "actual controls" in prompt and "raw sampling matrix" in prompt
+        assert "production-call trace, runtime limits and retained fixture bytes" in prompt
     assert not any(key.startswith(("execution", "observations")) for key in result.artifacts)
     assert {f"bundle-{attempt}" for attempt in range(1, 4)} <= set(result.artifacts)
     assert {f"code-review-{attempt}" for attempt in range(1, 4)} <= set(result.artifacts)

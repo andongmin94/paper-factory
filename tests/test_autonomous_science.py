@@ -472,6 +472,15 @@ def test_model_prompts_explain_existing_protocol_and_generation_boundaries(proto
     assert "its execution receipt satisfies" in generation
     assert "reset or disable the controller's profiler" in generation
     assert "sys.setprofile, threading.setprofile, or node:inspector Profiler" in generation
+    for prompt in (planning, generation):
+        assert "native direct import of the original" in prompt
+        assert "controller-verified Node runtime supports its syntax and" in prompt
+        for forbidden in ("stripTypeScriptTypes", "generated transpiled copies", "eval", "data URLs", "sourceURL", "coverage-origin reassociation"):
+            assert forbidden in prompt
+        assert "source-preserving resolver for existing relative or alias" in prompt
+        assert "file origins and native" in prompt
+        assert "Unsupported native syntax or unavailable dependencies make the study" in prompt
+        assert "copied-source fallback" in prompt
 
 
 def test_real_failed_controls_are_distinct_from_repairable_format_errors(tmp_path, protocol, observations):

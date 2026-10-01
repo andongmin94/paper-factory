@@ -129,6 +129,13 @@ the configured `TEMP` as writable locations and requires reading their exact
 environment paths. The focused prompt contract checks passed twice; the failed
 bundle and execution receipt remain preserved for the ordinary repair process.
 
+Two preexecution reviewers demanded run artifacts before approving execution.
+The review prompt now explicitly audits proposed code before execution; actual
+controls, raw rows, source calls and retained bytes remain later controller gates.
+TypeScript studies must import the original source through supported native
+execution rather than data URLs, stripped copies or reassociated coverage origins.
+Focused rejection and prompt regressions passed without relaxing runtime gates.
+
 ## Native Windows verification
 
 Windows automatic research selects AppContainer and a bounded Job Object.

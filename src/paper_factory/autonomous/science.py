@@ -170,6 +170,15 @@ calling a toy reimplementation 'production' are not research studies. If there
 is no feasible experiment, return a feasibility rejection with its concrete
 reason rather than an invented paper. Limit the scope to installed Python or
 Node runtimes and bounded fixture-based software experiments.
+For TypeScript production source, require a native direct import of the original
+.ts file only when the controller-verified Node runtime supports its syntax and
+dependencies, such as supported erasable type-only syntax. Do not plan
+stripTypeScriptTypes, generated transpiled copies, eval, data URLs, sourceURL
+comments or coverage-origin reassociation to claim execution of the original
+file. A source-preserving resolver for existing relative or alias module paths
+is allowed only if it preserves the original file origins and native execution.
+Unsupported native syntax or unavailable dependencies make the study infeasible;
+report that concrete reason rather than substituting a copied-source fallback.
 
 Freeze the exact conditions, scalar metric definitions and units, seed list,
 sample units per seed, source files, production entry point, and resources BEFORE
@@ -238,6 +247,14 @@ harness importing original TypeScript still needs a JavaScript entrypoint;
 do not generate .ts or .tsx files. All generated file contents together must
 fit within 512 KiB (524288 UTF-8 bytes); each file also has a 262144-character
 limit. Keep code compact rather than embedding large generated fixtures in it.
+For TypeScript production source, use a native direct import of the original .ts
+file only when the controller-verified Node runtime supports its syntax and
+dependencies. Do not use stripTypeScriptTypes, generated transpiled copies, eval,
+data URLs, sourceURL comments or coverage-origin reassociation to claim original
+file execution. A source-preserving resolver for existing relative or alias
+module paths is allowed only if it preserves original file origins and native
+execution. Unsupported native syntax or unavailable dependencies make the study
+infeasible; do not substitute a copied-source fallback.
 Import and actually call the declared production_entrypoint for each production
 measurement. The controller records a runtime source-invocation trace separately
 from model-authored observations. Merely opening a source file or writing its

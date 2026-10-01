@@ -430,10 +430,14 @@ def run(ws: Workspace, pipeline_id: str, *, provider=None, runner=None) -> Pipel
                         attempt.ended_at = now()
                         checkpoint()
                         continue
-                    review_prompt = ("Independently audit this proposed experiment against its frozen protocol and actual production source. "
-                                     "Return ScientificReview JSON. Accept only if it calls the declared production callable, independently computes the oracle, "
-                                     "uses the frozen conditions, seeds, unit counts and metrics, and records actual measurements. "
-                                     "Check that observations.json includes a nonempty fixtures array retaining the exact input, mutation-log, "
+                    review_prompt = ("Independently audit this proposed experiment BEFORE execution against its frozen protocol and actual production source. "
+                                     "This is a static code audit: determine whether the code will derive and retain genuine measurements when run. "
+                                     "Do not demand observations.json or an execution receipt that cannot exist before this audit approves execution. "
+                                     "A static acceptance does not establish execution or successful results. The controller later verifies actual controls, "
+                                     "the raw sampling matrix, production-call trace, runtime limits and retained fixture bytes before permitting a manuscript. "
+                                     "Return ScientificReview JSON. Accept only if the code calls the declared production callable, independently computes the oracle, "
+                                     "uses the frozen conditions, seeds, unit counts and metrics, and measures actual outputs when run. "
+                                     "Check that the code will emit observations.json with a nonempty fixtures array retaining the exact input, mutation-log, "
                                      "oracle-expectation and manifest bytes in Base64 with matching SHA-256. Other worker output files are not preserved. "
                                      "The controller's execution receipt supplies production-call profiling; reject competing profiler or coverage "
                                      "sessions that reset or disable it, including sys.setprofile, threading.setprofile or node:inspector Profiler operations. "
