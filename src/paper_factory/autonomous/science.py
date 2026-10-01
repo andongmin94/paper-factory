@@ -427,7 +427,10 @@ interpretation and threats to validity rather than repeating generic filler.
 
 Every numeric fact MUST be inserted using {{result:key}} or {{parameter:key}};
 literal digits in section prose are rejected, including years, percentages,
-sample counts and software versions. Every literature citation MUST use
+sample counts and software versions. The exact standalone technology names V8
+and NODE_V8_COVERAGE are allowed as names, not measured quantities; literal
+numbers and software versions still require verified placeholders.
+Every literature citation MUST use
 {{citation:id}} and its substantive statement must be supported by the supplied
 excerpt. DOI metadata alone cannot support a Related Work claim. Do not invent
 references, results, confidence intervals, p-values, causal effects or novelty.
@@ -766,7 +769,14 @@ def _plain_number_guard(text: str, heading: str) -> list[str]:
     errors = []
     if "{{" in plain or "}}" in plain:
         errors.append(f"{heading}: malformed or unsupported evidence placeholder")
-    if re.search(r"\d", plain):
+    # Only standalone names of the actual coverage technology are not quantities.
+    # Match them before removing placeholders, which must not manufacture a name.
+    # Keep the original prose for citation/link checks below.
+    numerical_prose = PLACEHOLDER.sub("", re.sub(
+        r"(?<![^\s('\"`])(?:V8|NODE_V8_COVERAGE)"
+        r"(?![)'\"`][\w%])(?=$|[\s,;:)'\"`]|[.!?](?=\s|$))", "", text,
+    ))
+    if re.search(r"\d", numerical_prose):
         errors.append(f"{heading}: literal numerical facts require result or parameter placeholders")
     if re.search(r"(?:https?://|doi\s*:|\[@|\[[A-Za-z][^\]]*\d|<script|<iframe|!\[)", plain, re.I):
         errors.append(f"{heading}: direct citations, external embeds or raw links must use verified references")

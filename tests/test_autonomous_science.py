@@ -401,6 +401,48 @@ def test_manuscript_rejects_ungrounded_facts_without_outputs(tmp_path, protocol,
     assert not (tmp_path / "paper" / "manuscript.md").exists()
 
 
+@pytest.mark.parametrize("text", [
+    "V8", "NODE_V8_COVERAGE", "Node V8 coverage; receipt evidence.",
+    "The mechanism is `NODE_V8_COVERAGE`.", "The mechanism (V8) is aggregate.",
+    "The engine is V8.",
+])
+def test_number_guard_allows_standalone_actual_coverage_technology(text):
+    assert science._plain_number_guard(text, "Method") == []
+
+
+@pytest.mark.parametrize("text", [
+    "V8 coverage observed 2 calls.", "NODE_V8_COVERAGE observed 8 calls.",
+    "V8 coverage observed 80 percent.", "V8 coverage observed eight percent.",
+    "Node 26.3.0 uses V8.", "V9", "NODE_V9_COVERAGE", "v8", "V80", "V8.2",
+    "prefixV8", "V8identifier", "NODE_V8_COVERAGE_EXTRA", "V8.alpha", "V8-coverage",
+    "V8ms", "V8%", "NODE_V8_COVERAGE%", "V8/second", "$V8", "V8@scope",
+    "`V8`%", "`V8`ms", "(V8)%", "V8's",
+    "V{{parameter:setting.fixture_size}}8", "NODE_V{{parameter:setting.fixture_size}}8_COVERAGE",
+])
+def test_number_guard_keeps_numbers_versions_and_attached_variants(text):
+    assert science._plain_number_guard(text, "Method")
+
+
+@pytest.mark.parametrize("text", [
+    "[V8]", "[@NODE_V8_COVERAGE]", "https://example.org/V8", "doi: NODE_V8_COVERAGE",
+])
+def test_coverage_names_do_not_mask_unverified_citations_or_links(text):
+    assert any("direct citations" in error for error in science._plain_number_guard(text, "Method"))
+
+
+@pytest.mark.parametrize("heading", ["Method", "Experimental Setup", "Threats to Validity"])
+def test_manuscript_preserves_actual_coverage_names(tmp_path, protocol, observations, literature, heading):
+    analysis = science.analyze(observations, protocol, tmp_path / "analysis")
+    draft = valid_draft()
+    text = "Actual Node V8 coverage uses NODE_V8_COVERAGE process aggregates; it does not prove per-invocation snapshots."
+    next(section for section in draft["sections"] if section["heading"] == heading)["text"] += " " + text
+    rendered = science.validate_and_render(draft, protocol, analysis, literature, tmp_path / "paper")
+    assert "Actual Node V8 coverage" in Path(rendered["markdown_path"]).read_text(encoding="utf-8")
+    canonical = json.loads(Path(rendered["canonical_path"]).read_text(encoding="utf-8"))
+    assert canonical["sections"] == draft["sections"]
+    assert canonical["scientific_review"] == "required"
+
+
 @pytest.mark.parametrize("limitation", [
     "No hypothesis tests, confidence intervals or population inference were used.",
     "The analysis is descriptive, without confidence intervals or significance tests.",
@@ -674,6 +716,8 @@ def test_instrumented_experiments_require_methods_disclosure(tmp_path, protocol,
     prompt = science.writing_prompt(protocol, analysis, literature, execution)
     assert "{{parameter:setting.execution_instrumentation}}" in prompt
     assert "uninstrumented absolute" in prompt
+    assert "exact standalone technology names V8\nand NODE_V8_COVERAGE are allowed as names, not measured quantities" in prompt
+    assert "numbers and software versions still require verified placeholders" in prompt
     draft = valid_draft()
     with pytest.raises(ValueError, match="Method or Experimental Setup must disclose"):
         science.validate_and_render(draft, protocol, analysis, literature, tmp_path / "paper")
