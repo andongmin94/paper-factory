@@ -336,7 +336,8 @@ def collect(
                 search: dict = {"query": query, "provider": "Crossref", "status": "failed", "resolved_ids": []}
                 result["searches"].append(search)
                 try:
-                    content, url, _ = _fetch(client, CROSSREF + "/works", params={"query.bibliographic": query, "rows": limit}, cancel=cancel)
+                    content, url, _ = _fetch(client, CROSSREF + "/works", params={"query.bibliographic": query, "rows": limit,
+                                                                                 "filter": "has-abstract:true"}, cancel=cancel)
                     path, digest = _save(root, "search-" + hashlib.sha256(query.encode()).hexdigest()[:16], "json", content)
                     search.update({"url": url, "raw_path": path, "sha256": digest})
                     data = json.loads(content)
@@ -349,9 +350,8 @@ def collect(
                     search["error"] = type(error).__name__
                     result["warnings"].append(f"Crossref search failed ({type(error).__name__}); no results were inferred")
                     continue
-                # Prefer inspectable abstracts, but verify each candidate again.
-                candidates = sorted(items[:limit], key=lambda item: not (isinstance(item, dict) and item.get("abstract")))
-                for item in candidates:
+                # A search filter does not establish reading scope: resolve each DOI again.
+                for item in items[:limit]:
                     _check_cancel(cancel)
                     if sum(source["scope"] != "metadata_only" for source in result["sources"]) >= limit:
                         break

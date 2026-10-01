@@ -1,9 +1,29 @@
 from contextlib import ExitStack, closing, contextmanager
+import os
 import sqlite3
 
 import pytest
 
 from paper_factory.workspace import Workspace
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows byte-range locking regression")
+def test_empty_lock_contender_reports_concurrency_and_can_retry_after_release(tmp_path):
+    import msvcrt
+    ws = Workspace.create(tmp_path / "workspace")
+    path = ws.path("locks/study.lock")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+b") as holder:
+        msvcrt.locking(holder.fileno(), msvcrt.LK_NBLCK, 1)
+        try:
+            with pytest.raises(ValueError, match="Another operation is already running"):
+                with ws.lock("study"):
+                    pytest.fail("A competing operation acquired the held lock")
+        finally:
+            holder.seek(0)
+            msvcrt.locking(holder.fileno(), msvcrt.LK_UNLCK, 1)
+    with ws.lock("study"):
+        pass
 
 
 def test_unknown_commit_outcome_preserves_owned_artifacts(tmp_path, monkeypatch):

@@ -1,4 +1,6 @@
 """Native runner contracts using a simulated restricted worker, never host code."""
+import base64
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -86,6 +88,72 @@ def test_native_export_rejects_non_utf8_or_nonfinite_observations(native_runner,
     assert result["output_path"] is None
     assert not (native_inputs[2] / "observations.json").exists()
     assert "Native sandbox execution rejected" in result["stderr"]
+
+
+def test_native_failed_control_retains_exact_raw_observations_without_trace(native_runner, native_inputs, monkeypatch):
+    fixture = b"input=1\nexpected=3\nactual=2\n"
+    content = json.dumps({
+        "observations": [{"unit_id": "fixture-1", "seed": 0, "condition": "production", "metric": "value", "value": 2}],
+        "controls": [{"name": "positive control", "passed": False, "details": "Expected 3, observed 2"},
+                     {"name": "negative control", "passed": True, "details": "Fault detected"}],
+        "fixtures": [{"label": "raw input and result", "encoding": "base64",
+                      "content": base64.b64encode(fixture).decode("ascii"), "sha256": hashlib.sha256(fixture).hexdigest()}],
+    }, indent=2).encode("utf-8") + b"\n"
+    def launch(command, **kwargs):
+        output = Path(kwargs["environment"]["PF_OUTPUT_ROOT"])
+        (output / "observations.json").write_bytes(content)
+        return {"status": "failed", "exit_code": 1, "stdout": "positive control failed", "stderr": "",
+                "cleanup_confirmed": True}
+    monkeypatch.setattr(windows_runtime, "launch", launch)
+    result = native_runner.run(*native_inputs, runtime="python", entrypoint="experiment.py")
+    assert result["status"] == "failed" and result["exit_code"] == 1
+    assert result["cleanup_confirmed"] is True
+    assert result["stdout"] == "positive control failed"
+    assert result["output_path"] is not None, result["stderr"]
+    assert Path(result["output_path"]).read_bytes() == content
+    assert result["artifacts"] == [{"path": "observations.json", "size": len(content),
+                                    "sha256": hashlib.sha256(content).hexdigest()}]
+    assert result["production_calls"] == []
+
+
+@pytest.mark.parametrize("content", [
+    b'{"controls":',
+    '{"controls": []}'.encode("utf-16"),
+    '{"controls": []}'.encode("utf-32"),
+    b'{"observations": [{"value": NaN}]}',
+    b'{"observations": [{"value": Infinity}]}',
+    b'{"observations": [{"value": -Infinity}]}',
+    b'{"observations": [{"value": 1e999}]}',
+], ids=["malformed", "utf16", "utf32", "nan", "infinity", "negative-infinity", "overflow"])
+def test_native_failed_exit_rejects_invalid_raw_observations(native_runner, native_inputs, monkeypatch, content):
+    def launch(command, **kwargs):
+        output = Path(kwargs["environment"]["PF_OUTPUT_ROOT"])
+        (output / "observations.json").write_bytes(content)
+        return {"status": "failed", "exit_code": 1, "stdout": "", "stderr": "",
+                "cleanup_confirmed": True}
+    monkeypatch.setattr(windows_runtime, "launch", launch)
+    result = native_runner.run(*native_inputs, runtime="python", entrypoint="experiment.py")
+    assert result["status"] == "failed" and result["exit_code"] == 1
+    assert result["cleanup_confirmed"] is True
+    assert result["output_path"] is None and result["artifacts"] == []
+    assert not (native_inputs[2] / "observations.json").exists()
+
+
+@pytest.mark.parametrize("status,exit_code", [("cancelled", 1), ("timeout", 1), ("failed", None)],
+                         ids=["cancelled", "timeout", "resource-limit"])
+def test_native_interrupted_execution_discards_even_valid_raw_observations(native_runner, native_inputs, monkeypatch, status, exit_code):
+    def launch(command, **kwargs):
+        output = Path(kwargs["environment"]["PF_OUTPUT_ROOT"])
+        write_json(output / "observations.json", {"controls": [{"name": "positive control", "passed": False}]})
+        write_json(output / ".paper-factory-python-calls.json", {"calls": [], "truncated": False})
+        return {"status": status, "exit_code": exit_code, "stdout": "",
+                "stderr": "Windows experiment exceeded its log limit" if status == "failed" else "",
+                "cleanup_confirmed": True}
+    monkeypatch.setattr(windows_runtime, "launch", launch)
+    result = native_runner.run(*native_inputs, runtime="python", entrypoint="experiment.py")
+    assert result["status"] == status and result["cleanup_confirmed"] is True
+    assert result["output_path"] is None and result["artifacts"] == []
+    assert not (native_inputs[2] / "observations.json").exists()
 
 
 def test_native_cleanup_failure_preserves_staging_and_handle(native_runner, native_inputs, monkeypatch):
@@ -265,6 +333,54 @@ pathlib.Path(os.environ['PF_OUTPUT_ROOT'], 'observations.json').write_text(json.
         "network_blocked": True, "host_environment_excluded": True}
     assert result["production_calls"] == [{"path": "production.py", "function": "transform", "calls": 1}]
     assert (source / "production.py").read_text(encoding="utf-8") == original
+
+
+def test_actual_native_failed_positive_control_retains_raw_observations_and_production_trace(tmp_path):
+    runner, _ = _real_native_worker()
+    source, code, output = (tmp_path / name for name in ("source", "code", "output"))
+    source.mkdir()
+    code.mkdir()
+    original = b"def transform(value):\n    return value + 1\n"
+    (source / "production.py").write_bytes(original)
+    (code / "experiment.py").write_text('''import base64, hashlib, json, os, pathlib, sys
+sys.path.insert(0, os.environ['PF_SOURCE_ROOT'])
+from production import transform
+actual = transform(1)
+fixture = f'input=1\\nexpected=3\\nactual={actual}\\n'.encode('utf-8')
+observations = {
+    'observations': [{'unit_id': 'fixture-1', 'seed': 0, 'condition': 'production', 'metric': 'value', 'value': actual}],
+    'controls': [{'name': 'positive control', 'passed': actual == 3, 'details': f'Expected 3, observed {actual}'},
+                 {'name': 'negative control', 'passed': actual != -1, 'details': 'Intentional wrong result detected'}],
+    'fixtures': [{'label': 'raw input and result', 'encoding': 'base64',
+                  'content': base64.b64encode(fixture).decode('ascii'), 'sha256': hashlib.sha256(fixture).hexdigest()}],
+}
+content = json.dumps(observations, indent=2).encode('utf-8') + b'\\n'
+pathlib.Path(os.environ['PF_OUTPUT_ROOT'], 'observations.json').write_bytes(content)
+sys.exit(1)
+''', encoding="utf-8")
+    fixture = b"input=1\nexpected=3\nactual=2\n"
+    expected = json.dumps({
+        "observations": [{"unit_id": "fixture-1", "seed": 0, "condition": "production", "metric": "value", "value": 2}],
+        "controls": [{"name": "positive control", "passed": False, "details": "Expected 3, observed 2"},
+                     {"name": "negative control", "passed": True, "details": "Intentional wrong result detected"}],
+        "fixtures": [{"label": "raw input and result", "encoding": "base64",
+                      "content": base64.b64encode(fixture).decode("ascii"), "sha256": hashlib.sha256(fixture).hexdigest()}],
+    }, indent=2).encode("utf-8") + b"\n"
+    result = runner.run(source, code, output, runtime="python", entrypoint="experiment.py", timeout_seconds=20,
+                        production_entrypoint="production.py:transform")
+    assert result["status"] == "failed" and result["exit_code"] == 1, result["stderr"]
+    assert result["cleanup_confirmed"] is True
+    assert result["output_path"] is not None, result["stderr"]
+    exported = Path(result["output_path"]).read_bytes()
+    assert exported == expected
+    assert result["artifacts"] == [{"path": "observations.json", "size": len(expected),
+                                    "sha256": hashlib.sha256(expected).hexdigest()}]
+    raw = json.loads(exported)
+    assert raw["controls"][0]["passed"] is False
+    assert base64.b64decode(raw["fixtures"][0]["content"]) == fixture
+    assert raw["fixtures"][0]["sha256"] == hashlib.sha256(fixture).hexdigest()
+    assert result["production_calls"] == [{"path": "production.py", "function": "transform", "calls": 1}]
+    assert (source / "production.py").read_bytes() == original
 
 
 def test_actual_native_node_records_production_calls(tmp_path):

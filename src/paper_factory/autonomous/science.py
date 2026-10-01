@@ -389,8 +389,22 @@ def _statistics(values: list[float]) -> dict[str, float | int]:
     return summary
 
 
+def reject_failed_controls(observations: object) -> None:
+    """Stop on an explicitly reported failure even when the run is incomplete."""
+    controls = observations.get("controls") if isinstance(observations, dict) else None
+    if not isinstance(controls, list):
+        return
+    for control in controls:
+        if isinstance(control, dict) and control.get("passed") is False:
+            name, details = control.get("name"), control.get("details")
+            name = name[:200] if isinstance(name, str) else "unnamed control"
+            details = details[:4000] if isinstance(details, str) else "No valid control details were retained"
+            raise ControlFailure(f"Experiment control failed: {name}: {details}; retain evidence and stop rather than seeking a passing rerun")
+
+
 def _compute(observations: dict, protocol: dict) -> dict:
     """Pure trusted analyzer, also copied verbatim into the reproduction script."""
+    reject_failed_controls(observations)
     if not isinstance(observations, dict) or set(observations) != {"observations", "controls", "fixtures"}:
         raise ValueError("Experiment must emit exactly observations, controls and fixtures")
     rows = observations["observations"]
@@ -414,8 +428,6 @@ def _compute(observations: dict, protocol: dict) -> dict:
             raise ValueError("Control details must explain the actually checked outcome")
         if type(control["passed"]) is not bool:
             raise ValueError("Control passed must be an actual boolean")
-        if not control["passed"]:
-            raise ControlFailure(f"Experiment control failed: {name}: {details}; retain evidence and stop rather than seeking a passing rerun")
         names.append(name.casefold())
     if len(names) != len(set(names)):
         raise ValueError("Control names must be distinct")
@@ -587,7 +599,7 @@ def analyze(observations: dict, plan: ResearchPlan, output_root: Path) -> dict:
     script = '"""Reproduce deterministic analysis using only Python standard library."""\n'
     script += "import argparse\nimport base64\nimport binascii\nimport hashlib\nimport json\nimport math\nimport re\nimport statistics\nfrom pathlib import Path\n\n"
     script += "ANALYSIS_SCOPE = " + repr(ANALYSIS_SCOPE) + "\n\n"
-    script += inspect.getsource(ControlFailure) + "\n" + inspect.getsource(_statistics) + "\n" + inspect.getsource(_compute) + "\n"
+    script += inspect.getsource(ControlFailure) + "\n" + inspect.getsource(reject_failed_controls) + "\n" + inspect.getsource(_statistics) + "\n" + inspect.getsource(_compute) + "\n"
     script += "if __name__ == '__main__':\n    parser = argparse.ArgumentParser()\n"
     script += "    parser.add_argument('--observations', type=Path, default=Path(__file__).with_name('analysis-observations.json'))\n"
     script += "    parser.add_argument('--protocol', type=Path, default=Path(__file__).with_name('analysis-protocol.json'))\n"

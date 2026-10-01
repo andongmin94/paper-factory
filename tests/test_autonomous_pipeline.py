@@ -332,12 +332,117 @@ def test_false_control_preserves_evidence_without_favorable_regeneration(workspa
     assert "manuscript" not in result.artifacts
 
 
+@pytest.mark.parametrize("incomplete", ["matrix", "fixtures", "root-shape"])
+def test_nonzero_exit_with_failed_control_blocks_before_repair_or_trace_validation(
+        workspace, components, monkeypatch, incomplete):
+    provider, runner, _, _ = components
+    failed = observations()
+    failed["controls"][0]["passed"] = False
+    if incomplete == "matrix":
+        failed["observations"] = failed["observations"][:1]
+    elif incomplete == "fixtures":
+        failed["fixtures"] = [{"malformed": True}]
+    else:
+        failed = {"controls": failed["controls"]}
+    runner.outputs = [failed, observations()]
+    execute = runner.run
+    def nonzero(*args, **kwargs):
+        receipt = execute(*args, **kwargs)
+        receipt.update(status="failed", exit_code=1, cleanup_confirmed=True,
+                       stderr="Positive scientific control failed", production_calls=[])
+        return receipt
+    monkeypatch.setattr(runner, "run", nonzero)
+    result = launch(workspace, components, budget={"repair_attempts": 3})
+    assert result.status == "blocked" and result.code == "CONTROL_FAILED"
+    assert result.stage == "execute" and result.code_attempt == 1 and runner.calls == 1
+    assert provider.calls.count("CodeBundle") == 1 and "ManuscriptDraft" not in provider.calls
+    assert pipeline._read(workspace, result, "observations") == failed
+    raw = pipeline._artifact(workspace, result, "observations")
+    assert digest_file(raw) == result.artifacts["observations"].sha256
+    assert result.artifacts["observations-1-1"].sha256 == result.artifacts["observations"].sha256
+    assert pipeline._read(workspace, result, "execution")["exit_code"] == 1
+    assert "analysis" not in result.artifacts and "manuscript" not in result.artifacts
+    with pytest.raises(pipeline.PipelineBlocked) as refused:
+        pipeline.resume(workspace, result.id)
+    assert refused.value.code == "CONTROL_FAILED"
+    # Cancellation relabels a terminal record; it must not bypass retained raw.
+    pipeline.cancel(workspace, result.id)
+    with pytest.raises(pipeline.PipelineBlocked) as refused:
+        pipeline.resume(workspace, result.id)
+    assert refused.value.code == "CONTROL_FAILED"
+    assert runner.calls == 1 and provider.calls.count("CodeBundle") == 1
+    assert pipeline._read(workspace, workspace.get("pipeline", result.id, PipelineRun), "observations") == failed
+
+
+@pytest.mark.parametrize("raw_kind", ["missing", "invalid-json", "valid-without-failed-controls"])
+def test_nonzero_exit_without_explicit_failed_control_remains_bounded_repair(
+        workspace, components, monkeypatch, raw_kind):
+    provider, runner, _, _ = components
+    execute = runner.run
+    def nonzero(source_dir, bundle_dir, output_dir, **kwargs):
+        receipt = execute(source_dir, bundle_dir, output_dir, **kwargs)
+        if raw_kind == "missing":
+            (Path(output_dir) / "observations.json").unlink()
+        elif raw_kind == "invalid-json":
+            (Path(output_dir) / "observations.json").write_text("not json", encoding="utf-8")
+        receipt.update(status="failed", exit_code=1, cleanup_confirmed=True, stderr="Ordinary runtime defect")
+        return receipt
+    monkeypatch.setattr(runner, "run", nonzero)
+    result = launch(workspace, components, budget={"repair_attempts": 1})
+    assert result.code == "EXPERIMENT_REPAIRS_EXHAUSTED" and result.code_attempt == 2
+    assert runner.calls == 2 and provider.calls.count("CodeBundle") == 2
+    assert "analysis" not in result.artifacts and "manuscript" not in result.artifacts
+
+
+@pytest.mark.parametrize("status,code,expected", [("blocked", "CLEANUP_UNCONFIRMED", "CLEANUP_UNCONFIRMED"),
+                                                ("cancelled", None, "STOPPED")])
+def test_failed_controls_do_not_override_cleanup_or_cancellation_gate(
+        workspace, components, monkeypatch, status, code, expected):
+    failed = observations()
+    failed["controls"][0]["passed"] = False
+    runner = components[1]
+    runner.outputs = [failed]
+    execute = runner.run
+    def interrupted(*args, **kwargs):
+        receipt = execute(*args, **kwargs)
+        receipt.update(status=status, exit_code=1, cleanup_confirmed=status != "blocked")
+        if code:
+            receipt.update(code=code, error="Cleanup not confirmed", active_handle={"kind": "fixture"})
+        return receipt
+    monkeypatch.setattr(runner, "run", interrupted)
+    result = launch(workspace, components)
+    assert result.code == expected and runner.calls == 1
+    if code == "CLEANUP_UNCONFIRMED":
+        assert pipeline._read(workspace, result, "observations") == failed
+        monkeypatch.setattr(pipeline, "_cleanup_handle", lambda _handle: True)
+        with pytest.raises(pipeline.PipelineBlocked) as refused:
+            pipeline.resume(workspace, result.id)
+        assert refused.value.code == "CONTROL_FAILED" and runner.calls == 1
+        saved = workspace.get("pipeline", result.id, PipelineRun)
+        assert saved.status == "blocked" and saved.code == "CONTROL_FAILED" and saved.active_handle == {}
+    else:
+        assert "observations" not in result.artifacts
+
+
 def test_rejected_code_review_blocks_execution_with_no_repair_budget(workspace, components):
     components[0].reviews = [{"accepted": False, "issues": ["Synthetic review found a missing independent oracle."], "checks": []}]
     result = launch(workspace, components, budget={"repair_attempts": 0})
     assert result.status == "blocked" and result.code == "EXPERIMENT_REPAIRS_EXHAUSTED"
     assert components[1].calls == 0 and "observations" not in result.artifacts
     assert components[0].calls.count("ScientificReview") == 1
+
+
+def test_terminal_review_rejection_records_latest_feedback_before_budget_guard(workspace, components):
+    provider, runner, _, _ = components
+    provider.reviews = [{"accepted": False, "issues": ["First static defect"], "checks": []},
+                        {"accepted": False, "issues": ["Final independent identifier defect"], "checks": []}]
+    result = launch(workspace, components, budget={"repair_attempts": 1})
+    assert result.code == "EXPERIMENT_REPAIRS_EXHAUSTED" and runner.calls == 0
+    feedback = json.loads((workspace.root / "autonomous" / result.id / "repair-feedback.json").read_text())
+    assert feedback["reason"] == "Scientific code review rejected execution: Final independent identifier defect"
+    assert feedback["protocol_sha256"] == result.artifacts["plan"].sha256
+    assert "First static defect" not in feedback["reason"]
+    assert pipeline._read(workspace, result, "code-review-2")["issues"] == ["Final independent identifier defect"]
 
 
 def test_repeated_python_syntax_rejection_exhausts_repairs_without_review_or_execution(workspace, components, monkeypatch):

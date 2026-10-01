@@ -1,7 +1,6 @@
 import hashlib
 import json
 import os
-from pathlib import Path
 import subprocess
 
 import httpx
@@ -53,6 +52,7 @@ def test_verified_abstract_has_literal_passage_and_raw_hash(tmp_path, monkeypatc
     requests = mocked(monkeypatch, handler)
     result = literature.collect(["reproducibility"], tmp_path)
     assert len(requests) == 2
+    assert dict(requests[0].url.params) == {"query.bibliographic": "reproducibility", "rows": "6", "filter": "has-abstract:true"}
     source = result["sources"][0]
     assert source["title"] == "Verified record title"
     assert source["scope"] == "abstract"
@@ -64,11 +64,16 @@ def test_verified_abstract_has_literal_passage_and_raw_hash(tmp_path, monkeypatc
 
 
 def test_metadata_never_becomes_a_finding(tmp_path, monkeypatch):
-    mocked(monkeypatch, lambda request: httpx.Response(200, json={"status": "ok", "message": {"items": [{"DOI": "10.1234/test"}]}})
+    requests = mocked(monkeypatch, lambda request: httpx.Response(200, json={"status": "ok", "message": {"items": [
+        {"DOI": "10.1234/test", "abstract": "Unverified search abstract must never become a reading excerpt."}]}})
            if request.url.path == "/works" else httpx.Response(200, json=record()))
     result = literature.collect(["query"], tmp_path)
+    assert len(requests) == 2 and requests[0].url.params["filter"] == "has-abstract:true"
     assert result["sources"][0]["scope"] == "metadata_only"
     assert result["sources"][0]["excerpts"] == []
+    raw = (tmp_path / result["sources"][0]["raw_path"]).read_bytes()
+    assert "abstract" not in json.loads(raw)["message"]
+    assert hashlib.sha256(raw).hexdigest() == result["sources"][0]["sha256"]
     assert any("No abstract or full text" in warning for warning in result["warnings"])
 
 

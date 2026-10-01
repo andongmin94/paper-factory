@@ -194,6 +194,18 @@ def resume(ws: Workspace, pipeline_id: str) -> PipelineRun:
         if not _cleanup_handle(record.active_handle):
             raise PipelineBlocked("CLEANUP_UNCONFIRMED", "Previous worker cleanup could not be confirmed; retained execution handle must be reconciled before resuming")
         record.active_handle = {}
+        if "observations" in record.artifacts:
+            from . import science
+            try:
+                science.reject_failed_controls(_read(ws, record, "observations"))
+            except science.ControlFailure as exc:
+                message = "Retained scientific controls failed; this study cannot rerun them to seek a favorable result: " + _sanitized(exc)
+                record.status, record.code, record.message = "blocked", "CONTROL_FAILED", message
+                _save(ws, record, merge_cancel=False)
+                raise PipelineBlocked("CONTROL_FAILED", message) from None
+            except ValueError:
+                # Malformed runtime output remains an ordinary bounded repair.
+                pass
         record.status = "queued"
         record.cancellation_requested = False
         record.code = record.message = None
@@ -286,10 +298,10 @@ def run(ws: Workspace, pipeline_id: str, *, provider=None, runner=None) -> Pipel
             return result
 
         def repair(reason):
-            if current.code_attempt > current.budget.repair_attempts:
-                raise PipelineBlocked("EXPERIMENT_REPAIRS_EXHAUSTED", "Experiment did not produce valid controlled observations within the repair budget: " + _sanitized(reason))
             write_json(root / "repair-feedback.json", {"reason": _sanitized(reason), "protocol_sha256": current.artifacts["plan"].sha256,
                                                        "notice": "Repair execution or measurement defects only. Do not change the protocol or seek favorable outcomes."})
+            if current.code_attempt > current.budget.repair_attempts:
+                raise PipelineBlocked("EXPERIMENT_REPAIRS_EXHAUSTED", "Experiment did not produce valid controlled observations within the repair budget: " + _sanitized(reason))
             current.stage = "generate"
 
         try:
@@ -474,15 +486,27 @@ def run(ws: Workspace, pipeline_id: str, *, provider=None, runner=None) -> Pipel
                     _freeze(ws, current, "execution", output_root / "execution.json")
                     if (output_root / "runtime-manifest.json").is_file():
                         _freeze(ws, current, "runtime-manifest", output_root / "runtime-manifest.json")
+                    observations = output_root / "observations.json"
+                    retained_observations = (receipt.get("status") in {"succeeded", "failed"} or cleanup_unconfirmed) and observations.is_file()
+                    if retained_observations:
+                        _freeze(ws, current, f"observations-{current.code_attempt}-{attempt.attempt}", observations)
+                        _freeze(ws, current, "observations", observations)
                     if cleanup_unconfirmed:
                         raise PipelineBlocked("CLEANUP_UNCONFIRMED", receipt.get("error") or "Research container removal could not be confirmed")
-                    if receipt.get("status") != "succeeded":
-                        if stopped() or receipt.get("status") == "cancelled":
-                            raise PipelineBlocked("STOPPED", "Experiment was stopped")
-                        repair(receipt.get("error") or receipt.get("stderr") or "Isolated experiment did not succeed")
-                    else:
-                        _freeze(ws, current, f"observations-{current.code_attempt}-{attempt.attempt}", output_root / "observations.json")
-                        _freeze(ws, current, "observations", output_root / "observations.json")
+                    if stopped() or receipt.get("status") == "cancelled":
+                        if receipt.get("status") == "succeeded" and retained_observations:
+                            current.stage = "analyze"
+                        raise PipelineBlocked("STOPPED", "Experiment was stopped")
+                    raw_error = None
+                    if retained_observations:
+                        try:
+                            science.reject_failed_controls(_read(ws, current, "observations"))
+                        except science.ControlFailure as exc:
+                            raise PipelineBlocked("CONTROL_FAILED", "A scientific control failed; observations are retained without regenerating a favorable result: " + _sanitized(exc)) from None
+                        except ValueError as exc:
+                            raw_error = exc
+                    if receipt.get("status") != "succeeded" or raw_error or not retained_observations:
+                        repair(raw_error or receipt.get("error") or receipt.get("stderr") or "Isolated experiment did not produce valid observations")
                 elif stage == "analyze":
                     plan = ResearchPlan.model_validate(_read(ws, current, "plan"))
                     execution = _read(ws, current, "execution")

@@ -12,6 +12,7 @@ import base64
 import binascii
 import hashlib
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -90,7 +91,7 @@ finally:
 # This controller-owned program runs INSIDE Docker. It neither receives model
 # credentials nor executes on the host. The generated child sees fixed paths.
 _LAUNCHER = r'''
-import base64, json, os, pathlib, signal, stat, subprocess, sys, threading, urllib.parse
+import base64, json, math, os, pathlib, signal, stat, subprocess, sys, threading, urllib.parse
 runtime, entrypoint, timeout = sys.argv[1], sys.argv[2], int(sys.argv[3])
 artifact_limit, log_limit = int(sys.argv[4]), int(sys.argv[5])
 commands = {"python": "/usr/local/bin/python3", "node": "/usr/local/bin/node"}
@@ -99,6 +100,11 @@ env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": "/work", "LANG": "C.UTF-8
        "PF_SOURCE_ROOT": "/input", "PF_CODE_ROOT": "/code", "PF_OUTPUT_ROOT": "/output",
        "PYTHONHASHSEED": "0", "PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1"}
 ''' + '\npython_driver = ' + repr(_PYTHON_DRIVER) + r'''
+def finite_float(value):
+    number = float(value)
+    if not math.isfinite(number): raise ValueError('nonfinite JSON number')
+    return number
+
 def read_json(path, limit):
     descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
@@ -107,7 +113,7 @@ def read_json(path, limit):
             raise ValueError('invalid bounded receipt file')
         with os.fdopen(descriptor,'rb',closefd=False) as stream: data = stream.read(limit + 1)
         if len(data) > limit: raise ValueError('receipt exceeds size limit')
-        return json.loads(data.decode('utf-8'),parse_constant=lambda value: (_ for _ in ()).throw(ValueError('nonfinite receipt')))
+        return json.loads(data.decode('utf-8'),parse_float=finite_float,parse_constant=lambda value: (_ for _ in ()).throw(ValueError('nonfinite receipt')))
     finally: os.close(descriptor)
 def production_receipt():
     if runtime == 'python':
@@ -173,8 +179,9 @@ try:
     except ProcessLookupError: pass
     for thread in threads: thread.join(timeout=2)
     result["exit_code"] = child.returncode
-    if child.returncode == 0 and not result["timed_out"]:
-        result['production_calls'],result['coverage_truncated']=production_receipt()
+    if not result["timed_out"]:
+        if child.returncode == 0:
+            result['production_calls'],result['coverage_truncated']=production_receipt()
         path = pathlib.Path("/output/observations.json")
         flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
         fd = os.open(path, flags)
@@ -185,9 +192,13 @@ try:
             if info.st_size > artifact_limit: raise ValueError("observations.json exceeds size limit")
             with os.fdopen(fd, "rb", closefd=False) as stream: data = stream.read(artifact_limit + 1)
             if len(data) > artifact_limit: raise ValueError("observations.json exceeds size limit")
-            json.loads(data.decode("utf-8"), parse_constant=lambda value: (_ for _ in ()).throw(ValueError("nonfinite JSON value: " + value)))
+            json.loads(data.decode("utf-8"), parse_float=finite_float, parse_constant=lambda value: (_ for _ in ()).throw(ValueError("nonfinite JSON value: " + value)))
             result["observation_b64"] = base64.b64encode(data).decode("ascii")
         finally: os.close(fd)
+        if child.returncode != 0:
+            # A missing failure receipt must not discard an already retained
+            # negative observation. Successful execution still requires it.
+            result['production_calls'],result['coverage_truncated']=production_receipt()
 except BaseException as exc:
     result["error"] = type(exc).__name__ + ": " + str(exc)
 for key in logs:
@@ -271,6 +282,30 @@ def _bounded_log(value: str) -> str:
         return value
     marker = "\n[log truncated]"
     return encoded[:MAX_LOG_BYTES - len(marker)].decode("utf-8", "ignore") + marker
+
+
+def _finite_float(value: str) -> float:
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("Sandbox artifact contains a nonfinite JSON number")
+    return number
+
+
+def _nonfinite_json(value: str):
+    raise ValueError("Sandbox artifact contains a nonfinite JSON number")
+
+
+def _retain_observations(output: Path, data: bytes) -> dict:
+    """Retain exact bounded JSON bytes without changing the execution status."""
+    if not data or len(data) > MAX_ARTIFACT_BYTES:
+        raise ValueError("observation is empty or exceeds size limit")
+    json.loads(data.decode("utf-8"), parse_float=_finite_float, parse_constant=_nonfinite_json)
+    path = output / "observations.json"
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    with os.fdopen(descriptor, "wb") as stream:
+        stream.write(data)
+    return {"output_path": str(path), "artifacts": [{"path": "observations.json", "size": len(data),
+                                                    "sha256": hashlib.sha256(data).hexdigest()}]}
 
 
 def _production_calls(value: object, source: Path) -> list[dict]:
@@ -516,30 +551,29 @@ class DockerRunner:
                 if envelope.get("timed_out"):
                     result["status"] = "timeout"
                     return result
-                if process.returncode or envelope.get("exit_code") != 0 or envelope.get("error"):
+                exit_code = envelope.get("exit_code")
+                if type(exit_code) is not int:
+                    raise ValueError("invalid experiment exit code")
+                result["exit_code"] = exit_code
+                succeeded = process.returncode == 0 and exit_code == 0 and not envelope.get("error")
+                if not succeeded:
                     result["stderr"] += "\n" + str(envelope.get("error") or "Experiment exited unsuccessfully")[:1000]
-                    return result
-                result["production_calls"] = _production_calls(envelope.get("production_calls", []), source)
-                if not isinstance(envelope.get("coverage_truncated", False), bool):
-                    raise ValueError("invalid coverage truncation marker")
-                result["coverage_truncated"] = envelope.get("coverage_truncated", False)
+                    if exit_code == 0 or envelope.get("observation_b64") is None:
+                        return result
                 encoded = envelope.get("observation_b64")
                 if not isinstance(encoded, str) or len(encoded) > (MAX_ARTIFACT_BYTES + 2) // 3 * 4:
                     raise ValueError("invalid or oversized observation transport")
                 data = base64.b64decode(encoded, validate=True)
-                if not data or len(data) > MAX_ARTIFACT_BYTES:
-                    raise ValueError("observation is empty or exceeds size limit")
-                json.loads(data.decode("utf-8"), parse_constant=lambda value: (_ for _ in ()).throw(ValueError("nonfinite JSON value: " + value)))
-                path = output / "observations.json"
-                descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
-                with os.fdopen(descriptor, "wb") as stream:
-                    stream.write(data)
-                result["artifacts"] = [{"path": "observations.json", "size": len(data),
-                                        "sha256": hashlib.sha256(data).hexdigest()}]
-                result["output_path"] = str(path)
-                result["status"] = "succeeded"
+                if not succeeded:
+                    result.update(_retain_observations(output, data))
+                result["production_calls"] = _production_calls(envelope.get("production_calls", []), source)
+                if not isinstance(envelope.get("coverage_truncated", False), bool):
+                    raise ValueError("invalid coverage truncation marker")
+                result["coverage_truncated"] = envelope.get("coverage_truncated", False)
+                if succeeded:
+                    result.update(_retain_observations(output, data), status="succeeded")
             except (ValueError, UnicodeError, binascii.Error, OSError, RecursionError) as exc:
-                result["stderr"] = "Sandbox artifact export rejected: " + str(exc)[:1000]
+                result["stderr"] += "\nSandbox artifact export rejected: " + str(exc)[:1000]
             return result
         except (OSError, subprocess.TimeoutExpired) as exc:
             result["stderr"] = "Docker execution failed: " + str(exc)[:1000]

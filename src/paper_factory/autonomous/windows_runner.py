@@ -24,7 +24,7 @@ import time
 from ..workspace import ensure_unlinked
 from .runner import (
     LIMITS, MAX_ARTIFACT_BYTES, _PYTHON_DRIVER, _bounded_log, _entrypoint,
-    _production_calls, _safe_tree, _stage_tree,
+    _finite_float, _nonfinite_json, _production_calls, _retain_observations, _safe_tree, _stage_tree,
 )
 
 
@@ -74,12 +74,8 @@ def _read_bytes(path: Path, limit: int) -> bytes:
         os.close(descriptor)
 
 
-def _nonfinite_json(value):
-    raise ValueError("Sandbox artifact contains a nonfinite JSON number")
-
-
 def _json(path: Path, limit: int):
-    return json.loads(_read_bytes(path, limit).decode("utf-8"), parse_constant=_nonfinite_json)
+    return json.loads(_read_bytes(path, limit).decode("utf-8"), parse_float=_finite_float, parse_constant=_nonfinite_json)
 
 
 def _copy_runtime_tree(source: Path, target: Path) -> None:
@@ -351,54 +347,58 @@ class WindowsRunner:
                               error="Native research process-tree termination could not be confirmed",
                               active_handle=execution_handle)
                 return result
-            if result["status"] != "succeeded" or result["exit_code"] != 0:
+            succeeded = result["status"] == "succeeded" and result["exit_code"] == 0
+            failed_exit = result["status"] == "failed" and type(result["exit_code"]) is int and result["exit_code"] != 0
+            if not succeeded and not failed_exit:
                 return result
-            if runtime == "python":
-                trace = _json(observations / ".paper-factory-python-calls.json", 1024 * 1024)
-                calls, truncated = trace["calls"], trace["truncated"]
-            else:
-                from urllib.parse import unquote, urlsplit
-                coverage = observations / ".paper-factory-node-coverage"
-                ensure_unlinked(coverage)
-                paths = sorted(coverage.glob("coverage-*.json"))
-                totals, truncated = {}, len(paths) > 32
-                for path in paths[:32]:
-                    for script in _json(path, 4 * 1024 * 1024).get("result", []):
-                        url = urlsplit(script.get("url", ""))
-                        if url.scheme != "file" or url.netloc:
-                            continue
-                        actual = Path(unquote(url.path).lstrip("/"))
-                        try:
-                            relative = actual.resolve().relative_to(staged_source.resolve()).as_posix()
-                        except (ValueError, OSError):
-                            continue
-                        for function in script.get("functions", []):
-                            name, ranges = function.get("functionName", ""), function.get("ranges", [])
-                            if not name or not ranges:
+            if failed_exit:
+                result.update(_retain_observations(output, _read_bytes(observations / "observations.json", MAX_ARTIFACT_BYTES)))
+            try:
+                if runtime == "python":
+                    trace = _json(observations / ".paper-factory-python-calls.json", 1024 * 1024)
+                    calls, truncated = trace["calls"], trace["truncated"]
+                else:
+                    from urllib.parse import unquote, urlsplit
+                    coverage = observations / ".paper-factory-node-coverage"
+                    ensure_unlinked(coverage)
+                    paths = sorted(coverage.glob("coverage-*.json"))
+                    totals, truncated = {}, len(paths) > 32
+                    for path in paths[:32]:
+                        for script in _json(path, 4 * 1024 * 1024).get("result", []):
+                            url = urlsplit(script.get("url", ""))
+                            if url.scheme != "file" or url.netloc:
                                 continue
-                            count = ranges[0].get("count", 0)
-                            if type(count) is not int or count < 1:
+                            actual = Path(unquote(url.path).lstrip("/"))
+                            try:
+                                relative = actual.resolve().relative_to(staged_source.resolve()).as_posix()
+                            except (ValueError, OSError):
                                 continue
-                            key = (relative, name)
-                            if key not in totals and len(totals) >= 512:
-                                truncated = True
-                                continue
-                            totals[key] = min(totals.get(key, 0) + count, 1_000_000_000)
-                calls = [{"path": path, "function": name, "calls": count} for (path, name), count in sorted(totals.items())]
-            result["production_calls"] = _production_calls(calls, source)
-            if type(truncated) is not bool:
-                raise ValueError("Invalid coverage truncation marker")
-            result["coverage_truncated"] = truncated
-            data = _read_bytes(observations / "observations.json", MAX_ARTIFACT_BYTES)
-            json.loads(data.decode("utf-8"), parse_constant=_nonfinite_json)
-            destination = output / "observations.json"
-            with destination.open("xb") as stream:
-                stream.write(data)
-            result.update(status="succeeded", output_path=str(destination),
-                          artifacts=[{"path": "observations.json", "size": len(data),
-                                      "sha256": hashlib.sha256(data).hexdigest()}])
+                            for function in script.get("functions", []):
+                                name, ranges = function.get("functionName", ""), function.get("ranges", [])
+                                if not name or not ranges:
+                                    continue
+                                count = ranges[0].get("count", 0)
+                                if type(count) is not int or count < 1:
+                                    continue
+                                key = (relative, name)
+                                if key not in totals and len(totals) >= 512:
+                                    truncated = True
+                                    continue
+                                totals[key] = min(totals.get(key, 0) + count, 1_000_000_000)
+                    calls = [{"path": path, "function": name, "calls": count} for (path, name), count in sorted(totals.items())]
+                result["production_calls"] = _production_calls(calls, source)
+                if type(truncated) is not bool:
+                    raise ValueError("Invalid coverage truncation marker")
+                result["coverage_truncated"] = truncated
+            except (OSError, ValueError, KeyError, TypeError, RecursionError) as error:
+                if succeeded:
+                    raise
+                result["stderr"] += "\nFailed execution trace unavailable: " + str(error)[:1000]
+                return result
+            if succeeded:
+                result.update(_retain_observations(output, _read_bytes(observations / "observations.json", MAX_ARTIFACT_BYTES)))
         except Exception as error:
-            result.update(status="failed", stderr="Native sandbox execution rejected: " + str(error)[:1000])
+            result.update(status="failed", stderr=result["stderr"] + "\nNative sandbox execution rejected: " + str(error)[:1000])
             if not cleanup_confirmed:
                 result.update(status="blocked", code="CLEANUP_UNCONFIRMED", cleanup_confirmed=False,
                               error="Native research launch failed without a confirmed cleanup receipt",

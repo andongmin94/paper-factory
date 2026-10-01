@@ -224,9 +224,8 @@ class Workspace:
         path = self.path(f"locks/{name}.lock")
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a+b") as stream:
-            if stream.tell() == 0:
-                stream.write(b"\0")
-                stream.flush()
+            # Byte-range locks may extend past EOF. Initializing byte zero can
+            # race with another Windows handle already locking that region.
             stream.seek(0)
             try:
                 if os.name == "nt":

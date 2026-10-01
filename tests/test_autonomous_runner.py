@@ -5,7 +5,9 @@ import io
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
+import sys
 
 import pytest
 
@@ -260,6 +262,86 @@ def test_records_wrapper_timeout(fake_runner, inputs):
     result = runner.run(*inputs, runtime="python", entrypoint="experiment.py")
     assert result["status"] == "timeout"
     assert result["artifacts"] == []
+
+
+@pytest.mark.parametrize("trace", ["valid", "missing", "invalid"])
+def test_nonzero_exit_retains_exact_negative_raw_without_claiming_success(fake_runner, inputs, trace):
+    runner, _, process = fake_runner
+    raw = b'{ "observations": [], "controls": [{"name":"positive", "passed":false}] }\n'
+    calls = [{"path": "witness.txt", "function": "actual", "calls": 1}] if trace == "valid" else []
+    if trace == "invalid":
+        calls = [{"path": "../outside.py", "function": "fake", "calls": 1}]
+    process.returncode = 1
+    process.stdout = io.BytesIO(envelope(raw, exit_code=7, production_calls=calls,
+                                       error="missing failure trace" if trace == "missing" else None))
+    result = runner.run(*inputs, runtime="python", entrypoint="experiment.py")
+    assert result["status"] == "failed" and result["exit_code"] == 7
+    assert result["cleanup_confirmed"] is True
+    assert Path(result["output_path"]).read_bytes() == raw
+    assert result["artifacts"] == [{"path": "observations.json", "size": len(raw),
+                                    "sha256": module.hashlib.sha256(raw).hexdigest()}]
+    assert result["production_calls"] == (calls if trace == "valid" else [])
+
+
+@pytest.mark.parametrize("raw", [b"not json", b'{"value":NaN}', b'{"value":1e999}',
+                                '{"value":1}'.encode("utf-16"), b"x" * (MAX_ARTIFACT_BYTES + 1)],
+                         ids=["invalid-json", "nonfinite", "overflow", "utf16", "oversized"])
+def test_nonzero_exit_rejects_invalid_raw_without_import(fake_runner, inputs, raw):
+    runner, _, process = fake_runner
+    process.returncode = 1
+    process.stdout = io.BytesIO(envelope(raw, exit_code=1))
+    result = runner.run(*inputs, runtime="python", entrypoint="experiment.py")
+    assert result["status"] == "failed" and result["cleanup_confirmed"] is True
+    assert result["artifacts"] == [] and not (inputs[2] / "observations.json").exists()
+
+
+def test_nonzero_exit_without_raw_remains_an_execution_failure(fake_runner, inputs):
+    runner, _, process = fake_runner
+    process.returncode = 1
+    process.stdout = io.BytesIO(envelope(exit_code=1, observation_b64=None, stderr="runtime failed"))
+    result = runner.run(*inputs, runtime="python", entrypoint="experiment.py")
+    assert result["status"] == "failed" and result["cleanup_confirmed"] is True
+    assert result["artifacts"] == [] and "runtime failed" in result["stderr"]
+
+
+@pytest.mark.parametrize("exit_code,trace_exists,retained", [(1, True, True), (1, False, True), (0, False, False)])
+def test_docker_launcher_transports_failure_raw_without_requiring_success_trace(
+        tmp_path, monkeypatch, capsys, exit_code, trace_exists, retained):
+    # Run only the trusted controller with a mocked child; generated code never
+    # executes outside isolation. File descriptors map /output to this fixture.
+    raw = b'{"observations":[],"controls":[{"name":"positive","passed":false}]}\n'
+    (tmp_path / "observations.json").write_bytes(raw)
+    if trace_exists:
+        (tmp_path / ".paper-factory-python-calls.json").write_text('{"calls":[],"truncated":false}')
+    child = FakeProcess(b"")
+    child.returncode, child.pid = exit_code, 12345
+    def mock_child(_command, **kwargs):
+        assert kwargs["cwd"] == "/work" and kwargs["env"]["PF_WORK"] == "/work"
+        assert kwargs["env"]["PF_SOURCE_ROOT"] == "/input" and kwargs["env"]["PF_OUTPUT_ROOT"] == "/output"
+        return child
+    monkeypatch.setattr(subprocess, "Popen", mock_child)
+    monkeypatch.setattr(signal, "SIGKILL", getattr(signal, "SIGKILL", 9), raising=False)
+    monkeypatch.setattr(sys, "argv", ["controller", "python", "experiment.py", "3", str(MAX_ARTIFACT_BYTES), "1024"])
+    monkeypatch.setattr(os, "O_NOFOLLOW", getattr(os, "O_NOFOLLOW", 0), raising=False)
+    monkeypatch.setattr(os, "O_NONBLOCK", getattr(os, "O_NONBLOCK", 0), raising=False)
+    def absent_process(*_args):
+        raise ProcessLookupError
+    monkeypatch.setattr(os, "killpg", absent_process, raising=False)
+    open_file = os.open
+    def mapped_open(path, flags, *args, **kwargs):
+        path = os.fspath(path).replace("\\", "/")
+        if path.startswith("/output/"):
+            path = tmp_path / path.removeprefix("/output/")
+        return open_file(path, flags, *args, **kwargs)
+    monkeypatch.setattr(os, "open", mapped_open)
+    with pytest.raises(SystemExit) as stopped:
+        exec(compile(module._LAUNCHER, "<trusted-docker-controller>", "exec"), {})
+    assert stopped.value.code == 1
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["exit_code"] == exit_code and receipt["timed_out"] is False
+    assert (receipt["observation_b64"] is not None) is retained
+    if retained:
+        assert base64.b64decode(receipt["observation_b64"]) == raw
 
 
 def test_cancel_kills_container_and_exports_nothing(fake_runner, inputs):

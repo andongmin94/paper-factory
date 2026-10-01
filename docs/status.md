@@ -33,7 +33,7 @@ Frontend readiness now follows the actual subscription provider status, includin
 an existing CLI login, and clears stale connection information after failed
 refreshes. Default web paths use the native `PF_HOME` studies/web directories.
 
-The current Windows collection contains **1,298 cases: 1,284 passed, 14 skipped,
+The current Windows collection contains **1,335 cases: 1,321 passed, 14 skipped,
 0 failed and 0 uncovered**. Complete fresh file shards and final affected reruns
 were deduplicated against the exact current collection. Per-case evidence is
 preserved at
@@ -135,6 +135,34 @@ controls, raw rows, source calls and retained bytes remain later controller gate
 TypeScript studies must import the original source through supported native
 execution rather than data URLs, stripped copies or reassociated coverage origins.
 Focused rejection and prompt regressions passed without relaxing runtime gates.
+
+Literature searches now use Crossref's documented `has-abstract:true` filter.
+The actual DOI resolution still determines reading scope; a search result's
+abstract claim cannot upgrade a metadata-only record. An actual probe of three
+frozen queries retrieved six abstracts, including weakly related records. This
+confirms inspectable evidence, not relevance, novelty or manuscript completion.
+
+Explicit failed controls now stop analysis before incomplete-row or missing-fixture
+errors can trigger a favorable retry. The standalone reanalysis includes the same
+check. Its first regression run caught an unavailable annotation dependency in the
+standalone script; the built-in annotation correction and the full science suite
+passed 109 cases. The failed report remains preserved.
+
+Both workers now retain exact bounded, finite UTF-8 observation bytes after a
+normal nonzero exit, while preserving the failed execution status. Failed controls
+stop before runtime repair; resume and cancellation relabeling cannot bypass them.
+Unconfirmed cleanup still takes priority, and successful execution still requires
+its strict production-call trace. The actual AppContainer failure regression
+retained the input/result bytes, digest and one original production invocation.
+The full native runner passed 28 cases and the affected runner/pipeline suite
+passed 126 cases. Terminal repair feedback now retains the actual last defect.
+
+A concurrent Windows lock test exposed byte-zero initialization racing with an
+already-held byte-range lock. The deterministic regression reproduced its
+PermissionError. Lock acquisition no longer writes that region; locks past EOF
+are supported by the actual Windows runtime. Workspace and concurrent pipeline
+checks passed six cases, including refusal of a competing operation and successful
+acquisition after release. Earlier failed reports remain preserved.
 
 ## Native Windows verification
 

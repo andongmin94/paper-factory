@@ -483,8 +483,15 @@ def test_model_prompts_explain_existing_protocol_and_generation_boundaries(proto
         assert "copied-source fallback" in prompt
 
 
-def test_real_failed_controls_are_distinct_from_repairable_format_errors(tmp_path, protocol, observations):
+@pytest.mark.parametrize("defect", ["none", "empty-matrix", "missing-fixtures", "malformed-rows"])
+def test_real_failed_controls_are_distinct_from_repairable_format_errors(tmp_path, protocol, observations, defect):
     observations["controls"][0]["passed"] = False
+    if defect == "empty-matrix":
+        observations["observations"] = []
+    elif defect == "missing-fixtures":
+        del observations["fixtures"]
+    elif defect == "malformed-rows":
+        observations["observations"] = None
     with pytest.raises(science.ControlFailure) as failure:
         science.analyze(observations, protocol, tmp_path)
     assert failure.value.code == "EXPERIMENT_CONTROL_FAILED"
@@ -495,6 +502,8 @@ def test_real_failed_controls_are_distinct_from_repairable_format_errors(tmp_pat
 def test_standalone_analysis_also_stops_on_real_failed_controls(tmp_path, protocol, observations):
     science.analyze(observations, protocol, tmp_path)
     observations["controls"][1]["passed"] = False
+    observations["observations"] = []
+    del observations["fixtures"]
     (tmp_path / "analysis-observations.json").write_text(json.dumps(observations))
     completed = subprocess.run([sys.executable, str(tmp_path / "analysis.py")], capture_output=True, text=True, timeout=20)
     assert completed.returncode != 0
