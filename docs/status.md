@@ -33,7 +33,7 @@ Frontend readiness now follows the actual subscription provider status, includin
 an existing CLI login, and clears stale connection information after failed
 refreshes. Default web paths use the native `PF_HOME` studies/web directories.
 
-The current Windows collection contains **1,242 cases: 1,228 passed, 14 skipped,
+The current Windows collection contains **1,266 cases: 1,252 passed, 14 skipped,
 0 failed and 0 uncovered**. Complete fresh file shards and final affected reruns
 were deduplicated against the exact current collection. Per-case evidence is
 preserved at
@@ -67,6 +67,17 @@ and provider report contains 150 passes and five platform/privilege skips:
 The invalid model proposal and its receipt remain unchanged; the live study
 resumes through the ordinary pipeline with cumulative budgets and fresh calls.
 This correction does not establish completion of a live autonomous paper.
+
+The subsequent live plans exposed missing guidance for distinct short labels
+and dependency declarations. Planning now explicitly requires unique labels and
+exact approved third-party names, with an empty dependency list for built-ins.
+Generation describes the existing portable-path, executable suffix and UTF-8
+bundle limits. Parameter key bounds also reach the actual wire schema. Plan
+validation reuses the common safe-path check against the actual source root,
+preserving Korean filenames and internal Unicode spaces while rejecting unsafe
+paths. The complete affected science/provider/pipeline report passed 208 cases
+with five skips:
+`C:/Users/Public/Documents/ESTsoft/CreatorTemp/paperfactory-live-contracts.xml`.
 
 ## Native Windows verification
 

@@ -65,6 +65,34 @@ def test_condition_name_boundaries_match_model_and_actual_wire_schema(protocol, 
         assert raised.value.errors()[0]["loc"] == ("conditions", 0)
 
 
+@pytest.mark.parametrize("key,accepted", [
+    ("", False),
+    ("x", True),
+    ("x" * 100, True),
+    ("x" * 101, False),
+    ("\uac00" * 100, True),
+    ("\uac00" * 101, False),
+], ids=["empty", "minimum", "maximum", "over-maximum", "unicode-maximum", "unicode-over-maximum"])
+def test_parameter_key_boundaries_match_model_and_actual_wire_schema(protocol, key, accepted):
+    schema = ResearchPlan.model_json_schema()
+    wire_schema = _wire_schema(schema)
+    parameter_schema = wire_schema["properties"]["parameters"]
+    assert "propertyNames" not in parameter_schema
+    assert parameter_schema["items"]["properties"]["key"] == {
+        "type": "string", "minLength": 1, "maxLength": 100,
+    }
+    original = protocol.model_dump(mode="json")
+    original["parameters"] = {key: 3}
+    wire = {**original, "parameters": [{"key": key, "value": 3}]}
+    assert Draft202012Validator(schema).is_valid(original) is accepted
+    assert Draft202012Validator(wire_schema).is_valid(wire) is accepted
+    if accepted:
+        assert ResearchPlan.model_validate(original).parameters == {key: 3}
+    else:
+        with pytest.raises(ValidationError):
+            ResearchPlan.model_validate(original)
+
+
 @pytest.fixture
 def observations():
     rows = []
@@ -297,6 +325,24 @@ def test_code_prompt_uses_runner_mount_and_structured_repair_feedback(protocol):
     assert "Repair measurement code without changing the protocol." in prompt
 
 
+def test_model_prompts_explain_existing_protocol_and_generation_boundaries(protocol):
+    planning = science.planning_prompt("inspected production source", "study behavior")
+    assert "distinct short stable labels of one to eighty characters" in planning
+    assert "never in condition names" in planning
+    assert "unique within its respective list" in planning
+    assert "exact approved third-party package names" in planning
+    assert "without versions or descriptions" in planning
+    assert "to be [] when no third-party package is used" in planning
+    assert "preserving their original Unicode spelling and internal spaces" in planning
+    generation = science.code_prompt(protocol, "inspected production source")
+    assert "portable relative path" in generation and "using / separators" in generation
+    assert ".py, .js, .cjs, .mjs, .json, .md, .txt" in generation
+    assert "end in .py for Python, or .js, .cjs, .mjs for Node" in generation
+    assert "do not generate .ts or .tsx files" in generation
+    assert "512 KiB (524288 UTF-8 bytes)" in generation
+    assert "262144-character" in generation
+
+
 def test_real_failed_controls_are_distinct_from_repairable_format_errors(tmp_path, protocol, observations):
     observations["controls"][0]["passed"] = False
     with pytest.raises(science.ControlFailure) as failure:
@@ -317,32 +363,58 @@ def test_standalone_analysis_also_stops_on_real_failed_controls(tmp_path, protoc
     assert not (tmp_path / "analysis-reproduced.json").exists()
 
 
-def test_plan_requires_substantive_behavior_and_bound_production_callable(protocol):
+def test_plan_requires_substantive_behavior_and_bound_production_callable(tmp_path, protocol):
     protocol.production_entrypoint = "transform.py:transform"
-    science.validate_plan(protocol)
+    science.validate_plan(protocol, tmp_path)
     protocol.question = "What assets and file sizes are present in this sanitized project snapshot?"
     with pytest.raises(ValueError, match="asset inventory"):
-        science.validate_plan(protocol)
+        science.validate_plan(protocol, tmp_path)
 
 
 @pytest.mark.parametrize("entrypoint,reason", [
     ("", "relative source file"),
     ("transform.py", "relative source file"),
-    ("../transform.py:transform", "declared immutable"),
+    ("../transform.py:transform", "safe relative artifact path"),
     ("other.py:transform", "declared immutable"),
     ("transform.py:function$", "runtime"),
 ])
-def test_plan_entrypoint_rejects_missing_or_unbound_functions(protocol, entrypoint, reason):
+def test_plan_entrypoint_rejects_missing_or_unbound_functions(tmp_path, protocol, entrypoint, reason):
     protocol.production_entrypoint = entrypoint
     with pytest.raises(ValueError, match=reason):
-        science.validate_plan(protocol)
+        science.validate_plan(protocol, tmp_path)
 
 
-def test_plan_cannot_freeze_nonfinite_parameters(protocol):
+def test_plan_keeps_original_unicode_production_path(tmp_path, protocol):
+    source_file = "\ubc31\uc900/Gold/1717.\u2005\uc9d1\ud569\uc758\u2005\ud45c\ud604/\uc9d1\ud569\uc758\u2005\ud45c\ud604.py"
+    original = tmp_path / source_file
+    original.parent.mkdir(parents=True)
+    original.write_bytes(b"def find(value): return value\n")
+    protocol.source_files = [source_file]
+    protocol.production_entrypoint = source_file + ":find"
+    science.validate_plan(protocol, tmp_path)
+    assert protocol.source_files == [source_file]
+    assert protocol.production_entrypoint == source_file + ":find"
+    assert original.read_bytes() == b"def find(value): return value\n"
+    assert len(list(tmp_path.rglob("*.py"))) == 1
+
+
+@pytest.mark.parametrize("source_file", [
+    "../transform.py", "./transform.py", "pkg//transform.py", "pkg\\transform.py",
+    "/transform.py", "C:/transform.py", "pkg/transform.py:other", "CON.py",
+    "pkg/AUX.py", "pkg/transform.py.", "pkg /transform.py", "pkg/transform\n.py",
+])
+def test_plan_rejects_unsafe_production_paths_using_snapshot_root(tmp_path, protocol, source_file):
+    protocol.source_files = [source_file]
+    protocol.production_entrypoint = source_file + ":find"
+    with pytest.raises(ValueError, match="safe relative artifact path"):
+        science.validate_plan(protocol, tmp_path)
+
+
+def test_plan_cannot_freeze_nonfinite_parameters(tmp_path, protocol):
     protocol.production_entrypoint = "transform.py:transform"
     protocol.parameters["imagined_size"] = float("inf")
     with pytest.raises(ValueError, match="finite"):
-        science.validate_plan(protocol)
+        science.validate_plan(protocol, tmp_path)
 
 
 def test_instrumented_experiments_require_methods_disclosure(tmp_path, protocol, observations, literature):

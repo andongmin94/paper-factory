@@ -333,7 +333,7 @@ def run(ws: Workspace, pipeline_id: str, *, provider=None, runner=None) -> Pipel
                         write_json(root / "exports" / "feasibility.json", {"feasible": False, "reason": plan.reason, "question": plan.question})
                         _freeze(ws, current, "feasibility", root / "exports" / "feasibility.json")
                         raise PipelineBlocked("NO_FEASIBLE_RESEARCH", plan.reason)
-                    science.validate_plan(plan)
+                    science.validate_plan(plan, ws.root / "source")
                     if any(not safe_relative(ws.root / "source", path).is_file() for path in plan.source_files):
                         raise PipelineBlocked("PLAN_SOURCE_MISSING", "Research plan refers to absent source files")
                     parts = plan.production_entrypoint.rsplit(":", 1)

@@ -168,6 +168,16 @@ sample units per seed, source files, production entry point, and resources BEFOR
 observing results. Every unit/seed must be tested in each condition with every
 metric. Distinguish correctness, performance, and intentionally limited surrogate
 measures. Do not claim scientific novelty or journal suitability as established.
+Conditions must be distinct short stable labels of one to eighty characters,
+such as production and byte_hash. Put explanations in comparator or procedure,
+never in condition names. Each condition, seed, source_files path, and metric
+name must be unique within its respective list. Use exact inspected relative
+source paths, preserving their original Unicode spelling and internal spaces.
+Dependencies must contain only exact approved third-party package names from
+the controller-verified runtime capabilities, without versions or descriptions.
+Python standard-library modules and Node built-in modules require dependencies
+to be [] when no third-party package is used. Never put runtime versions,
+module descriptions, or phrases such as Python standard library only in dependencies.
 Use at least a positive control and a negative control: the positive control
 checks a known-correct case against an independent expected answer; the negative
 control intentionally perturbs the algorithm or input and verifies that the
@@ -189,6 +199,17 @@ portable path joins; the worker can run on Windows or Linux. No network, package
 installation, credential access, subprocess escape, or arbitrary host paths.
 Only approved installed dependencies are available. Save generated fixtures
 needed to reconstruct the observations within PF_OUTPUT_ROOT.
+Every generated files[].path and entrypoint must be a portable relative path
+using / separators. Do not use absolute paths, . or .. components, backslashes,
+control characters, Windows-reserved device names, trailing dots or spaces, or
+the characters : < > " | ? *. Do not generate hidden path components beginning
+with a dot or credential files. Generated files may have only
+these suffixes: .py, .js, .cjs, .mjs, .json, .md, .txt. The entrypoint must be
+listed in files and end in .py for Python, or .js, .cjs, .mjs for Node. A Node
+harness importing original TypeScript still needs a JavaScript entrypoint;
+do not generate .ts or .tsx files. All generated file contents together must
+fit within 512 KiB (524288 UTF-8 bytes); each file also has a 262144-character
+limit. Keep code compact rather than embedding large generated fixtures in it.
 Import and actually call the declared production_entrypoint for each production
 measurement. The controller records a runtime source-invocation trace separately
 from model-authored observations. Merely opening a source file or writing its
@@ -216,7 +237,7 @@ Frozen protocol:
     return prompt
 
 
-def validate_plan(plan: ResearchPlan) -> None:
+def validate_plan(plan: ResearchPlan, source_root: Path) -> None:
     """Check supported behavioral scope and explicit production-call binding.
 
     This rejects known descriptive-inventory substitutes, without pretending
@@ -229,11 +250,11 @@ def validate_plan(plan: ResearchPlan) -> None:
     if re.search(r"what assets and file sizes|^(?:asset|repository|file)[ -]inventory[?.:]?$|how many files (?:are |exist )?in (?:this|the) (?:repository|snapshot)|^count(?:ing)? (?:repository|source) files[?.:]?$", plan.question, re.I):
         raise ValueError("Descriptive asset inventory is not a substantive production-behavior study")
     entrypoint = plan.production_entrypoint
-    match = re.fullmatch(r"([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*):([A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*)", entrypoint)
-    if not match:
+    source_file, separator, callable_name = entrypoint.rpartition(":")
+    if not separator or not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*", callable_name):
         raise ValueError("Production entrypoint must name a relative source file and qualified callable")
-    source_file, callable_name = match.groups()
-    if source_file not in plan.source_files or any(part in {".", ".."} for part in source_file.split("/")):
+    safe_relative(source_root, source_file)
+    if source_file not in plan.source_files:
         raise ValueError("Production entrypoint must bind to a declared immutable source file")
     supported = {"python": {".py"}, "node": {".js", ".mjs", ".cjs", ".ts"}}
     if Path(source_file).suffix not in supported[plan.runtime] or plan.runtime == "python" and "$" in callable_name:

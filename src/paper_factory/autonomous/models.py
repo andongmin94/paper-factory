@@ -37,7 +37,7 @@ class ResearchPlan(Record):
     sampling_unit: str = Field(min_length=8, max_length=1000)
     sample_size: int = Field(ge=3, le=500)
     seeds: list[int] = Field(min_length=2, max_length=20)
-    parameters: dict[str, str | int | float] = Field(default_factory=dict)
+    parameters: dict[Annotated[str, Field(min_length=1, max_length=100)], str | int | float] = Field(default_factory=dict)
     procedure: list[str] = Field(min_length=3, max_length=30)
     analysis_method: str = Field(min_length=12, max_length=2000)
     limitations: list[str] = Field(min_length=2, max_length=12)
@@ -48,8 +48,6 @@ class ResearchPlan(Record):
         for values in (self.conditions, self.seeds, self.source_files, [m.name for m in self.metrics]):
             if len(values) != len(set(values)):
                 raise ValueError("Protocol identifiers, conditions, seeds and metrics must be distinct")
-        if any(len(key) > 100 or not key for key in self.parameters):
-            raise ValueError("Protocol parameter names must be bounded")
         return self
 
 

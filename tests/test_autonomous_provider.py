@@ -471,6 +471,30 @@ def test_invalid_wire_map_entries_are_never_restored(tmp_path, entries):
     assert not (call / "model-output.json").exists()
 
 
+@pytest.mark.parametrize("key,accepted", [("", False), ("x", True), ("x" * 100, True), ("x" * 101, False)],
+                         ids=["empty", "minimum", "maximum", "over-maximum"])
+def test_research_parameter_key_limits_reach_cli_and_reject_invalid_output(tmp_path, key, accepted):
+    from paper_factory.autonomous.models import ResearchPlan
+    schema = {"type": "object", "properties": {
+        "parameters": ResearchPlan.model_json_schema()["properties"]["parameters"],
+    }, "required": ["parameters"], "additionalProperties": False}
+    call = tmp_path / "call"
+    provider = fake_codex(tmp_path, output=json.dumps({"parameters": [{"key": key, "value": 3}]}))
+    if accepted:
+        assert provider.generate("Produce bounded settings", schema, call) == {"parameters": {key: 3}}
+    else:
+        with pytest.raises(ProviderBlocked) as raised:
+            provider.generate("Produce bounded settings", schema, call)
+        assert raised.value.code == "SCHEMA_ERROR"
+        assert not (call / "model-output.json").exists()
+    wire = json.loads((call / "schema.json").read_text(encoding="utf-8"))
+    assert wire["properties"]["parameters"]["items"]["properties"]["key"] == {
+        "type": "string", "minLength": 1, "maxLength": 100,
+    }
+    assert "propertyNames" not in wire["properties"]["parameters"]
+    assert json.loads((call / "receipt.json").read_text(encoding="utf-8"))["cleanup_confirmed"] is True
+
+
 def test_restored_map_must_also_satisfy_original_schema(tmp_path):
     schema = {"type": "object", "additionalProperties": {"type": "integer"}, "required": ["must-exist"]}
     with pytest.raises(ProviderBlocked) as raised:
