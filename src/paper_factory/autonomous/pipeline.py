@@ -654,8 +654,22 @@ def _bundle(ws: Workspace, run: PipelineRun) -> None:
     for path in (root / "literature").rglob("*"):
         if path.is_file() and path.suffix in {".json", ".pdf", ".txt"}:
             selection["literature/" + path.relative_to(root / "literature").as_posix()] = path
-    for asset in ws.latest("project", Project).assets:
+    source_project = ws.latest("project", Project)
+    for asset in source_project.assets:
         selection["source/" + asset.path] = safe_relative(ws.root / "source", asset.path)
+    provenance = exports / "source-provenance.json"
+    write_json(provenance, {
+        "repository": _sanitized(source_project.source),
+        "commit": source_project.source_commit,
+        "snapshot_digest": source_project.snapshot_digest,
+        "scope": "The sanitized source snapshot retained under source/; not the entire repository history.",
+        "license_assessment": "not_performed",
+        "license_notice_files": sorted(asset.path for asset in source_project.assets
+                                       if re.search(r"(?:^|/)(?:LICENSE|LICENCE|COPYING|NOTICE|THIRD_PARTY_NOTICES)(?:[._-]|$)", asset.path, re.I)),
+        "attribution": "Repository provenance identifies the inspected source, not manuscript authorship or permission to redistribute it.",
+    })
+    _freeze(ws, run, "source-provenance", provenance)
+    selection["source-provenance.json"] = provenance
     if sum(path.stat().st_size for path in selection.values()) > MAX_BUNDLE_BYTES:
         raise PipelineBlocked("REPRODUCTION_BUNDLE_TOO_LARGE", "Research snapshot exceeds the reproduction bundle size limit; use a smaller supported repository")
     execution = _read(ws, run, "execution")
@@ -674,6 +688,8 @@ def _bundle(ws: Workspace, run: PipelineRun) -> None:
             "execution.json records the immutable image digest and resource policy; use that exact image for the recorded experiment.\n")
     readme = ("# Reproduce this controlled software study\n\n"
               "The sanitized source, frozen protocol, generated experiment, raw observations and deterministic analysis are included.\n"
+              "source-provenance.json records the inspected repository, commit, snapshot digest and retained license/notice paths. "
+              "Source license authorization has not been assessed; repository attribution does not establish manuscript authorship.\n"
               "Install Paper Factory with its research/PDF extras.\n" + runtime_instructions +
               "Run the bundled analysis script with its documented arguments to recompute reported values from observations.json.\n"
               "Run generated code through the enforced research runner. It supplies platform-native PF_SOURCE_ROOT, PF_CODE_ROOT, "

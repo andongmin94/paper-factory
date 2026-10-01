@@ -18,6 +18,7 @@ import zipfile
 import pytest
 
 from paper_factory.author import AuthorProfile
+from paper_factory.models import Project
 from paper_factory.autonomous import literature, pipeline, science
 from paper_factory.autonomous.models import PipelineRun, ResearchPlan
 from paper_factory.autonomous.provider import CodexProvider, ProviderBlocked
@@ -640,6 +641,37 @@ def test_completed_mock_wiring_reopens_native_exports_and_recomputes_raw_data(wo
         assert reproduced[key] == analysis[key]
     canonical = json.loads(workspace.path(result.artifacts["canonical"].path).read_text())
     assert canonical["publication_status"] == "not_submitted" and canonical["scientific_review"] == "required"
+
+
+@pytest.mark.parametrize("license_path", [None, "licenses/NOTICE.txt"])
+def test_reproduction_retains_source_identity_without_inventing_license_permission(workspace, components, tmp_path, pandoc, monkeypatch, license_path):
+    monkeypatch.setenv("PYPANDOC_PANDOC", pandoc)
+    source = tmp_path / "provenance-input"
+    source.mkdir()
+    (source / "transform.py").write_text("def transform(values):\n    return list(values)\n", encoding="utf-8")
+    if license_path:
+        notice = source / license_path
+        notice.parent.mkdir()
+        notice.write_text("Synthetic notice; no license assessment fixture.\n", encoding="utf-8")
+    ws = ingest(str(source), tmp_path / "provenance-workspace")
+    identity = ws.latest("project", Project)
+    identity.source = "https://github.com/example/research-source"
+    identity.source_commit = "a" * 40
+    ws.save("project", identity)
+    result = launch(ws, components)
+    assert result.status == "completed", (result.code, result.message)
+    assert pipeline.verify(ws, result.id)["passed"]
+    with zipfile.ZipFile(pipeline._artifact(ws, result, "reproducibility")) as archive:
+        provenance = json.loads(archive.read("source-provenance.json"))
+        assert provenance["repository"] == identity.source
+        assert provenance["commit"] == identity.source_commit
+        assert provenance["snapshot_digest"] == identity.snapshot_digest
+        assert provenance["license_assessment"] == "not_performed"
+        assert provenance["license_notice_files"] == ([license_path] if license_path else [])
+        assert "not manuscript authorship or permission" in provenance["attribution"]
+        assert "source-provenance.json" in archive.read("README.md").decode()
+        entry = json.loads(archive.read("inventory.json"))["source-provenance.json"]
+        assert entry["sha256"] == hashlib.sha256(archive.read("source-provenance.json")).hexdigest()
 
 
 def test_structural_repair_can_succeed_without_replanning(workspace, components, pandoc, monkeypatch):

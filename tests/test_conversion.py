@@ -1,4 +1,6 @@
 from pathlib import Path
+import hashlib
+import json
 import subprocess
 from types import SimpleNamespace
 import zipfile
@@ -62,6 +64,65 @@ def test_pdf_export_native_numbering_matches_requested_flags(source, pandoc, ena
     assert "Export contract" in text and "visible section structure" in text
     if not enabled:
         assert not any(character.isdigit() for character in text)
+
+
+@pytest.mark.parametrize("suffix", [".docx", ".tex", ".pdf"])
+def test_pipe_tables_after_captions_convert_to_native_tables_without_editing_source(source, pandoc, suffix):
+    source.write_text("# Controlled results\n\nDescriptive statistics.\n"
+                      "| Metric | Condition | Count | Mean |\n| --- | --- | ---: | ---: |\n"
+                      "| accuracy | production | 12 | 1 |\n\nPaired differences.\n"
+                      "| Metric | Baseline | Pairs | Mean delta |\n| --- | --- | ---: | ---: |\n"
+                      "| accuracy | production | 12 | -1 |\n", encoding="utf-8")
+    original = source.read_bytes()
+    output = source.with_suffix(suffix)
+    receipt = conversion.convert(source, output, pandoc=pandoc)
+    assert source.read_bytes() == original
+    assert receipt["input_sha256"] == hashlib.sha256(original).hexdigest()
+    assert receipt["pandoc_input_sha256"] == hashlib.sha256(conversion._table_spacing(original.decode()).encode()).hexdigest()
+    assert receipt["pandoc_input_sha256"] != receipt["input_sha256"]
+    if suffix == ".docx":
+        from docx import Document
+        tables = Document(output).tables
+        assert len(tables) == 2
+        assert [cell.text for cell in tables[0].rows[1].cells] == ["accuracy", "production", "12", "1"]
+        assert [cell.text for cell in tables[1].rows[1].cells] == ["accuracy", "production", "12", "-1"]
+    elif suffix == ".tex":
+        text = output.read_text(encoding="utf-8")
+        assert text.count(r"\begin{longtable}") == 2
+        assert "accuracy & production & 12 & -1" in text
+    else:
+        from pypdf import PdfReader
+        generated = output.with_suffix(".typ").read_text(encoding="utf-8")
+        assert generated.count("#table(") == 2
+        text = " ".join(page.extract_text() or "" for page in PdfReader(output).pages)
+        assert "accuracy" in text and "Mean delta" in text and "---" not in text and "| Metric" not in text
+    receipts = source.with_name("receipts.json")
+    receipts.write_text(json.dumps({suffix[1:]: receipt}), encoding="utf-8")
+    assert conversion.verify_receipts(source, {suffix[1:]: output}, receipts) == []
+
+
+def test_pipe_table_spacing_preserves_fenced_indented_and_already_spaced_code():
+    text = ("Caption\r\n\r\n| Metric | n |\r\n| --- | ---: |\r\n| x | 2 |\r\n\r\n"
+            "```markdown\nCaption\n| Metric | n |\n| --- | ---: |\n```\n\n"
+            "~~~~text\nCaption\n| Metric | n |\n| --- | ---: |\n~~~~\n\n"
+            "    Literal caption\n    | Metric | n |\n    | --- | ---: |\n")
+    assert conversion._table_spacing(text) == text
+    changed = conversion._table_spacing("Caption\n| Metric | n |\n| --- | ---: |\n| x | 2 |\n")
+    assert changed.startswith("Caption\n\n| Metric")
+    assert conversion._table_spacing(changed) == changed
+
+
+def test_trusted_statistics_renderer_separates_tables_before_pandoc_parsing(pandoc):
+    from paper_factory.autonomous import science
+    summaries = [{"metric": "accuracy", "condition": "production", "unit": "fraction",
+                  "count": 12, "mean": 1, "median": 1, "stdev": 0, "min": 1, "max": 1}]
+    paired = [{"metric": "accuracy", "condition": "ablation", "baseline": "production",
+               "count": 12, "mean": -1, "median": -1, "stdev": 0, "min": -1, "max": -1}]
+    text = science._tables({"summaries": summaries, "paired_deltas": paired})
+    assert conversion._table_spacing(text) == text
+    parsed = subprocess.run([pandoc, "--from=markdown-smart-raw_tex-raw_html", "--to=json"],
+                            input=text, text=True, capture_output=True, encoding="utf-8", check=True)
+    assert sum(block["t"] == "Table" for block in json.loads(parsed.stdout)["blocks"]) == 2
 
 
 def test_missing_converter_cannot_leave_a_stale_successful_artifact(source, monkeypatch):

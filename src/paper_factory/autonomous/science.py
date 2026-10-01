@@ -561,14 +561,14 @@ def _cell(value: Any) -> str:
 
 
 def _tables(analysis: dict) -> str:
-    parts = ["Descriptive statistics of the measured observations.",
+    parts = ["Descriptive statistics of the measured observations.", "",
              "| Metric | Condition | Unit | Count | Mean | Median | Sample SD | Min | Max |",
              "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |"]
     for row in analysis["summaries"]:
         cells = [_cell(row[key]) for key in ("metric", "condition", "unit")]
         cells += [_number(row[key]) for key in ("count", "mean", "median", "stdev", "min", "max")]
         parts.append("| " + " | ".join(cells) + " |")
-    parts += ["", "Paired differences are condition minus the first protocol condition.",
+    parts += ["", "Paired differences are condition minus the first protocol condition.", "",
               "| Metric | Condition | Baseline | Pairs | Mean delta | Median delta | Sample SD | Min | Max |",
               "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |"]
     for row in analysis["paired_deltas"]:

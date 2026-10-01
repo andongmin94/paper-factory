@@ -33,11 +33,26 @@ Frontend readiness now follows the actual subscription provider status, includin
 an existing CLI login, and clears stale connection information after failed
 refreshes. Default web paths use the native `PF_HOME` studies/web directories.
 
-The current Windows collection contains **1,336 cases: 1,322 passed, 14 skipped,
+The current Windows collection contains **1,343 cases: 1,329 passed, 14 skipped,
 0 failed and 0 uncovered**. Complete fresh file shards and final affected reruns
 were deduplicated against the exact current collection. Per-case evidence is
 preserved at
 `C:/Users/Public/Documents/ESTsoft/CreatorTemp/paperfactory-code-cleanup-verification/result.json`.
+
+The first live PDF exposed missing blank lines between trusted statistical
+captions and pipe tables. Rendering now writes valid table separation; conversion
+also records any whitespace normalization of its Pandoc input while preserving
+the original manuscript bytes and digest. Native PDF/Typst, Word and LaTeX
+regressions verify real tables and preserved literal code. The conversion report
+passed 17 cases, and the affected scientific renderer plus completed synthetic
+pipeline export/recompute report passed 110 cases. Reproduction packages now
+include repository URL, pinned commit, snapshot digest and retained license/notice
+paths in an inventoried source-provenance record, with license assessment
+explicitly unperformed. Two repository/notice variants passed native export and
+independent verification. Their first run omitted the test's Pandoc environment;
+the corrected run then encountered one transient Windows lock on a verification
+PNG during temporary-directory cleanup. A complete focused repeat passed both;
+no cleanup or scientific gate was relaxed. Original reports remain preserved.
 
 The initial broad run exposed an obsolete Docker fixture substring assertion;
 the corrected test checks actual mounts and environment bindings. One fake CLI
