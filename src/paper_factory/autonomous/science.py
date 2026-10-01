@@ -720,7 +720,7 @@ def _figures(analysis: dict, output_root: Path) -> None:
             axes.set_xlabel("Frozen experimental condition")
             axes.set_title("Descriptive means of controlled fixture measurements")
             figure.tight_layout()
-            figure.savefig(safe_relative(output_root, f"figure-{index}.png"), dpi=160)
+            figure.savefig(safe_relative(output_root, f"figure-{index}.png"), dpi=160, bbox_inches="tight")
         finally:
             plt.close(figure)
 

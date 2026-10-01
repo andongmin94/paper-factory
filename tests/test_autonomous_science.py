@@ -204,6 +204,36 @@ def test_analysis_recomputes_paired_measurements_without_model_values(tmp_path, 
     assert reproduced["parameters"]["observation_count"] == 12
 
 
+def test_saved_figure_includes_long_axis_label_outside_original_canvas(tmp_path, monkeypatch):
+    matplotlib = pytest.importorskip("matplotlib")
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+
+    captured = {}
+    subplots = plt.subplots
+
+    def capture_figure(*args, **kwargs):
+        figure, axes = subplots(*args, **kwargs)
+        captured.update(figure=figure, axes=axes)
+        return figure, axes
+
+    monkeypatch.setattr(plt, "subplots", capture_figure)
+    analysis = {"summaries": [{"metric": "selected_bonus_rate", "condition": "production", "mean": 1,
+                               "unit": "synthetic percentage points over all controlled fixture conditions"}]}
+    science._figures(analysis, tmp_path)
+    figure, axes = captured["figure"], captured["axes"]
+    canvas = FigureCanvasAgg(figure)
+    canvas.draw()
+    renderer = canvas.get_renderer()
+    label_bbox = axes.yaxis.label.get_window_extent(renderer)
+    assert label_bbox.y0 < figure.bbox.y0 or label_bbox.y1 > figure.bbox.y1
+    required_bbox = figure.get_tightbbox(renderer)
+    image = plt.imread(tmp_path / "figure-1.png")
+    assert image.shape[0] >= required_bbox.height * 160 - 1
+    assert image.shape[1] >= required_bbox.width * 160 - 1
+
+
 def test_analysis_preserves_embedded_fixture_bytes_without_extracting_labels(tmp_path, protocol, observations):
     payload = b'\x00\xff\r\n{"measurement_input":"exact bytes"}'
     observations["fixtures"] = [embedded_fixture("../never-extract.bin", payload),
