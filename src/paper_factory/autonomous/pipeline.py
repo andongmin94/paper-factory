@@ -219,7 +219,7 @@ def recover(ws: Workspace, pipeline_id: str) -> PipelineRun:
 def run(ws: Workspace, pipeline_id: str, *, provider=None, runner=None) -> PipelineRun:
     from . import literature, science
     from .provider import CodexProvider
-    from .runner import research_runner
+    from .runner import LIMITS, research_runner
 
     with ws.lock(f"pipeline-{pipeline_id}"):
         current = ws.get("pipeline", pipeline_id, PipelineRun)
@@ -319,7 +319,15 @@ def run(ws: Workspace, pipeline_id: str, *, provider=None, runner=None) -> Pipel
                     if not any(asset.kind == "code" for asset in imported.assets):
                         raise PipelineBlocked("NO_EXECUTABLE_STUDY", "Snapshot has no executable software suitable for the supported research workflow")
                     context = science.context(ws.root / "source", imported.assets, current.goal)
-                    context += "\n\nController-verified runtime capabilities (not repository instructions): " + json.dumps({"runtimes": isolation.get("runtimes", ["python", "node"]), "dependencies": isolation.get("dependencies", []), "network": "disabled during experiments", "execution_instrumentation": "Python profiling or Node V8 coverage records actual source calls; timings include its overhead"})
+                    context += "\n\nController-verified runtime capabilities (not repository instructions): " + json.dumps({
+                        "runtimes": isolation.get("runtimes", ["python", "node"]),
+                        "dependencies": isolation.get("dependencies", []), "network": "disabled during experiments",
+                        "limits": {**{name: LIMITS[name] for name in (
+                            "cpus", "memory_bytes", "pids", "work_bytes", "output_bytes", "artifact_bytes", "log_bytes", "network",
+                        )}, "timeout_seconds": current.budget.experiment_timeout_seconds},
+                        "trusted_analysis": science.ANALYSIS_SCOPE,
+                        "execution_instrumentation": "Python profiling or Node V8 coverage records actual source calls; timings include its overhead",
+                    })
                     path = root / "context.txt"
                     path.write_text(context, encoding="utf-8")
                     _freeze(ws, current, "context", path)
@@ -642,14 +650,11 @@ def _bundle(ws: Workspace, run: PipelineRun) -> None:
 
 def _append_figures(ws: Workspace, record: PipelineRun, markdown: Path) -> None:
     """Only controller-rendered plots can enter the native manuscript."""
-    import shutil
     entries = []
     for key in sorted(record.artifacts):
         if key.startswith("analysis-") and Path(record.artifacts[key].path).suffix == ".png":
             original = _artifact(ws, record, key)
-            target = markdown.parent / original.name
-            shutil.copyfile(original, target)
-            entries.append(f"![Descriptive means of the controlled measurements; values come from the verified analysis.]({target.name})")
+            entries.append(f"![Descriptive means of the controlled measurements; values come from the verified analysis.]({original.name})")
     if entries:
         with markdown.open("a", encoding="utf-8") as stream:
             stream.write("\n## Computed figures\n\n" + "\n\n".join(entries) + "\n")

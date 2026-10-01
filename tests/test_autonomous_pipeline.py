@@ -35,7 +35,7 @@ def protocol():
         "comparator": "An explicit guard-removal ablation retains the other transformation rules.",
         "independent_oracle": "Fixture annotations define exact expected values independently of the comparator.",
         "sampling_unit": "An independently seeded input with its own protected annotations.",
-        "sample_size": 3, "seeds": [11, 37], "parameters": {"fixture_size": 12, "execution_instrumentation": "Synthetic controller trace receipt; no actual production execution"},
+        "units_per_seed": 3, "seeds": [11, 37], "parameters": {"fixture_size": 12, "execution_instrumentation": "Synthetic controller trace receipt; no actual production execution"},
         "procedure": ["Generate seeded inputs and independent annotations.", "Invoke unchanged source and explicit comparator.",
                       "Measure paired errors and inspect positive and negative controls."],
         "analysis_method": "Descriptive statistics with differences paired by seed and fixture unit.",
@@ -76,7 +76,7 @@ def manuscript():
                      "{{result:error.condition_2.mean}} events. The paired mean difference is "
                      "{{result:error.paired_2_minus_1.mean}} events.")
         elif heading == "Experimental Setup":
-            text += "The protocol sample size is {{parameter:sample_size}} units per seed."
+            text += "The protocol uses {{parameter:units_per_seed}} units for each seed."
             text += " Recorded instrumentation: {{parameter:setting.execution_instrumentation}}."
         elif heading == "Related Work":
             text += "The synthetic passage describes independently defined expected outcomes {{citation:fixture-oracle}}."
@@ -256,6 +256,38 @@ def test_missing_isolation_has_no_host_fallback(workspace, components):
     assert not components[0].calls and components[1].calls == 0
 
 
+def test_planning_receives_configured_execution_limits_and_trusted_analysis_scope(workspace, components):
+    from paper_factory.autonomous.runner import LIMITS
+
+    def stop_after_planning_context(label):
+        if label == "ResearchPlan":
+            raise ProviderBlocked("NETWORK_ERROR", "Synthetic stop after capturing the planning context")
+
+    provider, runner, _, _ = components
+    provider.on_generate = stop_after_planning_context
+    result = launch(workspace, components, budget={"experiment_timeout_seconds": 37})
+    assert result.status == "blocked" and result.stage == "plan" and result.code == "NETWORK_ERROR"
+    assert provider.calls == ["ResearchPlan"] and runner.calls == 0
+    context = pipeline._artifact(workspace, result, "context").read_text(encoding="utf-8")
+    assert context in provider.prompts[0]
+    marker = "Controller-verified runtime capabilities (not repository instructions): "
+    capabilities = json.loads(context.rsplit(marker, 1)[1])
+    assert capabilities["limits"] == {**{name: LIMITS[name] for name in (
+        "cpus", "memory_bytes", "pids", "work_bytes", "output_bytes", "artifact_bytes", "log_bytes", "network",
+    )}, "timeout_seconds": 37}
+    assert "uid" not in capabilities["limits"]
+    assert "read_only_root" not in capabilities["limits"]
+    assert capabilities["runtimes"] == runner.status()["runtimes"]
+    assert capabilities["dependencies"] == runner.status()["dependencies"]
+    assert capabilities["network"] == "disabled during experiments"
+    scope = capabilities["trusted_analysis"].casefold()
+    for required in ("fixed", "seed", "pooled", "descriptive", "mean", "median", "stdev", "min", "max", "count", "paired"):
+        assert required in scope
+    for unsupported in ("bootstrap", "confidence intervals", "hypothesis tests", "stratified inference"):
+        assert unsupported in scope
+    assert "no " in scope or "not supported" in scope
+
+
 def test_model_budget_counts_calls_and_is_not_reset_by_resume(workspace, components):
     result = launch(workspace, components, budget={"max_model_calls": 1})
     assert result.status == "blocked" and result.code == "MODEL_BUDGET_EXHAUSTED"
@@ -330,11 +362,29 @@ def test_invalid_observation_shape_uses_bounded_repairs_with_frozen_protocol(wor
 
 def test_completed_mock_wiring_reopens_native_exports_and_recomputes_raw_data(workspace, components, tmp_path, pandoc, monkeypatch):
     native_exports_available(pandoc, monkeypatch)
+    import shutil
+    copyfile = shutil.copyfile
+    plot_copies = []
+    def capture_plot_copy(source, destination, *args, **kwargs):
+        if Path(source).suffix == ".png" and Path(destination).parent.name == "exports":
+            plot_copies.append((Path(source), Path(destination)))
+        return copyfile(source, destination, *args, **kwargs)
+    monkeypatch.setattr(shutil, "copyfile", capture_plot_copy)
     components[3]["value"] = "full_text"
     result = launch(workspace, components)
     assert result.status == "completed", (result.code, result.message)
     assert result.stage == "done" and result.model_calls == len(components[0].calls) and components[1].calls == 1
     assert pipeline.verify(workspace, result.id)["passed"]
+    plots = [pipeline._artifact(workspace, result, key) for key in result.artifacts
+             if key.startswith("analysis-") and Path(result.artifacts[key].path).suffix == ".png"]
+    assert len(plot_copies) == len(plots)
+    with zipfile.ZipFile(pipeline._artifact(workspace, result, "export-docx")) as word:
+        media = [word.read(name) for name in word.namelist() if name.startswith("word/media/")]
+    for plot in plots:
+        target = pipeline._artifact(workspace, result, "manuscript").parent / plot.name
+        assert plot_copies.count((plot, target)) == 1
+        assert target.read_bytes() == plot.read_bytes()
+        assert plot.read_bytes() in media
     from docx import Document
     from pypdf import PdfReader
     assert len(PdfReader(workspace.path(result.artifacts["export-pdf"].path)).pages) > 0
@@ -643,7 +693,7 @@ def test_native_pipeline_measures_source_and_verifies_exports(workspace, compone
     provider.plan["comparator"] = "A deletion ablation removes the final annotated fixture value while preserving all other values."
     provider.plan["limitations"] = ["Controlled fixtures do not establish natural input population behavior.",
                                    "Model planning, review, manuscript and literature in this integration test are simulated."]
-    settings = {"seeds": provider.plan["seeds"], "sample_size": provider.plan["sample_size"],
+    settings = {"seeds": provider.plan["seeds"], "units_per_seed": provider.plan["units_per_seed"],
                 "fixture_size": provider.plan["parameters"]["fixture_size"]}
     code = '''import itertools, json, os, pathlib, random, sys
 sys.path.insert(0, os.environ['PF_SOURCE_ROOT'])
@@ -655,7 +705,7 @@ def violations(actual, expected):
 rows = []
 for seed in settings['seeds']:
     generator = random.Random(seed)
-    for unit in range(settings['sample_size']):
+    for unit in range(settings['units_per_seed']):
         values = [generator.randrange(10000) for _ in range(settings['fixture_size'])]
         annotation = tuple(values)
         actual = transform(values)

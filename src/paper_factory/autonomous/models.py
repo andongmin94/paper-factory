@@ -35,7 +35,10 @@ class ResearchPlan(Record):
     comparator: str = Field(min_length=12, max_length=3000)
     independent_oracle: str = Field(min_length=12, max_length=3000)
     sampling_unit: str = Field(min_length=8, max_length=1000)
-    sample_size: int = Field(ge=3, le=500)
+    units_per_seed: int = Field(ge=3, le=500, description=(
+        "Distinct units for EACH seed; total = units_per_seed * len(seeds). "
+        "Procedures and parameters must agree with this count."
+    ))
     seeds: list[int] = Field(min_length=2, max_length=20)
     parameters: dict[Annotated[str, Field(min_length=1, max_length=100)], str | int | float] = Field(default_factory=dict)
     procedure: list[str] = Field(min_length=3, max_length=30)

@@ -29,7 +29,7 @@ def protocol():
         comparator="The ablation removes the guard while preserving remaining behavior.",
         independent_oracle="An independent fixture generator computes exact preserved values.",
         sampling_unit="A generated input with protected values and independently known output.",
-        sample_size=3, seeds=[11, 37], parameters={"fixture_size": 12},
+        units_per_seed=3, seeds=[11, 37], parameters={"fixture_size": 12},
         procedure=["Generate seeded fixtures.", "Run real production and comparator.", "Compare both against independent expected outputs."],
         analysis_method="Descriptive summaries and differences paired by seed and fixture.",
         limitations=["Synthetic cases cannot establish behavior in natural input populations.", "One source snapshot does not establish universal software correctness."],
@@ -93,6 +93,32 @@ def test_parameter_key_boundaries_match_model_and_actual_wire_schema(protocol, k
             ResearchPlan.model_validate(original)
 
 
+def test_units_per_seed_contract_is_required_and_explains_total_units(protocol):
+    schema = ResearchPlan.model_json_schema()
+    wire_schema = _wire_schema(schema)
+    for external in (schema, wire_schema):
+        assert "units_per_seed" in external["required"]
+        assert "sample_size" not in external["properties"]
+        field = external["properties"]["units_per_seed"]
+        assert field["type"] == "integer" and field["minimum"] == 3 and field["maximum"] == 500
+        assert "EACH seed" in field["description"]
+        assert "units_per_seed * len(seeds)" in field["description"]
+
+    original = protocol.model_dump(mode="json")
+    wire = {**original, "parameters": [{"key": key, "value": value}
+                                      for key, value in original["parameters"].items()]}
+    for external, value in ((schema, original), (wire_schema, wire)):
+        assert Draft202012Validator(external).is_valid(value)
+        legacy = {**value, "sample_size": value["units_per_seed"]}
+        del legacy["units_per_seed"]
+        assert not Draft202012Validator(external).is_valid(legacy)
+    legacy = {**original, "sample_size": original["units_per_seed"]}
+    del legacy["units_per_seed"]
+    with pytest.raises(ValidationError) as raised:
+        ResearchPlan.model_validate(legacy)
+    assert {error["type"] for error in raised.value.errors()} == {"missing", "extra_forbidden"}
+
+
 @pytest.fixture
 def observations():
     rows = []
@@ -137,7 +163,7 @@ def valid_draft():
         elif heading == "Related Work":
             text += "Independent software oracles compare behavior against expected outcomes {{citation:source-oracle}}."
         elif heading == "Experimental Setup":
-            text += "Each seed had {{parameter:sample_size}} fixture units and the seed count was {{parameter:seed_count}}."
+            text += "Each seed had {{parameter:units_per_seed}} fixture units and the seed count was {{parameter:seed_count}}."
         sections.append({"heading": heading, "text": text})
     return {"title": "A controlled comparison of transformation behavior", "sections": sections}
 
@@ -148,13 +174,22 @@ def test_analysis_recomputes_paired_measurements_without_model_values(tmp_path, 
     assert result["results"]["error.condition_2.mean"]["value"] == 2
     assert result["results"]["error.paired_2_minus_1.mean"]["value"] == 2
     assert result["results"]["error.condition_2.stdev"]["value"] == pytest.approx((4 / 5) ** 0.5)
+    assert protocol.units_per_seed == 3 and len(protocol.seeds) == 2
+    assert result["parameters"]["units_per_seed"] == 3
     assert result["parameters"]["unit_count"] == 6
+    assert result["parameters"]["observation_count"] == 12
+    assert {row["count"] for row in result["summaries"]} == {6}
+    assert {row["count"] for row in result["paired_deltas"]} == {6}
     assert result["parameters"]["setting.fixture_size"] == 12
     assert (tmp_path / "tables.csv").read_text().count("production") == 1
     assert (tmp_path / "tables.md").is_file()
     completed = subprocess.run([sys.executable, str(tmp_path / "analysis.py")], capture_output=True, text=True, timeout=20)
     assert completed.returncode == 0, completed.stderr
-    assert json.loads((tmp_path / "analysis-reproduced.json").read_text()) == result
+    reproduced = json.loads((tmp_path / "analysis-reproduced.json").read_text())
+    assert reproduced == result
+    assert reproduced["parameters"]["units_per_seed"] == 3
+    assert reproduced["parameters"]["unit_count"] == 6
+    assert reproduced["parameters"]["observation_count"] == 12
 
 
 @pytest.mark.parametrize("mutate,reason", [
@@ -165,7 +200,7 @@ def test_analysis_recomputes_paired_measurements_without_model_values(tmp_path, 
     (lambda value: value["observations"][0].update(seed=True), "seed"),
     (lambda value: value["observations"][0].update(metric="invented"), "frozen"),
     (lambda value: value["observations"][0].update(condition="invented"), "frozen"),
-    (lambda value: value["observations"][0].update(unit_id="extra-unit"), "sample_size"),
+    (lambda value: value["observations"][0].update(unit_id="extra-unit"), "units_per_seed"),
     (lambda value: value["observations"].__setitem__(0, value["observations"][1].copy()), "Duplicate"),
     (lambda value: value["observations"][0].update(p_value=0.01), "exactly"),
     (lambda value: value["controls"][0].update(passed=False), "control failed"),
@@ -185,7 +220,7 @@ def test_analysis_rejects_unpaired_units_even_with_complete_row_count(tmp_path, 
     for row in observations["observations"]:
         if row["condition"] == "ablation":
             row["unit_id"] += "-different"
-    with pytest.raises(ValueError, match="sample_size"):
+    with pytest.raises(ValueError, match="units_per_seed"):
         science.analyze(observations, protocol, tmp_path)
 
 

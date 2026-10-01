@@ -27,6 +27,12 @@ MAX_CONTEXT_CHARS = 96_000
 MAX_FILE_CHARS = 16_000
 MAX_CONTEXT_FILES = 48
 MAX_INVENTORY_CHARS = 16_000
+ANALYSIS_SCOPE = (
+    "Fixed-seed pooled descriptive statistics: mean, median, sample standard deviation (stdev), "
+    "min, max and count, plus paired differences (each comparator minus the first condition). "
+    "No bootstrap, confidence intervals, hypothesis tests, or stratified inference. "
+    "No population inference or independence claim."
+)
 REQUIRED_SECTIONS = (
     "Abstract", "Introduction", "Related Work", "Research Questions", "Method",
     "Experimental Setup", "Results", "Discussion", "Threats to Validity",
@@ -168,6 +174,18 @@ sample units per seed, source files, production entry point, and resources BEFOR
 observing results. Every unit/seed must be tested in each condition with every
 metric. Distinguish correctness, performance, and intentionally limited surrogate
 measures. Do not claim scientific novelty or journal suitability as established.
+units_per_seed is the number of DISTINCT sampling units for EACH seed, never
+the total across seeds. The total number of sampling units is units_per_seed
+multiplied by len(seeds); total scalar observations multiply that total by the
+number of conditions and metrics. Procedures and parameters must agree with
+units_per_seed. Do not redefine the sampling count in parameters.
+Stay within the controller-verified resource limits and experiment timeout;
+do not invent larger memory, disk, artifact, process, or time budgets. Choose a
+grid small enough to complete within those limits. Plan only the supported
+trusted analysis described by the controller: pooled descriptive statistics
+over fixed seeds and paired differences. Do not request bootstrap, confidence
+intervals, hypothesis tests, or stratified inference. Generated code measures
+raw observations; the trusted controller alone computes reported analysis.
 Conditions must be distinct short stable labels of one to eighty characters,
 such as production and byte_hash. Put explanations in comparator or procedure,
 never in condition names. Each condition, seed, source_files path, and metric
@@ -220,8 +238,11 @@ Output observations.json inside PF_OUTPUT_ROOT with this exact shape:
 "metric":"frozen metric name","value":0.0}],
 "controls":[{"name":"positive ...","passed":true,"details":"what was observed"},
 {"name":"negative ...","passed":true,"details":"intentional fault and detected failure"}]}
-Each frozen seed has exactly the planned number of distinct unit_id values, and
-each unit is measured under ALL conditions and metrics. Values must be finite
+Each frozen seed has exactly units_per_seed distinct unit_id values, never a
+fraction of that number shared across seeds. Total sampling units are
+units_per_seed * len(seeds), and every unit is measured under ALL conditions
+and metrics. Procedures and parameters must agree with that frozen count.
+Values must be finite
 real measured numbers. Do not output aggregate averages instead of raw rows.
 Implement the independent oracle separately from the production function. The
 negative control must prove the oracle notices an intentional error. If a
@@ -333,7 +354,7 @@ def _compute(observations: dict, protocol: dict) -> dict:
     controls = observations["controls"]
     if not isinstance(rows, list) or not isinstance(controls, list):
         raise ValueError("Observations and controls must be lists")
-    expected_count = len(protocol["seeds"]) * protocol["sample_size"] * len(protocol["conditions"]) * len(protocol["metrics"])
+    expected_count = len(protocol["seeds"]) * protocol["units_per_seed"] * len(protocol["conditions"]) * len(protocol["metrics"])
     if len(rows) != expected_count:
         raise ValueError(f"Sampling protocol requires exactly {expected_count} observation rows")
     if len(controls) < 2 or len(controls) > 40:
@@ -387,8 +408,8 @@ def _compute(observations: dict, protocol: dict) -> dict:
         units_by_seed[seed].add(unit)
     for seed in protocol["seeds"]:
         units = units_by_seed[seed]
-        if len(units) != protocol["sample_size"]:
-            raise ValueError("Each seed must have exactly sample_size distinct units")
+        if len(units) != protocol["units_per_seed"]:
+            raise ValueError("Each seed must have exactly units_per_seed distinct units")
         for unit in units:
             for condition in conditions:
                 for metric in metrics:
@@ -421,7 +442,7 @@ def _compute(observations: dict, protocol: dict) -> dict:
                                 "description": f"{statistic} of paired {metric_name} difference: {condition} minus {baseline}",
                                 "source": "observations.json"}
     parameters = {
-        "sample_size": protocol["sample_size"], "seed_count": len(protocol["seeds"]),
+        "units_per_seed": protocol["units_per_seed"], "seed_count": len(protocol["seeds"]),
         "seed_list": ", ".join(str(seed) for seed in protocol["seeds"]),
         "unit_count": len(ordered_units), "observation_count": len(rows),
         "condition_count": len(conditions), "conditions": ", ".join(conditions),
@@ -440,7 +461,7 @@ def _compute(observations: dict, protocol: dict) -> dict:
     return {"schema_version": 1, "results": results, "parameters": parameters,
             "summaries": summaries, "paired_deltas": paired, "controls": controls,
             "observation_digest": digest, "protocol_digest": protocol_digest,
-            "analysis_scope": "Descriptive statistics pooled across fixed seeds and paired synthetic units; no population inference or independence claim.",
+            "analysis_scope": ANALYSIS_SCOPE,
             "statistic_definition": "stdev is sample standard deviation (n-1 denominator); paired differences are condition minus the first protocol condition."}
 
 
@@ -494,6 +515,7 @@ def analyze(observations: dict, plan: ResearchPlan, output_root: Path) -> dict:
     # no dependency on Paper Factory, model access, or a live provider login.
     script = '"""Reproduce deterministic analysis using only Python standard library."""\n'
     script += "import argparse\nimport hashlib\nimport json\nimport math\nimport re\nimport statistics\nfrom pathlib import Path\n\n"
+    script += "ANALYSIS_SCOPE = " + repr(ANALYSIS_SCOPE) + "\n\n"
     script += inspect.getsource(ControlFailure) + "\n" + inspect.getsource(_statistics) + "\n" + inspect.getsource(_compute) + "\n"
     script += "if __name__ == '__main__':\n    parser = argparse.ArgumentParser()\n"
     script += "    parser.add_argument('--observations', type=Path, default=Path(__file__).with_name('analysis-observations.json'))\n"

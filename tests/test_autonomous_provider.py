@@ -811,7 +811,7 @@ def test_actual_research_plan_contract_is_supported_without_changing_caller_api(
         production_entrypoint="module.py", dependencies=[], conditions=["reference", "production"],
         metrics=[{"name": "duration", "description": "Measured elapsed runtime per independent sample.", "unit": "ms"}],
         comparator="Use a preserved independent baseline implementation.", independent_oracle="Check each result against a simple reference implementation.",
-        sampling_unit="One independently seeded fixture.", sample_size=3, seeds=[1, 2],
+        sampling_unit="One independently seeded fixture.", units_per_seed=3, seeds=[1, 2],
         parameters={"count": 3, "ratio": 0.5, "label": "fixture"},
         procedure=["Generate independent seeded inputs.", "Invoke both production and reference.", "Record paired observations."],
         analysis_method="Compare paired observations with a bootstrap confidence interval.",

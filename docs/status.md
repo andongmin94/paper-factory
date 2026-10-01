@@ -33,7 +33,7 @@ Frontend readiness now follows the actual subscription provider status, includin
 an existing CLI login, and clears stale connection information after failed
 refreshes. Default web paths use the native `PF_HOME` studies/web directories.
 
-The current Windows collection contains **1,266 cases: 1,252 passed, 14 skipped,
+The current Windows collection contains **1,268 cases: 1,254 passed, 14 skipped,
 0 failed and 0 uncovered**. Complete fresh file shards and final affected reruns
 were deduplicated against the exact current collection. Per-case evidence is
 preserved at
@@ -78,6 +78,23 @@ preserving Korean filenames and internal Unicode spaces while rejecting unsafe
 paths. The complete affected science/provider/pipeline report passed 208 cases
 with five skips:
 `C:/Users/Public/Documents/ESTsoft/CreatorTemp/paperfactory-live-contracts.xml`.
+
+Two live proposals then confused total sampling units with units for each seed,
+and requested resource/analysis capabilities that the worker did not provide.
+Both jobs were cancelled before isolated execution, with confirmed cleanup;
+their frozen plans and model receipts remain unchanged. The ambiguous
+`sample_size` field has been replaced by required `units_per_seed` throughout
+the schema, measurements, manuscript parameters and standalone reanalysis.
+Assessment now supplies the actual common resource bounds and configured
+experiment timeout, plus the supported pooled descriptive/paired analysis.
+Linux-only UID/filesystem metadata is not presented as Windows capabilities.
+PNG copying is performed once by export; manuscript assembly only adds the
+verified image references. The final affected suites passed 210 cases with five
+skips, including actual DOCX image inclusion and standalone reanalysis:
+`C:/Users/Public/Documents/ESTsoft/CreatorTemp/paperfactory-live-units-contract-final.xml`.
+An earlier export test hit a transient PNG PermissionError; its direct locking
+cause remains unconfirmed, and its failed report was preserved. Existing frozen
+development protocols using the previous field are not rewritten or migrated.
 
 ## Native Windows verification
 
