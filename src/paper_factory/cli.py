@@ -196,13 +196,16 @@ def _connect_subscription(*, login: bool) -> None:
         manager.close()
 
 
-@auto_app.command("disconnect")
+@auto_app.command("logout")
 @handled
-def auto_disconnect():
-    """Deactivate the managed worker connection; preserve platform authentication."""
+def auto_logout():
+    """Log out app-owned Codex profiles; preserve platform authentication."""
     manager = _connection_manager()
     try:
-        output(manager.disconnect())
+        result = manager.logout()
+        output(result)
+        if result.get("code"):
+            raise typer.Exit(1)
     finally:
         manager.close()
 

@@ -149,7 +149,9 @@ official account/CLI controls for that private profile. Existing injected platfo
 authentication is preserved and can still be used by legacy CLI configurations.
 
 Commands: `auto connection`, `auto login`, `auto probe`, `auto login-cancel` and
-`auto disconnect`. API keys and OAuth tokens do not belong in `.env` or chat.
+`auto logout`. This logs out only the app-owned CLI profiles and leaves other
+Codex applications' authentication unchanged. API keys and OAuth tokens do not
+belong in `.env` or chat.
 
 Configure the following locally, alongside private author metadata:
 

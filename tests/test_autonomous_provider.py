@@ -835,6 +835,42 @@ def test_auth_root_optional_setting_defaults_without_creating_directories(tmp_pa
     assert resolve_auth_home() is None
 
 
+def test_explicit_app_logout_prevents_global_status_and_model_processes(tmp_path, monkeypatch):
+    from paper_factory.autonomous import provider as module
+    root = tmp_path / "connections"
+    connected_profile(root)
+    pointer = root / "active.json"
+    pointer.write_text(json.dumps({"version": 1, "logged_out": True}), encoding="utf-8")
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "already-logged-in-global-home"))
+    provider = fake_codex(tmp_path)
+    def forbidden(*args, **kwargs):
+        pytest.fail("explicit app logout must not invoke any Codex status/model process")
+    monkeypatch.setattr(module.subprocess, "run", forbidden)
+    status = provider.status()
+    assert status["authentication"] == "logged_out" and status["code"] == "AUTH_REQUIRED" and not status["ready"]
+    call = tmp_path / "call-after-logout"
+    with pytest.raises(ProviderBlocked) as raised:
+        provider.generate("Produce answer", SCHEMA, call)
+    assert raised.value.code == "AUTH_REQUIRED"
+    assert not (call / "observed.json").exists()
+    assert json.loads((call / "receipt.json").read_text(encoding="utf-8"))["code"] == "AUTH_REQUIRED"
+
+
+@pytest.mark.parametrize("selection", [
+    {"version": True, "logged_out": True},
+    {"version": 1, "logged_out": True, "profiles": ["../outside"]},
+    {"version": 1, "logged_out": True, "profiles": "profiles/" + "a" * 32},
+    {"version": 1, "logged_out": True, "token": "unexpected-private-field"},
+])
+def test_unsafe_logout_marker_fails_closed(tmp_path, selection):
+    root = tmp_path / "connections"
+    connected_profile(root)
+    (root / "active.json").write_text(json.dumps(selection), encoding="utf-8")
+    with pytest.raises(ProviderBlocked) as raised:
+        resolve_auth_home()
+    assert raised.value.code == "CONFIGURATION_ERROR"
+
+
 def test_active_profile_uses_only_owned_nonsecret_metadata(tmp_path, monkeypatch):
     root = tmp_path / "connections"
     home = connected_profile(root)

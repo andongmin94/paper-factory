@@ -17,6 +17,7 @@ import stat
 import subprocess
 import sys
 import threading
+import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -365,12 +366,34 @@ class WebState:
 
     def connection_action(self, action: str, payload: dict) -> dict:
         _strict_keys(payload, set())
-        if action not in {"login", "cancel", "probe", "disconnect"}:
+        if action not in {"login", "cancel", "probe", "logout"}:
             raise ValueError("Unsupported connection action")
         with self.lock:
             if self.closed:
                 raise ValueError("Server is shutting down")
+            if action != "cancel":
+                from .autonomous.models import PipelineRun
+                active = any(job["status"] in {"queued", "running"} for job in self.jobs.values())
+                if not active:
+                    for project_id, record in self.projects.items():
+                        if record.get("status") == "ready" and any(
+                                run.status == "running" or run.active_handle or run.code == "CLEANUP_UNCONFIRMED"
+                                for run in Workspace(self.workspace_path(project_id)).list("pipeline", PipelineRun)):
+                            active = True
+                            break
+                if active:
+                    return {"status": "blocked", "code": "RESEARCH_BUSY", "message": "연구 작업을 중지하고 작업자의 종료를 확인한 뒤 Codex 계정을 변경하거나 로그아웃하세요."}
             return getattr(self.connection_manager(), action)()
+
+    def _research_auth_guard(self, *, uses_codex: bool = False):
+        if self._connection is not None:
+            connection = self._connection.status()
+            if connection.get("code") == "CLEANUP_UNCONFIRMED":
+                raise ValueError("이전 Codex 연결 작업자의 종료를 확인하지 못했습니다. 연결 작업을 정리한 뒤 연구를 시작하세요.")
+            if connection.get("status") in {"starting", "waiting_user", "probing", "logging_out"}:
+                raise ValueError("Codex 계정 연결 작업이 진행 중입니다. 작업이 끝난 뒤 연구를 시작하세요.")
+            if uses_codex and connection.get("app_login_required"):
+                raise ValueError("이 앱에서 Codex 계정을 연결하고 연결 확인을 완료한 뒤 연구를 시작하세요.")
 
     def recommend_repositories(self, payload: dict) -> dict:
         from .autonomous.repositories import select_repositories
@@ -425,6 +448,7 @@ class WebState:
             raise ValueError("budget must contain an object")
         with self.lock:
             self._capacity()
+            self._research_auth_guard(uses_codex=True)
             ws = self._project_available(project_id)
             created = pipeline.create(ws, goal, model=model, budget=budget)
             job = self._submit_pipeline(project_id, created.id, "autonomous-start")
@@ -435,12 +459,13 @@ class WebState:
         _strict_keys(payload, set())
         pipeline_id = _identifier(pipeline_id)
         with self.lock:
-            ws = Workspace(self.workspace_path(project_id))
             if control == "cancel":
+                ws = Workspace(self.workspace_path(project_id))
                 pipeline.cancel(ws, pipeline_id)
                 return {"pipeline": self.pipeline_detail(project_id, pipeline_id)}
             self._capacity()
-            self._project_available(project_id)
+            self._research_auth_guard(uses_codex=True)
+            ws = self._project_available(project_id)
             resumed = pipeline.resume(ws, pipeline_id)
             return {"pipeline": self.pipeline_detail(project_id, resumed.id),
                     "job": self._submit_pipeline(project_id, resumed.id, "autonomous-resume")}
@@ -538,6 +563,7 @@ class WebState:
                         if recovered.status != "paused" or recovered.code != "INTERRUPTED" or recovered.cancellation_requested:
                             continue
                         self._capacity()
+                        self._research_auth_guard(uses_codex=True)
                         self._project_available(project_id)
                         resumed = pipeline.resume(ws, pipeline_id)
                         self._submit_pipeline(project_id, resumed.id, "autonomous-resume")
@@ -548,6 +574,7 @@ class WebState:
     def submit(self, project_id: str, action: str, args: list[str], *, timeout: int = 600) -> dict:
         with self.lock:
             self._capacity()
+            self._research_auth_guard()
             if any(job["project_id"] == project_id and job["status"] in {"queued", "running"} for job in self.jobs.values()):
                 raise ValueError("A job is already active for this project")
             job = {"id": "job-" + uuid4().hex[:12], "project_id": project_id, "action": action,
@@ -910,6 +937,7 @@ class WebHandler(BaseHTTPRequestHandler):
         # Consume a bounded overflow byte before replying. Closing with an
         # unread body can reset the Windows connection and hide the HTTP error.
         data = self.rfile.read(min(int(length), MAX_BODY + 1))
+        self._body_consumed = len(data) == int(length)
         if int(length) > MAX_BODY:
             raise ValueError("Request body must be between 1 byte and 1 MiB")
         if len(data) != int(length):
@@ -921,6 +949,33 @@ class WebHandler(BaseHTTPRequestHandler):
             raise ValueError("Request JSON must contain an object")
         return value
 
+    def _drain_denied_body(self):
+        """Avoid a Windows reset hiding denials of small, complete requests."""
+        if getattr(self, "_body_consumed", False) or self.headers.get("Transfer-Encoding"):
+            return
+        length = self.headers.get("Content-Length", "")
+        if (not length.isdigit() or len(length) > 7 or not 0 < int(length) <= MAX_BODY
+                or self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json"):
+            return
+        previous_timeout = self.connection.gettimeout()
+        try:
+            remaining = int(length)
+            deadline = time.monotonic() + 0.25
+            while remaining:
+                available = deadline - time.monotonic()
+                if available <= 0:
+                    break
+                self.connection.settimeout(available)
+                chunk = self.rfile.read1(min(remaining, 65536))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+            self._body_consumed = remaining == 0
+        except (OSError, ValueError):
+            pass
+        finally:
+            self.connection.settimeout(previous_timeout)
+
     def _dispatch(self):
         self._host_guard()
         parts = self._parts()
@@ -929,9 +984,9 @@ class WebHandler(BaseHTTPRequestHandler):
         if self.command in {"POST", "PUT"}:
             self._write_guard()
             body = self._body()
-            if self.command == "POST" and len(parts) == 4 and parts[:3] == ["api", "agent", "connection"] and parts[3] in {"login", "cancel", "probe", "disconnect"}:
+            if self.command == "POST" and len(parts) == 4 and parts[:3] == ["api", "agent", "connection"] and parts[3] in {"login", "cancel", "probe", "logout"}:
                 result = self.state.connection_action(parts[3], body)
-                if result.get("code") == "CONNECTION_BUSY":
+                if result.get("code") in {"CONNECTION_BUSY", "RESEARCH_BUSY"}:
                     return self._reply(409, {"error": result.get("message"), "code": result["code"]})
                 if result.get("status") in {"blocked", "failed"} and result.get("code"):
                     return self._reply(400, {"error": result.get("message"), "code": result["code"]})
@@ -1009,9 +1064,11 @@ class WebHandler(BaseHTTPRequestHandler):
         return self._file(path)
 
     def _handle(self):
+        self._body_consumed = False
         try:
             self._dispatch()
         except PermissionError as exc:
+            self._drain_denied_body()
             self._reply(403, {"error": str(exc)})
         except KeyError:
             self._reply(404, {"error": "Resource was not found"})

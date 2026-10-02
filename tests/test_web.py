@@ -1,6 +1,7 @@
 """Exercise the local HTTP boundary and a real research CLI workflow."""
 
 import json
+import socket
 import threading
 import time
 import zipfile
@@ -151,6 +152,37 @@ def test_write_origin_and_host_boundary(web_case, headers):
     response = client.post("/api/projects", json={"source": str(source)}, headers=headers)
     assert response.status_code == 403
     assert server.state.projects == {}
+
+
+def test_denied_small_json_body_returns_http_error_repeatedly_on_windows(web_case):
+    server, client, source, _ = web_case
+    for _ in range(20):
+        response = client.post("/api/projects", json={"source": str(source)}, headers={"Origin": "https://foreign.example"})
+        assert response.status_code == 403 and "Origin" in response.json()["error"]
+    assert server.state.projects == {}
+
+
+@pytest.mark.parametrize("length,extra", [("20", ""), (str(MAX_BODY + 1), ""), ("20", "Transfer-Encoding: chunked\r\n")])
+def test_denied_missing_or_unsupported_body_has_bounded_response(web_case, length, extra):
+    server, _, _, _ = web_case
+    request = (f"POST /api/projects HTTP/1.0\r\nHost: 127.0.0.1:{server.server_port}\r\n"
+               f"Origin: https://foreign.example\r\nContent-Type: application/json\r\nContent-Length: {length}\r\n{extra}\r\n")
+    started = time.monotonic()
+    with socket.create_connection(("127.0.0.1", server.server_port), timeout=2) as transport:
+        transport.sendall(request.encode("ascii"))
+        assert b"403" in transport.recv(4096).split(b"\r\n", 1)[0]
+    assert time.monotonic() - started < 1.5
+
+
+def test_permission_denial_after_body_read_does_not_read_again(web_case, monkeypatch):
+    server, client, source, _ = web_case
+    def denied(payload):
+        raise PermissionError("Synthetic post-body denial")
+    monkeypatch.setattr(server.state, "import_project", denied)
+    started = time.monotonic()
+    response = client.post("/api/projects", json={"source": str(source)})
+    assert response.status_code == 403 and response.json()["error"] == "Synthetic post-body denial"
+    assert time.monotonic() - started < 1.5
 
 
 def test_dns_rebinding_read_and_json_size_boundary(web_case):

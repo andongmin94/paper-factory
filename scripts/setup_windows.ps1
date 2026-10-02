@@ -21,7 +21,8 @@ if (-not (Test-Path -LiteralPath $venvPython)) {
 if ($LASTEXITCODE -ne 0) { throw 'Python dependency installation failed.' }
 $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
 if (-not $npm) { throw 'Install Node.js 24 with npm before running Windows automatic research.' }
-& $npm.Source install --prefix (Join-Path $venvRoot 'codex') --no-audit --no-fund '@openai/codex@0.159.3'
+$runtimeVersions = Get-Content -Raw -LiteralPath (Join-Path $projectRoot 'desktop/runtime-versions.json') | ConvertFrom-Json
+& $npm.Source install --prefix (Join-Path $venvRoot 'codex') --no-audit --no-fund "@openai/codex@$($runtimeVersions.codex)"
 if ($LASTEXITCODE -ne 0) { throw 'The private official Codex CLI installation failed.' }
 & $venvPython -m pip check
 if ($LASTEXITCODE -ne 0) { throw 'Python dependencies are inconsistent.' }

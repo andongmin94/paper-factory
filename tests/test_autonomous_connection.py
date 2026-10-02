@@ -44,14 +44,26 @@ class FakeProvider:
         return self.settings.get("response", {"ready": True})
 
 
-def make_manager(tmp_path, monkeypatch, *, delay=0, diagnostic="", code=0, timeout=900, descendant=False, root=None, challenge=True):
+def make_manager(tmp_path, monkeypatch, *, delay=0, diagnostic="", code=0, timeout=900, descendant=False, root=None, challenge=True,
+                 logout_delay=0, logout_code=0, keep_credentials=False, logout_diagnostic=""):
     executable = tmp_path / ("fake-codex-" + str(time.monotonic_ns()) + ".py")
     observed = tmp_path / "observed.json"
-    settings = {"delay": delay, "diagnostic": diagnostic, "code": code, "observed": str(observed), "descendant": descendant, "challenge": challenge}
+    settings = {"delay": delay, "diagnostic": diagnostic, "code": code, "observed": str(observed), "descendant": descendant, "challenge": challenge,
+                "logout_delay": logout_delay, "logout_code": logout_code, "keep_credentials": keep_credentials, "logout_diagnostic": logout_diagnostic}
     executable.write_text(
         f"#!{sys.executable}\nimport os,sys,json,time,subprocess\nfrom pathlib import Path\n"
         f"s=json.loads({json.dumps(json.dumps(settings))})\n"
         "Path(s['observed']).write_text(json.dumps({'arguments':sys.argv[1:],'home':os.environ.get('CODEX_HOME'),'private_env':[n for n in ('OPENAI_API_KEY','PF_AUTHOR_EMAIL','GH_TOKEN') if n in os.environ]}))\n"
+        "with Path(s['observed']+'.commands').open('a') as log:log.write(json.dumps({'arguments':sys.argv[1:],'home':os.environ['CODEX_HOME']})+'\\n')\n"
+        "credential=Path(os.environ['CODEX_HOME'],'auth.json')\n"
+        "if 'logout' in sys.argv:\n"
+        " if s['logout_diagnostic']:print(s['logout_diagnostic'],file=sys.stderr,flush=True)\n"
+        " time.sleep(s['logout_delay'])\n"
+        " if s['logout_code']==0 and not s['keep_credentials']:credential.unlink(missing_ok=True)\n"
+        " sys.exit(s['logout_code'])\n"
+        "if sys.argv[-2:]==['login','status']:\n"
+        " print('Logged in using ChatGPT' if credential.exists() else 'Not logged in',file=sys.stderr,flush=True)\n"
+        " sys.exit(0 if credential.exists() else 1)\n"
         "Path(os.environ['CODEX_HOME'],'auth.json').write_text('fixture-owned-credential')\n"
         "if s['descendant']:\n"
         " child=subprocess.Popen([sys.executable,'-c','import time,signal;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(60)'])\n"
@@ -148,10 +160,11 @@ def test_device_login_transient_code_and_explicit_model_promotion(tmp_path, monk
         assert pointer["verified"] is True
         assert is_private_path(manager.root / pointer["profile"])
         assert is_private_path(manager.root / "active.json")
-        manager.disconnect()
+        manager.logout()
         assert manager.status()["connected"] is False
         assert (platform / "auth.json").read_text(encoding="utf-8") == "platform-fixture-untouched"
-        assert (manager.root / pointer["profile"] / "auth.json").exists()
+        assert not (manager.root / pointer["profile"] / "auth.json").exists()
+        assert manager.status()["status"] == "logged_out"
     finally:
         manager.close()
 
@@ -253,7 +266,7 @@ def test_cleanup_failure_preserves_handle_and_blocks_new_actions(tmp_path, monke
         assert old is not None
         assert manager.cancel()["code"] == "CLEANUP_UNCONFIRMED"
         assert manager.login()["code"] == "CLEANUP_UNCONFIRMED"
-        assert manager.disconnect()["code"] == "CLEANUP_UNCONFIRMED"
+        assert manager.logout()["code"] == "CLEANUP_UNCONFIRMED"
         assert json.loads((manager.root / "operation.json").read_text(encoding="utf-8"))["handle"] == old
     finally:
         state["cleanup"] = True
@@ -467,7 +480,7 @@ def test_login_reader_start_exception_retains_unconfirmed_worker_handle(tmp_path
         handle = json.loads((manager.root / "operation.json").read_text(encoding="utf-8"))["handle"]
         assert handle == {"kind": "codex", "pid": 999999, "pgid": 999999, "start_ticks": 1}
         assert manager.cancel()["code"] == "CLEANUP_UNCONFIRMED"
-        assert manager.disconnect()["code"] == "CLEANUP_UNCONFIRMED"
+        assert manager.logout()["code"] == "CLEANUP_UNCONFIRMED"
         assert json.loads((manager.root / "operation.json").read_text(encoding="utf-8"))["handle"] == handle
     finally:
         manager.close()
@@ -561,4 +574,151 @@ def test_probe_commit_serializes_cross_instance_cancel_acceptance(tmp_path, monk
         assert not (manager.root / ".cancel.json").exists()
     finally:
         if peer: peer.close()
+        manager.close()
+
+
+def test_first_desktop_start_requires_app_login_without_cli_or_auth_reads(tmp_path, monkeypatch):
+    from paper_factory.autonomous.provider import resolve_auth_home
+    manager, state, observed = make_manager(tmp_path, monkeypatch)
+    monkeypatch.setenv("PF_CODEX_AUTH_HOME", str(manager.root))
+    try:
+        result = manager.initialize_app_login()
+        assert result["status"] == "logged_out" and result["app_login_required"]
+        assert state == {"status_calls": 0, "generate_calls": 0}
+        assert not observed.exists()
+        assert json.loads((manager.root / "active.json").read_text(encoding="utf-8")) == {"version": 1, "logged_out": True}
+        with pytest.raises(ProviderBlocked, match="logged out") as raised:
+            resolve_auth_home()
+        assert raised.value.code == "AUTH_REQUIRED"
+        manager.login(); wait(manager, {"authenticated"})
+        assert manager.initialize_app_login()["app_login_required"]
+        manager.probe(); wait(manager, {"available"})
+        before = (manager.root / "active.json").read_bytes()
+        assert manager.initialize_app_login()["connected"]
+        assert (manager.root / "active.json").read_bytes() == before
+    finally:
+        manager.close()
+
+
+def test_logout_removes_active_and_pending_owned_credentials_only(tmp_path, monkeypatch):
+    platform = tmp_path / "platform"
+    platform.mkdir(); (platform / "auth.json").write_text("outside-fixture-untouched")
+    monkeypatch.setenv("CODEX_HOME", str(platform))
+    manager, state, observed = make_manager(tmp_path, monkeypatch)
+    artifact = tmp_path / "research-paper.pdf"
+    artifact.write_bytes(b"preserved research artifact")
+    try:
+        manager.login(); wait(manager, {"authenticated"}); manager.probe(); wait(manager, {"available"})
+        first = json.loads((manager.root / "active.json").read_text(encoding="utf-8"))["profile"]
+        manager.login(); wait(manager, {"authenticated"})
+        second = json.loads((manager.root / "operation.json").read_text(encoding="utf-8"))["profile"]
+        assert first != second
+        calls = state["generate_calls"]
+        original = Path.open
+        def guarded(path, *args, **kwargs):
+            if path.name == "auth.json":
+                pytest.fail("the app must never open credential files")
+            return original(path, *args, **kwargs)
+        with monkeypatch.context() as guard:
+            guard.setattr(Path, "open", guarded)
+            result = manager.logout()
+        assert result["status"] == "logged_out" and result["app_login_required"] and not result["connected"]
+        assert result["pending"] is None and state["generate_calls"] == calls
+        journal = [json.loads(line) for line in Path(str(observed) + ".commands").read_text(encoding="utf-8").splitlines()]
+        logout_calls = [item for item in journal if item["arguments"][-1] == "logout"]
+        assert {Path(item["home"]) for item in logout_calls} == {manager.root / first, manager.root / second}
+        assert all(item["arguments"] == ["--no-daemon", "-c", 'cli_auth_credentials_store="file"', "logout"] for item in logout_calls)
+        assert not (manager.root / first / "auth.json").exists() and not (manager.root / second / "auth.json").exists()
+        assert (platform / "auth.json").read_text(encoding="utf-8") == "outside-fixture-untouched"
+        assert artifact.read_bytes() == b"preserved research artifact"
+        assert os.environ["CODEX_HOME"] == str(platform)
+    finally:
+        manager.close()
+
+
+@pytest.mark.parametrize("settings,expected", [
+    ({"logout_delay": 60}, "LOGOUT_TIMEOUT"),
+    ({"logout_code": 1, "logout_diagnostic": "raw-private-fixture@example.org bearer secret"}, "LOGOUT_FAILED"),
+    ({"keep_credentials": True}, "LOGOUT_FAILED"),
+])
+def test_failed_logout_blocks_inherited_auth_and_retries_same_owned_profile(tmp_path, monkeypatch, settings, expected):
+    from paper_factory.autonomous.provider import resolve_auth_home
+    manager, _, observed = make_manager(tmp_path, monkeypatch, **settings)
+    manager.logout_timeout_seconds = 1
+    monkeypatch.setenv("PF_CODEX_AUTH_HOME", str(manager.root))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "external-codex-home"))
+    retry = None
+    try:
+        manager.login(); wait(manager, {"authenticated"}); manager.probe(); wait(manager, {"available"})
+        selected = json.loads((manager.root / "active.json").read_text(encoding="utf-8"))["profile"]
+        result = manager.logout()
+        assert result["code"] == expected and result["status"] == "blocked" and result["app_login_required"]
+        assert result["model_available"] is False and result["connected"] is False
+        with pytest.raises(ProviderBlocked) as raised:
+            resolve_auth_home()
+        assert raised.value.code == "AUTH_REQUIRED"
+        assert manager.login()["code"] == "LOGOUT_FAILED"
+        metadata = (manager.root / "operation.json").read_text(encoding="utf-8")
+        assert "raw-private" not in metadata + json.dumps(result) and "fixture@example" not in metadata
+        manager.close()
+        retry, _, _ = make_manager(tmp_path, monkeypatch, root=manager.root)
+        assert retry.status()["app_login_required"]
+        assert json.loads((retry.root / "active.json").read_text(encoding="utf-8"))["profiles"] == [selected]
+        assert retry.logout()["status"] == "logged_out"
+        assert json.loads((retry.root / "active.json").read_text(encoding="utf-8")) == {"version": 1, "logged_out": True}
+        assert not (retry.root / selected / "auth.json").exists()
+        journal = [json.loads(line) for line in Path(str(observed) + ".commands").read_text(encoding="utf-8").splitlines()]
+        assert all(Path(item["home"]).is_relative_to(manager.root) for item in journal)
+    finally:
+        if retry: retry.close()
+        manager.close()
+
+
+def test_logout_cleanup_failure_retains_worker_and_blocks_login(tmp_path, monkeypatch):
+    manager, state, _ = make_manager(tmp_path, monkeypatch)
+    try:
+        manager.login(); wait(manager, {"authenticated"}); manager.probe(); wait(manager, {"available"})
+        state["cleanup"] = False
+        result = manager.logout()
+        assert result["code"] == "CLEANUP_UNCONFIRMED" and result["app_login_required"]
+        retained = json.loads((manager.root / "operation.json").read_text(encoding="utf-8"))["handle"]
+        assert retained and retained["kind"] == "codex"
+        assert manager.login()["code"] == "CLEANUP_UNCONFIRMED"
+        assert manager.logout()["code"] == "CLEANUP_UNCONFIRMED"
+        assert json.loads((manager.root / "operation.json").read_text(encoding="utf-8"))["handle"] == retained
+        state["cleanup"] = True
+        assert manager.logout()["status"] == "logged_out"
+    finally:
+        state["cleanup"] = True
+        manager.close()
+
+
+def test_logout_during_login_requires_explicit_cancel_and_keeps_cancel_flow(tmp_path, monkeypatch):
+    manager, _, observed = make_manager(tmp_path, monkeypatch, delay=60)
+    try:
+        manager.login(); waiting(manager)
+        assert manager.logout()["code"] == "CONNECTION_BUSY"
+        assert not (manager.root / "active.json").exists()
+        manager.cancel(); wait(manager, {"cancelled"})
+        assert manager.logout()["status"] == "logged_out"
+        assert "logout" in Path(str(observed) + ".commands").read_text(encoding="utf-8")
+    finally:
+        manager.close()
+
+
+def test_logout_status_reader_start_failure_confirms_cleanup_and_can_retry(tmp_path, monkeypatch):
+    manager, _, _ = make_manager(tmp_path, monkeypatch)
+    try:
+        manager.login(); wait(manager, {"authenticated"}); manager.probe(); wait(manager, {"available"})
+        with monkeypatch.context() as fixture:
+            def failed_start(thread):
+                raise RuntimeError("synthetic-reader-start-failure")
+            fixture.setattr(connection.threading.Thread, "start", failed_start)
+            result = manager.logout()
+        assert result["status"] == "blocked" and result["code"] == "CONFIGURATION_ERROR"
+        assert result["app_login_required"]
+        operation = json.loads((manager.root / "operation.json").read_text(encoding="utf-8"))
+        assert operation["handle"] is None
+        assert manager.logout()["status"] == "logged_out"
+    finally:
         manager.close()

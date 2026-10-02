@@ -31,8 +31,8 @@ class FixtureConnection:
         self.calls.append("cancel")
         return {"status": "cancelled", "model_available": False}
 
-    def disconnect(self):
-        self.calls.append("disconnect")
+    def logout(self):
+        self.calls.append("logout")
         return self.status()
 
     def close(self):
@@ -67,7 +67,7 @@ def test_reading_connection_does_not_start_login_or_model_requests(connection_we
     assert manager.calls == []
 
 
-@pytest.mark.parametrize("action,status", [("login", 202), ("probe", 202), ("cancel", 200), ("disconnect", 200)])
+@pytest.mark.parametrize("action,status", [("login", 202), ("probe", 202), ("cancel", 200), ("logout", 200)])
 def test_explicit_connection_actions_use_typed_endpoints(connection_web, action, status):
     _, client, manager, _ = connection_web
     response = client.post(f"/api/agent/connection/{action}", json={})
@@ -75,7 +75,7 @@ def test_explicit_connection_actions_use_typed_endpoints(connection_web, action,
     assert manager.calls == [action]
 
 
-@pytest.mark.parametrize("action", ["login", "probe", "cancel", "disconnect"])
+@pytest.mark.parametrize("action", ["login", "probe", "cancel", "logout"])
 def test_authentication_actions_require_same_origin_and_empty_payload(connection_web, action):
     _, client, manager, _ = connection_web
     route = f"/api/agent/connection/{action}"
@@ -98,6 +98,67 @@ def test_connection_preflight_failure_is_visible_without_starting_a_job(connecti
     monkeypatch.setattr(manager, "login", lambda: {"status": "blocked", "code": code, "message": "Synthetic connection prerequisite failure"})
     response = client.post("/api/agent/connection/login", json={})
     assert response.status_code == http_status and response.json()["code"] == code
+
+
+@pytest.mark.parametrize("action", ["login", "probe", "logout"])
+def test_account_changes_are_blocked_while_research_is_queued_or_running(connection_web, action):
+    server, client, manager, _ = connection_web
+    server.state.jobs["job-fixture"] = {"status": "running", "project_id": "fixture"}
+    response = client.post(f"/api/agent/connection/{action}", json={})
+    assert response.status_code == 409 and response.json()["code"] == "RESEARCH_BUSY"
+    assert manager.calls == []
+    assert client.post("/api/agent/connection/cancel", json={}).status_code == 200
+    assert manager.calls == ["cancel"]
+    server.state.jobs.clear()
+
+
+def test_saved_unconfirmed_research_handle_blocks_account_logout(connection_web, tmp_path):
+    from paper_factory.autonomous.models import PipelineRun
+    from paper_factory.workspace import Workspace
+    server, client, manager, _ = connection_web
+    source = tmp_path / "source"; source.mkdir(); (source / "module.py").write_text("pass\n")
+    destination = server.state.data_root / "projects" / "fixture"
+    project.ingest(str(source), destination)
+    server.state.projects["fixture"] = {"id": "fixture", "status": "ready"}
+    ws = Workspace(destination)
+    run = PipelineRun(project_id="fixture", goal="A synthetic research goal", status="blocked", code="CLEANUP_UNCONFIRMED")
+    ws.save("pipeline", run)
+    response = client.post("/api/agent/connection/logout", json={})
+    assert response.status_code == 409 and response.json()["code"] == "RESEARCH_BUSY"
+    assert manager.calls == []
+
+
+@pytest.mark.parametrize("status", ["starting", "waiting_user", "probing", "logging_out"])
+def test_research_submission_cannot_race_account_connection(connection_web, monkeypatch, status):
+    server, _, manager, _ = connection_web
+    monkeypatch.setattr(manager, "status", lambda: {"status": status})
+    with pytest.raises(ValueError, match="계정 연결 작업"):
+        server.state.submit("fixture", "research", ["research"])
+    with pytest.raises(ValueError, match="계정 연결 작업"):
+        server.state.start_pipeline("fixture", {"goal": "A synthetic research goal"})
+    with pytest.raises(ValueError, match="계정 연결 작업"):
+        server.state.control_pipeline("fixture", "pipeline-fixture", "resume", {})
+    assert server.state.jobs == {}
+
+
+def test_logged_out_app_cannot_create_or_resume_research(connection_web, monkeypatch):
+    server, _, manager, _ = connection_web
+    monkeypatch.setattr(manager, "status", lambda: {"status": "logged_out", "app_login_required": True})
+    with pytest.raises(ValueError, match="연결 확인"):
+        server.state.start_pipeline("fixture", {"goal": "A synthetic research goal"})
+    with pytest.raises(ValueError, match="연결 확인"):
+        server.state.control_pipeline("fixture", "pipeline-fixture", "resume", {})
+    assert server.state.jobs == {}
+
+
+def test_unconfirmed_connection_worker_blocks_new_research(connection_web, monkeypatch):
+    server, _, manager, _ = connection_web
+    monkeypatch.setattr(manager, "status", lambda: {"status": "blocked", "connected": True, "code": "CLEANUP_UNCONFIRMED"})
+    with pytest.raises(ValueError, match="작업자의 종료"):
+        server.state.start_pipeline("fixture", {"goal": "A synthetic research goal"})
+    with pytest.raises(ValueError, match="작업자의 종료"):
+        server.state.submit("fixture", "research", ["research"])
+    assert server.state.jobs == {}
 
 
 def test_local_project_import_cannot_include_private_worker_credentials(connection_web):

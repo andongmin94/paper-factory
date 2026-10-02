@@ -1,12 +1,13 @@
 # Paper Factory
 
-Paper Factory is a local web research workspace and evidence-first CLI. The Korean
+Paper Factory is a Windows desktop and local web research workspace with an evidence-first CLI. The Korean
 web interface supports project import, study creation, experiment execution,
 literature lookup, manuscript editing and artifact downloads. An autonomous
 workflow calls the official Codex CLI with ChatGPT subscription authentication
 to propose research, generate isolated experiments and write grounded manuscripts.
-Three separately executed repository studies have external English papers and
-reproducible results; those earlier articles are not proof of app autonomy.
+An independently audited native Windows batch produced seven English paper
+drafts with reproducible results. Papers and audit outputs remain external
+deliverables, not files shipped with a fresh installation.
 The CLI also connects project ingestion, study discovery, literature metadata,
 real experiments, English drafts,
 scientific author approval, live venue discovery and policy evidence, venue
@@ -23,7 +24,34 @@ literature and actual observations, and blocks when these cannot be established.
 final Submit require separate explicit commands and factual author approval.
 Preprint upload remains manual.
 
-## Install
+## Windows desktop
+
+The Electron application uses the
+[create-frontron template](https://github.com/andongmin94/frontron/tree/main/create-frontron)
+and actual source components from
+[neobrutal-ui](https://github.com/andongmin94/neobrutal-ui).
+The Windows x64 installer and portable application bundle Python, Node.js, the
+official Codex CLI, Git, Pandoc, Typst and research dependencies. End users do not
+need to clone this repository or install developer tools.
+
+Open **Paper Factory**, connect a ChatGPT subscription through the official Codex
+device login, verify the connection, then enter a GitHub repository and research
+goal. The app shows saved progress, stop/resume controls and paper downloads.
+Connection verification makes one model request against the subscription.
+There is no Paper Factory signup, member database or central account service.
+Official credentials remain in the app's private local CLI profile; research
+records and papers remain local. **Codex 로그아웃** removes credentials from
+the selected and current pending app profiles and prevents fallback to another
+installed Codex account.
+Stop research before changing accounts or logging out. Closing the app requests
+research cancellation and waits for worker cleanup; saved results are retained.
+
+Developer builds and the runtime bundling procedure are documented in
+[desktop setup](docs/desktop.md). Built installers are under `desktop/output/`.
+Code signing is not configured; a local build alone does not create or publish a
+GitHub Release.
+
+## CLI and browser installation
 
 Use native **Windows**, Python 3.11+ (3.12 recommended), Git, and Node.js 24 with
 npm. Generated research experiments use Windows AppContainer isolation and a
@@ -33,7 +61,7 @@ research image. Run these commands in PowerShell from the cloned repository:
 ```powershell
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[dev,pdf,research,automation]" pypandoc_binary -r scripts/research-runtime-requirements.txt
-npm.cmd install --prefix .venv/codex --no-audit --no-fund @openai/codex@0.159.3
+npm.cmd install --prefix .venv/codex --no-audit --no-fund @openai/codex@0.160.0
 $env:PYPANDOC_PANDOC = (& .\.venv\Scripts\python.exe -c 'import json; from pathlib import Path; import pypandoc; p = Path(pypandoc.get_pandoc_path()); print(json.dumps(str(p if p.is_file() else p.with_suffix(".exe"))))') | ConvertFrom-Json
 Copy-Item .env.example .env
 .\.venv\Scripts\paperfactory.exe --help
@@ -149,7 +177,7 @@ For Windows, check the installation and connect your account:
 ```
 
 For Linux autonomous execution, install the same extras in a Python 3.12 virtual
-environment, install Node 24 and `@openai/codex@0.159.3`, and provision a Docker
+environment, install Node 24 and `@openai/codex@0.160.0`, and provision a Docker
 research image. The following Linux-only example includes standard-library
 Python/Node and Mido; it does not install arbitrary project dependencies:
 
@@ -185,7 +213,7 @@ paperfactory --env-file .env --workspace /path/to/workspace auto verify PIPELINE
 `auto login` displays the official approval URL and one-time code, waits for
 your approval, then verifies an actual model response. Alternatively, use the
 web connection button and its separate model-check button. Use `auto probe` to
-recheck model access and `auto disconnect` to deactivate the worker connection.
+recheck model access and `auto logout` to remove the app-owned connection.
 Small Node repositories
 such as [madi](https://github.com/andongmin94/madi),
 [garak](https://github.com/andongmin94/garak) and
@@ -202,13 +230,14 @@ not an adversarial proof of truthful measurements, and their timing overhead is
 disclosed in the protocol and manuscript.
 
 The integration/native-export tests use explicit model and observation fixtures.
-Actual isolated source execution and live literature retrieval were checked
-separately. A live subscription-generated research paper has not yet been
-validated. Earlier cloud checks recognized stored ChatGPT authentication, but
-model requests encountered proxy HTTP CONNECT 403 and a subsequent HTTP 401.
-These historical results do not establish current Windows model access. The
-login flow uses a fresh private worker profile and preserves an existing injected
-authentication profile. Device approval still requires the account owner.
+The 2026-10-01 native Windows batch also exercised actual subscription requests,
+isolated source execution, literature retrieval and document exports. Seven of
+thirteen selected repositories yielded audited drafts; unsuccessful or invalid
+studies were retained and excluded from the final paper package. This finite
+check does not guarantee future model access or scientific validity for another
+repository. The login flow uses a fresh private worker profile and preserves
+other installed applications' authentication. Device approval requires the
+account owner.
 See [setup, evidence and recovery instructions](docs/autonomous-research.md).
 
 ## Three executed empirical studies

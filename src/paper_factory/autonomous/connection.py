@@ -30,14 +30,14 @@ if os.name == "nt":
     import msvcrt
 
 from ..workspace import ensure_unlinked, write_json
-from .provider import CodexProvider, ProviderBlocked, _cli_command, _environment, _process_options, _track_process, _try_stop, _worker_handle
+from .provider import CodexProvider, ProviderBlocked, _authentication_kind, _cli_command, _environment, _process_options, _track_process, _try_stop, _worker_handle
 from .windows_runtime import is_private_path, private_path
 
 
 MAX_DIAGNOSTIC_BYTES = 64 * 1024
 DEVICE_URL = "https://auth.openai.com/codex/device"
 PROFILE = re.compile(r"profiles/([a-f0-9]{32})\Z")
-STATES = {"starting", "waiting_user", "authenticated", "probing", "available", "blocked", "cancelled", "failed", "disconnected"}
+STATES = {"starting", "waiting_user", "authenticated", "probing", "available", "blocked", "cancelled", "failed", "disconnected", "logging_out", "logged_out"}
 PROBE_SCHEMA = {"type": "object", "properties": {"ready": {"type": "boolean", "enum": [True]}},
                 "required": ["ready"], "additionalProperties": False}
 MESSAGES = {
@@ -62,10 +62,13 @@ MESSAGES = {
     "CODEX_FAILED": "공식 Codex 연결 작업을 완료하지 못했습니다.",
     "DEVICE_AUTH_UNAVAILABLE": "현재 Codex 서버에서 기기 로그인을 지원하지 않습니다. 공식 서버 설정을 확인하세요.",
     "CANCEL_REQUESTED": "진행 중인 구독 연결 작업에 취소를 요청했습니다.",
+    "LOGOUT_TIMEOUT": "Codex 로그아웃 확인 시간이 끝났습니다. 앱의 연구 시작은 차단되어 있으며 다시 로그아웃할 수 있습니다.",
+    "LOGOUT_FAILED": "공식 Codex 로그아웃을 확인하지 못했습니다. 앱의 연구 시작은 차단되어 있으며 다시 로그아웃할 수 있습니다.",
 }
 STATE_MESSAGES = {
     "authenticated": "공식 구독 로그인이 완료되었습니다. 연결 확인을 실행하면 사용할 수 있습니다.",
     "available": "구독 모델의 실제 응답을 확인했습니다.",
+    "logged_out": "이 앱의 Codex 계정에서 로그아웃했습니다. 저장된 연구와 논문은 유지됩니다.",
 }
 
 
@@ -163,8 +166,9 @@ def _utc(value: object) -> None:
 class ConnectionManager:
     def __init__(self, root: Path, *, provider_factory: Callable[[Path], object] | None = None,
                  executable: str | Path | None = None, login_timeout_seconds: int = 900,
-                 probe_timeout_seconds: int = 90, startup_challenge_timeout_seconds: int = 60) -> None:
-        for timeout in (login_timeout_seconds, probe_timeout_seconds, startup_challenge_timeout_seconds):
+                 probe_timeout_seconds: int = 90, startup_challenge_timeout_seconds: int = 60,
+                 logout_timeout_seconds: int = 30) -> None:
+        for timeout in (login_timeout_seconds, probe_timeout_seconds, startup_challenge_timeout_seconds, logout_timeout_seconds):
             if isinstance(timeout, bool) or not isinstance(timeout, int) or not 1 <= timeout <= 1800:
                 raise ValueError("connection timeouts must be bounded positive integers")
         self.root = Path(root).expanduser().absolute()
@@ -173,6 +177,7 @@ class ConnectionManager:
         self.login_timeout_seconds = login_timeout_seconds
         self.probe_timeout_seconds = probe_timeout_seconds
         self.startup_challenge_timeout_seconds = startup_challenge_timeout_seconds
+        self.logout_timeout_seconds = logout_timeout_seconds
         self._mutex = threading.RLock()
         self._worker: threading.Thread | None = None
         self._cancel = threading.Event()
@@ -265,15 +270,44 @@ class ConnectionManager:
             raise ValueError("unsafe profile home")
         return home
 
-    def _active(self) -> dict | None:
+    def _selection(self) -> dict | None:
         value = _read_metadata(self.root / "active.json")
         if value is not None:
+            if value.get("logged_out") is True:
+                profiles = value.get("profiles", [])
+                if (set(value) - {"version", "logged_out", "profiles"}
+                        or not isinstance(profiles, list) or len(profiles) > 2
+                        or not all(isinstance(profile, str) for profile in profiles) or len(set(profiles)) != len(profiles)):
+                    raise ValueError("invalid logout selection")
+                for profile in profiles:
+                    self._home(profile)
+                return value
             if (set(value) != {"version", "profile", "verified", "verified_at"}
                     or value.get("verified") is not True or not isinstance(value.get("verified_at"), str)):
                 raise ValueError("invalid active profile")
             self._home(value.get("profile"))
             _utc(value["verified_at"])
         return value
+
+    def _active(self) -> dict | None:
+        selection = self._selection()
+        return selection if selection and selection.get("logged_out") is not True else None
+
+    def initialize_app_login(self) -> dict:
+        """Require explicit app login on first start without invoking the CLI."""
+        with self._mutex:
+            if self._initial_error or not _locking_available():
+                return self.status()
+            if self._closed or self._worker and self._worker.is_alive() or not self._acquire():
+                return self._busy()
+            try:
+                if self._selection() is None:
+                    _write_metadata(self.root / "active.json", {"version": 1, "logged_out": True})
+                return self.status()
+            except (OSError, ValueError, TypeError):
+                return {**self.status(), "status": "blocked", "code": "AUTH_STORAGE_INVALID", "message": MESSAGES["AUTH_STORAGE_INVALID"]}
+            finally:
+                self._release()
 
     def _operation(self) -> dict | None:
         value = _read_metadata(self.root / "operation.json")
@@ -374,7 +408,7 @@ class ConnectionManager:
     def _recover(self) -> None:
         self._active()
         operation = self._operation()
-        if operation is None or (operation["status"] not in {"starting", "waiting_user", "probing"}
+        if operation is None or (operation["status"] not in {"starting", "waiting_user", "probing", "logging_out"}
                                  and operation.get("code") != "CLEANUP_UNCONFIRMED"):
             return
         handle = operation.get("handle")
@@ -393,18 +427,20 @@ class ConnectionManager:
         with self._mutex:
             error = self._initial_error or ("UNSUPPORTED_PLATFORM" if not _locking_available() else None)
             try:
-                active = self._active() if not error else None
+                selection = self._selection() if not error else None
+                active = selection if selection and selection.get("logged_out") is not True else None
                 operation = self._operation() if not error else None
             except (OSError, ValueError, TypeError, KeyError):
-                error, active, operation = "AUTH_STORAGE_INVALID", None, None
+                error, selection, active, operation = "AUTH_STORAGE_INVALID", None, None, None
             connected = active is not None
             model_available = connected
-            state = operation["status"] if operation else ("available" if connected else "disconnected")
+            state = operation["status"] if operation else ("available" if connected else "logged_out" if selection else "disconnected")
             authentication = operation.get("authentication", "unknown") if operation else ("chatgpt" if connected else "logged_out")
             if active and operation and operation.get("profile") == active["profile"] and state in {"blocked", "failed"}:
                 model_available = False
             result = {"status": "blocked" if error else state, "authentication": authentication,
                       "model_available": model_available, "connected": connected,
+                      "app_login_required": bool(selection and selection.get("logged_out") is True),
                       "verification_url": self._verification_url, "user_code": self._user_code,
                       "code": error or (operation.get("code") if operation else None),
                       "message": MESSAGES[error] if error else (MESSAGES[operation["code"]] if operation and operation.get("code") else STATE_MESSAGES.get(state)),
@@ -438,12 +474,16 @@ class ConnectionManager:
             try:
                 self._recover()
                 previous = self._operation()
+                selection = self._selection()
             except (OSError, ValueError, KeyError, TypeError):
                 self._release()
                 return {**self.status(), "status": "blocked", "code": "AUTH_STORAGE_INVALID", "message": MESSAGES["AUTH_STORAGE_INVALID"]}
             if previous and previous.get("code") == "CLEANUP_UNCONFIRMED":
                 self._release()
                 return self.status()
+            if selection and selection.get("logged_out") and selection.get("profiles"):
+                self._release()
+                return {**self.status(), "status": "blocked", "code": "LOGOUT_FAILED", "message": MESSAGES["LOGOUT_FAILED"]}
             binary = shutil.which(self.executable)
             if not binary and Path(self.executable).suffix.casefold() == ".py" and Path(self.executable).is_file():
                 binary = str(Path(self.executable).resolve())
@@ -683,24 +723,116 @@ class ConnectionManager:
         worker.join(timeout=10)
         return self.status()
 
-    def disconnect(self) -> dict:
-        self.cancel()
+    def _logout_cli(self, binary: str, profile: str, arguments: list[str], deadline: float,
+                    *, capture: bool = False) -> tuple[int, str]:
+        """Run a bounded owned CLI worker; keep only the authentication kind."""
+        diagnostics = bytearray()
+        overflow = threading.Event()
+        reader_error = threading.Event()
+        process = None
+        reader = None
+        clean = False
+        try:
+            if time.monotonic() >= deadline:
+                raise ProviderBlocked("LOGOUT_TIMEOUT", MESSAGES["LOGOUT_TIMEOUT"])
+            home = self._home(profile)
+            command = [*_cli_command(binary), "--no-daemon", "-c", 'cli_auth_credentials_store="file"', *arguments]
+            process = subprocess.Popen(command, cwd=home, env=_environment(home), stdin=subprocess.DEVNULL,
+                                       stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
+                                       stderr=subprocess.STDOUT if capture else subprocess.DEVNULL,
+                                       **_process_options(suspended=True))
+            _track_process(process, suspended=True)
+            self._record_handle(_worker_handle(process))
+            if capture:
+                def drain():
+                    try:
+                        while part := process.stdout.read1(4096):
+                            room = max(0, MAX_DIAGNOSTIC_BYTES - len(diagnostics))
+                            diagnostics.extend(part[:room])
+                            if len(part) > room:
+                                overflow.set()
+                                return
+                    except (OSError, ValueError):
+                        reader_error.set()
+                    finally:
+                        process.stdout.close()
+                reader = threading.Thread(target=drain, daemon=True)
+                reader.start()
+            while process.poll() is None and time.monotonic() < deadline and not overflow.is_set() and not reader_error.is_set():
+                time.sleep(0.02)
+            timed_out = process.poll() is None and time.monotonic() >= deadline
+            clean = self._confirm_cleanup(profile, process)
+            if not clean:
+                raise ProviderBlocked("CLEANUP_UNCONFIRMED", MESSAGES["CLEANUP_UNCONFIRMED"])
+            if reader and reader.ident is not None:
+                reader.join(timeout=1)
+            if timed_out:
+                raise ProviderBlocked("LOGOUT_TIMEOUT", MESSAGES["LOGOUT_TIMEOUT"])
+            if overflow.is_set():
+                raise ProviderBlocked("OUTPUT_LIMIT", MESSAGES["OUTPUT_LIMIT"])
+            if reader_error.is_set() or reader and reader.is_alive():
+                raise ProviderBlocked("LOGOUT_FAILED", MESSAGES["LOGOUT_FAILED"])
+            self._update(handle=None)
+            return process.returncode, _authentication_kind(diagnostics.decode("utf-8", "replace"))
+        except ProviderBlocked:
+            raise
+        except Exception:
+            clean = self._confirm_cleanup(profile, process)
+            code = "CONFIGURATION_ERROR" if clean else "CLEANUP_UNCONFIRMED"
+            raise ProviderBlocked(code, MESSAGES[code]) from None
+        finally:
+            if reader and reader.ident is not None:
+                reader.join(timeout=1)
+            elif capture and process is not None and process.stdout is not None:
+                process.stdout.close()
+            diagnostics.clear()
+
+    def logout(self) -> dict:
         with self._mutex:
-            if self._initial_error or (self._worker and self._worker.is_alive()) or not self._acquire():
+            if self._initial_error or not _locking_available():
+                return self.status()
+            if self._closed or (self._worker and self._worker.is_alive()) or not self._acquire():
                 return self._busy()
             try:
+                self._recover()
                 operation = self._operation()
                 if operation and operation.get("code") == "CLEANUP_UNCONFIRMED":
                     return self.status()
-                # Only deactivate a validated owned pointer. Never log out of,
-                # delete, inspect, or modify the platform authentication home.
-                if self._active():
-                    (self.root / "active.json").unlink()
-                if operation:
-                    operation.update(status="disconnected", handle=None, code=None, message=None, authentication="logged_out")
-                    self._write(operation)
+                selection = self._selection()
+                profiles = list(selection.get("profiles", [])) if selection and selection.get("logged_out") else [selection["profile"]] if selection else []
+                if operation and operation.get("profile") and operation["profile"] not in profiles:
+                    profiles.append(operation["profile"])
+                # Disable research before touching credentials, including on
+                # timeout/restart. Only the CLI edits its app-owned auth store.
+                _write_metadata(self.root / "active.json", {"version": 1, "logged_out": True, "profiles": profiles})
+                self._write({"version": 1, "operation_id": uuid4().hex, "kind": "logout", "profile": profiles[0] if profiles else None,
+                             "status": "logging_out", "authentication": "unknown", "started_at": _now(),
+                             "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=self.logout_timeout_seconds)).isoformat(),
+                             "handle": None, "code": None, "message": None})
+                binary = shutil.which(self.executable)
+                if not binary and Path(self.executable).suffix.casefold() == ".py" and Path(self.executable).is_file():
+                    binary = str(Path(self.executable).resolve())
+                if profiles and not binary:
+                    self._failure("CODEX_NOT_FOUND")
+                    return self.status()
+                deadline = time.monotonic() + self.logout_timeout_seconds
+                for profile in list(profiles):
+                    self._update(profile=profile)
+                    code, _ = self._logout_cli(binary, profile, ["logout"], deadline)
+                    if code != 0:
+                        raise ProviderBlocked("LOGOUT_FAILED", MESSAGES["LOGOUT_FAILED"])
+                    _, authentication = self._logout_cli(binary, profile, ["login", "status"], deadline, capture=True)
+                    if authentication != "logged_out":
+                        raise ProviderBlocked("LOGOUT_FAILED", MESSAGES["LOGOUT_FAILED"])
+                    profiles.remove(profile)
+                    _write_metadata(self.root / "active.json", {"version": 1, "logged_out": True, "profiles": profiles})
+                _write_metadata(self.root / "active.json", {"version": 1, "logged_out": True})
+                self._update(status="logged_out", profile=None, authentication="logged_out", handle=None, code=None,
+                             message=STATE_MESSAGES["logged_out"])
                 self._verification_url = self._user_code = None
-            except (OSError, ValueError):
+            except ProviderBlocked as exc:
+                self._failure(exc.code)
+            except (OSError, ValueError, TypeError):
                 return {**self.status(), "status": "blocked", "code": "AUTH_STORAGE_INVALID", "message": MESSAGES["AUTH_STORAGE_INVALID"]}
             finally:
                 self._release()

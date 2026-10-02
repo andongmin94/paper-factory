@@ -133,6 +133,21 @@ assert.ok(connectionPanel().includes('data-action="probe-model"'));
 ''')
 
 
+def test_connection_panel_uses_real_logout_and_prevents_inherited_auth_copy():
+    run_frontend(r'''
+state.agent = {provider: {ready: true, authentication: "chatgpt"}, runner: {ready: false}};
+state.modelConnection = {status: "authenticated", authentication: "chatgpt", connected: false};
+assert.ok(connectionPanel().includes('data-action="logout-model"'));
+assert.ok(connectionPanel().includes("Codex 로그아웃"));
+assert.ok(!connectionPanel().includes("disconnect-model"));
+state.modelConnection = {status: "logged_out", authentication: "logged_out", connected: false, app_login_required: true};
+assert.ok(connectionPanel().includes("로그아웃됨"));
+assert.ok(!connectionPanel().includes("현재 구독 로그인을 사용할 수 있습니다"));
+state.modelConnection = {status: "blocked", authentication: "unknown", connected: false, pending: {profile_id: "fixture"}, app_login_required: true};
+assert.ok(connectionPanel().includes('data-action="logout-model"'));
+''')
+
+
 def test_cli_prerequisite_diagnostics_distinguish_installation_capabilities_and_auth():
     run_frontend(r'''
 state.agent = {provider: {ready: false, executable_available: false}, runner: {ready: false}};

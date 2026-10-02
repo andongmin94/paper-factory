@@ -101,6 +101,7 @@ def resolve_auth_home(root: Path | None = None) -> Path | None:
     """Read only the owned nonsecret selection pointer, never auth files.
 
     An absent pointer retains the environment's original official CLI binding.
+    Explicit app logout prevents any inherited/global credential fallback.
     Selected connections must have been verified by the separate auth manager.
     """
     try:
@@ -130,6 +131,17 @@ def resolve_auth_home(root: Path | None = None) -> Path | None:
                 result[key] = value
             return result
         selection = json.loads(raw, object_pairs_hook=pairs)
+        if isinstance(selection, dict) and selection.get("logged_out") is True:
+            if (type(selection.get("version")) is not int or selection["version"] != 1
+                    or set(selection) - {"version", "logged_out", "profiles"}
+                    or not isinstance(selection.get("profiles", []), list)
+                    or len(selection.get("profiles", [])) > 2):
+                raise ValueError("invalid logout selection")
+            for profile in selection.get("profiles", []):
+                if not isinstance(profile, str) or not re.fullmatch(r"profiles/[a-f0-9]{32}", profile):
+                    raise ValueError("invalid logout profile")
+                _private_directory(safe_relative(root, profile))
+            raise ProviderBlocked("AUTH_REQUIRED", "Paper Factory is logged out. Connect your ChatGPT account in the app before starting research.")
         if (not isinstance(selection, dict) or set(selection) - {"version", "profile", "verified", "verified_at"} or
                 type(selection.get("version")) is not int or selection["version"] != 1 or selection.get("verified") is not True or
                 not isinstance(selection.get("profile"), str) or not re.fullmatch(r"profiles/[a-f0-9]{32}", selection["profile"])):
@@ -157,6 +169,18 @@ def _environment(auth_home: Path | None = None) -> dict[str, str]:
     if auth_home is not None:
         environment["CODEX_HOME"] = str(auth_home)
     return environment
+
+
+def _authentication_kind(diagnostic: str) -> str:
+    """Classify official CLI status without retaining raw identity output."""
+    text = diagnostic.casefold()
+    if "not logged in" in text or "logged out" in text:
+        return "logged_out"
+    if "logged in" in text and "chatgpt" in text:
+        return "chatgpt"
+    if "logged in" in text and ("api key" in text or "api_key" in text):
+        return "api_key"
+    return "unknown"
 
 
 def _sensitive_values() -> list[str]:
@@ -517,7 +541,7 @@ class CodexProvider:
         try:
             return self._status(self._child_environment())
         except ProviderBlocked as exc:
-            return {"executable_available": bool(self._binary()), "authentication": "unknown", "ready": False,
+            return {"executable_available": bool(self._binary()), "authentication": "logged_out" if exc.code == "AUTH_REQUIRED" else "unknown", "ready": False,
                     "cli_version": None, "capabilities_supported": False, "missing_capabilities": [],
                     "code": exc.code, "reason": exc.message}
 
@@ -530,15 +554,7 @@ class CodexProvider:
         try:
             response = subprocess.run([*_cli_command(binary), "login", "status"], env=environment, stdout=subprocess.PIPE,
                                       stderr=subprocess.PIPE, timeout=15, check=False, **_process_options())
-            diagnostic = (response.stdout + response.stderr).decode("utf-8", errors="replace").casefold()
-            if "logged in" in diagnostic and "chatgpt" in diagnostic:
-                authentication = "chatgpt"
-            elif "logged in" in diagnostic and ("api key" in diagnostic or "api_key" in diagnostic):
-                authentication = "api_key"
-            elif "not logged in" in diagnostic or "logged out" in diagnostic:
-                authentication = "logged_out"
-            else:
-                authentication = "unknown"
+            authentication = _authentication_kind((response.stdout + response.stderr).decode("utf-8", errors="replace"))
             return {"executable_available": True, "authentication": authentication,
                     "ready": metadata["capabilities_supported"] and response.returncode == 0 and authentication == "chatgpt",
                     **metadata}

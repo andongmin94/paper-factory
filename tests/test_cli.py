@@ -125,7 +125,7 @@ def test_cli_login_preflight_failure_does_not_wait_on_someone_else_session(monke
     assert '"code": "CONNECTION_BUSY"' in result.stdout
 
 
-@pytest.mark.parametrize("command,method", [("connection", "status"), ("disconnect", "disconnect"), ("login-cancel", "cancel")])
+@pytest.mark.parametrize("command,method", [("connection", "status"), ("logout", "logout"), ("login-cancel", "cancel")])
 def test_cli_connection_controls_do_not_generate_models(monkeypatch, command, method):
     from paper_factory import cli
 
