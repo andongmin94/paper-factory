@@ -710,11 +710,14 @@ class ConnectionManager:
                     finally:
                         self._state_release()
                 try:
+                    previous = self._operation()
                     self._recover()
                     operation = self._operation()
                     if operation and operation.get("code") == "CLEANUP_UNCONFIRMED":
                         return self.status()
-                    if self._operation():
+                    # Completed connections and logout failures are durable
+                    # results, not work to cancel during ordinary app shutdown.
+                    if previous and previous["status"] in {"starting", "waiting_user", "probing"}:
                         self._failure("CANCELLED", status="cancelled")
                     self._verification_url = self._user_code = None
                 finally:

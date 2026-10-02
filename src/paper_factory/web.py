@@ -862,6 +862,8 @@ class WebHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def _reply(self, status: int, value: object):
+        if status >= 400:
+            self._drain_unread_body()
         data = json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")
         self._headers(status, "application/json; charset=utf-8", len(data))
         if self.command != "HEAD":
@@ -949,13 +951,12 @@ class WebHandler(BaseHTTPRequestHandler):
             raise ValueError("Request JSON must contain an object")
         return value
 
-    def _drain_denied_body(self):
-        """Avoid a Windows reset hiding denials of small, complete requests."""
+    def _drain_unread_body(self):
+        """Avoid a Windows reset hiding errors for small, complete requests."""
         if getattr(self, "_body_consumed", False) or self.headers.get("Transfer-Encoding"):
             return
         length = self.headers.get("Content-Length", "")
-        if (not length.isdigit() or len(length) > 7 or not 0 < int(length) <= MAX_BODY
-                or self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json"):
+        if not length.isascii() or not length.isdigit() or len(length) > 7 or not 0 < int(length) <= MAX_BODY:
             return
         previous_timeout = self.connection.gettimeout()
         try:
@@ -1068,7 +1069,6 @@ class WebHandler(BaseHTTPRequestHandler):
         try:
             self._dispatch()
         except PermissionError as exc:
-            self._drain_denied_body()
             self._reply(403, {"error": str(exc)})
         except KeyError:
             self._reply(404, {"error": "Resource was not found"})

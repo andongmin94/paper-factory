@@ -138,3 +138,60 @@ def test_desktop_refuses_auth_root_outside_its_workspace(tmp_path, monkeypatch):
         create_desktop_server(home=home)
     assert caught.value.code == "AUTH_STORAGE_INVALID"
     assert not foreign.exists()
+
+
+def test_desktop_serializes_concurrent_shutdown_without_reopening_state(desktop, monkeypatch):
+    server, _, _ = desktop
+    entered, release = threading.Event(), threading.Event()
+    outcomes = []
+    def slow_cancel():
+        entered.set()
+        assert release.wait(timeout=3)
+        return {"status": "logged_out"}
+    monkeypatch.setattr(server.state._connection, "cancel", slow_cancel)
+    worker = threading.Thread(target=lambda: outcomes.append(server.state.request_shutdown()))
+    worker.start()
+    try:
+        assert entered.wait(timeout=3)
+        refused = server.state.request_shutdown()
+        assert refused["ready"] is False and refused["code"] == "SHUTDOWN_BUSY"
+        assert server.state.closed is True
+    finally:
+        release.set()
+        worker.join(timeout=3)
+    assert outcomes == [{"ready": True}] and not worker.is_alive()
+    assert server.state.closed is True
+
+
+def test_desktop_shutdown_tolerates_research_finishing_before_cancellation(desktop, monkeypatch):
+    from paper_factory.autonomous import pipeline
+    from paper_factory.autonomous.models import PipelineRun
+    from paper_factory.workspace import Workspace
+    server, _, _ = desktop
+    ws = Workspace.create(server.state.data_root / "projects" / "project-fixture")
+    saved = PipelineRun(project_id="source-fixture", goal="Synthetic finish race", status="running")
+    ws.save("pipeline", saved)
+    server.state.projects["project-fixture"] = {"id": "project-fixture", "status": "ready"}
+    server.state.jobs["job-fixture"] = {"status": "running", "project_id": "project-fixture", "pipeline_id": saved.id}
+    def completed_before_cancel(workspace, pipeline_id):
+        saved.status = "completed"
+        ws.save("pipeline", saved)
+        server.state.jobs["job-fixture"]["status"] = "succeeded"
+        raise ValueError("Completed research cannot be cancelled")
+    monkeypatch.setattr(pipeline, "cancel", completed_before_cancel)
+    assert server.state.request_shutdown() == {"ready": True}
+    assert ws.get("pipeline", saved.id, PipelineRun).status == "completed"
+
+
+def test_desktop_shutdown_retains_app_when_worker_state_cannot_be_read(desktop, monkeypatch):
+    from paper_factory.autonomous import pipeline
+    from paper_factory.workspace import Workspace
+    server, _, _ = desktop
+    Workspace.create(server.state.data_root / "projects" / "project-fixture")
+    server.state.projects["project-fixture"] = {"id": "project-fixture", "status": "ready"}
+    def unavailable(workspace):
+        raise OSError("synthetic unreadable checkpoint")
+    monkeypatch.setattr(pipeline, "list_runs", unavailable)
+    result = server.state.request_shutdown()
+    assert result["ready"] is False and result["code"] == "CLEANUP_UNCONFIRMED"
+    assert server.state.closed is False

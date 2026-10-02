@@ -3,7 +3,6 @@
 import json
 import re
 import shutil
-import subprocess
 from pathlib import Path
 from typing import Literal
 from urllib.parse import quote
@@ -343,20 +342,16 @@ def compile_manuscript(ws: Workspace, paper: Paper, pandoc: str | None = None, p
     output = root / ("manuscript.pdf" if pdf else "manuscript.tex")
     for stale in (root / "manuscript.tex", root / "manuscript.pdf", root / "manuscript.typ", root / "manuscript-pandoc-metadata.json"):
         stale.unlink(missing_ok=True)
-    command = [binary or "pandoc", str(root / "manuscript.md"), "--from=markdown-smart-raw_tex-raw_html", "--standalone", "--to=latex", "-V", "geometry:margin=1in", "-o", str(output)]
+    target = output.with_suffix(".typ") if pdf else output
+    command = [binary or "pandoc", str(root / "manuscript.md"), "--from=markdown-smart-raw_tex-raw_html", "--standalone", "--to=" + ("typst" if pdf else "latex"), "-o", str(target)]
+    command += ["-V", "papersize:a4", "-V", "fontsize:11pt"] if pdf else ["-V", "geometry:margin=1in"]
     report = {"status": "COMPILE_READY", "command": command, "message": "Install Pandoc for standalone LaTeX; install the optional PDF extra for Pandoc/Typst PDF compilation."}
     if binary:
         try:
-            if pdf:
-                result = convert(root / "manuscript.md", output, pandoc=binary)
-                command = result["command"]
-                report = {"status": "COMPILED", "command": command, "output": output.name, "engine": result["engine"], "exit_code": 0, "sha256": result["output_sha256"], "diagnostics": result["diagnostics"]}
-            else:
-                result = subprocess.run(command, cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, check=False)
-                report = {"status": "COMPILED" if result.returncode == 0 and output.is_file() else "FAILED", "command": command, "output": output.name, "exit_code": result.returncode, "diagnostics": result.stderr}
-                if report["status"] == "COMPILED":
-                    report["sha256"] = digest_file(output)
-        except (ValueError, OSError, subprocess.TimeoutExpired) as exc:
+            result = convert(root / "manuscript.md", output, pandoc=binary)
+            command = result["command"]
+            report = {"status": "COMPILED", "command": command, "output": output.name, "engine": result["engine"], "exit_code": 0, "sha256": result["output_sha256"], "diagnostics": result["diagnostics"]}
+        except (ValueError, OSError) as exc:
             report = {"status": "FAILED", "command": command, "message": str(exc)}
     report["input_sha256"] = digest_file(root / "manuscript.md")
     report["document_sha256"] = digest_file(root / "canonical.json")

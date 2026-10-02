@@ -236,6 +236,15 @@ def test_malformed_success_is_ambiguous_write(body):
     assert caught.value.reconciliation_required
 
 
+@pytest.mark.parametrize("token", ["1e999", "-1e999"])
+def test_success_with_overflowing_number_requires_reconciliation(token):
+    body = json.dumps(submission(extra={"unused": "number-placeholder"})).replace('"number-placeholder"', token).encode()
+    with provider(lambda request: httpx.Response(200, content=body)) as client:
+        with pytest.raises(OJSError, match="invalid_provider_json") as caught:
+            client.create_draft(OJSDraft(sectionId=7, locale="en"))
+    assert caught.value.reconciliation_required
+
+
 def test_success_receipt_preserves_metadata_and_redacts_known_secrets():
     raw = submission(extra={"apiKey": "another secret", "password": "another password",
                            "authors": [{"givenName": {"en": "Synthetic"}, "orcidAccessToken": "other token"}],

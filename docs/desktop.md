@@ -43,9 +43,10 @@ then installs only locked application dependencies into a clean destination.
 It copies backend source, a separate Node executable and its official license,
 installs the fixed official Codex package, and downloads the official MinGit ZIP
 with SHA-256 verification. It never copies a user's Python site-packages,
-Codex home, `.env`, Git credentials or account cache. The first dependency
-resolution produces `desktop/backend-requirements.txt`; later builds use that
-lock. Runtime versions live in `desktop/runtime-versions.json`. Electron and
+Codex home, `.env`, Git credentials or account cache. Every build requires the
+checked-in `desktop/backend-requirements.txt`; the builder never resolves a new
+dependency set or changes the lock. Runtime versions live in
+`desktop/runtime-versions.json`. Electron and
 React build dependency versions and transitive resolutions are in
 `desktop/package.json` and `desktop/package-lock.json`.
 

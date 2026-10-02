@@ -94,6 +94,28 @@ def test_local_end_to_end_has_measured_claims_and_compile_ready_manuscript(built
     assert not (source / ".paper-factory").exists()
 
 
+def test_latex_export_rejects_source_changed_while_pandoc_runs(built_case, pandoc, monkeypatch):
+    from paper_factory import conversion
+    _, ws, _, _, paper, root = built_case
+    canonical_digest = digest_file(root / "canonical.json")
+    original_run = conversion.subprocess.run
+
+    def concurrent_edit(*args, **kwargs):
+        result = original_run(*args, **kwargs)
+        with (root / "manuscript.md").open("a", encoding="utf-8") as stream:
+            stream.write("\nConcurrent manuscript edit.\n")
+        return result
+
+    monkeypatch.setattr(conversion.subprocess, "run", concurrent_edit)
+    with pytest.raises(ValueError, match="Pandoc export failed"):
+        manuscript.compile_manuscript(ws, paper, pandoc=pandoc)
+    report = json.loads((root / "compile-report.json").read_text(encoding="utf-8"))
+    assert report["status"] == "FAILED"
+    assert "Manuscript changed during conversion" in report["message"]
+    assert not (root / "manuscript.tex").exists()
+    assert digest_file(root / "canonical.json") == canonical_digest
+
+
 @pytest.mark.parametrize("heading", ["Accuracy achieved 99 percent", "The first novel experimental approach"])
 def test_new_section_headings_cannot_introduce_unsupported_results_or_novelty(built_case, heading):
     _, ws, _, _, paper, root = built_case

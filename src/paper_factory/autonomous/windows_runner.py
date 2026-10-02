@@ -21,10 +21,10 @@ import sysconfig
 import tempfile
 import time
 
-from ..workspace import ensure_unlinked
+from ..workspace import ensure_unlinked, loads_json
 from .runner import (
     LIMITS, MAX_ARTIFACT_BYTES, _PYTHON_DRIVER, _bounded_log, _entrypoint,
-    _finite_float, _nonfinite_json, _production_calls, _retain_observations, _safe_tree, _stage_tree,
+    _production_calls, _retain_observations, _safe_tree, _stage_tree,
 )
 
 
@@ -75,7 +75,7 @@ def _read_bytes(path: Path, limit: int) -> bytes:
 
 
 def _json(path: Path, limit: int):
-    return json.loads(_read_bytes(path, limit).decode("utf-8"), parse_float=_finite_float, parse_constant=_nonfinite_json)
+    return loads_json(_read_bytes(path, limit).decode("utf-8"))
 
 
 def _copy_runtime_tree(source: Path, target: Path) -> None:

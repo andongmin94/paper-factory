@@ -21,7 +21,7 @@ from typing import Any
 
 from ..author import AuthorProfile
 from ..project import _secret
-from ..workspace import digest_file, ensure_unlinked, safe_relative, write_json
+from ..workspace import digest_file, ensure_unlinked, loads_json, safe_relative, write_json
 from .models import ManuscriptDraft, ResearchPlan
 
 
@@ -692,12 +692,12 @@ def analyze(observations: dict, plan: ResearchPlan, output_root: Path) -> dict:
     script = '"""Reproduce deterministic analysis using only Python standard library."""\n'
     script += "import argparse\nimport base64\nimport binascii\nimport hashlib\nimport json\nimport math\nimport re\nimport statistics\nfrom pathlib import Path\n\n"
     script += "ANALYSIS_SCOPE = " + repr(ANALYSIS_SCOPE) + "\n\n"
-    script += inspect.getsource(ControlFailure) + "\n" + inspect.getsource(reject_failed_controls) + "\n" + inspect.getsource(_statistics) + "\n" + inspect.getsource(_compute) + "\n"
+    script += inspect.getsource(loads_json) + "\n" + inspect.getsource(ControlFailure) + "\n" + inspect.getsource(reject_failed_controls) + "\n" + inspect.getsource(_statistics) + "\n" + inspect.getsource(_compute) + "\n"
     script += "if __name__ == '__main__':\n    parser = argparse.ArgumentParser()\n"
     script += "    parser.add_argument('--observations', type=Path, default=Path(__file__).with_name('analysis-observations.json'))\n"
     script += "    parser.add_argument('--protocol', type=Path, default=Path(__file__).with_name('analysis-protocol.json'))\n"
     script += "    parser.add_argument('--output', type=Path, default=Path(__file__).with_name('analysis-reproduced.json'))\n"
-    script += "    args = parser.parse_args()\n    result = _compute(json.loads(args.observations.read_text(encoding='utf-8')), json.loads(args.protocol.read_text(encoding='utf-8')))\n"
+    script += "    args = parser.parse_args()\n    result = _compute(loads_json(args.observations.read_text(encoding='utf-8')), loads_json(args.protocol.read_text(encoding='utf-8')))\n"
     script += "    args.output.write_text(json.dumps(result, indent=2, ensure_ascii=False, allow_nan=False) + '\\n', encoding='utf-8')\n"
     safe_relative(output_root, "analysis.py").write_text(script, encoding="utf-8")
     _figures(analysis, output_root)

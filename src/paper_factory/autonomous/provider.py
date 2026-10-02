@@ -30,7 +30,7 @@ from pathlib import Path
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError
 
-from ..workspace import ensure_unlinked, pf_home, safe_relative, write_json
+from ..workspace import ensure_unlinked, loads_json, pf_home, safe_relative, write_json
 from . import windows_runtime
 
 MAX_PROMPT_BYTES = 1024 * 1024
@@ -796,17 +796,8 @@ class CodexProvider:
             receipt["raw_output_sha256"] = _digest(raw)
             if _redact(raw.decode("utf-8", errors="replace"), sensitive) != raw.decode("utf-8", errors="replace"):
                 raise ProviderBlocked("UNSAFE_OUTPUT", "The structured response contained a sensitive value and was discarded.")
-            def pairs(items):
-                result = {}
-                for key, value in items:
-                    if key in result:
-                        raise ValueError("duplicate key")
-                    result[key] = value
-                return result
-            def invalid_constant(value):
-                raise ValueError("nonfinite JSON")
             try:
-                model_output = json.loads(raw, object_pairs_hook=pairs, parse_constant=invalid_constant)
+                model_output = loads_json(raw)
                 def safe_decoded(value, depth=0):
                     if depth > 80:
                         raise ValueError("response depth")

@@ -70,6 +70,7 @@ jobs:
         run: |
           npm.cmd run typecheck --prefix desktop
           npm.cmd run lint --prefix desktop
+          npm.cmd run format:check --prefix desktop
           npm.cmd test --prefix desktop
       - name: Bundle and exercise standalone Windows runtimes
         run: |

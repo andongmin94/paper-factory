@@ -395,7 +395,7 @@ const connectionStates = {
 function officialVerificationURL(value) {
   try {
     const url = new URL(value);
-    return url.protocol === "https:" && ["auth.openai.com", "chatgpt.com"].includes(url.hostname) && !url.username && !url.password && !url.port ? url.href : "";
+    return url.href === "https://auth.openai.com/codex/device" ? url.href : "";
   } catch { return ""; }
 }
 function connectionPanel() {
@@ -1464,7 +1464,7 @@ setInterval(() => {
   if (document.hidden) return;
   const active = state.jobs.some((job) =>
     ["queued", "running"].includes(job.status),
-  ) || ["starting", "waiting_user", "probing"].includes(state.modelConnection?.status);
+  ) || ["starting", "waiting_user", "probing", "logging_out"].includes(state.modelConnection?.status);
   if (Date.now() - lastRefresh > (active ? 2000 : 15000))
     refresh({ silent: true });
 }, 2500);

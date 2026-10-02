@@ -20,7 +20,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from .models import Asset, ExperimentManifest, ExperimentRun, Project, Study, StudyState, now, transition_study
 from .project import is_link, verify_snapshot
-from .workspace import Workspace, digest_file, safe_relative, write_json
+from .workspace import Workspace, digest_file, loads_json, safe_relative, write_json
 
 
 def _credential_name(name: str) -> bool:
@@ -117,16 +117,7 @@ def _environment(manifest: ExperimentManifest) -> dict[str, str]:
 
 
 def read_json(path: Path) -> object:
-    def pairs(items: list[tuple[str, object]]) -> dict[str, object]:
-        result: dict[str, object] = {}
-        for key, value in items:
-            if key in result:
-                raise ValueError("JSON metric output has duplicate object keys")
-            result[key] = value
-        return result
-    def invalid(value: str) -> object:
-        raise ValueError(f"Nonfinite JSON numeric constant: {value}")
-    return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=pairs, parse_constant=invalid)
+    return loads_json(path.read_text(encoding="utf-8"))
 
 
 def extract_metric(data: object, pointer: str) -> float:

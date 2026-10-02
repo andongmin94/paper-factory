@@ -7,7 +7,6 @@ No write is retried: an ambiguous outcome requires provider reconciliation.
 
 from datetime import datetime, timezone
 import hashlib
-import json
 import mimetypes
 from pathlib import Path
 import re
@@ -19,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from . import __version__
 from .venue_policy import MAX_SOURCE_BYTES, _origin, _public_ip
-from .workspace import ensure_unlinked
+from .workspace import ensure_unlinked, loads_json
 
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 PositiveId = Annotated[int, Field(strict=True, gt=0)]
@@ -197,15 +196,6 @@ def _positive(value: int) -> int:
     return value
 
 
-def _pairs(pairs):
-    result = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError("Duplicate JSON field")
-        result[key] = value
-    return result
-
-
 def _safe_json(value, token: str, depth: int = 0):
     if depth > 30:
         raise ValueError("Provider JSON nesting exceeds the client limit")
@@ -301,8 +291,7 @@ class OJSClient:
                     chunks.append(chunk)
                 body = b"".join(chunks)
                 try:
-                    parsed = json.loads(body, object_pairs_hook=_pairs,
-                                        parse_constant=lambda _: (_ for _ in ()).throw(ValueError("Non-finite JSON")))
+                    parsed = loads_json(body)
                     if not isinstance(parsed, (dict, list)):
                         raise ValueError("Expected JSON object or list")
                     safe = _safe_json(parsed, self._token)

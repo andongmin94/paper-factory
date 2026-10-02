@@ -2,16 +2,11 @@ import { useRef, useState } from "react";
 import type { FormEvent } from "react";
 import {
   ArrowRight,
-  BookOpen,
-  Check,
   CheckCircle2,
-  Download,
-  ExternalLink,
   FileText,
   GitBranch,
   Library,
   LoaderCircle,
-  LogOut,
   Play,
   RefreshCw,
   Search,
@@ -33,30 +28,19 @@ import {
   DialogTitle,
 } from "./components/ui/dialog";
 import { Input } from "./components/ui/input";
-import { Progress, ProgressLabel } from "./components/ui/progress";
 import { Textarea } from "./components/ui/textarea";
 import type { Artifact, Candidate, Connection, DesktopBridge, Pipeline, Project } from "./model";
-import {
-  activeStatus,
-  artifactKind,
-  artifactRequestPath,
-  connectionMessage,
-  progress,
-  readableSize,
-  resumableStatus,
-  shortRepository,
-  stages,
-  statusLabel,
-  validRepository,
-} from "./model";
+import { activeStatus, artifactRequestPath, connectionReadiness, validRepository } from "./model";
+import { ConnectionCard } from "./components/connection-card";
+import { CODEX_DEVICE_URL } from "@shared/api";
 import { useWorkspace } from "./use-workspace";
+import { LibraryView } from "./views/library-view";
+import { ProgressView } from "./views/progress-view";
 import license from "./vendor/neobrutal-ui.LICENSE?raw";
 import fontLicense from "./assets/fonts/OFL.txt?raw";
 
 type View = "start" | "progress" | "library";
 type Notice = { kind: "success" | "error"; title: string; message: string };
-type LibraryEntry = { id: string; title: string; repository: string; files: Artifact[] };
-const deviceUrl = "https://auth.openai.com/codex/device";
 
 function actionError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
@@ -72,21 +56,6 @@ function actionError(error: unknown) {
     return "설정한 연구 한도에 도달했습니다. 진행 현황의 중지 사유를 확인해 주세요.";
   if (/AUTH|login|로그인/i.test(message)) return "Codex 연결을 확인한 뒤 다시 시도해 주세요.";
   return "요청을 완료하지 못했습니다. 현재 상태를 새로고침한 뒤 다시 시도해 주세요.";
-}
-
-function interruptionMessage(run: Pipeline) {
-  const code = run.code ?? "";
-  if (/MODEL_BUDGET/.test(code))
-    return "모델 호출 한도를 사용했습니다. 남은 작업은 완료되지 않았습니다.";
-  if (/TIME_BUDGET/.test(code))
-    return "설정한 작업 시간이 끝났습니다. 완료한 연구 자료는 보존됩니다.";
-  if (/CLEANUP/.test(code))
-    return "작업자의 종료가 확인되지 않았습니다. 계정을 변경하기 전에 종료 확인이 필요합니다.";
-  if (/AUTH|LOGIN|PROVIDER/.test(code))
-    return "Codex 연결 또는 모델 사용 가능 여부를 확인해 주세요.";
-  if (/CANCELLED/.test(code) || run.status === "cancelled")
-    return "연구를 중지했습니다. 완료한 자료와 연구 기록은 보존됩니다.";
-  return "이 연구는 확인이 필요합니다. 연구 기록을 보존한 채 다시 이어갈 수 있습니다.";
 }
 
 export default function App({ api }: { api: DesktopBridge }) {
@@ -115,30 +84,7 @@ export default function App({ api }: { api: DesktopBridge }) {
   }>({ considered: 0, limitations: [] });
   const [query, setQuery] = useState("");
   const connection = connectionOverride ?? snapshot.connection;
-  const authBusy = ["starting", "waiting_user", "probing", "logging_out"].includes(
-    connection.status,
-  );
-  const explicitlyLoggedOut =
-    connection.app_login_required === true ||
-    ["logged_out", "logging_out"].includes(connection.status);
-  const modelReady =
-    !explicitlyLoggedOut &&
-    !authBusy &&
-    !["failed", "blocked"].includes(connection.status) &&
-    connection.model_available === true &&
-    snapshot.agent.provider?.ready === true;
-  const canProbe =
-    !authBusy &&
-    connection.code !== "CLEANUP_UNCONFIRMED" &&
-    ((!explicitlyLoggedOut && (connection.authentication === "chatgpt" || modelReady)) ||
-      (Boolean(connection.pending?.profile_id) &&
-        connection.authentication === "chatgpt" &&
-        !["cancelled", "logged_out"].includes(connection.status)));
-  const canLogout = canProbe || connection.connected || Boolean(connection.pending?.profile_id);
-  const logoutRetry =
-    connection.app_login_required &&
-    Boolean(connection.pending?.profile_id) &&
-    ["failed", "blocked"].includes(connection.status);
+  const { modelReady } = connectionReadiness(connection, snapshot.agent);
   const runnerReady = snapshot.agent.runner?.ready === true;
   const toolsReady = snapshot.agent.tools?.git === true && snapshot.agent.tools?.pandoc === true;
   const runs = snapshot.projects.flatMap((project) =>
@@ -274,34 +220,6 @@ export default function App({ api }: { api: DesktopBridge }) {
       }
     });
   }
-
-  const library: LibraryEntry[] = [
-    ...runs
-      .filter(({ run }) => run.status === "completed")
-      .map(({ project, run }) => ({
-        id: run.id,
-        title: run.goal,
-        repository: shortRepository(project.source),
-        files: run.files ?? [],
-      })),
-    ...snapshot.studies.map((study) => ({
-      id: `catalog-${study.slug}`,
-      title: study.title_ko ?? study.title ?? study.slug,
-      repository:
-        typeof study.repository === "string"
-          ? shortRepository(study.repository)
-          : (study.repository?.name ?? "보관된 연구"),
-      files: [
-        ...(study.files ?? []),
-        ...(study.bundle_url && !(study.files ?? []).some((file) => file.url === study.bundle_url)
-          ? [{ name: "reproducibility.zip", url: study.bundle_url }]
-          : []),
-      ],
-    })),
-  ];
-  const filteredLibrary = library.filter((entry) =>
-    `${entry.title} ${entry.repository}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()),
-  );
 
   return (
     <div className="app-shell">
@@ -552,95 +470,18 @@ export default function App({ api }: { api: DesktopBridge }) {
                   </Card>
                 </section>
                 <div className="start-side">
-                  <Card className="account-card">
-                    <CardHeader>
-                      <CardTitle className="section-title">
-                        <span className="number-chip">✓</span>Codex 연결
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <Badge variant="neutral" className={modelReady ? "ready-badge" : ""}>
-                        {modelReady ? "사용 준비 완료" : authBusy ? "연결 진행 중" : "연결 필요"}
-                      </Badge>
-                      <p className="account-description">
-                        {connectionMessage(connection, snapshot.agent)}
-                      </p>
-                      {connection.status === "waiting_user" && (
-                        <div className="device-box">
-                          <span>일회용 로그인 코드</span>
-                          <strong>
-                            {connection.user_code &&
-                            /^[A-Za-z0-9-]{1,32}$/.test(connection.user_code)
-                              ? connection.user_code
-                              : "코드 준비 중"}
-                          </strong>
-                          <Button
-                            className="full-width"
-                            disabled={Boolean(pending) || connection.verification_url !== deviceUrl}
-                            onClick={() =>
-                              void action("device-page", () => api.openExternal(deviceUrl))
-                            }
-                          >
-                            공식 로그인 페이지 열기
-                            <ExternalLink size={15} />
-                          </Button>
-                          <p>OpenAI 페이지에서만 로그인 정보를 입력하세요.</p>
-                        </div>
-                      )}
-                      {canProbe && (
-                        <p className="field-help">
-                          연결 확인은 실제 모델을 1회 호출하며 구독 사용량에 반영됩니다.
-                        </p>
-                      )}
-                      <div className="account-actions">
-                        {canProbe ? (
-                          <Button
-                            variant="neutral"
-                            disabled={Boolean(pending) || researchBusy}
-                            onClick={() => connect("probe")}
-                          >
-                            {modelReady ? "연결 다시 확인 (1회 호출)" : "연결 확인 (1회 호출)"}
-                          </Button>
-                        ) : (
-                          !authBusy && (
-                            <Button
-                              className="full-width"
-                              disabled={Boolean(pending) || loading || researchBusy}
-                              onClick={() => connect("login")}
-                            >
-                              <ExternalLink size={16} />
-                              Codex 연결하기
-                            </Button>
-                          )
-                        )}
-                        {authBusy && connection.status !== "logging_out" && (
-                          <Button
-                            variant="neutral"
-                            disabled={Boolean(pending)}
-                            onClick={() => connect("cancel")}
-                          >
-                            연결 취소
-                          </Button>
-                        )}
-                        {canLogout && (
-                          <Button
-                            variant="ghost"
-                            className="logout-button"
-                            disabled={Boolean(pending) || authBusy}
-                            onClick={() => setLogoutOpen(true)}
-                          >
-                            <LogOut size={15} />
-                            {logoutRetry ? "로그아웃 다시 시도" : "로그아웃"}
-                          </Button>
-                        )}
-                      </div>
-                      {researchBusy && (
-                        <p className="field-help">
-                          계정 변경은 진행 중인 연구가 종료된 뒤 가능합니다.
-                        </p>
-                      )}
-                    </CardContent>
-                  </Card>
+                  <ConnectionCard
+                    connection={connection}
+                    agent={snapshot.agent}
+                    loading={loading}
+                    pending={Boolean(pending)}
+                    researchBusy={researchBusy}
+                    onConnect={connect}
+                    onDevicePage={() => {
+                      void action("device-page", () => api.openExternal(CODEX_DEVICE_URL));
+                    }}
+                    onLogout={() => setLogoutOpen(true)}
+                  />
                   <Card className="recommend-card">
                     <CardHeader>
                       <CardTitle className="section-title">
@@ -729,282 +570,45 @@ export default function App({ api }: { api: DesktopBridge }) {
             </>
           )}
           {view === "progress" && (
-            <>
-              <div className="page-heading compact">
-                <Badge className="eyebrow">RESEARCH IN MOTION</Badge>
-                <h1>
-                  진행 현황<span className="heading-dot">.</span>
-                </h1>
-                <p>완료한 단계와 사용한 한도를 확인하세요. 연구 기록은 중지 후에도 남습니다.</p>
-              </div>
-              {loading && <Loading />}
-              {snapshot.projects
-                .filter(
-                  (project) =>
-                    project.status === "importing" ||
-                    project.status === "failed" ||
-                    project.autonomous_error,
-                )
-                .map((project) => (
-                  <Card key={`import-${project.id}`} className="import-card">
-                    <CardContent>
-                      <div className="row">
-                        <GitBranch />
-                        <strong>{project.name}</strong>
-                        <Badge variant="neutral">{statusLabel(project.status)}</Badge>
-                      </div>
-                      <p>
-                        {project.status === "importing"
-                          ? "저장소를 가져오고 있습니다. 준비되면 요청한 연구를 자동으로 시작합니다."
-                          : project.autonomous_error
-                            ? "저장소는 준비됐지만 연구를 시작하지 못했습니다. 연결 상태를 확인하고 자동 연구 화면에서 이 프로젝트를 선택하세요."
-                            : "저장소를 가져오지 못했습니다. 주소와 접근 권한을 확인한 뒤 새로 가져와 주세요."}
-                      </p>
-                    </CardContent>
-                  </Card>
-                ))}
-              {!loading &&
-                runs.length === 0 &&
-                snapshot.projects.every((project) => project.status !== "importing") && (
-                  <Empty
-                    icon="progress"
-                    title="아직 시작한 연구가 없습니다"
-                    description="GitHub 저장소와 연구 목표를 입력해 첫 연구를 시작하세요."
-                    onStart={() => setView("start")}
-                  />
-                )}
-              <div className="run-list">
-                {runs.map(({ project, run }) => {
-                  const completion = progress(run);
-                  const current =
-                    stages.find(([key]) => key === run.stage)?.[1] ??
-                    (run.stage === "done" ? "최종 확인 완료" : "작업 준비");
-                  return (
-                    <Card key={run.id} className="run-card">
-                      <CardHeader>
-                        <div className="run-topline">
-                          <span className="repo-label">
-                            <GitBranch size={16} />
-                            {shortRepository(project.source)}
-                          </span>
-                          <Badge
-                            className={run.status === "completed" ? "ready-badge" : ""}
-                            variant="neutral"
-                          >
-                            {run.cancellation_requested && activeStatus(run.status)
-                              ? "중지 요청 · 정리 중"
-                              : statusLabel(run.status)}
-                          </Badge>
-                        </div>
-                        <CardTitle className="run-goal">{run.goal}</CardTitle>
-                      </CardHeader>
-                      <CardContent>
-                        <Progress value={completion.percent}>
-                          <ProgressLabel>
-                            완료한 단계 {completion.completed} / {stages.length}
-                          </ProgressLabel>
-                          <span className="progress-current">{current}</span>
-                        </Progress>
-                        <ol className="stage-list">
-                          {stages.map(([key, label], index) => (
-                            <li
-                              key={key}
-                              className={
-                                completion.finished.has(key)
-                                  ? "done"
-                                  : run.stage === key && activeStatus(run.status)
-                                    ? "current"
-                                    : ""
-                              }
-                            >
-                              <span>
-                                {completion.finished.has(key) ? <Check size={12} /> : index + 1}
-                              </span>
-                              {label}
-                            </li>
-                          ))}
-                        </ol>
-                        <div className="run-footer">
-                          <div className="run-budget">
-                            <span>
-                              모델 호출{" "}
-                              <strong>
-                                {run.model_calls ?? 0} / {run.budget?.max_model_calls ?? "—"}회
-                              </strong>
-                            </span>
-                            <span>
-                              사용 시간{" "}
-                              <strong>
-                                {Math.floor((run.elapsed_seconds ?? 0) / 60)} /{" "}
-                                {run.budget?.wall_seconds
-                                  ? Math.floor(run.budget.wall_seconds / 60)
-                                  : "—"}
-                                분
-                              </strong>
-                            </span>
-                          </div>
-                          <div className="run-actions">
-                            {activeStatus(run.status) && (
-                              <Button
-                                variant="neutral"
-                                size="sm"
-                                disabled={Boolean(pending) || run.cancellation_requested}
-                                onClick={() => setCancelTarget({ project, run })}
-                              >
-                                <Square size={13} />
-                                {run.cancellation_requested ? "종료 확인 중" : "연구 중지"}
-                              </Button>
-                            )}
-                            {resumableStatus(run.status) && (
-                              <Button
-                                size="sm"
-                                disabled={
-                                  Boolean(pending) ||
-                                  !modelReady ||
-                                  !runnerReady ||
-                                  !toolsReady ||
-                                  Boolean(loadError) ||
-                                  researchBusy
-                                }
-                                onClick={() =>
-                                  void action(`resume-${run.id}`, async () => {
-                                    await api.request(
-                                      "POST",
-                                      `/api/projects/${encodeURIComponent(project.id)}/pipelines/${encodeURIComponent(run.id)}/resume`,
-                                      {},
-                                    );
-                                  })
-                                }
-                              >
-                                <Play size={13} />
-                                이어서 진행
-                              </Button>
-                            )}
-                            {run.status === "completed" && (
-                              <Button size="sm" onClick={() => setView("library")}>
-                                <BookOpen size={14} />
-                                결과 확인
-                              </Button>
-                            )}
-                          </div>
-                        </div>
-                        {resumableStatus(run.status) && (
-                          <div className="run-warning">
-                            <p>{interruptionMessage(run)}</p>
-                            {run.code && <span>상태 코드: {run.code}</span>}
-                          </div>
-                        )}
-                      </CardContent>
-                    </Card>
+            <ProgressView
+              projects={snapshot.projects}
+              runs={runs}
+              loading={loading}
+              pending={Boolean(pending)}
+              canResume={
+                modelReady &&
+                runnerReady &&
+                toolsReady &&
+                !loading &&
+                !loadError &&
+                !pending &&
+                !researchBusy
+              }
+              onCancel={setCancelTarget}
+              onResume={({ project, run }) => {
+                void action(`resume-${run.id}`, async () => {
+                  await api.request(
+                    "POST",
+                    `/api/projects/${encodeURIComponent(project.id)}/pipelines/${encodeURIComponent(run.id)}/resume`,
+                    {},
                   );
-                })}
-              </div>
-            </>
+                });
+              }}
+              onStart={() => setView("start")}
+              onLibrary={() => setView("library")}
+            />
           )}
           {view === "library" && (
-            <>
-              <div className="page-heading compact">
-                <Badge className="eyebrow">YOUR PAPER COLLECTION</Badge>
-                <h1>
-                  논문 보관함<span className="heading-dot">.</span>
-                </h1>
-                <p>검토용 원고와 실험을 확인할 재현 자료를 열거나 저장하세요.</p>
-              </div>
-              <div className="library-toolbar">
-                <label className="library-search">
-                  <Search size={18} />
-                  <Input
-                    aria-label="논문 검색"
-                    value={query}
-                    onChange={(event) => setQuery(event.target.value)}
-                    placeholder="연구 목표 또는 저장소로 검색"
-                  />
-                </label>
-                <span>{filteredLibrary.length}개의 연구</span>
-              </div>
-              {loading && <Loading />}
-              {!loading && filteredLibrary.length === 0 && (
-                <Empty
-                  icon="library"
-                  title={query ? "검색 결과가 없습니다" : "첫 논문이 놓일 자리입니다"}
-                  description={
-                    query
-                      ? "검색어를 바꾸어 다시 확인해 주세요."
-                      : "연구의 최종 확인이 끝나면 원고와 재현 자료가 여기에 나타납니다."
-                  }
-                  onStart={query ? undefined : () => setView("start")}
-                />
-              )}
-              <div className="library-grid">
-                {filteredLibrary.map((entry, index) => {
-                  const files = entry.files.filter(
-                    (file) => artifactKind(file) && artifactRequestPath(file),
-                  );
-                  return (
-                    <Card key={entry.id} className="paper-card">
-                      <CardHeader>
-                        <div className="paper-topline">
-                          <span className="paper-number">
-                            PAPER {String(index + 1).padStart(2, "0")}
-                          </span>
-                          <Badge variant="neutral">검토용 원고</Badge>
-                        </div>
-                        <CardTitle className="paper-title">{entry.title}</CardTitle>
-                        <CardDescription className="repo-label">
-                          <GitBranch size={15} />
-                          {entry.repository}
-                        </CardDescription>
-                      </CardHeader>
-                      <CardContent>
-                        {files.length > 0 ? (
-                          <div className="artifact-list">
-                            {files.map((file) => (
-                              <div key={file.url} className="artifact-row">
-                                <div>
-                                  <strong>{artifactKind(file)}</strong>
-                                  <span>{readableSize(file.size)}</span>
-                                </div>
-                                <div>
-                                  {!file.url.endsWith("/bundle") &&
-                                    artifactKind(file) !== "전체 재현 자료" && (
-                                      <Button
-                                        variant="neutral"
-                                        size="icon-sm"
-                                        aria-label={`${artifactKind(file)} 열기`}
-                                        disabled={Boolean(pending)}
-                                        onClick={() => fileAction(file, "open")}
-                                      >
-                                        <ExternalLink size={15} />
-                                      </Button>
-                                    )}
-                                  <Button
-                                    variant="neutral"
-                                    size="icon-sm"
-                                    aria-label={`${artifactKind(file)} 저장`}
-                                    disabled={Boolean(pending)}
-                                    onClick={() => fileAction(file, "save")}
-                                  >
-                                    <Download size={16} />
-                                  </Button>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <p className="field-help">
-                            준비된 파일을 읽을 수 없습니다. 상태를 새로고침한 뒤 다시 확인해 주세요.
-                          </p>
-                        )}
-                      </CardContent>
-                    </Card>
-                  );
-                })}
-              </div>
-              <p className="library-note">
-                자동 생성 원고에는 오류가 남을 수 있습니다. 인용, 결과, 저자 정보는 제출하거나
-                공유하기 전에 직접 검토하세요.
-              </p>
-            </>
+            <LibraryView
+              runs={runs}
+              studies={snapshot.studies}
+              loading={loading}
+              pending={Boolean(pending)}
+              query={query}
+              onQuery={setQuery}
+              onFileAction={fileAction}
+              onStart={() => setView("start")}
+            />
           )}
         </main>
       </div>
@@ -1150,42 +754,5 @@ export default function App({ api }: { api: DesktopBridge }) {
         </DialogContent>
       </Dialog>
     </div>
-  );
-}
-
-function Empty({
-  icon,
-  title,
-  description,
-  onStart,
-}: {
-  icon: "progress" | "library";
-  title: string;
-  description: string;
-  onStart?: () => void;
-}) {
-  const Icon = icon === "library" ? BookOpen : Sparkles;
-  return (
-    <div className="empty-state">
-      <span className="empty-icon">
-        <Icon size={38} />
-      </span>
-      <h2>{title}</h2>
-      <p>{description}</p>
-      {onStart && (
-        <Button onClick={onStart}>
-          첫 연구 시작하기
-          <ArrowRight size={16} />
-        </Button>
-      )}
-    </div>
-  );
-}
-function Loading() {
-  return (
-    <p className="loading-state" role="status">
-      <LoaderCircle className="spinner" size={20} />
-      작업실의 기록을 불러오고 있습니다.
-    </p>
   );
 }

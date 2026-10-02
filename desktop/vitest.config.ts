@@ -9,7 +9,6 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.join(root, "src/renderer"),
-      "@renderer": path.join(root, "src/renderer"),
       "@shared": path.join(root, "src/shared"),
     },
   },

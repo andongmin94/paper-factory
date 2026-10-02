@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import math
 import os
 import shutil
 import sqlite3
@@ -52,6 +53,26 @@ def digest_file(path: Path) -> str:
     with path.open("rb") as stream:
         digest = hashlib.file_digest(stream, "sha256")
     return digest.hexdigest()
+
+
+def loads_json(content: str | bytes) -> object:
+    """Decode evidence without ambiguous keys or nonfinite numbers."""
+    def pairs(items: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in items:
+            if key in result:
+                raise ValueError("JSON has duplicate object keys")
+            result[key] = value
+        return result
+
+    def finite_number(token: str) -> float:
+        value = float(token)
+        if not math.isfinite(value):
+            raise ValueError(f"Nonfinite JSON numeric value: {token}")
+        return value
+
+    return json.loads(content, object_pairs_hook=pairs,
+        parse_float=finite_number, parse_constant=finite_number)
 
 
 def write_json(path: Path, value: object) -> None:

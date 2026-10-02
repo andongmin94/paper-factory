@@ -53,6 +53,8 @@ class DesktopState(WebState):
         from .autonomous import pipeline
         from .autonomous.models import PipelineRun
         with self.lock:
+            if self.closed:
+                return {"ready": False, "code": "SHUTDOWN_BUSY", "error": "앱 종료가 이미 진행 중입니다. 종료 확인을 기다려 주세요."}
             active = [dict(job) for job in self.jobs.values() if job["status"] in {"queued", "running"}]
             if any("pipeline_id" not in job for job in active):
                 return {"ready": False, "code": "SHUTDOWN_BUSY", "error": "프로젝트 가져오기가 끝난 뒤 앱을 닫아 주세요."}
@@ -60,7 +62,14 @@ class DesktopState(WebState):
         ready = False
         try:
             for job in active:
-                pipeline.cancel(Workspace(self.workspace_path(job["project_id"])), job["pipeline_id"])
+                ws = Workspace(self.workspace_path(job["project_id"]))
+                try:
+                    pipeline.cancel(ws, job["pipeline_id"])
+                except ValueError:
+                    # Completion can win the race between the job snapshot and
+                    # cancellation. A completed run already needs no request.
+                    if ws.get("pipeline", job["pipeline_id"], PipelineRun).status != "completed":
+                        raise
             deadline = time.monotonic() + timeout
             while True:
                 with self.lock:
@@ -84,6 +93,8 @@ class DesktopState(WebState):
                     return {"ready": False, "code": "CLEANUP_UNCONFIRMED", "error": "Codex 연결 작업자의 종료를 확인하지 못했습니다. 잠시 뒤 다시 닫아 주세요."}
             ready = True
             return {"ready": True}
+        except (OSError, ValueError, KeyError):
+            return {"ready": False, "code": "CLEANUP_UNCONFIRMED", "error": "작업 상태와 종료를 확인하지 못했습니다. 앱을 유지하고 다시 시도해 주세요."}
         finally:
             # A failed close remains usable; the cancellation request is retained.
             if not ready:

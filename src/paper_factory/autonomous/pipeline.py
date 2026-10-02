@@ -15,7 +15,7 @@ from pydantic import ValidationError
 from .. import conversion, project
 from ..author import load_author
 from ..models import Project, Study, now
-from ..workspace import Workspace, digest_file, ensure_unlinked, safe_relative, write_json
+from ..workspace import Workspace, digest_file, ensure_unlinked, loads_json, safe_relative, write_json
 from .models import Budget, CodeBundle, FrozenArtifact, ManuscriptDraft, PipelineRun, ResearchPlan, ScientificReview, StageAttempt
 
 STAGES = ("assess", "plan", "literature", "generate", "execute", "analyze", "write", "export", "verify", "done")
@@ -74,9 +74,7 @@ def _artifact(ws: Workspace, run: PipelineRun, key: str) -> Path:
 
 
 def _read(ws: Workspace, run: PipelineRun, key: str) -> dict:
-    def invalid(value):
-        raise ValueError("Scientific records require finite JSON numbers")
-    return json.loads(_artifact(ws, run, key).read_text(encoding="utf-8"), parse_constant=invalid)
+    return loads_json(_artifact(ws, run, key).read_text(encoding="utf-8"))
 
 
 def _verify_artifacts(ws: Workspace, run: PipelineRun) -> None:
@@ -409,7 +407,7 @@ def run(ws: Workspace, pipeline_id: str, *, provider=None, runner=None) -> Pipel
                 elif stage == "generate":
                     plan = ResearchPlan.model_validate(_read(ws, current, "plan"))
                     context = _artifact(ws, current, "context").read_text(encoding="utf-8")
-                    feedback = json.loads((root / "repair-feedback.json").read_text(encoding="utf-8")) if (root / "repair-feedback.json").is_file() else None
+                    feedback = loads_json((root / "repair-feedback.json").read_text(encoding="utf-8")) if (root / "repair-feedback.json").is_file() else None
                     bundle = CodeBundle.model_validate(ask(science.code_prompt(plan, context, feedback), CodeBundle.model_json_schema(), "code"))
                     if bundle.runtime != plan.runtime:
                         raise ValueError("Generated runtime differs from frozen protocol")
@@ -527,9 +525,16 @@ def run(ws: Workspace, pipeline_id: str, *, provider=None, runner=None) -> Pipel
                     execution = _read(ws, current, "execution")
                     prompt = science.writing_prompt(plan, analysis, literature_evidence, execution)
                     draft_error = None
-                    for draft_attempt in range(current.budget.repair_attempts + 1):
+                    # Resume must retain rejected drafts/reviews, including a
+                    # file written just before an interrupted checkpoint.
+                    draft_number = max((int(match.group(1)) for path in root.iterdir()
+                                        if (match := re.fullmatch(r"(?:draft-attempt|manuscript-review)-([1-9][0-9]*)\.json", path.name))), default=0)
+                    for _ in range(current.budget.repair_attempts + 1):
+                        draft_number += 1
                         draft = ManuscriptDraft.model_validate(ask(prompt, ManuscriptDraft.model_json_schema(), "manuscript"))
-                        write_json(root / f"draft-attempt-{draft_attempt+1}.json", draft)
+                        draft_path = root / f"draft-attempt-{draft_number}.json"
+                        write_json(draft_path, draft)
+                        _freeze(ws, current, f"draft-attempt-{draft_number}", draft_path)
                         try:
                             rendered = science.validate_and_render(draft.model_dump(mode="json"), plan, analysis, literature_evidence,
                                                                   root / "exports", author=load_author().model_dump(exclude_defaults=True))
@@ -545,8 +550,9 @@ def run(ws: Workspace, pipeline_id: str, *, provider=None, runner=None) -> Pipel
                                              draft.model_dump_json() + "\n\nProtocol:\n" + plan.model_dump_json() + "\n\n" + science.execution_evidence_prompt(execution) + "\n\nAnalysis:\n" + json.dumps(analysis) +
                                              "\n\nRetrieved source excerpts:\n" + json.dumps(literature_evidence))
                             review = ScientificReview.model_validate(ask(review_prompt, ScientificReview.model_json_schema(), "manuscript-review"))
-                            write_json(root / f"manuscript-review-{draft_attempt+1}.json", review)
-                            _freeze(ws, current, f"manuscript-review-{draft_attempt+1}", root / f"manuscript-review-{draft_attempt+1}.json")
+                            review_path = root / f"manuscript-review-{draft_number}.json"
+                            write_json(review_path, review)
+                            _freeze(ws, current, f"manuscript-review-{draft_number}", review_path)
                             if not review.accepted or review.issues:
                                 raise ValueError("Scientific manuscript review: " + "; ".join(review.issues or ["Interpretation was not accepted"]))
                         except ValueError as exc:
@@ -752,7 +758,7 @@ def verify(ws: Workspace, pipeline_id: str) -> dict:
     with zipfile.ZipFile(_artifact(ws, record, "reproducibility")) as archive:
         if archive.testzip():
             raise ValueError("Reproduction archive has a CRC error")
-        inventory = json.loads(archive.read("inventory.json"))
+        inventory = loads_json(archive.read("inventory.json"))
         import hashlib
         for name, item in inventory.items():
             content = archive.read(name)

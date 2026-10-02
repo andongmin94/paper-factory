@@ -580,6 +580,59 @@ def test_writer_and_review_retries_receive_actual_aggregate_execution(workspace,
         assert execution["private_unrelated_field"] not in prompt
 
 
+@pytest.mark.parametrize("orphaned_history", [False, True])
+def test_resumed_writing_preserves_rejected_and_uncheckpointed_history(workspace, components, monkeypatch, orphaned_history):
+    provider, runner, _, _ = components
+    provider.reviews = [{"accepted": True, "issues": [], "checks": []},
+                        {"accepted": False, "issues": ["Synthetic interpretation needs correction."], "checks": []}]
+    result = launch(workspace, components, budget={"repair_attempts": 0})
+    assert result.stage == "write" and result.code == "MANUSCRIPT_EVIDENCE_INVALID"
+    retained = {key: (pipeline._artifact(workspace, result, key).read_bytes(), result.artifacts[key].sha256)
+                for key in ("draft-attempt-1", "manuscript-review-1", "plan", "observations", "analysis")}
+    root = pipeline._root(workspace, result)
+    orphaned = {}
+    if orphaned_history:
+        for name in ("draft-attempt-9.json", "manuscript-review-9.json"):
+            orphaned[name] = b'{"notice":"Synthetic interrupted, uncheckpointed history"}\n'
+            (root / name).write_bytes(orphaned[name])
+    original = manuscript
+
+    def revised_draft():
+        draft = original()
+        draft["sections"][0]["text"] += " This revised interpretation retains the limits of the synthetic experiment."
+        return draft
+
+    monkeypatch.setattr(sys.modules[__name__], "manuscript", revised_draft)
+    provider.reviews.append({"accepted": True, "issues": [], "checks": []})
+    provider.on_generate = lambda label: pipeline.cancel(workspace, result.id) if label == "ScientificReview" else None
+    before_calls = len(provider.calls)
+    pipeline.resume(workspace, result.id)
+    resumed = pipeline.run(workspace, result.id, provider=provider, runner=runner)
+    assert resumed.status == "cancelled" and resumed.stage == "export"
+    assert runner.calls == 1 and provider.calls[before_calls:] == ["ManuscriptDraft", "ScientificReview"]
+    for key, (content, digest) in retained.items():
+        assert resumed.artifacts[key].sha256 == digest
+        assert pipeline._artifact(workspace, resumed, key).read_bytes() == content
+    for name, content in orphaned.items():
+        assert (root / name).read_bytes() == content
+    number = 10 if orphaned_history else 2
+    assert pipeline._read(workspace, resumed, f"manuscript-review-{number}")["accepted"] is True
+    assert pipeline._artifact(workspace, resumed, f"draft-attempt-{number}").read_bytes() != retained["draft-attempt-1"][0]
+
+
+@pytest.mark.parametrize("content,reason", [
+    ('{"controls":[{"passed":false,"passed":true}]}', "duplicate object keys"),
+    ('{"observations":[{"value":1e999}]}', "Nonfinite JSON"),
+])
+def test_frozen_evidence_read_rejects_ambiguous_or_nonfinite_json(workspace, content, reason):
+    record = pipeline.create(workspace, "Synthetic frozen evidence parsing check")
+    path = pipeline._root(workspace, record) / "ambiguous-evidence.json"
+    path.write_text(content, encoding="utf-8")
+    pipeline._freeze(workspace, record, "test-evidence", path)
+    with pytest.raises(ValueError, match=reason):
+        pipeline._read(workspace, record, "test-evidence")
+
+
 @pytest.mark.parametrize("claim", [
     "The difference was statistically significant.",
     "Confidence intervals establish a population effect.",

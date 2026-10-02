@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import hashlib
-import importlib.metadata
 import json
 import os
 from pathlib import Path
@@ -11,7 +10,6 @@ import subprocess
 import sys
 import sysconfig
 import tempfile
-import tomllib
 import zipfile
 
 import httpx
@@ -45,6 +43,9 @@ def checked_output(path: Path) -> Path:
 def bundle(destination: Path):
     if os.name != "nt" or sys.maxsize <= 2**32:
         raise SystemExit("Build the desktop runtime with native Windows x64 Python.")
+    lock = DESKTOP / "backend-requirements.txt"
+    if not lock.is_file():
+        raise ValueError("The checked-in desktop/backend-requirements.txt is required for runtime builds.")
     runtime = destination / "runtime"
     python = runtime / "python"
     python.mkdir(parents=True)
@@ -60,20 +61,7 @@ def bundle(destination: Path):
     copy_tree(base / "DLLs", python / "DLLs", standard_library=True)
     (python / f"python{major_minor}._pth").write_text("Lib\nDLLs\n.\nLib/site-packages\n../../backend\n", encoding="utf-8")
     site = python / "Lib" / "site-packages"
-    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
-    lock = DESKTOP / "backend-requirements.txt"
-    if lock.is_file():
-        arguments = ["-r", str(lock)]
-    else:
-        dependencies = project["dependencies"] + ["pypandoc_binary"]
-        for extra in ("pdf", "research", "automation"):
-            dependencies += project["optional-dependencies"][extra]
-        arguments = [*dependencies, "-r", str(ROOT / "scripts" / "research-runtime-requirements.txt")]
-    subprocess.run([sys.executable, "-m", "pip", "install", "--no-compile", "--target", str(site), *arguments], check=True, cwd=ROOT)
-    distributions = sorted(importlib.metadata.distributions(path=[str(site)]), key=lambda item: item.metadata["Name"].lower())
-    resolved = "# Windows desktop backend dependencies, resolved at build time.\n" + "".join(f"{item.metadata['Name']}=={item.version}\n" for item in distributions)
-    if not lock.exists():
-        lock.write_text(resolved, encoding="utf-8", newline="\n")
+    subprocess.run([sys.executable, "-m", "pip", "install", "--no-compile", "--target", str(site), "-r", str(lock)], check=True, cwd=ROOT)
     shutil.copyfile(lock, runtime / "backend-requirements.txt")
     copy_tree(ROOT / "src" / "paper_factory", destination / "backend" / "paper_factory")
     shutil.copyfile(ROOT / "LICENSE", destination / "LICENSE")

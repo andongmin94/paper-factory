@@ -75,7 +75,8 @@ def test_native_controller_uses_staged_paths_and_verified_trace(native_runner, n
     '{"measured": 7}'.encode("utf-16"),
     '{"measured": 7}'.encode("utf-32"),
     b'{"measured": NaN}',
-], ids=["utf16", "utf32", "nonfinite"])
+    b'{"controls":[{"name":"positive","passed":false,"passed":true}]}',
+], ids=["utf16", "utf32", "nonfinite", "duplicate-control"])
 def test_native_export_rejects_non_utf8_or_nonfinite_observations(native_runner, native_inputs, monkeypatch, content):
     def launch(command, **kwargs):
         output = Path(kwargs["environment"]["PF_OUTPUT_ROOT"])
@@ -88,6 +89,20 @@ def test_native_export_rejects_non_utf8_or_nonfinite_observations(native_runner,
     assert result["output_path"] is None
     assert not (native_inputs[2] / "observations.json").exists()
     assert "Native sandbox execution rejected" in result["stderr"]
+
+
+def test_native_rejects_ambiguous_production_trace_before_export(native_runner, native_inputs, monkeypatch):
+    def launch(command, **kwargs):
+        output = Path(kwargs["environment"]["PF_OUTPUT_ROOT"])
+        write_json(output / "observations.json", {"observations": [], "controls": []})
+        (output / ".paper-factory-python-calls.json").write_text(
+            '{"calls":[],"truncated":true,"truncated":false}', encoding="utf-8")
+        return {"status": "succeeded", "exit_code": 0, "stdout": "", "stderr": "", "cleanup_confirmed": True}
+    monkeypatch.setattr(windows_runtime, "launch", launch)
+    result = native_runner.run(*native_inputs, runtime="python", entrypoint="experiment.py")
+    assert result["status"] == "failed" and result["cleanup_confirmed"] is True
+    assert "duplicate object keys" in result["stderr"] and result["output_path"] is None
+    assert not (native_inputs[2] / "observations.json").exists()
 
 
 def test_native_failed_control_retains_exact_raw_observations_without_trace(native_runner, native_inputs, monkeypatch):

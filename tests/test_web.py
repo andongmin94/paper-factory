@@ -7,6 +7,7 @@ import time
 import zipfile
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -162,15 +163,46 @@ def test_denied_small_json_body_returns_http_error_repeatedly_on_windows(web_cas
     assert server.state.projects == {}
 
 
+@pytest.mark.parametrize("length", [None, "²"])
+def test_invalid_content_type_sends_error_with_bounded_body_handling(length):
+    payload = b'{"source":"x"}'
+    handler = object.__new__(WebHandler)
+    handler.command = "POST"
+    handler.path = "/api/projects"
+    handler.client_address = ("127.0.0.1", 12345)
+    handler.headers = {"Host": "127.0.0.1:8765", "Origin": "http://127.0.0.1:8765",
+                       "Content-Type": "text/plain", "Content-Length": length or str(len(payload))}
+    handler.server = SimpleNamespace(server_port=8765, writes_enabled=True,
+                                     state=SimpleNamespace(redact=lambda value: value))
+    handler.rfile, handler.wfile = BytesIO(payload), BytesIO()
+    replies = []
+    handler._headers = lambda status, mime, size: replies.append((status, handler.rfile.tell()))
+    with socket.socket() as connection:
+        handler.connection = connection
+        handler._handle()
+    assert replies == [(400, len(payload) if length is None else 0)]
+    assert json.loads(handler.wfile.getvalue())["error"] == "Write requests require application/json"
+
+
+def test_invalid_content_type_returns_http_error_repeatedly_on_windows(web_case):
+    server, client, _, _ = web_case
+    for _ in range(20):
+        response = client.post("/api/projects", content='{"source":"x"}', headers={"Content-Type": "text/plain"})
+        assert response.status_code == 400 and "application/json" in response.json()["error"]
+    assert server.state.projects == {}
+
+
 @pytest.mark.parametrize("length,extra", [("20", ""), (str(MAX_BODY + 1), ""), ("20", "Transfer-Encoding: chunked\r\n")])
-def test_denied_missing_or_unsupported_body_has_bounded_response(web_case, length, extra):
+@pytest.mark.parametrize("content_type,foreign_origin,status", [("application/json", True, 403), ("text/plain", False, 400)])
+def test_denied_missing_or_unsupported_body_has_bounded_response(web_case, length, extra, content_type, foreign_origin, status):
     server, _, _, _ = web_case
+    origin = "https://foreign.example" if foreign_origin else f"http://127.0.0.1:{server.server_port}"
     request = (f"POST /api/projects HTTP/1.0\r\nHost: 127.0.0.1:{server.server_port}\r\n"
-               f"Origin: https://foreign.example\r\nContent-Type: application/json\r\nContent-Length: {length}\r\n{extra}\r\n")
+               f"Origin: {origin}\r\nContent-Type: {content_type}\r\nContent-Length: {length}\r\n{extra}\r\n")
     started = time.monotonic()
     with socket.create_connection(("127.0.0.1", server.server_port), timeout=2) as transport:
         transport.sendall(request.encode("ascii"))
-        assert b"403" in transport.recv(4096).split(b"\r\n", 1)[0]
+        assert str(status).encode("ascii") in transport.recv(4096).split(b"\r\n", 1)[0]
     assert time.monotonic() - started < 1.5
 
 

@@ -148,6 +148,15 @@ assert.ok(connectionPanel().includes('data-action="logout-model"'));
 ''')
 
 
+def test_browser_device_login_accepts_only_the_fixed_official_challenge():
+    run_frontend(r'''
+assert.equal(officialVerificationURL("https://auth.openai.com/codex/device"), "https://auth.openai.com/codex/device");
+for (const url of ["https://chatgpt.com/", "https://auth.openai.com/other", "https://auth.openai.com/codex/device?grant=secret", "https://auth.openai.com/codex/device#grant", "https://person@auth.openai.com/codex/device", "http://auth.openai.com/codex/device"]) {
+  assert.equal(officialVerificationURL(url), "");
+}
+''')
+
+
 def test_cli_prerequisite_diagnostics_distinguish_installation_capabilities_and_auth():
     run_frontend(r'''
 state.agent = {provider: {ready: false, executable_available: false}, runner: {ready: false}};

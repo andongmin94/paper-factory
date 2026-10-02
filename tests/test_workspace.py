@@ -4,7 +4,29 @@ import sqlite3
 
 import pytest
 
-from paper_factory.workspace import Workspace
+from paper_factory.workspace import Workspace, loads_json
+
+
+@pytest.mark.parametrize("payload", [
+    '{"passed": false, "passed": true}',
+    '{"control": {"passed": false, "passed": true}}',
+    '{"passed": false, "pass\\u0065d": true}',
+])
+def test_json_evidence_rejects_duplicate_keys(payload):
+    with pytest.raises(ValueError, match="duplicate object keys"):
+        loads_json(payload)
+
+
+@pytest.mark.parametrize("token", ["NaN", "Infinity", "-Infinity", "1e999", "-1e999"])
+def test_json_evidence_rejects_nonfinite_numbers_in_any_field(token):
+    with pytest.raises(ValueError, match="Nonfinite JSON"):
+        loads_json('{"units": [1, {"unused": ' + token + '}]}')
+
+
+def test_json_evidence_preserves_valid_types_and_exact_integers():
+    assert loads_json('{"control":true,"label":"가","units":[null,1.25,9007199254740993]}'.encode("utf-8")) == {
+        "control": True, "label": "가", "units": [None, 1.25, 9007199254740993],
+    }
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows byte-range locking regression")

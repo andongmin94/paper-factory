@@ -204,6 +204,21 @@ def test_analysis_recomputes_paired_measurements_without_model_values(tmp_path, 
     assert reproduced["parameters"]["observation_count"] == 12
 
 
+@pytest.mark.parametrize("input_name", ["observations", "protocol"])
+def test_standalone_analysis_rejects_ambiguous_json_before_writing_results(tmp_path, protocol, observations, input_name):
+    science.analyze(observations, protocol, tmp_path)
+    path = tmp_path / f"analysis-{input_name}.json"
+    content = path.read_text(encoding="utf-8")
+    if input_name == "observations":
+        content = content.replace('"passed": true', '"passed": false, "passed": true', 1)
+    else:
+        content = content.replace('"units_per_seed": 3', '"units_per_seed": 9, "units_per_seed": 3', 1)
+    path.write_text(content, encoding="utf-8")
+    completed = subprocess.run([sys.executable, str(tmp_path / "analysis.py")], capture_output=True, text=True, timeout=20)
+    assert completed.returncode != 0 and "duplicate object keys" in completed.stderr
+    assert not (tmp_path / "analysis-reproduced.json").exists()
+
+
 def test_saved_figure_includes_long_axis_label_outside_original_canvas(tmp_path, monkeypatch):
     matplotlib = pytest.importorskip("matplotlib")
     matplotlib.use("Agg")

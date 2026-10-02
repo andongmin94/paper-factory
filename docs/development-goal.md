@@ -17,15 +17,15 @@ runtime prerequisites are recorded in [autonomous research](autonomous-research.
 The earlier three articles were produced outside that pipeline. They must not be
 presented as proof of an autonomous app-generated paper. Actual model requests
 in this cloud encountered proxy CONNECT 403 and a later HTTP 401; a successful
-live end-to-end autonomous study remains unverified. Those authentication results
+live end-to-end autonomous study was unverified in that cloud. Those authentication results
 belong to the earlier cloud environment. Native Windows runtime validation and
 fresh model-generated research are distinct evidence and must be recorded separately.
 
 ## Use the workspace
 
 Run [the Windows setup helper](../scripts/setup_windows.ps1) or follow the manual
-PowerShell installation in [README](../README.md#install). The setup uses a private
-`@openai/codex@0.159.3` npm installation under `.venv/codex`; existing global CLI
+PowerShell installation in [README](../README.md#cli-and-browser-installation). The setup uses the private
+Codex version pinned in `desktop/runtime-versions.json` under `.venv/codex`; existing global CLI
 installations stay unchanged. `PF_CODEX_BIN` is optional when using that setup.
 
 ```powershell

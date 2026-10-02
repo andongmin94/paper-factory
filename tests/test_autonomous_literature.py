@@ -1,7 +1,9 @@
 import hashlib
+import io
 import json
 import os
 import subprocess
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -315,6 +317,27 @@ def test_pdf_deadline_terminates_child(monkeypatch):
     with pytest.raises(ValueError, match="resource limit"):
         literature._pdf_text(b"%PDF-test")
     assert len(processes) == 1 and processes[0].poll() is not None
+
+
+@pytest.mark.parametrize("confirmed", [True, False])
+def test_completed_pdf_leader_still_requires_whole_tree_cleanup(monkeypatch, confirmed):
+    from paper_factory.autonomous import provider
+
+    text = "Synthetic literal extraction fixture. " * 8
+    process = SimpleNamespace(returncode=0, stdin=io.BytesIO(), stdout=io.BytesIO(),
+                              communicate=lambda *args, **kwargs: (json.dumps(text).encode(), None),
+                              poll=lambda: 0)
+    cleaned = []
+    monkeypatch.setattr(literature, "os", SimpleNamespace(name="posix"))
+    monkeypatch.setattr(literature.subprocess, "Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr(provider, "_try_stop", lambda child: cleaned.append(child) or confirmed)
+    if confirmed:
+        assert literature._pdf_text(b"%PDF-synthetic") == text
+    else:
+        with pytest.raises(ValueError, match="cleanup could not be confirmed"):
+            literature._pdf_text(b"%PDF-synthetic")
+    assert cleaned == [process]
+    assert process.stdin.closed and process.stdout.closed
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows job assignment regression")

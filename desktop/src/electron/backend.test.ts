@@ -9,7 +9,9 @@ const fixtures: { directory: string; backend: Backend }[] = [];
 async function fixture(refuseShutdown = false, exitCode = 0): Promise<Backend> {
   const directory = await mkdtemp(path.join(os.tmpdir(), "paperfactory-backend-test-"));
   const filename = path.join(directory, "server.mjs");
-  await writeFile(filename, `
+  await writeFile(
+    filename,
+    `
     import { createServer } from 'node:http';
     const token = 'a'.repeat(43);
     let refuse = ${refuseShutdown};
@@ -29,8 +31,16 @@ async function fixture(refuseShutdown = false, exitCode = 0): Promise<Backend> {
       res.writeHead(200, {'content-type':'application/json'});res.end(JSON.stringify({authenticated:true,leaked}));
     });
     server.listen(0,'127.0.0.1',()=>process.stdout.write(JSON.stringify({url:'http://127.0.0.1:'+server.address().port,token})+'\\n'));
-  `);
-  const backend = new Backend({ executable: process.execPath, args: [filename], cwd: directory, env: process.env, startupMs: 5000, shutdownMs: 5000 });
+  `,
+  );
+  const backend = new Backend({
+    executable: process.execPath,
+    args: [filename],
+    cwd: directory,
+    env: process.env,
+    startupMs: 5000,
+    shutdownMs: 5000,
+  });
   fixtures.push({ directory, backend });
   await backend.start();
   return backend;
@@ -39,8 +49,14 @@ async function fixture(refuseShutdown = false, exitCode = 0): Promise<Backend> {
 afterEach(async () => {
   for (const { backend, directory } of fixtures.splice(0)) {
     if (backend.ready) await backend.json("/api/allow-shutdown", { method: "POST", body: "{}" });
-    await backend.stop().catch((error: unknown) => { if (backend.ready) throw error; });
-    if (path.dirname(directory) !== path.resolve(os.tmpdir()) || !path.basename(directory).startsWith("paperfactory-backend-test-")) throw new Error("Unexpected fixture directory");
+    await backend.stop().catch((error: unknown) => {
+      if (backend.ready) throw error;
+    });
+    if (
+      path.dirname(directory) !== path.resolve(os.tmpdir()) ||
+      !path.basename(directory).startsWith("paperfactory-backend-test-")
+    )
+      throw new Error("Unexpected fixture directory");
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -66,9 +82,17 @@ describe("dedicated backend lifecycle", () => {
     expect(backend.ready).toBe(false);
   });
   it("enforces streaming response bounds independently of content-length", async () => {
-    const stream = new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array(3)); controller.enqueue(new Uint8Array(3)); controller.close(); } });
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array(3));
+        controller.enqueue(new Uint8Array(3));
+        controller.close();
+      },
+    });
     await expect(boundedBytes(new Response(stream), 5)).rejects.toThrow("크기");
-    expect(await boundedBytes(new Response(new Uint8Array([1, 2, 3])), 5)).toEqual(Buffer.from([1, 2, 3]));
+    expect(await boundedBytes(new Response(new Uint8Array([1, 2, 3])), 5)).toEqual(
+      Buffer.from([1, 2, 3]),
+    );
   });
   it("rejects a nonzero process exit even after the shutdown endpoint accepts", async () => {
     const backend = await fixture(false, 7);

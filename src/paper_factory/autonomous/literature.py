@@ -13,7 +13,6 @@ import ipaddress
 import json
 import os
 import re
-import signal
 import socket
 import subprocess
 import sys
@@ -209,6 +208,8 @@ def _extract_pdf(content: bytes) -> str:
 
 def _pdf_text(content: bytes) -> str:
     """Parse untrusted PDFs in a resource-limited child with no inherited secrets."""
+    from .provider import _try_stop
+
     if not content.startswith(b"%PDF-"):
         raise ValueError("Open-access response is not a PDF document")
     if len(content) > MAX_PDF_BYTES:
@@ -252,6 +253,7 @@ except Exception:
         )
         if job is not None:
             job.assign(process._handle)
+            process._paper_factory_job = job
         output, _ = process.communicate(content, timeout=12)
         returncode = process.returncode
     except (OSError, subprocess.TimeoutExpired) as error:
@@ -259,17 +261,15 @@ except Exception:
     finally:
         try:
             if process is not None:
-                # A job assignment failure happens before any PDF input is sent.
-                if job is not None:
-                    cleanup_confirmed = job.stop()
-                elif process.poll() is None:
-                    try:
-                        os.killpg(process.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                if process.poll() is None:
+                # A completed leader can leave descendants behind. Reuse the
+                # whole-tree cleanup, attaching a job only after assignment.
+                if job is not None and getattr(process, "_paper_factory_job", None) is None:
+                    # No PDF input was sent to this unassigned worker.
                     process.kill()
-                process.wait(timeout=5)
+                    process.wait(timeout=5)
+                    cleanup_confirmed = job.stop()
+                else:
+                    cleanup_confirmed = _try_stop(process)
                 for stream in (process.stdin, process.stdout):
                     if stream is not None:
                         stream.close()

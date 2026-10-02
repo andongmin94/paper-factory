@@ -65,7 +65,6 @@ function fixture(
       backend: "ready" as const,
     })),
     openExternal: vi.fn(async () => {}),
-    readArtifact: vi.fn(async () => ({ mime: "application/pdf", bytes: new Uint8Array() })),
     openArtifact: vi.fn(async () => {}),
     saveArtifact: vi.fn(async () => ({ canceled: false })),
   };
@@ -336,6 +335,25 @@ describe("desktop automatic study flow through the restricted bridge", () => {
     await ready();
     await userEvent.click(screen.getByRole("button", { name: "논문 보관함" }));
     expect(screen.getByRole("heading", { name: "첫 논문이 놓일 자리입니다" })).toBeInTheDocument();
+  });
+  it("filters stored research and preserves the search across navigation", async () => {
+    const imported = project(run({ status: "completed" }));
+    imported.pipelines!.push(
+      run({ id: "pipeline-b", status: "completed", goal: "정렬 알고리즘의 메모리를 비교합니다" }),
+    );
+    const { api } = fixture({ projects: [imported] });
+    render(<App api={api} />);
+    await ready();
+    await userEvent.click(screen.getByRole("button", { name: "논문 보관함" }));
+    fireEvent.change(screen.getByLabelText("논문 검색"), { target: { value: "캐시" } });
+    expect(screen.getByText("1개의 연구")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "정렬 알고리즘의 메모리를 비교합니다" }),
+    ).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "진행 현황" }));
+    await userEvent.click(screen.getByRole("button", { name: "논문 보관함" }));
+    expect(screen.getByLabelText("논문 검색")).toHaveValue("캐시");
+    expect(screen.getByText("1개의 연구")).toBeInTheDocument();
   });
   it("handles unavailable backend readiness without leaving research enabled", async () => {
     const { api } = fixture({ error: "unavailable" });

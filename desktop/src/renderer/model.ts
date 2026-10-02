@@ -50,6 +50,11 @@ export interface Pipeline {
   file_errors?: { path?: string; error?: string }[];
 }
 
+export interface ResearchRun {
+  project: Project;
+  run: Pipeline;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -229,4 +234,53 @@ export function connectionMessage(connection: Connection, agent: AgentStatus) {
   if (agent.provider?.ready === false)
     return "현재 모델 실행 연결이 준비되지 않았습니다. 연결 상태를 다시 확인해 주세요.";
   return "공식 OpenAI 로그인으로 사용 중인 구독을 연결하세요.";
+}
+
+export function interruptionMessage(run: Pipeline) {
+  const code = run.code ?? "";
+  if (/MODEL_BUDGET/.test(code))
+    return "모델 호출 한도를 사용했습니다. 남은 작업은 완료되지 않았습니다.";
+  if (/TIME_BUDGET/.test(code))
+    return "설정한 작업 시간이 끝났습니다. 완료한 연구 자료는 보존됩니다.";
+  if (/CLEANUP/.test(code))
+    return "작업자의 종료가 확인되지 않았습니다. 계정을 변경하기 전에 종료 확인이 필요합니다.";
+  if (/AUTH|LOGIN|PROVIDER/.test(code))
+    return "Codex 연결 또는 모델 사용 가능 여부를 확인해 주세요.";
+  if (/CANCELLED/.test(code) || run.status === "cancelled")
+    return "연구를 중지했습니다. 완료한 자료와 연구 기록은 보존됩니다.";
+  return "이 연구는 확인이 필요합니다. 연구 기록을 보존한 채 다시 이어갈 수 있습니다.";
+}
+
+export function connectionReadiness(connection: Connection, agent: AgentStatus) {
+  const authBusy = ["starting", "waiting_user", "probing", "logging_out"].includes(
+    connection.status,
+  );
+  const explicitlyLoggedOut =
+    connection.app_login_required === true ||
+    ["logged_out", "logging_out"].includes(connection.status);
+  const modelReady =
+    !explicitlyLoggedOut &&
+    !authBusy &&
+    !["failed", "blocked"].includes(connection.status) &&
+    connection.model_available === true &&
+    agent.provider?.ready === true;
+  const canProbe =
+    !authBusy &&
+    connection.code !== "CLEANUP_UNCONFIRMED" &&
+    ((!explicitlyLoggedOut && (connection.authentication === "chatgpt" || modelReady)) ||
+      (Boolean(connection.pending?.profile_id) &&
+        connection.authentication === "chatgpt" &&
+        !["cancelled", "logged_out"].includes(connection.status)));
+  const canLogout = canProbe || connection.connected || Boolean(connection.pending?.profile_id);
+  const logoutRetry =
+    connection.app_login_required &&
+    Boolean(connection.pending?.profile_id) &&
+    ["failed", "blocked"].includes(connection.status);
+  return {
+    authBusy,
+    modelReady,
+    canProbe,
+    canLogout: Boolean(canLogout),
+    logoutRetry: Boolean(logoutRetry),
+  };
 }

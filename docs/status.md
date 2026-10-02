@@ -1,8 +1,9 @@
 # Implementation status
 
-Current workspace: version 0.8.0 with native Windows automatic research.
-The Windows work below was verified on 2026-10-01 (Asia/Seoul); older release
-evidence is preserved separately.
+Current workspace: version 0.9.0 with the Windows Electron application and native
+Windows automatic research. The current precision audit is recorded in
+[code audit](code-audit.md). The earlier Windows work below was verified on
+2026-10-01 (Asia/Seoul); its measured release evidence is preserved separately.
 
 ## Code cleanup and diagnosis
 

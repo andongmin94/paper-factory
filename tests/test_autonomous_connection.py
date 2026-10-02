@@ -722,3 +722,25 @@ def test_logout_status_reader_start_failure_confirms_cleanup_and_can_retry(tmp_p
         assert manager.logout()["status"] == "logged_out"
     finally:
         manager.close()
+
+
+@pytest.mark.parametrize("status", ["authenticated", "available", "logged_out", "failed", "blocked", "cancelled"])
+def test_idle_cancel_preserves_completed_connection_and_failure_metadata(tmp_path, monkeypatch, status):
+    manager, state, observed = make_manager(tmp_path, monkeypatch)
+    profile = "profiles/" + "a" * 32
+    connection._private_directory(manager.root / profile)
+    operation = {"version": 1, "operation_id": "b" * 32, "kind": "logout" if status in {"logged_out", "blocked"} else "probe",
+                 "profile": profile, "status": status, "authentication": "logged_out" if status == "logged_out" else "chatgpt",
+                 "started_at": _now(), "expires_at": _now(), "handle": None,
+                 "code": "LOGOUT_FAILED" if status == "blocked" else "NETWORK_ERROR" if status == "failed" else None,
+                 "message": None}
+    connection._write_metadata(manager.root / "operation.json", operation)
+    before = (manager.root / "operation.json").read_bytes()
+    try:
+        result = manager.cancel()
+        assert result["status"] == status and result["code"] == operation["code"]
+        assert (manager.root / "operation.json").read_bytes() == before
+        assert state == {"status_calls": 0, "generate_calls": 0}
+        assert not observed.exists()
+    finally:
+        manager.close()

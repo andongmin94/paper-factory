@@ -11,8 +11,8 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import inspect
 import json
-import math
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -25,7 +25,7 @@ import time
 from typing import Callable
 import uuid
 
-from ..workspace import ensure_unlinked, is_link
+from ..workspace import ensure_unlinked, is_link, loads_json
 
 
 IMAGE_LABEL = "org.paper-factory.research-runtime"
@@ -121,12 +121,7 @@ env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": "/work", "LANG": "C.UTF-8
        "PF_INPUT": "/input", "PF_OUTPUT": "/output", "PF_WORK": "/work",
        "PF_SOURCE_ROOT": "/input", "PF_CODE_ROOT": "/code", "PF_OUTPUT_ROOT": "/output",
        "PYTHONHASHSEED": "0", "PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1"}
-''' + '\npython_driver = ' + repr(_PYTHON_DRIVER) + r'''
-def finite_float(value):
-    number = float(value)
-    if not math.isfinite(number): raise ValueError('nonfinite JSON number')
-    return number
-
+''' + '\npython_driver = ' + repr(_PYTHON_DRIVER) + '\n' + inspect.getsource(loads_json) + r'''
 def read_json(path, limit):
     descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
@@ -135,12 +130,13 @@ def read_json(path, limit):
             raise ValueError('invalid bounded receipt file')
         with os.fdopen(descriptor,'rb',closefd=False) as stream: data = stream.read(limit + 1)
         if len(data) > limit: raise ValueError('receipt exceeds size limit')
-        return json.loads(data.decode('utf-8'),parse_float=finite_float,parse_constant=lambda value: (_ for _ in ()).throw(ValueError('nonfinite receipt')))
+        return loads_json(data.decode('utf-8'))
     finally: os.close(descriptor)
 def production_receipt():
     if runtime == 'python':
         payload = read_json('/output/.paper-factory-python-calls.json', 1024*1024)
-        return payload['calls'], bool(payload['truncated'])
+        if type(payload['truncated']) is not bool: raise ValueError('invalid coverage truncation marker')
+        return payload['calls'], payload['truncated']
     directory = pathlib.Path('/output/.paper-factory-node-coverage')
     if directory.is_symlink() or not directory.is_dir(): raise ValueError('invalid coverage directory')
     calls, truncated = {}, False
@@ -214,7 +210,7 @@ try:
             if info.st_size > artifact_limit: raise ValueError("observations.json exceeds size limit")
             with os.fdopen(fd, "rb", closefd=False) as stream: data = stream.read(artifact_limit + 1)
             if len(data) > artifact_limit: raise ValueError("observations.json exceeds size limit")
-            json.loads(data.decode("utf-8"), parse_float=finite_float, parse_constant=lambda value: (_ for _ in ()).throw(ValueError("nonfinite JSON value: " + value)))
+            loads_json(data.decode("utf-8"))
             result["observation_b64"] = base64.b64encode(data).decode("ascii")
         finally: os.close(fd)
         if child.returncode != 0:
@@ -306,22 +302,11 @@ def _bounded_log(value: str) -> str:
     return encoded[:MAX_LOG_BYTES - len(marker)].decode("utf-8", "ignore") + marker
 
 
-def _finite_float(value: str) -> float:
-    number = float(value)
-    if not math.isfinite(number):
-        raise ValueError("Sandbox artifact contains a nonfinite JSON number")
-    return number
-
-
-def _nonfinite_json(value: str):
-    raise ValueError("Sandbox artifact contains a nonfinite JSON number")
-
-
 def _retain_observations(output: Path, data: bytes) -> dict:
     """Retain exact bounded JSON bytes without changing the execution status."""
     if not data or len(data) > MAX_ARTIFACT_BYTES:
         raise ValueError("observation is empty or exceeds size limit")
-    json.loads(data.decode("utf-8"), parse_float=_finite_float, parse_constant=_nonfinite_json)
+    loads_json(data.decode("utf-8"))
     path = output / "observations.json"
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
     with os.fdopen(descriptor, "wb") as stream:
@@ -563,7 +548,7 @@ class DockerRunner:
             if result["status"] in {"cancelled", "timeout"} or overflow.is_set():
                 return result
             try:
-                envelope = json.loads(streams["stdout"].decode("utf-8"))
+                envelope = loads_json(streams["stdout"].decode("utf-8"))
                 if not isinstance(envelope, dict) or envelope.get("protocol") != PROTOCOL:
                     raise ValueError("invalid runner protocol")
                 for key in ("stdout", "stderr"):

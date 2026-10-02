@@ -38,7 +38,8 @@
   --sidebar-ring: var(--ring);
   --font-weight-heading: 800;
   --radius-base: 8px;
-  font-family: "Pretendard Variable", Pretendard, "Segoe UI", "Malgun Gothic", system-ui, sans-serif;
+  font-family:
+    "Pretendard Variable", Pretendard, "Segoe UI", "Malgun Gothic", system-ui, sans-serif;
   font-synthesis: none;
 }
 body {
@@ -229,7 +230,12 @@ h1 {
 }
 .highlight {
   display: inline;
-  background: linear-gradient(transparent 56%, var(--accent) 56%, var(--accent) 91%, transparent 91%);
+  background: linear-gradient(
+    transparent 56%,
+    var(--accent) 56%,
+    var(--accent) 91%,
+    transparent 91%
+  );
 }
 .page-heading > p {
   color: var(--muted-foreground);

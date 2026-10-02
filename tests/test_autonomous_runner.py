@@ -246,8 +246,9 @@ def test_rejects_nested_output_without_mutating_inputs(inputs, monkeypatch, root
 @pytest.mark.parametrize("payload", [
     b"garbage", envelope(protocol="forged"), envelope(observation_b64="not-base64"),
     envelope(b"not json"), envelope(b'{"value": NaN}'), envelope(error="artifact was a link"),
+    envelope(b'{"controls":[{"name":"positive","passed":false,"passed":true}]}'),
     envelope(observation_b64="a" * (((MAX_ARTIFACT_BYTES + 2) // 3 * 4) + 1)),
-], ids=["garbage", "protocol", "base64", "json", "nonfinite", "artifact-error", "oversized"])
+], ids=["garbage", "protocol", "base64", "json", "nonfinite", "artifact-error", "duplicate-control", "oversized"])
 def test_rejects_invalid_transport_without_import(fake_runner, inputs, payload):
     runner, _, process = fake_runner
     process.stdout = io.BytesIO(payload)
@@ -284,8 +285,9 @@ def test_nonzero_exit_retains_exact_negative_raw_without_claiming_success(fake_r
 
 
 @pytest.mark.parametrize("raw", [b"not json", b'{"value":NaN}', b'{"value":1e999}',
+                                b'{"value":0,"value":1}',
                                 '{"value":1}'.encode("utf-16"), b"x" * (MAX_ARTIFACT_BYTES + 1)],
-                         ids=["invalid-json", "nonfinite", "overflow", "utf16", "oversized"])
+                         ids=["invalid-json", "nonfinite", "overflow", "duplicate", "utf16", "oversized"])
 def test_nonzero_exit_rejects_invalid_raw_without_import(fake_runner, inputs, raw):
     runner, _, process = fake_runner
     process.returncode = 1
@@ -305,14 +307,15 @@ def test_nonzero_exit_without_raw_remains_an_execution_failure(fake_runner, inpu
 
 
 @pytest.mark.parametrize("exit_code,trace_exists,retained", [(1, True, True), (1, False, True), (0, False, False)])
+@pytest.mark.parametrize("truncated", [False, 0])
 def test_docker_launcher_transports_failure_raw_without_requiring_success_trace(
-        tmp_path, monkeypatch, capsys, exit_code, trace_exists, retained):
+        tmp_path, monkeypatch, capsys, exit_code, trace_exists, retained, truncated):
     # Run only the trusted controller with a mocked child; generated code never
     # executes outside isolation. File descriptors map /output to this fixture.
     raw = b'{"observations":[],"controls":[{"name":"positive","passed":false}]}\n'
     (tmp_path / "observations.json").write_bytes(raw)
     if trace_exists:
-        (tmp_path / ".paper-factory-python-calls.json").write_text('{"calls":[],"truncated":false}')
+        (tmp_path / ".paper-factory-python-calls.json").write_text(json.dumps({"calls": [], "truncated": truncated}))
     child = FakeProcess(b"")
     child.returncode, child.pid = exit_code, 12345
     def mock_child(_command, **kwargs):
@@ -342,6 +345,8 @@ def test_docker_launcher_transports_failure_raw_without_requiring_success_trace(
     assert (receipt["observation_b64"] is not None) is retained
     if retained:
         assert base64.b64decode(receipt["observation_b64"]) == raw
+    if trace_exists and type(truncated) is not bool:
+        assert "invalid coverage truncation marker" in receipt["error"]
 
 
 def test_cancel_kills_container_and_exports_nothing(fake_runner, inputs):
