@@ -12,6 +12,7 @@ function fixture(
     tools?: AgentStatus["tools"];
     error?: string;
     providerReady?: boolean;
+    provider?: AgentStatus["provider"];
   } = {},
 ) {
   let connection = options.connection ?? {
@@ -26,7 +27,11 @@ function fixture(
     if (method === "GET") {
       if (path === "/api/agent/status")
         return {
-          provider: { ready: options.providerReady ?? true, executable_available: true },
+          provider: {
+            ready: options.providerReady ?? true,
+            executable_available: true,
+            ...options.provider,
+          },
           runner: { ready: true },
           tools: options.tools ?? { git: true, pandoc: true },
         };
@@ -150,6 +155,141 @@ describe("desktop automatic study flow through the restricted bridge", () => {
     fillStudy();
     expect(screen.getByRole("button", { name: "연구 시작하기" })).toBeDisabled();
     expect(request.mock.calls.every(([method]) => method === "GET")).toBe(true);
+  });
+  it("shows a missing Codex tool even after logout and does not offer an ineffective account retry", async () => {
+    const { api, request } = fixture({
+      connection: {
+        status: "blocked",
+        code: "CODEX_NOT_FOUND",
+        app_login_required: true,
+        pending: { profile_id: "11111111111111111111111111111111", status: "blocked" },
+      },
+      provider: { ready: false, executable_available: false },
+    });
+    render(<App api={api} />);
+    expect(await screen.findByText(/Codex 실행 도구를 찾지 못했습니다/)).toBeInTheDocument();
+    expect(screen.getByText("연결 불가")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Codex 연결하기" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /연결 확인/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /로그아웃/ })).not.toBeInTheDocument();
+    fillStudy();
+    expect(screen.getByRole("button", { name: "연구 시작하기" })).toBeDisabled();
+    expect(request.mock.calls.every(([method]) => method === "GET")).toBe(true);
+  });
+  it("shows actual missing CLI capabilities ahead of an app-login-required marker", async () => {
+    const { api, request } = fixture({
+      connection: { status: "logged_out", app_login_required: true },
+      provider: {
+        ready: false,
+        capabilities_supported: false,
+        missing_capabilities: ["--ignore-user-config"],
+      },
+    });
+    render(<App api={api} />);
+    expect(
+      await screen.findByText(/설치된 Codex 도구가 필요한 기능을 지원하지 않습니다/),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Codex 연결하기" })).not.toBeInTheDocument();
+    expect(request.mock.calls.every(([method]) => method === "GET")).toBe(true);
+  });
+  it("allows an account retry after the missing tool is repaired even when its earlier failure is retained", async () => {
+    const { api, request } = fixture({
+      connection: {
+        status: "blocked",
+        code: "CODEX_NOT_FOUND",
+        app_login_required: true,
+        pending: { profile_id: "11111111111111111111111111111111", status: "blocked" },
+      },
+      provider: { ready: false, executable_available: true },
+    });
+    render(<App api={api} />);
+    expect(
+      await screen.findByText(/현재 도구가 있으므로 계정 작업을 다시 시도할 수 있습니다/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Codex 연결하기" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "로그아웃 다시 시도" })).toBeEnabled();
+    expect(request.mock.calls.every(([method]) => method === "GET")).toBe(true);
+  });
+  it("keeps logout available when the existing CLI lacks model-call capabilities", async () => {
+    const { api, request } = fixture({
+      provider: {
+        ready: false,
+        capabilities_supported: false,
+        missing_capabilities: ["--ignore-user-config"],
+      },
+    });
+    render(<App api={api} />);
+    expect(
+      await screen.findByText(/설치된 Codex 도구가 필요한 기능을 지원하지 않습니다/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "로그아웃" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: /연결 확인/ })).not.toBeInTheDocument();
+    expect(request.mock.calls.every(([method]) => method === "GET")).toBe(true);
+  });
+  it("keeps login available when capability metadata is unavailable only because the app is logged out", async () => {
+    const { api } = fixture({
+      connection: { status: "logged_out", app_login_required: true },
+      provider: {
+        ready: false,
+        capabilities_supported: false,
+        missing_capabilities: [],
+        code: "AUTH_REQUIRED",
+      },
+    });
+    render(<App api={api} />);
+    expect(await screen.findByRole("button", { name: "Codex 연결하기" })).toBeEnabled();
+    expect(screen.queryByText(/필요한 기능을 지원하지 않습니다/)).not.toBeInTheDocument();
+  });
+  it.each([
+    ["AUTH_STORAGE_INVALID", "앱의 Codex 로그인 저장소를 사용할 수 없습니다"],
+    ["NETWORK_ERROR", "Codex 서버에 연결하지 못했습니다"],
+    ["LOGIN_START_TIMEOUT", "공식 로그인 주소와 코드를 받지 못했습니다"],
+  ])(
+    "preserves the safe explanation for the polled %s failure without displaying raw diagnostics",
+    async (code, message) => {
+      const { api } = fixture({
+        connection: { status: "blocked", code, message: "private-token-DO-NOT-DISPLAY" },
+      });
+      render(<App api={api} />);
+      expect(await screen.findByText(new RegExp(message))).toBeInTheDocument();
+      expect(screen.queryByText(/private-token-DO-NOT-DISPLAY/)).not.toBeInTheDocument();
+    },
+  );
+  it.each([
+    ["CODEX_NOT_FOUND", "Codex 실행 도구를 찾지 못했습니다"],
+    ["NETWORK_ERROR", "Codex 서버에 연결하지 못했습니다"],
+    ["AUTH_STORAGE_INVALID", "앱의 Codex 로그인 저장소를 사용할 수 없습니다"],
+  ])(
+    "explains a classified %s IPC rejection without exposing the backend error text",
+    async (code, message) => {
+      const { api, request } = fixture({ connection: { status: "disconnected" } });
+      api.request = vi.fn(async (method, route) => {
+        if (method === "POST")
+          throw new Error(
+            `Error invoking remote method 'paperfactory:request': Error: [${code}] private-token-DO-NOT-DISPLAY`,
+          );
+        return request(method, route);
+      }) as DesktopBridge["request"];
+      render(<App api={api} />);
+      await userEvent.click(await screen.findByRole("button", { name: "Codex 연결하기" }));
+      const alert = await screen.findByRole("alert");
+      expect(within(alert).getByText(new RegExp(message))).toBeInTheDocument();
+      expect(alert).not.toHaveTextContent("private-token-DO-NOT-DISPLAY");
+    },
+  );
+  it("uses a generic notice for unknown IPC diagnostics and never displays its raw message", async () => {
+    const { api, request } = fixture({ connection: { status: "disconnected" } });
+    api.request = vi.fn(async (method, route) => {
+      if (method === "POST") throw new Error("[UNKNOWN_FAILURE] private-token-DO-NOT-DISPLAY");
+      return request(method, route);
+    }) as DesktopBridge["request"];
+    render(<App api={api} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Codex 연결하기" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(
+      "요청을 완료하지 못했습니다. 현재 상태를 새로고침한 뒤 다시 시도해 주세요.",
+    );
+    expect(alert).not.toHaveTextContent("private-token-DO-NOT-DISPLAY");
   });
   it("shows the one-model-call probe after authentication and keeps research disabled until verified", async () => {
     const { api, request } = fixture({

@@ -27,10 +27,8 @@ export function ConnectionCard({
   onDevicePage,
   onLogout,
 }: ConnectionCardProps) {
-  const { authBusy, modelReady, canProbe, canLogout, logoutRetry } = connectionReadiness(
-    connection,
-    agent,
-  );
+  const { authBusy, modelReady, toolingBlocked, canLogin, canProbe, canLogout, logoutRetry } =
+    connectionReadiness(connection, agent);
   return (
     <Card className="account-card">
       <CardHeader>
@@ -40,7 +38,13 @@ export function ConnectionCard({
       </CardHeader>
       <CardContent>
         <Badge variant="neutral" className={modelReady ? "ready-badge" : ""}>
-          {modelReady ? "사용 준비 완료" : authBusy ? "연결 진행 중" : "연결 필요"}
+          {modelReady
+            ? "사용 준비 완료"
+            : authBusy
+              ? "연결 진행 중"
+              : toolingBlocked
+                ? "연결 불가"
+                : "연결 필요"}
         </Badge>
         <p className="account-description">{connectionMessage(connection, agent)}</p>
         {connection.status === "waiting_user" && (
@@ -77,7 +81,7 @@ export function ConnectionCard({
               {modelReady ? "연결 다시 확인 (1회 호출)" : "연결 확인 (1회 호출)"}
             </Button>
           ) : (
-            !authBusy && (
+            canLogin && (
               <Button
                 className="full-width"
                 disabled={Boolean(pending) || loading || researchBusy}

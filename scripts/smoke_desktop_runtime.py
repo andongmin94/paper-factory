@@ -11,6 +11,7 @@ import tempfile
 
 
 def main():
+    from paper_factory.autonomous.provider import CodexProvider, _cli_command
     from paper_factory.autonomous.windows_runner import WindowsRunner
     from paper_factory.conversion import convert
     import pypandoc
@@ -24,8 +25,13 @@ def main():
     pandoc = pandoc if pandoc.is_file() else pandoc.with_suffix(".exe")
     assert shutil.which("python") is None, "The smoke PATH must not provide a system Python"
     git = subprocess.check_output(["git", "--version"], text=True).strip()
-    cli = runtime / "codex" / "node_modules" / "@openai" / "codex" / "bin" / "codex.js"
-    codex = subprocess.check_output([os.environ["PF_NODE_BIN"], str(cli), "--version"], text=True, timeout=15).strip()
+    # Exercise the application's configured launcher, including Windows
+    # environments that omit .CMD from PATHEXT, instead of bypassing resolution.
+    os.environ["PATHEXT"] = ".EXE"
+    cli = runtime / "codex" / "node_modules" / ".bin" / "codex.cmd"
+    binary = CodexProvider(cli)._binary()
+    assert binary is not None, "The bundled Codex launcher must resolve without .CMD in PATHEXT"
+    codex = subprocess.check_output([*_cli_command(binary), "--version"], text=True, timeout=15).strip()
     runner = WindowsRunner()
     assert runner.status()["ready"] and set(runner.status()["runtimes"]) == {"python", "node"}
     with tempfile.TemporaryDirectory(prefix="paperfactory-desktop-smoke-") as temporary:

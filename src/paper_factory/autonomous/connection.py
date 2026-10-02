@@ -30,7 +30,7 @@ if os.name == "nt":
     import msvcrt
 
 from ..workspace import ensure_unlinked, write_json
-from .provider import CodexProvider, ProviderBlocked, _authentication_kind, _cli_command, _environment, _process_options, _track_process, _try_stop, _worker_handle
+from .provider import CodexProvider, ProviderBlocked, _authentication_kind, _cli_command, _environment, _process_options, _resolve_cli_executable, _track_process, _try_stop, _worker_handle
 from .windows_runtime import is_private_path, private_path
 
 
@@ -484,9 +484,7 @@ class ConnectionManager:
             if selection and selection.get("logged_out") and selection.get("profiles"):
                 self._release()
                 return {**self.status(), "status": "blocked", "code": "LOGOUT_FAILED", "message": MESSAGES["LOGOUT_FAILED"]}
-            binary = shutil.which(self.executable)
-            if not binary and Path(self.executable).suffix.casefold() == ".py" and Path(self.executable).is_file():
-                binary = str(Path(self.executable).resolve())
+            binary = _resolve_cli_executable(self.executable)
             if not binary:
                 self._release()
                 return {**self.status(), "status": "blocked", "code": "CODEX_NOT_FOUND", "message": MESSAGES["CODEX_NOT_FOUND"]}
@@ -812,9 +810,7 @@ class ConnectionManager:
                              "status": "logging_out", "authentication": "unknown", "started_at": _now(),
                              "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=self.logout_timeout_seconds)).isoformat(),
                              "handle": None, "code": None, "message": None})
-                binary = shutil.which(self.executable)
-                if not binary and Path(self.executable).suffix.casefold() == ".py" and Path(self.executable).is_file():
-                    binary = str(Path(self.executable).resolve())
+                binary = _resolve_cli_executable(self.executable)
                 if profiles and not binary:
                     self._failure("CODEX_NOT_FOUND")
                     return self.status()

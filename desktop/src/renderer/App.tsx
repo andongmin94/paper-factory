@@ -30,7 +30,13 @@ import {
 import { Input } from "./components/ui/input";
 import { Textarea } from "./components/ui/textarea";
 import type { Artifact, Candidate, Connection, DesktopBridge, Pipeline, Project } from "./model";
-import { activeStatus, artifactRequestPath, connectionReadiness, validRepository } from "./model";
+import {
+  activeStatus,
+  artifactRequestPath,
+  connectionErrorMessage,
+  connectionReadiness,
+  validRepository,
+} from "./model";
 import { ConnectionCard } from "./components/connection-card";
 import { CODEX_DEVICE_URL } from "@shared/api";
 import { useWorkspace } from "./use-workspace";
@@ -46,12 +52,12 @@ function actionError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   if (/RESEARCH_BUSY|already active|active.*research/i.test(message))
     return "진행 중인 연구를 중지하고 종료를 확인한 뒤 다시 시도해 주세요.";
-  if (/CONNECTION_BUSY|연결 작업|authentication.*progress/i.test(message))
+  for (const code of message.match(/\b[A-Z][A-Z0-9_]{1,63}\b/g) ?? []) {
+    const knownMessage = connectionErrorMessage(code);
+    if (knownMessage) return knownMessage;
+  }
+  if (/연결 작업|authentication.*progress/i.test(message))
     return "계정 연결 작업이 진행 중입니다. 작업이 끝난 뒤 다시 시도해 주세요.";
-  if (/CLEANUP_UNCONFIRMED/i.test(message))
-    return "작업자의 종료가 아직 확인되지 않았습니다. 계정을 유지한 채 진행 현황을 확인해 주세요.";
-  if (/LOGOUT_TIMEOUT|LOGOUT_FAILED/i.test(message))
-    return "로그아웃을 완료하지 못했습니다. 연결 상태를 다시 확인한 뒤 재시도해 주세요.";
   if (/MODEL_BUDGET|TIME_BUDGET|budget/i.test(message))
     return "설정한 연구 한도에 도달했습니다. 진행 현황의 중지 사유를 확인해 주세요.";
   if (/AUTH|login|로그인/i.test(message)) return "Codex 연결을 확인한 뒤 다시 시도해 주세요.";

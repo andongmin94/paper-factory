@@ -95,6 +95,47 @@ def test_status_reports_existing_authentication_without_raw_key(tmp_path):
                                                          "cli_version": None, "capabilities_supported": False, "missing_capabilities": []}
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows PATHEXT regression")
+def test_explicit_windows_cli_works_when_cmd_is_not_in_pathext(tmp_path, monkeypatch):
+    from paper_factory.autonomous import provider as module
+
+    fake = fake_codex(tmp_path)
+    packaged = tmp_path / "Packaged CLI" / "codex.cmd"
+    packaged.parent.mkdir()
+    packaged.write_text("fixture launcher; execution uses the synthetic CLI", encoding="utf-8")
+    monkeypatch.setenv("PATHEXT", ".EXE")
+    assert module.shutil.which(str(packaged)) is None
+    selected = []
+
+    def command(binary):
+        selected.append(binary)
+        return [sys.executable, fake.configured_executable]
+
+    monkeypatch.setattr(module, "_cli_command", command)
+    result = CodexProvider(packaged).status()
+    assert result["executable_available"] and result["ready"]
+    assert selected == [str(packaged)] * 5
+
+
+@pytest.mark.parametrize("configured", ["./codex.py", "selected/codex.cmd"])
+def test_explicit_relative_cli_never_searches_for_another_binary(tmp_path, monkeypatch, configured):
+    from paper_factory.autonomous import provider as module
+
+    monkeypatch.chdir(tmp_path)
+    selected = Path(configured)
+    selected.parent.mkdir(exist_ok=True)
+    selected.write_text("synthetic explicit executable", encoding="utf-8")
+
+    def unexpected_search(value):
+        pytest.fail("explicit executable unexpectedly searched PATH: " + value)
+
+    monkeypatch.setattr(module.shutil, "which", unexpected_search)
+    provider = CodexProvider(configured)
+    assert provider._binary() == str(selected.absolute())
+    selected.unlink()
+    assert provider._binary() is None
+
+
 def test_generation_validates_schema_and_records_real_usage_and_model(tmp_path, monkeypatch):
     monkeypatch.setenv("PF_AUTHOR_EMAIL", "private@example.org")
     monkeypatch.setenv("PF_OJS_API_TOKEN", "private-publication-token")

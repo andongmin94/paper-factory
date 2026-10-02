@@ -330,6 +330,15 @@ def _worker_handle(process: subprocess.Popen) -> dict:
     return handle
 
 
+def _resolve_cli_executable(executable: str | Path) -> str | None:
+    """Resolve explicit files directly; only command names use PATH/PATHEXT."""
+    value = str(executable)
+    path = Path(value)
+    if path.is_absolute() or os.path.dirname(value):
+        return str(path.absolute()) if path.is_file() else None
+    return shutil.which(value)
+
+
 def _cli_command(binary: str | Path) -> list[str]:
     """Run an explicit Python fixture or npm's official CLI without a shell."""
     path = Path(binary)
@@ -501,10 +510,7 @@ class CodexProvider:
             raise ProviderBlocked("CONFIGURATION_ERROR", "The explicit Codex profile is unavailable or unsafe.") from None
 
     def _binary(self) -> str | None:
-        selected = Path(self.configured_executable)
-        if selected.suffix.lower() == ".py" and selected.is_file():
-            return str(selected.absolute())
-        return shutil.which(self.configured_executable)
+        return _resolve_cli_executable(self.configured_executable)
 
     def _cli_metadata(self, binary: str, environment: dict[str, str]) -> dict:
         """Probe public capabilities without reading user config or auth data."""

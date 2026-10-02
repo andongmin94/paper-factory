@@ -137,12 +137,18 @@ export class Backend {
   async json(path: string, options: { method?: string; body?: string } = {}): Promise<unknown> {
     const response = await this.fetch(path, options);
     const value = JSON.parse(new TextDecoder().decode(await boundedBytes(response, MAX_JSON * 8)));
-    if (!response.ok)
+    if (!response.ok) {
+      const code =
+        typeof value?.code === "string" && /^[A-Z][A-Z0-9_]{1,63}$/.test(value.code)
+          ? `[${value.code}] `
+          : "";
       throw new Error(
-        typeof value?.error === "string"
-          ? value.error
-          : `요청이 실패했습니다 (${response.status}).`,
+        code +
+          (typeof value?.error === "string"
+            ? value.error
+            : `요청이 실패했습니다 (${response.status}).`),
       );
+    }
     return value;
   }
 

@@ -19,6 +19,8 @@ export interface AgentStatus {
     ready?: boolean;
     executable_available?: boolean;
     capabilities_supported?: boolean;
+    missing_capabilities?: string[];
+    code?: string;
     reason?: string;
   };
   runner?: { ready?: boolean; backend?: string; runtimes?: string[]; reason?: string };
@@ -210,6 +212,60 @@ export function shortRepository(source?: string) {
   return source?.replace(/^https:\/\/github\.com\//, "").replace(/\/$/, "") ?? "가져온 프로젝트";
 }
 
+const connectionErrors: Record<string, string> = {
+  AUTH_REQUIRED: "Codex 구독 로그인이 필요합니다. 공식 로그인 후 연결을 다시 확인해 주세요.",
+  API_KEY_UNSUPPORTED: "API 키 로그인은 사용할 수 없습니다. ChatGPT 구독 계정으로 연결해 주세요.",
+  SUBSCRIPTION_AUTH_REQUIRED:
+    "API 키 로그인은 사용할 수 없습니다. ChatGPT 구독 계정으로 연결해 주세요.",
+  NETWORK_ERROR: "Codex 서버에 연결하지 못했습니다. 네트워크와 프록시 연결을 확인해 주세요.",
+  PROXY_BLOCKED: "프록시가 Codex 연결을 차단했습니다(HTTP 403). 프록시 설정을 확인해 주세요.",
+  RATE_LIMITED:
+    "구독 사용량 제한으로 연결을 확인하지 못했습니다. 이용 가능해진 뒤 다시 확인해 주세요.",
+  LOGIN_TIMEOUT: "공식 로그인의 대기 시간이 끝났습니다. Codex 연결을 다시 시작해 주세요.",
+  LOGIN_START_TIMEOUT:
+    "공식 로그인 주소와 코드를 받지 못했습니다. 네트워크를 확인한 뒤 다시 연결해 주세요.",
+  OUTPUT_LIMIT: "Codex 연결 응답이 지원하는 크기를 초과하여 중단했습니다.",
+  CODEX_NOT_FOUND: "Codex 실행 도구를 찾지 못했습니다. 앱을 다시 설치한 뒤 연결해 주세요.",
+  CONFIGURATION_ERROR:
+    "Codex 실행 환경을 준비하지 못했습니다. 앱 설치 상태와 접근 권한을 확인해 주세요.",
+  SCHEMA_ERROR: "모델이 올바른 연결 확인 응답을 반환하지 않았습니다. 연결을 다시 확인해 주세요.",
+  INTERRUPTED: "이전 연결 작업이 중단되었습니다. Codex 연결을 다시 시작할 수 있습니다.",
+  CLEANUP_UNCONFIRMED:
+    "작업자의 종료가 아직 확인되지 않았습니다. 계정을 유지한 채 진행 현황을 확인해 주세요.",
+  CONNECTION_BUSY: "계정 연결 작업이 진행 중입니다. 작업이 끝난 뒤 다시 시도해 주세요.",
+  AUTH_STORAGE_INVALID:
+    "앱의 Codex 로그인 저장소를 사용할 수 없습니다. 저장 경로와 접근 권한을 확인해 주세요.",
+  UNSUPPORTED_PLATFORM: "이 실행 환경은 Codex 로그인 저장소의 파일 잠금을 지원하지 않습니다.",
+  CODEX_FAILED: "Codex 연결 작업을 완료하지 못했습니다. 앱 설치 상태와 네트워크를 확인해 주세요.",
+  DEVICE_AUTH_UNAVAILABLE:
+    "Codex 서버에서 기기 로그인을 허용하지 않습니다. 공식 로그인 설정을 확인해 주세요.",
+  LOGOUT_TIMEOUT:
+    "로그아웃 확인 시간이 끝났습니다. 연결 상태를 확인한 뒤 로그아웃을 다시 시도해 주세요.",
+  LOGOUT_FAILED:
+    "로그아웃을 완료하지 못했습니다. 연결 상태를 확인한 뒤 로그아웃을 다시 시도해 주세요.",
+};
+
+export function connectionErrorMessage(code?: string | null): string | null {
+  return code && Object.hasOwn(connectionErrors, code) ? connectionErrors[code] : null;
+}
+
+function codexToolMissing(connection: Connection, agent: AgentStatus): boolean {
+  return (
+    agent.provider?.executable_available === false ||
+    (connection.code === "CODEX_NOT_FOUND" && agent.provider?.executable_available !== true)
+  );
+}
+
+function connectionToolingMessage(connection: Connection, agent: AgentStatus): string | null {
+  if (codexToolMissing(connection, agent)) return connectionErrors.CODEX_NOT_FOUND;
+  if (
+    agent.provider?.capabilities_supported === false &&
+    (agent.provider.missing_capabilities?.length ?? 0) > 0
+  )
+    return "설치된 Codex 도구가 필요한 기능을 지원하지 않습니다. 앱을 업데이트한 뒤 연결해 주세요.";
+  return null;
+}
+
 export function connectionMessage(connection: Connection, agent: AgentStatus) {
   if (connection.status === "logging_out") return "앱 전용 로그인에서 로그아웃하고 있습니다.";
   if (connection.status === "waiting_user") return "공식 로그인 페이지에서 아래 코드를 입력하세요.";
@@ -217,18 +273,20 @@ export function connectionMessage(connection: Connection, agent: AgentStatus) {
     return "연결을 확인하고 있습니다. 잠시만 기다려 주세요.";
   if (connection.code === "CLEANUP_UNCONFIRMED")
     return "작업자의 종료가 아직 확인되지 않았습니다. 종료 확인 전에는 계정 작업을 진행할 수 없습니다.";
+  const toolingMessage = connectionToolingMessage(connection, agent);
+  if (toolingMessage) return toolingMessage;
+  if (connection.code === "CODEX_NOT_FOUND" && agent.provider?.executable_available === true)
+    return "이전 연결 작업에서 Codex 실행 도구를 찾지 못했습니다. 현재 도구가 있으므로 계정 작업을 다시 시도할 수 있습니다.";
   if (connection.pending && ["LOGOUT_FAILED", "LOGOUT_TIMEOUT"].includes(connection.code ?? ""))
     return "로그아웃을 완료하지 못했습니다. 앱 전용 로그인에서 로그아웃을 다시 시도해 주세요.";
+  const errorMessage = connectionErrorMessage(connection.code);
+  if (errorMessage) return errorMessage;
   if (connection.status === "authenticated")
     return "공식 로그인이 완료됐습니다. 연결 확인을 누르면 모델 사용 가능 여부를 확인합니다.";
   if (["failed", "blocked"].includes(connection.status))
     return "연결을 확인하지 못했습니다. 다시 연결하거나 연결 상태를 확인해 주세요.";
   if (connection.app_login_required || connection.status === "logged_out")
     return "다시 연결하면 연구를 이어갈 수 있습니다.";
-  if (agent.provider?.executable_available === false)
-    return "모델 실행 도구가 준비되지 않았습니다. 설치 안내를 확인해 주세요.";
-  if (agent.provider?.capabilities_supported === false)
-    return "모델 실행 도구를 업데이트한 뒤 다시 확인해 주세요.";
   if (connection.model_available === true && agent.provider?.ready === true)
     return "구독 로그인이 준비됐습니다. 새 연구를 시작할 수 있습니다.";
   if (agent.provider?.ready === false)
@@ -252,6 +310,7 @@ export function interruptionMessage(run: Pipeline) {
 }
 
 export function connectionReadiness(connection: Connection, agent: AgentStatus) {
+  const toolingBlocked = connectionToolingMessage(connection, agent) !== null;
   const authBusy = ["starting", "waiting_user", "probing", "logging_out"].includes(
     connection.status,
   );
@@ -259,25 +318,31 @@ export function connectionReadiness(connection: Connection, agent: AgentStatus) 
     connection.app_login_required === true ||
     ["logged_out", "logging_out"].includes(connection.status);
   const modelReady =
+    !toolingBlocked &&
     !explicitlyLoggedOut &&
     !authBusy &&
     !["failed", "blocked"].includes(connection.status) &&
     connection.model_available === true &&
     agent.provider?.ready === true;
   const canProbe =
+    !toolingBlocked &&
     !authBusy &&
     connection.code !== "CLEANUP_UNCONFIRMED" &&
     ((!explicitlyLoggedOut && (connection.authentication === "chatgpt" || modelReady)) ||
       (Boolean(connection.pending?.profile_id) &&
         connection.authentication === "chatgpt" &&
         !["cancelled", "logged_out"].includes(connection.status)));
-  const canLogout = canProbe || connection.connected || Boolean(connection.pending?.profile_id);
+  const canLogout =
+    !codexToolMissing(connection, agent) &&
+    (canProbe || connection.connected || Boolean(connection.pending?.profile_id));
   const logoutRetry =
     connection.app_login_required &&
     Boolean(connection.pending?.profile_id) &&
     ["failed", "blocked"].includes(connection.status);
   return {
     authBusy,
+    toolingBlocked,
+    canLogin: !authBusy && !toolingBlocked,
     modelReady,
     canProbe,
     canLogout: Boolean(canLogout),

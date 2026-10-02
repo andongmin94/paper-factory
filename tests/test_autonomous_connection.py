@@ -110,6 +110,36 @@ def test_status_is_local_and_side_effect_free(tmp_path, monkeypatch):
         manager.close()
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows PATHEXT regression")
+def test_login_logout_and_provider_select_explicit_cli_without_cmd_pathext(tmp_path, monkeypatch):
+    manager, state, observed = make_manager(tmp_path, monkeypatch)
+    fake = manager.executable
+    packaged = tmp_path / "Packaged CLI" / "codex.cmd"
+    packaged.parent.mkdir()
+    packaged.write_text("fixture launcher; execution uses the synthetic CLI", encoding="utf-8")
+    manager.executable = str(packaged)
+    monkeypatch.setenv("PATHEXT", ".EXE")
+    assert connection.shutil.which(str(packaged)) is None
+    assert CodexProvider(packaged)._binary() == str(packaged)
+    selected = []
+
+    def command(binary):
+        selected.append(binary)
+        return [sys.executable, fake]
+
+    monkeypatch.setattr(connection, "_cli_command", command)
+    try:
+        manager.login()
+        assert wait(manager, {"authenticated"})["code"] is None
+        assert manager.logout()["status"] == "logged_out"
+        assert selected == [str(packaged)] * 3
+        commands = [json.loads(line)["arguments"] for line in Path(str(observed) + ".commands").read_text().splitlines()]
+        assert [arguments[-2:] for arguments in commands] == [["login", "--device-auth"], ['cli_auth_credentials_store="file"', "logout"], ["login", "status"]]
+        assert state == {"status_calls": 1, "generate_calls": 0}
+    finally:
+        manager.close()
+
+
 def test_shared_active_metadata_is_rejected(tmp_path, monkeypatch):
     manager, _, _ = make_manager(tmp_path, monkeypatch)
     profile = "profiles/" + "a" * 32

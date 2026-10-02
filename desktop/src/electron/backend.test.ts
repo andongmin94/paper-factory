@@ -21,6 +21,9 @@ async function fixture(refuseShutdown = false, exitCode = 0): Promise<Backend> {
       if (req.headers.authorization !== 'Bearer ' + token || req.headers.origin !== origin) { res.writeHead(403);res.end('{}'); return; }
       if(req.url === '/api/redirect') { res.writeHead(302,{location:origin+'/api/leak'}); res.end();return; }
       if(req.url === '/api/leak') leaked++;
+      if(req.url === '/api/classified-failure') { res.writeHead(400, {'content-type':'application/json'});res.end(JSON.stringify({code:'AUTH_STORAGE_INVALID',error:'Synthetic safe connection failure'}));return; }
+      if(req.url === '/api/invalid-code') { res.writeHead(400, {'content-type':'application/json'});res.end(JSON.stringify({code:'AUTH_REQUIRED\\nprivate-token',error:'Synthetic failure'}));return; }
+      if(req.url === '/api/oversized-code') { res.writeHead(400, {'content-type':'application/json'});res.end(JSON.stringify({code:'A'.repeat(65),error:'Synthetic failure'}));return; }
       if(req.url === '/api/crash') { res.writeHead(200, {'content-type':'application/json'});res.end('{}');setTimeout(()=>process.exit(9),50);return; }
       if(req.url === '/api/allow-shutdown') refuse = false;
       if(req.url === '/api/desktop/shutdown') {
@@ -80,6 +83,15 @@ describe("dedicated backend lifecycle", () => {
     await backend.json("/api/allow-shutdown", { method: "POST", body: "{}" });
     await backend.stop();
     expect(backend.ready).toBe(false);
+  });
+  it("preserves a bounded classified error code in the message serialized by Electron IPC", async () => {
+    const backend = await fixture();
+    await expect(backend.json("/api/classified-failure")).rejects.toThrow(
+      "[AUTH_STORAGE_INVALID] Synthetic safe connection failure",
+    );
+    await expect(backend.json("/api/invalid-code")).rejects.toThrow(/^Synthetic failure$/);
+    await expect(backend.json("/api/oversized-code")).rejects.toThrow(/^Synthetic failure$/);
+    expect(backend.ready).toBe(true);
   });
   it("enforces streaming response bounds independently of content-length", async () => {
     const stream = new ReadableStream({

@@ -102,3 +102,12 @@ account, approve device authentication or start paid research. Inspect a package
 app with a fresh data directory as well: dependency checks must pass with no
 system Python/Node/Git on PATH. A release still needs signing and a clean-machine
 installation check before it can be described as production-tested.
+
+Version 0.9.1 resolves the bundled Codex launcher as an explicit file. Windows
+`PATHEXT` settings no longer make an existing `codex.cmd` disappear from login,
+logout or model readiness. Classified connection errors survive Electron IPC
+and appear as safe, specific instructions in the connection card.
+
+For a native portable smoke run, pass `--user-data-dir=<fresh absolute path>`
+and verify that its workspace is created there before testing account actions.
+Changing `APPDATA` alone does not override Electron's Windows known-folder path.
