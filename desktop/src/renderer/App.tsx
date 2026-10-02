@@ -51,6 +51,7 @@ import {
 } from "./model";
 import { useWorkspace } from "./use-workspace";
 import license from "./vendor/neobrutal-ui.LICENSE?raw";
+import fontLicense from "./assets/fonts/OFL.txt?raw";
 
 type View = "start" | "progress" | "library";
 type Notice = { kind: "success" | "error"; title: string; message: string };
@@ -554,7 +555,7 @@ export default function App({ api }: { api: DesktopBridge }) {
                   <Card className="account-card">
                     <CardHeader>
                       <CardTitle className="section-title">
-                        <span className="number-chip mint">✓</span>Codex 연결
+                        <span className="number-chip">✓</span>Codex 연결
                       </CardTitle>
                     </CardHeader>
                     <CardContent>
@@ -1134,6 +1135,11 @@ export default function App({ api }: { api: DesktopBridge }) {
           <details>
             <summary>neobrutal-ui 라이선스 보기</summary>
             <pre className="license-text">{license}</pre>
+          </details>
+          <p className="field-help">글꼴: Pretendard Variable · SIL Open Font License 1.1</p>
+          <details>
+            <summary>Pretendard 라이선스 보기</summary>
+            <pre className="license-text">{fontLicense}</pre>
           </details>
           <DialogFooter>
             <Button variant="neutral" onClick={() => setAboutOpen(false)}>

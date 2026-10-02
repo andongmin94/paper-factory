@@ -10,3 +10,11 @@ The application icon in `public/` is an original Paper Factory document mark.
 Renderer component provenance and its upstream MIT license are retained under
 `src/renderer/vendor/`. Packaged runtime license notices are collected by the
 runtime bundling script under `resources/licenses/`.
+
+Pretendard Variable v1.3.9 is bundled unchanged from `orioncactus/pretendard`
+commit `5c41199ea0024a9e0b2cb31735265056e5472d76`.
+Source: https://github.com/orioncactus/pretendard/tree/v1.3.9/packages/pretendard
+The font and its complete SIL Open Font License 1.1 are retained in
+`src/renderer/assets/fonts/`, with the license also available in the app's About
+dialog. The font is served locally; no external font request is made.
+Font SHA-256: `9599f12fd42fc0bce1cd50b47a0c022e108d7aa64dd0d1bb0ed44f3282d900b4`.

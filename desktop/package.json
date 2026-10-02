@@ -58,6 +58,8 @@
     "productName": "Paper Factory",
     "icon": "public/icon.png",
     "asar": true,
+    "electronDist": "node_modules/electron/dist",
+    "afterExtract": "./scripts/after-extract.mjs",
     "win": {
       "icon": "public/icon.ico",
       "target": [
