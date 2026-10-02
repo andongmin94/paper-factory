@@ -5,6 +5,11 @@ The desktop application adapts `create-frontron` at commit
 private Python backend. React renders installed neobrutal-ui source components;
 it does not receive backend session tokens, filesystem access or a shell API.
 
+The application uses the reference's Mono canvas (`#f4f5f7`), charcoal controls
+(`#27282b`), gray auxiliary surfaces, 5px corners and 4px hard shadows. Application
+styles layer card headers and supporting sections over the unchanged upstream
+components/tokens. Pretendard Variable remains bundled locally.
+
 ## Develop
 
 Use Windows x64, Python 3.12, Node.js 24+ and npm on the **build machine**:

@@ -313,7 +313,7 @@ export default function App({ api }: { api: DesktopBridge }) {
                 <h1>
                   코드가 논문이 되는
                   <br />
-                  <span className="highlight">연구 작업실.</span>
+                  연구 작업실.
                 </h1>
                 <p>저장소와 연구 목표를 정하면, 설계부터 원고 생성까지 이어갑니다.</p>
               </div>
