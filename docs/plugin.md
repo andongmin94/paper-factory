@@ -1,6 +1,6 @@
 # 플러그인 설치와 패키지
 
-Paper Factory의 기본 배포는 스킬·JSON 컨트롤러·의존성 manifest·다운로드 transport와 QuickJS 런타임을 담는 ZIP입니다. 호스트별 의존성을 private scratch에 준비하며, MCP 서버를 시작하거나 별도 모델 로그인·API 키를 요청하지 않습니다. 계획·코드·독립 리뷰·원고는 현재 호스트 모델이 작성합니다. 동결된 `0.10.2` Cloud 검증, 개인 웹 설치본 `0.11.0`, 설치 전 소스 preview `0.12.0`을 구분하여 기록합니다.
+Paper Factory의 기본 배포는 스킬·JSON 컨트롤러·의존성 manifest·다운로드 transport와 QuickJS 런타임을 담는 ZIP입니다. 호스트별 의존성을 private scratch에 준비하며, MCP 서버를 시작하거나 별도 모델 로그인·API 키를 요청하지 않습니다. 계획·코드·독립 리뷰·원고는 현재 호스트 모델이 작성합니다. 동결된 `0.10.2` Cloud 검증, 개인 웹 설치본 `0.11.0`, 별도 개인 preview `0.12.0`과 이후 소스 수정을 구분하여 기록합니다.
 
 ## 사용자 설치
 
@@ -30,7 +30,11 @@ Frontron 첫 일반 설치 사본은 동결된 `paper-factory-0.10.0.zip`이며 
 
 일반 Chat의 기존 Pandoc·pdflatex도 고정 진단 입력으로 PDF 1쪽·DOCX·TeX 출력을 실제 통과했습니다. 이 검사는 Paper Factory 컨트롤러를 실행하지 않았습니다. 설치 자원의 전체 원본 파일을 실행 공간에 전달하는 경로와 전체 연구 실행은 여전히 검증 대상입니다. 첫 세 text chunk 전달이나 개별 문서 변환 성공을 전체 제작 성공으로 계산하지 않습니다.
 
-일반 Chat의 실제 GitHub 도구에는 Actions ZIP을 받아 재사용 가능한 파일 ID를 반환하는 기능이 있고, native Files는 connector 파일 ID를 실행 공간에 옮기는 계약을 제공합니다. 실제 프로젝트 조회에서는 완료된 run이 0개였으므로 아직 전달에 쓸 artifact는 확인되지 않았습니다. 개발자용 `plugin-verification.yml`은 두 실제 Mac 아키텍처에서 준비·종료·문서 출력 검사를 수행하고, 성공한 원본 ZIP·build report를 14일간 별도 artifact로 남기도록 준비됐습니다. 현재는 로컬 소스만 검토했으며 원격 실행과 파일 전달은 수행하지 않았습니다. 이 CI artifact는 검증용이고 OpenAI 공개 디렉터리 등록을 대신하지 않습니다.
+별도 개인 설치본 `paper-factory-preview-012`는 41개 자원·22개 core 파일의 원본을 대조하고 Work Cloud의 private 준비·PDF/DOCX/TeX 진단·fresh QuickJS readiness·종료 검사를 실제 통과했습니다. 이 사본 이후 Mac 준비 소스가 바뀌었으므로 최신 43개 자원 패키지의 성공으로 계산하지 않습니다.
+
+일반 Chat에서는 실제 GitHub 도구로 첫 Mac CI의 진단 artifact를 받고 native Files로 실행 공간에 옮겼습니다. 원본 ZIP 13,774 bytes와 GitHub digest, 8개 member와 CRC가 일치했습니다. 이 파일 전달 검사는 패키지 코드·의존성 준비·연구를 실행하지 않았습니다. 첫 Mac arm64·Intel CI는 private 준비에서 실패했으며 원래 진단을 보존했습니다. 현재 Mac 수정은 원본 wheel의 누락된 라이선스와 잘못된 arm64 바이너리 대신 아키텍처별 공식 Pandoc 3.9 ZIP과 고정한 upstream 라이선스를 사용합니다. 실제 Mac 성공과 일반 Chat의 전체 패키지 준비·논문 제작은 다음 검증 대상입니다.
+
+개발자용 `plugin-verification.yml`은 두 실제 Mac 아키텍처에서 준비·종료·문서 출력 검사를 수행하고, 성공한 원본 ZIP·build report를 14일간 별도 artifact로 남깁니다. 이 CI artifact는 검증용이고 OpenAI 공개 디렉터리 등록을 대신하지 않습니다.
 
 호스트는 설치된 스킬 폴더를 읽기 전용으로 사용하고, 승인된 쓰기 가능한 durable scratch를 선택합니다. 그 안에서 공식 배포의 크기·SHA256을 검증하고 private venv에 고정 wheel을 `--no-index --require-hashes`로 설치합니다. Docker·WSL·OS 설치 프로그램이나 system PATH 변경은 요구하지 않습니다. 이후 명령은 준비 결과의 정확한 Python 경로와 `--environment-file`을 사용하여 private Node·Pandoc를 선택합니다. 상속한 proxy·TLS·네트워크 정책은 유지합니다.
 

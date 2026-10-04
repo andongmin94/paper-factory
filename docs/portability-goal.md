@@ -6,16 +6,17 @@ ChatGPT Chat. Docker, WSL, operating-system feature changes and user-managed
 runtime installers are excluded. This goal started on 2026-10-04.
 
 The frozen 0.10.2 ZIP and its five completed Cloud studies are retained unchanged.
-The installed development release is frozen 0.11.0; current source development
-is 0.12.0 with explicit provided-host preparation. Installing a plugin does not
-itself establish any environment's execution support. This goal remains active.
+The working installation remains frozen 0.11.0. A separate private 0.12.0 preview
+is installed for regression; current source development has explicit provided-host
+preparation. Installing a plugin does not itself establish any environment's
+execution support. This goal remains active.
 
 | Environment | Current observed result | Remaining proof |
 | --- | --- | --- |
-| Work Cloud | Five retained studies; installed 0.11.0 preparation/conversion/readiness regression passed | New source release regression before updating the working installation |
+| Work Cloud | Five retained studies; installed 0.11.0 and separate private 0.12.0 preparation/conversion/readiness regressions passed | Validate the next source increment and keep the working-installation upgrade separate |
 | Windows local | New 0.11.0 study exported and all seven PDF pages reviewed; installed Codex 0.11.0 and corrected 0.12.0 preview readiness passed under approved host-tool permissions | Default retained-state access failed; new source release regression and installation remain distinct from these preview checks |
-| macOS local | Runtime/preparation implementation, native-only tests and Apple Silicon/Intel CI job added | Actual Mac/CI execution; no Mac host used here |
-| Ordinary Chat | Tiny and first-three-chunk original-byte transfer; native Files contracts checked; existing native PDF/DOCX/TeX converter diagnostic passed | Usable complete installed-package delivery, preparation and a full verified paper |
+| macOS local | First Apple Silicon and Intel CI attempt failed private preparation; diagnostics preserved; focused preparation source fix added | Obtain a successful new native CI preparation/readiness result |
+| Ordinary Chat | Tiny and first-three-chunk transfer, native converter diagnostic and exact existing GitHub diagnostic-artifact-to-Files transfer passed | Complete plugin distribution delivery, preparation and a full verified paper remain unproved |
 
 ## Work in progress
 
@@ -58,8 +59,8 @@ Previous readiness observations are in
 - The launcher verifies prepared Python/Node/Pandoc identities without changing
   system PATH or inherited proxy/TLS settings. Host-context and conversion checks
   passed 30 tests with actual document output verification.
-- macOS guardian code is implemented. Its platform tests and actual Mac execution
-  status remain separate; no Mac host has been used.
+- macOS guardian code was implemented before an actual Mac host was used.
+  Its platform tests and the later remote CI results remain separate evidence.
 - Ordinary Chat cannot read installed binary QuickJS/Typst resources through
   `skills__read`. Direct container HTTPS requests failed DNS; the native remote
   download broker rejected the exact wheel URL at its prior-web-view gate.
@@ -77,10 +78,12 @@ Previous readiness observations are in
   `11b3fb20c9eb61d12f56918176ed089738d22975cf5634302317e62e50dcd70c`.
   Installed inventory SHA256 is
   `d126e509dac16954657cea1f2d8334aa9da8ba13796cad8a7f5bbde3b82a777a`.
-  It was uploaded as a private new version; no public publication occurred.
+  It was uploaded as a private new version; no public publication occurred at
+  that release-upload checkpoint.
 - Windows owned-worker and boundary tests passed 108/108; shared controller and
   workflow tests passed 72/72. Independent instruction forward review found no
-  blocking interface contradiction. Actual Mac execution is still unobserved.
+  blocking interface contradiction. Actual Mac execution was unobserved at that
+  Windows-test checkpoint.
 - A new Windows Frontron study `research-73b2dea0df76` ran once and reached
   analyzed with confirmed cleanup: 96 raw rows, 99 retained fixtures and 51
   actual gate attempts. Two scientific controls passed. Manuscript review and
@@ -204,8 +207,8 @@ Previous readiness observations are in
   frozen 0.11.0 plugin. Its completion and actual test results are recorded
   separately from that release's successful Windows/Cloud evidence.
 - Native macOS tests and a dedicated CI job were added for Apple Silicon
-  (`macos-14`) and Intel (`macos-15-intel`). These are currently local source
-  changes, not a completed CI run or an actual Mac execution claim.
+  (`macos-14`) and Intel (`macos-15-intel`). These began as local source changes;
+  the first remote attempt described below failed during private preparation.
 
 - Provided-host preparation/conversion and identity checks passed 60 tests.
   Shared controller/workflow and explicit probe selection checks passed 78 tests.
@@ -218,7 +221,8 @@ Previous readiness observations are in
   inventory SHA256
   `ccc17c574722282411dea2a401ccdc73241b5956e2320a0ce214176b1f1ad896`.
   All entries passed CRC and byte comparison to the staged source; frozen
-  0.11.0 ZIP remains unchanged. The preview was not installed or published.
+  0.11.0 ZIP remains unchanged. That exact initial preview was not installed or
+  published.
 - Three commands from that exact preview actually exited zero: provided
   preparation using existing Windows Python 3.12.14, Node 22.16.0, Pandoc 3.9 and
   Typst 0.15; trusted runtime extraction; then the schema-2 exact launcher and
@@ -270,7 +274,7 @@ Previous readiness observations are in
   the empty owned-worker journal. No native command or study was rerun.
   Review receipt is `provided-host/independent-source-012-review.json`, SHA256
   `d3c07cf2a922c3a4f31271e792744e607c1df487ed02bd0de238ea7f955ece3c`.
-- The next native CI increment is ready locally: `scripts/ci_verify_plugin.py`
+- The native CI increment was first validated locally: `scripts/ci_verify_plugin.py`
   and `.github/workflows/plugin-verification.yml`. It enforces actual arm64 and
   x86_64 macOS hosts, builds the original plugin, runs private preparation and
   the exact launcher/readiness with an empty owned journal, then requires the
@@ -289,13 +293,17 @@ Previous readiness observations are in
   workflow SHA256 is
   `969e7a27adccc7a82089c317a15a521f4ded5909a093bd41084c8b8cf9c11b4c`.
   No actual CI/native preparation/test/dispatch/upload was run by that review.
-- Actual remote CI now requires putting the prepared source into a GitHub
-  verification branch. Approval was requested for public
-  `andongmin94/paper-factory`, branch `codex/plugin-portability-012`; main merge
-  and OpenAI directory publication are outside that request. Until that approval
-  arrives, no public source, artifact or CI run has been created. The overall
-  goal remains active; actual Mac proof and ordinary Chat complete delivery and
-  paper export remain required.
+- The user approved public verification-branch publication. The prepared source
+  was pushed to `andongmin94/paper-factory`, branch `codex/plugin-portability-012`,
+  at commit `5b213385a6e7ca597b48cc8f7f495acb5c697ee9`, parent
+  `7b354faeed0adc9589327f04ad16829c22911e7c`. Main remains unchanged; no PR merge
+  or OpenAI directory publication occurred.
+- Actual Plugin verification run `37180608193`, attempt 1, executed both macOS
+  architecture jobs. Apple Silicon and Intel private preparation failed; their
+  diagnostic artifacts were retained and no successful distribution artifact
+  was produced. Prior Windows and Cloud proof remains preserved. The overall
+  goal stays active; successful Mac execution, ordinary Chat complete delivery
+  and a verified ordinary Chat paper export remain required.
 - The actual local Codex-installed 0.11.0 cache has 41 resources and 22 core
   files byte-identical to the frozen ZIP. Reusing its already verified private
   preparation required no dependency download or installation. The first exact
@@ -339,7 +347,8 @@ Previous readiness observations are in
   inventory SHA256
   `688fb143de322060d685369ce90683b078e456e4cf2214bc798b977ce9e3fe9c`.
   Build record is `provided-host/package-preview-0.12.0-status-002/preview-build-report.json`.
-  It remains uninstalled and unpublished; frozen releases were not rebuilt.
+  That exact ZIP remains a local snapshot; frozen releases were not rebuilt.
+  Its separately named private installation is recorded below.
 - This corrected preview's exact launcher reused the first 0.12.0 schema-2
   preparation, runtime and controller/supervisor namespace. Under default tool
   permissions it exited 1 with INPUT_UNAVAILABLE; that original failure is
@@ -367,6 +376,108 @@ Previous readiness observations are in
 - A local source publication candidate is kept separately from plugin releases.
   Its exact selected source bytes, tracked deletions, declared-input coverage
   and excluded private files are recorded under
-  `provided-host/publication-candidate-002/manifest.json`. This candidate is for
-  the pending GitHub verification-branch approval only; it is not a published
-  branch, remote artifact, OpenAI directory installation or actual CI run.
+  `provided-host/publication-candidate-002/manifest.json`. It preserves the source
+  reviewed before the approved public branch push; the candidate archive itself
+  is not a plugin release, remote artifact or evidence of successful CI execution.
+- The corrected preview was copied to a separate private plugin named
+  `paper-factory-preview-012`, version `0.12.0`. Only root `plugin.json` name bytes
+  changed; the 41-resource/22-core inventory remains SHA256
+  `688fb143de322060d685369ce90683b078e456e4cf2214bc798b977ce9e3fe9c`.
+  This private ZIP is 1365834 bytes, SHA256
+  `8672a8e26766025b25f82960cdb4afd6d03f7432c63f1b99035a3e7682d2e92c`.
+  Its upload and installation succeeded; the working 0.11.0 installation remains
+  preserved. Local records are `web-chat/private-preview-012-installation.json`
+  and `web-chat/private-preview-012-installed.png`. Its actual Work Cloud
+  preparation/conversion/readiness regression completed; the original proof and
+  its precise scope are recorded at the checkpoint below.
+
+### Checkpoint recorded 2026-10-04T06:07:58Z
+
+- The separate installed private 0.12.0 preview passed actual Work Cloud private
+  preparation, controller import, fixed PNG/PDF/DOCX/TeX conversion and fresh
+  QuickJS readiness with confirmed cleanup and an empty owned-worker journal.
+  Independent review passed 25 original-byte/receipt checks; no scientific study
+  was rerun. Original evidence is
+  `web-chat/paper-factory-preview-012-work-cloud-regression-evidence.zip`,
+  2302162 bytes, SHA256
+  `1d5569d40002c2325e7d6cb22c5003778d1edce7dc79fd0bb86f0445a298533f`.
+  Review is `web-chat/independent-cloud-012-review.json`, SHA256
+  `1cb1644cd7af5055fd2820fb4165a59d73f3c79661769e599e809422a232f224`.
+  This validates the 41-resource installed preview; it does not validate later
+  Mac preparation source changes, ordinary Chat execution or a new study.
+- Ordinary Chat's native `mcp__GitHub__download_workflow_artifact` response supplied
+  the actual file ID used by `files__materialize`. The original ARM Mac failed-CI
+  diagnostic reached its script container unchanged: 13774 bytes, SHA256
+  `381bba9a844da1cac2c812ec30de239fdb4bc4313fef899e9399bb40ca6f65b3`.
+  Independent inspection verified CRC, all eight members and their raw streams.
+  The pilot evidence ZIP is 32174 bytes, SHA256
+  `d4b5416de226770f0b96d43b3fb6900fffffa76ca0595540cf78fe5f09b3f07f`.
+  Review is `web-chat/broker-pilot-independent-review.json`, SHA256
+  `5dc40c54c2286dac807042c16e7a2ae06a8d4410e7127bfd028a1b2e9de3d454`.
+  This proves an existing diagnostic artifact transfer; complete plugin delivery,
+  host preparation, package execution and a study in ordinary Chat remain false.
+  Signed URLs and opaque connector file IDs are omitted from the review.
+- The retained ARM Mac first failure was private preparation command 2, exit 2,
+  stage `dependency-download`, current artifact
+  `pypandoc_binary-1.17-py3-none-macosx_11_0_arm64.whl`. Its original stdout is
+  12134 bytes and stderr is empty. The safe report records `ValueError` without
+  its underlying validation guard; no more specific cause is claimed from that
+  diagnostic alone. The original failed artifact remains preserved.
+- Current source omits `pypandoc-binary` from the six Mac wheel profiles and
+  selects two pinned official Pandoc 3.9 Mac ZIPs with separately retained upstream
+  notices. Windows/Linux wheel closures remain unchanged. These source and ZIP
+  checks are not a second actual Mac CI preparation, runtime or research result.
+- Current host packaging tests no longer read the obsolete Cloud dependency
+  manifest or lock. A clean minimal fixture containing only the test, three
+  current helpers, host manifest and eight pinned wheels passed 18 tests with
+  real HTTPX/SOCKS construction, network forbidden and schema-2 preparation
+  contracts checked. Source before/after matched. The initial test-port failure
+  remains retained; the corrected run is
+  `provided-host/cloud-packaging-current-fixture-002/receipt.json`, SHA256
+  `5504e3acaaa58d7e1b94d7630acd089d6211f022c6f4b372c76542f9dca3f2d9`.
+  Simulated host preparation and marker checks do not establish actual Mac support.
+
+### Preparation redirect checkpoint recorded 2026-10-04T06:16:42Z
+
+- The latest preparation helper uses bounded manual redirects with implicit client
+  redirects disabled. Its exact source snapshot is 35303 bytes, SHA256
+  `754f64d5ea978c01db67f6de8244c6c969e4891f2865d4a202851957fd5fc3bb`.
+  Eleven focused tests passed with original stdout/stderr hashes and unchanged
+  source. Receipt is
+  `mac-ci-independent/source-fix-checks-003-approved/pytest-receipt.json`, SHA256
+  `0cdeb2f6d176cf95b1b6cb87580ccfd59b15061cec170c4bb987287c3aad0325`.
+- The two original Pandoc 3.9 Mac archives passed extraction checks, including
+  pinned binary identities and the separately retained upstream notices; no
+  foreign binary was executed. The extraction record is
+  `mac-ci-independent/source-fix-checks-003-approved/original-assets-extraction.json`,
+  SHA256 `df4b7751fc7eeccdcb49760e0f0e56704f499901b0596f0c3ffc3d532e5e60e7`.
+  These checks are source/asset evidence, not actual Mac preparation or readiness.
+- A fresh current-only fixture bound to that latest helper passed the same 18
+  host packaging tests, including actual pinned HTTPX/SOCKS client construction
+  with network forbidden. Its 13 source inputs remained byte-identical. Receipt
+  is `provided-host/cloud-packaging-current-fixture-003/receipt.json`, SHA256
+  `402631d5d7d177335b644df4a3d7d97905957651012ca0e7a735b7b527f9888a`.
+  The earlier fixture002 and its pre-redirect helper proof remain preserved.
+- Source-fix preview003's actual Windows launcher exited zero with flat
+  `ready: true`, QuickJS, Node 22.16.0 and confirmed cleanup, using the existing
+  schema-2 preparation, runtime and controller namespace. The original verifier
+  incorrectly looked for a nested runtime result; its failure is retained.
+  Read-only parsing of the original 665-byte stdout corrected that interpretation
+  without rerunning the command. The empty journal remained byte-identical.
+  Verification is `provided-host/actual-source-fix-012-003/verification.json`,
+  SHA256 `a22076b27107402f1baa37944322e3199841e3556d3b69038d118feddd62a80e`.
+  This 48-member/43-resource snapshot contains the earlier preparation helper,
+  which was not executed by the readiness check. It does not validate the latest
+  redirect preparation behavior, an installation, Mac execution, ordinary Chat
+  execution or a new study. A new actual Mac CI result remains required.
+- The final source-fix preview004 was packaged after the current README and
+  plugin guide updates: 48 archive members, 43 resources and 22 controller core
+  files, 1377658 bytes, SHA256
+  `cfe4feac6d92e2cb7140ef2963933efce49a7659e7098ed8543ed7c8bc5fb86f`.
+  Inventory SHA256 is
+  `035e2049acd609a5184cbb8b36184c904e4fb2fb465b05ed59de8dc24591eede`.
+  The archive CRC and latest preparation-helper bytes were checked against its
+  build report, `mac-ci-independent/source-fix-preview-004/preview-build-report.json`.
+  This is a source-only package: it has not been installed or used for a native
+  Mac or ordinary Chat execution test. The Windows preview003 proof above stays
+  bound to its earlier snapshot.

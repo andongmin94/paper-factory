@@ -70,7 +70,9 @@ pathlib.Path(os.environ["PF_OUTPUT_ROOT"], "observations.json").write_text(json.
                         production_entrypoint="production.py:transform", timeout_seconds=20,
                         on_handle=retain)
     (tmp_path / "runner-result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
-    assert result["status"] == "succeeded", result["stderr"]
+    assert result["status"] == "succeeded", {
+        key: result.get(key) for key in ("status", "code", "error", "reason", "exit_code", "cleanup_confirmed", "stderr")
+    }
     assert result["cleanup_confirmed"] is True
     assert result["production_calls"] == [{"path": "production.py", "function": "transform", "calls": 1}]
     observed = json.loads(Path(result["output_path"]).read_text(encoding="utf-8"))

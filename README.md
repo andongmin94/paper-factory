@@ -4,9 +4,9 @@ GitHub 저장소를 연구하고, 실제 실험 근거가 연결된 논문 초�
 
 **현재 상태:** 테스트 계정의 ChatGPT Work Cloud에서 공개 저장소 5개의 격리 실험·분석·독립 원고 리뷰·논문 PDF 생성을 완료했습니다. 부족한 의존성의 오프라인 준비와 실제 문헌 검색·DOI 재확인·초록 수집도 검증했습니다. 개인 설치본 `0.10.2`는 승인된 원고를 그대로 사용하여 최종 PDF 5편, 총 31쪽을 생성하고 긴 제목의 서식 문제를 해결했습니다. 지원 범위는 아래 실행 경계와 현재 호스트 검사 결과에 따릅니다. 공개 디렉터리 설치는 별도 검증 대상입니다. 연구별 결과·원본 증거는 [개발 목표](docs/development-goal.md), 설치 사본과 현재 소스의 구분은 [설치 안내](docs/plugin.md)에 기록합니다.
 
-개발 버전 `0.11.0`은 Docker·WSL 없이 private 환경과 운영체제별 프로세스 종료 처리를 사용합니다. 현재 Windows x86_64에서 새 Frontron 실험을 한 번 수행하고 독립 원고 리뷰·7쪽 PDF·Word·LaTeX·재현 ZIP 생성과 파일 검증을 완료했습니다. 같은 설치 사본은 Work Cloud의 환경 준비·문서 변환·QuickJS readiness·종료 검사도 통과했습니다. Mac 구현과 프로필은 있지만 현재 기기가 없어 실제 실행 검증이 남습니다. 일반 ChatGPT 채팅에서는 설치 리소스의 실행 공간 전달을 별도로 시험하고 있으며 전체 논문 제작은 아직 검증되지 않았습니다. 최신 진행·완료 조건은 [환경 지원 목표](docs/portability-goal.md)에 기록합니다.
+개발 버전 `0.11.0`은 Docker·WSL 없이 private 환경과 운영체제별 프로세스 종료 처리를 사용합니다. 현재 Windows x86_64에서 새 Frontron 실험을 한 번 수행하고 독립 원고 리뷰·7쪽 PDF·Word·LaTeX·재현 ZIP 생성과 파일 검증을 완료했습니다. 같은 설치 사본은 Work Cloud의 환경 준비·문서 변환·QuickJS readiness·종료 검사도 통과했습니다. Mac의 첫 arm64·Intel CI는 의존성 준비에서 실패했고 수정 후 실제 실행 검증이 남습니다. 일반 ChatGPT 채팅에서는 GitHub 진단 artifact의 원본 ZIP 전달을 확인했으며 전체 패키지 준비와 논문 제작은 아직 검증되지 않았습니다. 최신 진행·완료 조건은 [환경 지원 목표](docs/portability-goal.md)에 기록합니다.
 
-현재 개발 소스 `0.12.0`은 기존 호스트 도구를 사용하는 명시적 `provided` 준비와 pdflatex PDF 변환을 추가합니다. Windows에서는 기존 Python·Node 22·Pandoc·Typst를 사용해 새 다운로드·venv·설치 없이 실제 준비·문서 진단·launcher readiness를 통과했습니다. Node 22 격리 실행 검사도 통과했습니다. 이 소스는 웹 개인 설치본 `0.11.0`과 별도이며, 일반 Chat 전체 제작과 Mac 실기 성공을 뜻하지 않습니다.
+현재 개발 소스 `0.12.0`은 기존 호스트 도구를 사용하는 명시적 `provided` 준비와 pdflatex PDF 변환을 추가합니다. Windows에서는 기존 Python·Node 22·Pandoc·Typst를 사용해 새 다운로드·venv·설치 없이 실제 준비·문서 진단·launcher readiness를 통과했습니다. Node 22 격리 실행 검사도 통과했습니다. 별도 개인 preview `0.12.0`도 Work Cloud의 준비·변환·readiness를 통과했습니다. 이후 Mac 준비 수정은 아키텍처별 공식 Pandoc ZIP과 원본 라이선스를 사용하며, 이 최신 소스의 Mac 실제 성공과 일반 Chat 전체 제작은 아직 검증 대상입니다.
 
 ## 사용하기
 

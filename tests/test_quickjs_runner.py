@@ -620,8 +620,10 @@ def test_stop_rejects_reused_or_unowned_pid_before_signalling(pinned_runtime, mo
 
 def test_windows_recovery_never_terminates_an_unowned_pid(pinned_runtime, monkeypatch, supervisor_root):
     candidate = QuickJSRunner(pinned_runtime, supervisor_root=supervisor_root)
-    monkeypatch.setattr(module, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(module, "os", SimpleNamespace(**{**vars(os), "name": "nt"}))
     assert candidate.stop({"kind": "quickjs-worker", "pid": 12345, "owner_nonce": "a" * 32}) is False
+    assert candidate._lease is None and candidate._records == {}
+    assert not candidate._journal_path.exists()
 
 
 def test_active_handle_pid_mismatch_is_rejected(pinned_runtime, supervisor_root):

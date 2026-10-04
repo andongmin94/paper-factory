@@ -279,17 +279,34 @@ def test_credentials_do_not_cross_environment_boundary(imported, tmp_path, monke
 
 def test_git_url_credentials_are_not_persisted(tmp_path, monkeypatch):
     monkeypatch.setenv("PF_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "credential.helper")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "synthetic-unreviewed-helper")
+    source = "https://user:private-secret@example.invalid/project.git?access_token=private-secret"
+    clones = []
+
     def fake_git(command, **kwargs):
-        if command[1] == "clone":
+        if "clone" in command:
+            assert command[:6] == ["git", "-c", "credential.helper=", "-c", "core.hooksPath=" + os.devnull, "clone"]
+            assert command[6:-1] == ["--depth", "1", "--", source]
+            environment = kwargs["env"]
+            assert {key: value for key, value in environment.items() if key.upper().startswith("GIT_")} == {
+                "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_ASKPASS": "",
+            }
+            clones.append(command)
             checkout = Path(command[-1])
             checkout.mkdir()
             (checkout / "data.txt").write_text("public asset", encoding="utf-8")
             return subprocess.CompletedProcess(command, 0, "", "")
+        assert command[:2] == ["git", "-C"] and command[-2:] == ["rev-parse", "HEAD"]
         return subprocess.CompletedProcess(command, 0, "f" * 40 + "\n", "")
     monkeypatch.setattr("paper_factory.project.subprocess.run", fake_git)
-    ws = ingest("https://user:private-secret@example.invalid/project.git?access_token=private-secret", tmp_path / "workspace")
+    ws = ingest(source, tmp_path / "workspace")
+    assert len(clones) == 1
     project = ws.latest("project", Project)
     assert project.source == "https://example.invalid/project.git"
+    assert project.source_commit == "f" * 40
+    assert (ws.root / "source/data.txt").read_text(encoding="utf-8") == "public asset"
     assert "private-secret" not in (ws.root / "project.json").read_text(encoding="utf-8")
 
 

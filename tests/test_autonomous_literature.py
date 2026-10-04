@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 from paper_factory.autonomous import literature
+from paper_factory import workspace
 
 
 def symlink(path, target, *, directory=False):
@@ -165,9 +166,41 @@ def test_symbolic_links_are_rejected(tmp_path, monkeypatch, location):
         content = b"evidence"
         digest = hashlib.sha256(content).hexdigest()
         symlink(root / "literature" / f"source-{digest[:16]}.json", other / "private")
-        with pytest.raises(ValueError, match="does not match"):
+        with pytest.raises(ValueError, match="symlinks or junctions"):
             literature._save(root, "source", "json", content)
         assert not (other / "private").exists()
+
+
+def test_regular_content_addressed_artifact_creation_reuse_and_corruption(tmp_path):
+    root = literature._prepare_root(tmp_path / "output")
+    content = "Exact evidence\x00가🙂".encode("utf-8")
+    relative, digest = literature._save(root, "source", "txt", content)
+    path = root / relative
+    assert path.read_bytes() == content and digest == hashlib.sha256(content).hexdigest()
+    assert literature._save(root, "source", "txt", content) == (relative, digest)
+    path.write_bytes(b"changed evidence")
+    with pytest.raises(ValueError, match="does not match"):
+        literature._save(root, "source", "txt", content)
+    assert path.read_bytes() == b"changed evidence"
+
+
+def test_final_link_detection_rejects_before_native_open(tmp_path, monkeypatch):
+    """Exercise final-component refusal when symlink creation is unavailable."""
+    root = literature._prepare_root(tmp_path / "output")
+    content = b"evidence"
+    path = root / "literature" / f"source-{hashlib.sha256(content).hexdigest()[:16]}.json"
+    actual_is_link, actual_open = workspace.is_link, os.open
+    monkeypatch.setattr(workspace, "is_link", lambda candidate: candidate == path or actual_is_link(candidate))
+
+    def guarded_open(candidate, *args, **kwargs):
+        if candidate == path or candidate == str(path):
+            pytest.fail("A detected final link must not reach native open")
+        return actual_open(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", guarded_open)
+    with pytest.raises(ValueError, match="symlinks or junctions"):
+        literature._save(root, "source", "json", content)
+    assert not path.exists()
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows junction regression")

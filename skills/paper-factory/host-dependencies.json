@@ -265,7 +265,6 @@
         "pillow-12.3.0-cp312-cp312-macosx_10_13_x86_64.whl",
         "pydantic-2.13.5-py3-none-any.whl",
         "pydantic_core-2.46.5-cp312-cp312-macosx_10_12_x86_64.whl",
-        "pypandoc_binary-1.17-py3-none-macosx_10_9_x86_64.whl",
         "pyparsing-3.3.3-py3-none-any.whl",
         "pypdf-6.19.0-py3-none-any.whl",
         "python_dateutil-2.9.0.post0-py2.py3-none-any.whl",
@@ -300,7 +299,6 @@
         "pillow-12.3.0-cp313-cp313-macosx_10_13_x86_64.whl",
         "pydantic-2.13.5-py3-none-any.whl",
         "pydantic_core-2.46.5-cp313-cp313-macosx_10_12_x86_64.whl",
-        "pypandoc_binary-1.17-py3-none-macosx_10_9_x86_64.whl",
         "pyparsing-3.3.3-py3-none-any.whl",
         "pypdf-6.19.0-py3-none-any.whl",
         "python_dateutil-2.9.0.post0-py2.py3-none-any.whl",
@@ -335,7 +333,6 @@
         "pillow-12.3.0-cp314-cp314-macosx_10_15_x86_64.whl",
         "pydantic-2.13.5-py3-none-any.whl",
         "pydantic_core-2.46.5-cp314-cp314-macosx_10_12_x86_64.whl",
-        "pypandoc_binary-1.17-py3-none-macosx_10_9_x86_64.whl",
         "pyparsing-3.3.3-py3-none-any.whl",
         "pypdf-6.19.0-py3-none-any.whl",
         "python_dateutil-2.9.0.post0-py2.py3-none-any.whl",
@@ -370,7 +367,6 @@
         "pillow-12.3.0-cp312-cp312-macosx_11_0_arm64.whl",
         "pydantic-2.13.5-py3-none-any.whl",
         "pydantic_core-2.46.5-cp312-cp312-macosx_11_0_arm64.whl",
-        "pypandoc_binary-1.17-py3-none-macosx_11_0_arm64.whl",
         "pyparsing-3.3.3-py3-none-any.whl",
         "pypdf-6.19.0-py3-none-any.whl",
         "python_dateutil-2.9.0.post0-py2.py3-none-any.whl",
@@ -405,7 +401,6 @@
         "pillow-12.3.0-cp313-cp313-macosx_11_0_arm64.whl",
         "pydantic-2.13.5-py3-none-any.whl",
         "pydantic_core-2.46.5-cp313-cp313-macosx_11_0_arm64.whl",
-        "pypandoc_binary-1.17-py3-none-macosx_11_0_arm64.whl",
         "pyparsing-3.3.3-py3-none-any.whl",
         "pypdf-6.19.0-py3-none-any.whl",
         "python_dateutil-2.9.0.post0-py2.py3-none-any.whl",
@@ -440,7 +435,6 @@
         "pillow-12.3.0-cp314-cp314-macosx_11_0_arm64.whl",
         "pydantic-2.13.5-py3-none-any.whl",
         "pydantic_core-2.46.5-cp314-cp314-macosx_11_0_arm64.whl",
-        "pypandoc_binary-1.17-py3-none-macosx_11_0_arm64.whl",
         "pyparsing-3.3.3-py3-none-any.whl",
         "pypdf-6.19.0-py3-none-any.whl",
         "python_dateutil-2.9.0.post0-py2.py3-none-any.whl",
@@ -3030,32 +3024,6 @@
         "typing-extensions>=4.14.1"
       ]
     },
-    "pypandoc_binary-1.17-py3-none-macosx_10_9_x86_64.whl": {
-      "name": "pypandoc-binary",
-      "version": "1.17",
-      "filename": "pypandoc_binary-1.17-py3-none-macosx_10_9_x86_64.whl",
-      "url": "https://files.pythonhosted.org/packages/80/85/681a54111f0948821a5cf87ce30a88bb0a3f6848af5112c912abac4a2b77/pypandoc_binary-1.17-py3-none-macosx_10_9_x86_64.whl",
-      "size": 25553945,
-      "sha256": "734726dc618ef276343e272e1a6b4567e59c2ef9ef41d5533042deac3b0531f1",
-      "release_url": "https://pypi.org/pypi/pypandoc-binary/1.17/json",
-      "release_sha256": "e52295f9d70881f24789d241313b35e4929870a6e5f5e7dd69a7d8bee57bd872",
-      "license": "MIT",
-      "requires_python": ">=3.7",
-      "requires_dist": []
-    },
-    "pypandoc_binary-1.17-py3-none-macosx_11_0_arm64.whl": {
-      "name": "pypandoc-binary",
-      "version": "1.17",
-      "filename": "pypandoc_binary-1.17-py3-none-macosx_11_0_arm64.whl",
-      "url": "https://files.pythonhosted.org/packages/15/58/8fd107c68522957868c1e785fbea7595608df118e440e424d189668294df/pypandoc_binary-1.17-py3-none-macosx_11_0_arm64.whl",
-      "size": 25553944,
-      "sha256": "fcfd28f347ed998dda28823fc6bc24f9310e7fdf3ddceaf925bf0563a100ab5b",
-      "release_url": "https://pypi.org/pypi/pypandoc-binary/1.17/json",
-      "release_sha256": "e52295f9d70881f24789d241313b35e4929870a6e5f5e7dd69a7d8bee57bd872",
-      "license": "MIT",
-      "requires_python": ">=3.7",
-      "requires_dist": []
-    },
     "pypandoc_binary-1.17-py3-none-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl": {
       "name": "pypandoc-binary",
       "version": "1.17",
@@ -3325,5 +3293,61 @@
     }
   },
   "network_policy": "Only manifest-pinned official artifact URLs; inherited proxy/certificate settings.",
-  "python_required": "An existing host CPython3.12,3.13 or3.14 with script/subprocess access. No OS installer is invoked."
+  "python_required": "An existing host CPython3.12,3.13 or3.14 with script/subprocess access. No OS installer is invoked.",
+  "pandoc": {
+    "macos-arm64": {
+      "version": "3.9",
+      "filename": "pandoc-3.9-arm64-macOS.zip",
+      "url": "https://github.com/jgm/pandoc/releases/download/3.9/pandoc-3.9-arm64-macOS.zip",
+      "size": 42595715,
+      "sha256": "7d56ac6fe6fad0a7407bcd776aa142f61ca41838f286165f79d0584fa57b24d1",
+      "release_url": "https://api.github.com/repos/jgm/pandoc/releases/tags/3.9",
+      "release_sha256": "67016596b5e04bbf32b9aad6126383b330871e083d4129e945ea6da72133b06a",
+      "source_commit": "19c1f6552b12c70741674f509f8064ae506f29db",
+      "binary": {
+        "member": "pandoc-3.9-arm64/bin/pandoc",
+        "size": 189626864,
+        "sha256": "140353e19f2518a76aa144ce90a7afcb6f485ba94d0dbe069e77c805277908c3"
+      },
+      "licenses": {
+        "licenses/pandoc/COPYING.md": {
+          "size": 17787,
+          "sha256": "9d56cac92294e206af026a5502bee0fed77200b08b51ec28aa63c9efda4dcfdd",
+          "source_url": "https://raw.githubusercontent.com/jgm/pandoc/19c1f6552b12c70741674f509f8064ae506f29db/COPYING.md"
+        },
+        "licenses/pandoc/COPYRIGHT": {
+          "size": 9598,
+          "sha256": "842e33ef01625e93f85bebb8bac83aa570186b7aa77a09971257cc29f8f60740",
+          "source_url": "https://raw.githubusercontent.com/jgm/pandoc/19c1f6552b12c70741674f509f8064ae506f29db/COPYRIGHT"
+        }
+      }
+    },
+    "macos-x86_64": {
+      "version": "3.9",
+      "filename": "pandoc-3.9-x86_64-macOS.zip",
+      "url": "https://github.com/jgm/pandoc/releases/download/3.9/pandoc-3.9-x86_64-macOS.zip",
+      "size": 25692894,
+      "sha256": "f1dfb5a433976b131818c2e69db70bb46874604367e8923412a5c2fa673f2526",
+      "release_url": "https://api.github.com/repos/jgm/pandoc/releases/tags/3.9",
+      "release_sha256": "67016596b5e04bbf32b9aad6126383b330871e083d4129e945ea6da72133b06a",
+      "source_commit": "19c1f6552b12c70741674f509f8064ae506f29db",
+      "binary": {
+        "member": "pandoc-3.9-x86_64/bin/pandoc",
+        "size": 119565632,
+        "sha256": "d7b1e75cd20ee6a788a1399492be07d4559949e18e55f34cfc5c91807fdfa90d"
+      },
+      "licenses": {
+        "licenses/pandoc/COPYING.md": {
+          "size": 17787,
+          "sha256": "9d56cac92294e206af026a5502bee0fed77200b08b51ec28aa63c9efda4dcfdd",
+          "source_url": "https://raw.githubusercontent.com/jgm/pandoc/19c1f6552b12c70741674f509f8064ae506f29db/COPYING.md"
+        },
+        "licenses/pandoc/COPYRIGHT": {
+          "size": 9598,
+          "sha256": "842e33ef01625e93f85bebb8bac83aa570186b7aa77a09971257cc29f8f60740",
+          "source_url": "https://raw.githubusercontent.com/jgm/pandoc/19c1f6552b12c70741674f509f8064ae506f29db/COPYRIGHT"
+        }
+      }
+    }
+  }
 }

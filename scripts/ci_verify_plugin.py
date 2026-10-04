@@ -23,6 +23,7 @@ MAX_CAPTURE = 2 * 1024 * 1024
 SUITES = (
     "test_quickjs_runner.py", "test_quickjs_platforms.py", "test_host_context.py",
     "test_cloud_packaging.py", "test_provided_probe.py", "test_cloud.py", "test_conversion.py",
+    "test_macos_pandoc_preparation.py",
 )
 REQUIRED_CASES = (
     "test_macos_guardian_normal_guest_has_actual_bound_completion",

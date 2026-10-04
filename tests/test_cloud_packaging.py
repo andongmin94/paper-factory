@@ -1,4 +1,4 @@
-"""Offline dependency/transport checks for the packaged Cloud prerequisites."""
+"""Offline dependency/transport checks for the packaged host prerequisites."""
 
 import hashlib
 import importlib.util
@@ -14,6 +14,7 @@ import pytest
 
 SKILL = Path(__file__).resolve().parents[1] / "skills/paper-factory"
 SCRIPTS = SKILL / "scripts"
+TRANSPORT = {"httpx", "httpcore", "h11", "anyio", "idna", "certifi", "typing-extensions", "socksio"}
 
 
 def load_helper(name):
@@ -25,11 +26,15 @@ def load_helper(name):
 
 @pytest.fixture
 def wheels(tmp_path):
-    manifest = json.loads((SKILL / "dependency-manifest.json").read_bytes())
+    manifest = json.loads((SKILL / "host-dependencies.json").read_bytes())
+    declarations = [item for item in manifest["wheels"].values() if item["name"] in TRANSPORT]
+    assert len(declarations) == len(TRANSPORT) and {item["name"] for item in declarations} == TRANSPORT
     paths = {}
     # The bootstrap wheelhouse supplies HTTPX's declared runtime dependencies.
-    for distribution in ("httpx", "httpcore", "h11", "anyio", "idna", "certifi", "typing-extensions", "socksio"):
-        declaration = manifest["dependencies"][distribution]
+    for declaration in declarations:
+        distribution = declaration["name"]
+        assert declaration["version"] == manifest["pins"][distribution]
+        assert declaration["filename"].endswith("-py3-none-any.whl")
         path = SKILL / "wheelhouse" / declaration["filename"]
         raw = path.read_bytes()
         assert len(raw) == declaration["size"]
@@ -319,7 +324,7 @@ def test_native_wheel_identity_and_licenses_bound_before_install(tmp_path):
         bootstrap.wheel_receipt(wheel, {'name': 'other', 'version': '1'})
 
 
-def test_all_host_profiles_have_pinned_marker_closure_and_matching_wheel_tags():
+def test_all_host_profiles_have_pinned_python_and_marker_closure():
     from packaging.requirements import Requirement
     from packaging.specifiers import SpecifierSet
     from packaging.utils import canonicalize_name
@@ -335,7 +340,8 @@ def test_all_host_profiles_have_pinned_marker_closure_and_matching_wheel_tags():
                        'platform_machine': machine, 'platform_python_implementation': 'CPython',
                        'implementation_name': 'cpython', 'os_name': 'nt' if system == 'windows' else 'posix', 'extra': ''}
         selected = {manifest['wheels'][filename]['name'] for filename in declaration['wheels']}
-        assert selected == set(manifest['pins'])
+        expected = set(manifest['pins']) - ({'pypandoc-binary'} if system == 'macos' else set())
+        assert selected == expected
         for filename in declaration['wheels']:
             wheel = manifest['wheels'][filename]
             assert Version(version) in SpecifierSet(wheel['requires_python'] or '')
@@ -380,21 +386,27 @@ print(json.dumps({'ready':True,'closed':client.is_closed,'request_executed':Fals
     assert 'fixture_user' not in result.stdout and 'fixture_password' not in result.stdout
 
 
-def test_declared_proxy_dependency_lock_wheel_and_license_are_exact():
-    manifest = json.loads((SKILL / "dependency-manifest.json").read_bytes())
-    dependency = manifest["dependencies"]["socksio"]
+def test_declared_proxy_dependency_wheel_and_license_are_exact():
+    bootstrap = load_helper("prepare_host")
+    manifest = json.loads((SKILL / "host-dependencies.json").read_bytes())
+    declarations = [item for item in manifest["wheels"].values() if item["name"] in TRANSPORT]
+    assert len(declarations) == len(TRANSPORT) and {item["name"] for item in declarations} == TRANSPORT
+    dependencies = {item["name"]: item for item in declarations}
+    dependency = dependencies["socksio"]
+    assert dependency["version"] == manifest["pins"]["socksio"]
     raw = (SKILL / "wheelhouse" / dependency["filename"]).read_bytes()
     assert len(raw) == dependency["size"]
     assert hashlib.sha256(raw).hexdigest() == dependency["sha256"]
-    lock = (SCRIPTS / "cloud-dependencies.lock").read_text(encoding="utf-8")
-    assert re.search(r"^socksio==" + re.escape(dependency["version"]) + r" --hash=sha256:"
-                     + dependency["sha256"] + r"$", lock, flags=re.MULTILINE)
-    with zipfile.ZipFile(SKILL / "wheelhouse" / manifest["dependencies"]["httpx"]["filename"]) as archive:
+    receipt = bootstrap.wheel_receipt(SKILL / "wheelhouse" / dependency["filename"], dependency)
+    assert receipt["size"] == dependency["size"] and receipt["sha256"] == dependency["sha256"]
+    with zipfile.ZipFile(SKILL / "wheelhouse" / dependencies["httpx"]["filename"]) as archive:
         metadata_name = next(name for name in archive.namelist() if name.endswith(".dist-info/METADATA"))
         metadata = archive.read(metadata_name).decode()
     assert "Requires-Dist: socksio==1.*; extra == 'socks'" in metadata
     with zipfile.ZipFile(SKILL / "wheelhouse" / dependency["filename"]) as archive:
         metadata_name = next(name for name in archive.namelist() if name.endswith(".dist-info/METADATA"))
-        assert not re.findall(r"^Requires-Dist:", archive.read(metadata_name).decode(), flags=re.MULTILINE)
-        for name in dependency["license_files"]:
-            assert (SKILL / name).read_bytes() == archive.read("/".join(Path(name).parts[2:]))
+        metadata = archive.read(metadata_name)
+        assert not re.findall(r"^Requires-Dist:", metadata.decode(), flags=re.MULTILINE)
+        assert receipt["metadata_sha256"] == hashlib.sha256(metadata).hexdigest()
+        license_name = metadata_name.removesuffix("METADATA") + "LICENSE"
+        assert receipt["license_files"] == {license_name: hashlib.sha256(archive.read(license_name)).hexdigest()}

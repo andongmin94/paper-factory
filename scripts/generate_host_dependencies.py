@@ -30,6 +30,16 @@ PINS = {
     "soupsieve": "2.10",
 }
 NODE_VERSION = "24.21.0"
+PANDOC_VERSION = "3.9"
+PANDOC_COMMIT = "19c1f6552b12c70741674f509f8064ae506f29db"
+PANDOC_BINARIES = {
+    "arm64": (189626864, "140353e19f2518a76aa144ce90a7afcb6f485ba94d0dbe069e77c805277908c3"),
+    "x86_64": (119565632, "d7b1e75cd20ee6a788a1399492be07d4559949e18e55f34cfc5c91807fdfa90d"),
+}
+PANDOC_NOTICES = {
+    "COPYING.md": (17787, "9d56cac92294e206af026a5502bee0fed77200b08b51ec28aa63c9efda4dcfdd"),
+    "COPYRIGHT": (9598, "842e33ef01625e93f85bebb8bac83aa570186b7aa77a09971257cc29f8f60740"),
+}
 PLATFORMS = {
     "windows-x86_64": ["win_amd64"],
     "linux-x86_64": [f"manylinux_2_{i}_x86_64" for i in range(28, 16, -1)] + ["manylinux2014_x86_64"],
@@ -41,6 +51,35 @@ PLATFORMS = {
 def fetch(url):
     with urllib.request.urlopen(url, timeout=60) as response:
         return response.read(8 * 1024 * 1024 + 1)
+
+
+def pandoc_declarations():
+    release_url = f"https://api.github.com/repos/jgm/pandoc/releases/tags/{PANDOC_VERSION}"
+    raw = fetch(release_url)
+    release = json.loads(raw)
+    if release['tag_name'] != PANDOC_VERSION:
+        raise ValueError("Official Pandoc release differs from the reviewed version")
+    licenses = {}
+    for name, (size, expected) in PANDOC_NOTICES.items():
+        path = "licenses/pandoc/" + name
+        original = (ROOT / "skills/paper-factory" / path).read_bytes()
+        if len(original) != size or hashlib.sha256(original).hexdigest() != expected:
+            raise ValueError("Reviewed original Pandoc upstream notice changed")
+        licenses[path] = {"size": size, "sha256": expected,
+                          "source_url": f"https://raw.githubusercontent.com/jgm/pandoc/{PANDOC_COMMIT}/{name}"}
+    result = {}
+    for machine, (size, expected) in PANDOC_BINARIES.items():
+        filename = f"pandoc-{PANDOC_VERSION}-{machine}-macOS.zip"
+        asset = next(item for item in release['assets'] if item['name'] == filename)
+        url = f"https://github.com/jgm/pandoc/releases/download/{PANDOC_VERSION}/{filename}"
+        if asset['browser_download_url'] != url or not asset['digest'].startswith('sha256:'):
+            raise ValueError("Official Pandoc asset lacks the reviewed origin or digest")
+        result['macos-' + machine] = {"version": PANDOC_VERSION, "filename": filename, "url": url,
+            "size": asset['size'], "sha256": asset['digest'][7:], "release_url": release_url,
+            "release_sha256": hashlib.sha256(raw).hexdigest(), "source_commit": PANDOC_COMMIT,
+            "binary": {"member": f"pandoc-{PANDOC_VERSION}-{machine}/bin/pandoc", "size": size, "sha256": expected},
+            "licenses": licenses}
+    return result
 
 
 def generate():
@@ -66,6 +105,10 @@ def generate():
                                platform_machine=system.split('-')[1], implementation_name="cpython",
                                platform_python_implementation="CPython", os_name="nt" if system.startswith("windows") else "posix")
             for name, (release, url, metadata_hash) in releases.items():
+                # The upstream macOS wheel omits notices, and its arm64 tag
+                # contains an Intel binary. Use reviewed native official assets.
+                if system.startswith('macos-') and name == 'pypandoc-binary':
+                    continue
                 candidates = []
                 for artifact in release["urls"]:
                     if artifact["packagetype"] != "bdist_wheel" or artifact.get("yanked"):
@@ -108,6 +151,7 @@ def generate():
                         "max_bytes": 100 * 1024 * 1024}
     return {"schema": 1, "scope": "Private host preparation; platform execution readiness is checked separately.",
             "pins": PINS, "profiles": profiles, "wheels": dict(sorted(wheels.items())), "node": node,
+            "pandoc": pandoc_declarations(),
             "network_policy": "Only manifest-pinned official artifact URLs; inherited proxy/certificate settings.",
             "python_required": "An existing host CPython3.12,3.13 or3.14 with script/subprocess access. No OS installer is invoked."}
 

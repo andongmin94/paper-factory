@@ -124,9 +124,13 @@ def host_profile():
     return f'{system}-{machine}-cp3{sys.version_info.minor}', f'{system}-{machine}'
 
 
-def artifact_url(url):
+def artifact_url(url, *, redirect=False):
     parsed = urllib.parse.urlsplit(url)
-    if (parsed.scheme != 'https' or parsed.hostname not in {'files.pythonhosted.org', 'nodejs.org'}
+    origin = parsed.hostname in {'files.pythonhosted.org', 'nodejs.org'}
+    pandoc = parsed.hostname == 'github.com' and re.fullmatch(
+        r'/jgm/pandoc/releases/download/[0-9.]+/pandoc-[0-9.]+-(?:arm64|x86_64)-macOS\.zip', parsed.path)
+    relay = redirect and parsed.hostname == 'release-assets.githubusercontent.com'
+    if (parsed.scheme != 'https' or not (origin or pandoc or relay)
             or parsed.username or parsed.password or parsed.port is not None or parsed.fragment):
         raise ValueError('Dependency URL is outside the pinned official artifact origins')
     return url
@@ -170,7 +174,7 @@ def download_transport(data, manifest, profile):
         raise ValueError('Prepare the pinned transport in a fresh helper process')
     sys.path.insert(0, str(target))
     import httpx
-    return httpx.Client(trust_env=True, timeout=60, follow_redirects=True)
+    return httpx.Client(trust_env=True, timeout=60, follow_redirects=False)
 
 
 def artifact(cache, record, *, client=None):
@@ -205,15 +209,24 @@ def artifact(cache, record, *, client=None):
         else:
             if client is None:
                 raise ValueError('A verified inherited-proxy transport is required for dependency downloads')
-            with client.stream('GET', artifact_url(record['url'])) as response:
-                response.raise_for_status()
-                artifact_url(str(response.url))
-                total = 0
-                for chunk in response.iter_bytes(1024 * 1024):
-                    total += len(chunk)
-                    if total > limit:
-                        raise ValueError('Dependency response exceeds its pinned size bound')
-                    output.write(chunk)
+            url = artifact_url(record['url'])
+            pandoc_redirect = urllib.parse.urlsplit(url).hostname == 'github.com'
+            for hop in range(4):
+                with client.stream('GET', url, follow_redirects=False) as response:
+                    if response.status_code in {301, 302, 303, 307, 308}:
+                        if hop == 3 or 'location' not in response.headers:
+                            raise ValueError('Official artifact redirect exceeds its bounded policy')
+                        # Check the next origin before sending the next request.
+                        url = artifact_url(urllib.parse.urljoin(url, response.headers['location']), redirect=pandoc_redirect)
+                        continue
+                    response.raise_for_status()
+                    total = 0
+                    for chunk in response.iter_bytes(1024 * 1024):
+                        total += len(chunk)
+                        if total > limit:
+                            raise ValueError('Dependency response exceeds its pinned size bound')
+                        output.write(chunk)
+                    break
     if digest(partial) != expected or ('size' in record and partial.stat().st_size != record['size']):
         raise ValueError('Official dependency bytes differ from the pinned digest/size')
     partial.rename(target)
@@ -276,6 +289,49 @@ def prepare_node(archive, destination, family):
         if name == basename:
             output.chmod(0o700)
     return destination / basename
+
+
+def prepare_macos_pandoc(archive, destination, record, family):
+    """Extract the pinned native binary and retain original upstream notices."""
+    destination.mkdir()
+    binary = record['binary']
+    expected_cpu = {'macos-arm64': 0x0100000c, 'macos-x86_64': 0x01000007}[family]
+    with zipfile.ZipFile(archive) as bundle:
+        if bundle.testzip() or len(bundle.namelist()) != len(set(bundle.namelist())):
+            raise ValueError('Pandoc archive CRC or unique member check failed')
+        name = binary['member']
+        if (PurePosixPath(name).is_absolute() or '\\' in name or ':' in name
+                or any(p in {'', '.', '..'} for p in name.split('/'))):
+            raise ValueError('Invalid pinned Pandoc binary member')
+        info = bundle.getinfo(name)
+        if (info.is_dir() or stat.S_ISLNK(info.external_attr >> 16)
+                or info.file_size != binary['size'] or info.file_size > MAX_EXECUTABLE):
+            raise ValueError('Pandoc binary is not the bounded pinned ordinary file')
+        output = destination / 'pandoc'
+        with bundle.open(info) as source, output.open('xb') as target:
+            shutil.copyfileobj(source, target, length=1024 * 1024)
+    if output.stat().st_size != binary['size'] or digest(output) != binary['sha256']:
+        raise ValueError('Pandoc binary differs from the reviewed original bytes')
+    with output.open('rb') as stream:
+        header = stream.read(8)
+    if header[:4] != b'\xcf\xfa\xed\xfe' or int.from_bytes(header[4:8], 'little') != expected_cpu:
+        raise ValueError('Pandoc Mach-O architecture differs from the actual macOS host')
+    licenses = {}
+    if set(record['licenses']) != {'licenses/pandoc/COPYING.md', 'licenses/pandoc/COPYRIGHT'}:
+        raise ValueError('Pandoc original upstream notices are incomplete')
+    for name, declaration in record['licenses'].items():
+        source = ordinary(ROOT / name)
+        if source.stat().st_size != declaration['size'] or digest(source) != declaration['sha256']:
+            raise ValueError('Pandoc original upstream notice bytes changed')
+        target = destination / PurePosixPath(name).name
+        with target.open('xb') as stream:
+            stream.write(source.read_bytes())
+        licenses[name] = {'size': target.stat().st_size, 'sha256': digest(target),
+                          'source_url': declaration['source_url']}
+    output.chmod(0o700)
+    return output, {'version': record['version'], 'archive': archive.name,
+                    'archive_size': archive.stat().st_size, 'archive_sha256': digest(archive),
+                    'binary': binary, 'licenses': licenses}
 
 
 def run(command, *, environment=None, timeout=180):
@@ -403,6 +459,13 @@ def prepare_private(data):
         report['node_asset'] = {'version': node_record['version'], 'archive': node_archive.name,
                               'archive_sha256': digest(node_archive), 'archive_size': node_archive.stat().st_size,
                               'executable_sha256': digest(node), 'license_sha256': digest(node.parent / 'LICENSE')}
+        pandoc = None
+        if family.startswith('macos-'):
+            pandoc_record = manifest['pandoc'][family]
+            report.update(stage='pandoc-prepare', current_artifact=pandoc_record['filename'])
+            pandoc_archive, downloaded = artifact(cache, pandoc_record, client=client)
+            report['dependency_downloads'] += int(downloaded)
+            pandoc, report['pandoc_asset'] = prepare_macos_pandoc(pandoc_archive, data / 'pandoc', pandoc_record, family)
         target = data / 'runtime'
         report['stage'] = 'private-venv'
         venv.EnvBuilder(system_site_packages=False, with_pip=True, symlinks=False).create(target)
@@ -416,8 +479,9 @@ def prepare_private(data):
         report['steps'].append({'action': 'private-wheel-install', **install})
         if install['exit_code'] != 0:
             raise ValueError(install['error'])
-        pandoc = target / ('Lib/site-packages/pypandoc/files/pandoc.exe' if family.startswith('windows')
-                           else f'lib/python3.{sys.version_info.minor}/site-packages/pypandoc/files/pandoc')
+        if pandoc is None:
+            pandoc = target / ('Lib/site-packages/pypandoc/files/pandoc.exe' if family.startswith('windows')
+                               else f'lib/python3.{sys.version_info.minor}/site-packages/pypandoc/files/pandoc')
         ordinary(pandoc)
         environment['PYPANDOC_PANDOC'] = str(pandoc)
         info = checked_json(run([str(python), '-c', 'import json,sys;print(json.dumps({"prefix":sys.prefix}))'], environment=environment))

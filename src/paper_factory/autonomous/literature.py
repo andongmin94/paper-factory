@@ -144,9 +144,9 @@ def _save(root: Path, prefix: str, suffix: str, content: bytes) -> tuple[str, st
     digest = hashlib.sha256(content).hexdigest()
     relative = f"literature/{prefix}-{digest[:16]}.{suffix}"
     path = root / relative
-    # Recheck directories in case a prepared output path was replaced by a link.
-    ensure_unlinked(path.parent)
-    # Exclusive creation and NOFOLLOW keep an existing symlink from being followed.
+    # Check the final component too: Windows os.open has no O_NOFOLLOW.
+    ensure_unlinked(path)
+    # POSIX NOFOLLOW additionally guards the final component during creation.
     try:
         descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
     except FileExistsError:

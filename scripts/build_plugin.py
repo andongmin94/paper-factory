@@ -21,7 +21,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 SKILL = "skills/paper-factory/"
 MAX_PACKAGE_BYTES = 100 * 1024 * 1024
-HOST_DEPENDENCIES_SHA256 = "c8a26e303e63676bd37283521a690f04bbd5e1c62545b61a58d6b4c29df572d6"
+HOST_DEPENDENCIES_SHA256 = "1ad1145cca20dc66784b9b96d5d4438153fe1427f9daf63d444bd097bd8ff9ed"
 TRANSPORT = {"httpx", "httpcore", "h11", "anyio", "idna", "certifi", "typing-extensions", "socksio"}
 CORE = (
     "__init__.py", "author.py", "models.py", "workspace.py", "project.py", "conversion.py",
@@ -152,8 +152,9 @@ def inputs(root: Path) -> tuple[dict[str, bytes], dict[Path, str], dict]:
     manifest = json.loads(manifest_raw)
     if manifest.get("schema") != 1 or len(manifest["profiles"]) != 12:
         raise ValueError("Host dependency profiles differ from the reviewed release")
-    for profile in manifest["profiles"].values():
-        if {manifest["wheels"][name]["name"] for name in profile["wheels"]} != set(manifest["pins"]):
+    for name, profile in manifest["profiles"].items():
+        expected = set(manifest["pins"]) - ({'pypandoc-binary'} if name.startswith('macos-') else set())
+        if {manifest["wheels"][name]["name"] for name in profile["wheels"]} != expected:
             raise ValueError("Host profile omits a declared dependency")
     for filename, dependency in manifest["wheels"].items():
         safe_name(filename)
@@ -162,6 +163,33 @@ def inputs(root: Path) -> tuple[dict[str, bytes], dict[Path, str], dict]:
                 or not re.fullmatch("[0-9a-f]{64}", dependency["sha256"]) or dependency["size"] > MAX_PACKAGE_BYTES):
             raise ValueError("Host dependency declaration differs from its reviewed artifact")
     add(SKILL + "host-dependencies.json", manifest_raw, skill / "host-dependencies.json")
+    if set(manifest['pandoc']) != {'macos-arm64', 'macos-x86_64'}:
+        raise ValueError('The reviewed native macOS Pandoc assets are incomplete')
+    notices = {}
+    for family, asset in manifest['pandoc'].items():
+        machine = family.removeprefix('macos-')
+        pandoc_version = asset['version']
+        filename = f'pandoc-{pandoc_version}-{machine}-macOS.zip'
+        if (not re.fullmatch('[0-9.]+', pandoc_version) or asset['filename'] != filename
+                or asset['url'] != f'https://github.com/jgm/pandoc/releases/download/{pandoc_version}/{filename}'
+                or not re.fullmatch('[0-9a-f]{64}', asset['sha256']) or not 0 < asset['size'] <= MAX_PACKAGE_BYTES
+                or asset['binary']['member'] != f'pandoc-{pandoc_version}-{machine}/bin/pandoc'
+                or not re.fullmatch('[0-9a-f]{64}', asset['binary']['sha256'])
+                or not 0 < asset['binary']['size'] <= 256 * 1024 * 1024
+                or not re.fullmatch('[0-9a-f]{40}', asset['source_commit'])
+                or set(asset['licenses']) != {'licenses/pandoc/COPYING.md', 'licenses/pandoc/COPYRIGHT'}):
+            raise ValueError('Native Pandoc declaration differs from the reviewed artifact')
+        for name, declaration in asset['licenses'].items():
+            if declaration['source_url'] != f'https://raw.githubusercontent.com/jgm/pandoc/{asset["source_commit"]}/{PurePosixPath(name).name}':
+                raise ValueError('Pandoc upstream notice lacks immutable original provenance')
+            raw = regular(skill / name)
+            if len(raw) != declaration['size'] or digest(raw) != declaration['sha256']:
+                raise ValueError('Pandoc original upstream notice differs from its reviewed bytes')
+            if name in notices and notices[name] != raw:
+                raise ValueError('Pandoc native profiles disagree on their original notice bytes')
+            notices[name] = raw
+    for name, raw in notices.items():
+        add(SKILL + name, raw, skill / name)
     transport = {name: dependency for name, dependency in manifest["wheels"].items() if dependency["name"] in TRANSPORT}
     if {dependency["name"] for dependency in transport.values()} != TRANSPORT or len(transport) != len(TRANSPORT):
         raise ValueError("Bootstrap transport must be one complete portable pure-wheel closure")
