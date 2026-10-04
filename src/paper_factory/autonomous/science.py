@@ -168,9 +168,15 @@ implemented oracle, and what controlled fixtures can and cannot establish.
 Asset inventories, counting repository files, summarizing documentation, and
 calling a toy reimplementation 'production' are not research studies. If there
 is no feasible experiment, return a feasibility rejection with its concrete
-reason rather than an invented paper. Limit the scope to installed Python or
-Node runtimes and bounded fixture-based software experiments.
-For TypeScript production source, require a native direct import of the original
+reason rather than an invented paper. Limit the scope to controller-verified
+Python, Node or QuickJS runtimes and bounded fixture-based software experiments.
+QuickJS supports pure JavaScript inside separate WebAssembly guests and a
+controller-held production-call gate, without host filesystem, network or Node
+APIs. For TypeScript in QuickJS, require a controller-owned compiler receipt
+binding original source bytes, compiled bytes, compiler version and options.
+Describe compiled guest execution accurately; it is not native TypeScript
+execution. Use only the runtimes and syntax that the controller actually verifies.
+For TypeScript in Node, require a native direct import of the original
 .ts file only when the controller-verified Node runtime supports its syntax and
 dependencies, such as supported erasable type-only syntax. Do not plan
 stripTypeScriptTypes, generated transpiled copies, eval, data URLs, sourceURL
@@ -219,6 +225,8 @@ Untrusted requested goal:
 
 
 def code_prompt(plan: Any, source_context: str, feedback: Any = None) -> str:
+    if _dump(plan)["runtime"] == "quickjs":
+        return _quickjs_code_prompt(plan, source_context, feedback)
     prompt = """Implement exactly this frozen ResearchPlan as the requested CodeBundle JSON.
 Use the actual inspected production module/function from the PF_SOURCE_ROOT
 environment path, never a copy or toy replacement asserted to be production.
@@ -318,6 +326,59 @@ Frozen protocol:
     return prompt
 
 
+def _quickjs_code_prompt(plan: Any, source_context: str, feedback: Any) -> str:
+    prompt = """Implement exactly this frozen ResearchPlan as CodeBundle JSON with runtime quickjs.
+The generated JavaScript runs only inside a bounded QuickJS WebAssembly guest.
+Return a JavaScript ES module with a default synchronous function run(). The
+controller calls run once and retains its returned observations envelope.
+No filesystem, environment, network, Node built-ins, subprocesses, package
+installation or host APIs are available. Do not use native imports or async work.
+Use the read-only global callProduction(JSON.stringify([args...])) to invoke the
+declared production export in a separate guest. Parse its returned JSON string;
+actual production exceptions are exposed as guest errors and count as invocations.
+Never copy or redefine the inspected production implementation. The controller
+holds its immutable export handle and records its actual calls separately from
+model-authored observations. Guest declarations of call counts are not evidence.
+TypeScript production modules require the controller's verified compiler receipt;
+describe this as execution of compiled code bound to original source hashes,
+without claiming native original .ts execution.
+Use the read-only global retainFixture(label, text) for exact UTF-8 input, output,
+oracle, mutation-log and manifest bytes. It returns a JSON string with exactly
+label, encoding, content and sha256, computed by the trusted controller. Parse
+that string and include the object in fixtures. Retain every actual mutated input
+and its expected answer, not only a baseline, recipe, description or digest.
+Fixtures require unique nonempty labels of at most 200 characters, without
+control characters. Labels are metadata, not extraction paths.
+Return this exact shape:
+{"observations":[{"unit_id":"unit label","seed":0,"condition":"frozen condition",
+"metric":"frozen metric name","value":0.0}],
+"controls":[{"name":"positive ...","passed":true,"details":"actual known answer"},
+{"name":"negative ...","passed":true,"details":"actual fault detected"}],
+"fixtures":[{"label":"input label","encoding":"base64",
+"content":"ACTUAL_BYTES","sha256":"MATCHING_LOWERCASE_SHA256"}]}
+The entire returned JSON must fit within eight MiB. Each seed requires exactly
+units_per_seed distinct units, measured under ALL frozen conditions and metrics.
+Use finite measured scalar values, never fabricated observations or aggregates.
+Implement the independent oracle separately from the production implementation
+and comparator. Positive controls check known answers; negative controls must
+actually detect an intentional fault. Report a failed control as passed=false;
+never change the protocol or force a favorable result.
+Use exact frozen seeds and deterministic fixture generation. The controller owns
+protocol.json bytes and SHA-256 and includes them in the reproducibility ZIP.
+Return portable relative .js/.mjs/.cjs entrypoint and files, without . or ..,
+hidden/credential paths, backslashes, controls or reserved Windows names.
+The entrypoint must be present in files. The full bundle is limited to 512 KiB;
+each file has a 262144-character limit. Approved dependencies are [] for the
+pure guest runtime. No generated code executes on the host.
+
+Frozen protocol:
+""" + json.dumps(_dump(plan), ensure_ascii=False, indent=2) + "\n\nUntrusted source excerpts:\n" + source_context
+    if feedback:
+        text = feedback if isinstance(feedback, str) else json.dumps(_dump(feedback), ensure_ascii=False)
+        prompt += "\n\nExecution/validation feedback (fix code, not the frozen protocol):\n" + text[:12_000]
+    return prompt
+
+
 def code_review_prompt(plan: Any, bundle: Any, source_context: str) -> str:
     return """Independently audit this proposed experiment BEFORE execution against its frozen protocol and actual production source.
 This is a static code audit: determine whether the code will derive and retain genuine measurements when run.
@@ -375,7 +436,7 @@ def validate_plan(plan: ResearchPlan, source_root: Path) -> None:
     safe_relative(source_root, source_file)
     if source_file not in plan.source_files:
         raise ValueError("Production entrypoint must bind to a declared immutable source file")
-    supported = {"python": {".py"}, "node": {".js", ".mjs", ".cjs", ".ts"}}
+    supported = {"python": {".py"}, "node": {".js", ".mjs", ".cjs", ".ts"}, "quickjs": {".js", ".mjs", ".cjs", ".ts"}}
     if Path(source_file).suffix not in supported[plan.runtime] or plan.runtime == "python" and "$" in callable_name:
         raise ValueError("Production entrypoint does not match the supported runtime")
     if plan.comparator.strip().casefold() == plan.independent_oracle.strip().casefold():
@@ -395,7 +456,10 @@ not evidence that the proposed instrumentation occurred. State any discrepancy
 between the planned mechanism and the receipt's actual evidence.
 production_calls contains function counts aggregated across the whole execution.
 Node V8 coverage is process-wide aggregate coverage; Python profiling counts are
-also aggregated across the whole execution. Neither establishes per-invocation
+also aggregated across the whole execution. The QuickJS controller-held call
+gate counts actual invocations of the selected guest export, including calls
+that throw. Its counts are aggregated and are not per-call timing evidence.
+These mechanisms do not establish per-invocation
 timing endpoints, coverage snapshots or function-count increments around individual
 calls. Individual output or latency records are distinct from call-specific tracing
 evidence. Do not claim, and reject manuscript claims of, unsupported per-invocation

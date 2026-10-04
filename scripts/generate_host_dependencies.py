@@ -1,0 +1,122 @@
+"""Resolve reviewed release pins to official platform wheels, without installing.
+
+Run this maintainer command when intentionally updating host dependencies. The
+generated manifest is the only download catalog used by prepare_host.py.
+"""
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import urllib.request
+
+from packaging.markers import default_environment
+from packaging.requirements import Requirement
+from packaging.tags import compatible_tags, cpython_tags, mac_platforms
+from packaging.utils import canonicalize_name, parse_wheel_filename
+from packaging.version import Version
+
+ROOT = Path(__file__).resolve().parents[1]
+PINS = {
+    "pydantic": "2.13.5", "pydantic-core": "2.46.5", "annotated-types": "0.8.0",
+    "typing-inspection": "0.4.4", "typing-extensions": "4.16.0",
+    "numpy": "2.5.3", "matplotlib": "3.11.2", "contourpy": "1.4.0",
+    "cycler": "0.12.1", "fonttools": "4.66.1", "kiwisolver": "1.5.1",
+    "packaging": "26.3", "pillow": "12.3.0", "pyparsing": "3.3.3",
+    "python-dateutil": "2.9.0.post0", "six": "1.17.0", "pypdf": "6.19.0",
+    "python-docx": "1.2.0", "lxml": "6.1.3", "typst": "0.15.0",
+    "pypandoc-binary": "1.17", "httpx": "0.28.1", "httpcore": "1.0.9",
+    "anyio": "4.15.1", "certifi": "2026.7.22", "h11": "0.16.0",
+    "idna": "3.20", "socksio": "1.0.0", "beautifulsoup4": "4.15.0",
+    "soupsieve": "2.10",
+}
+NODE_VERSION = "24.21.0"
+PLATFORMS = {
+    "windows-x86_64": ["win_amd64"],
+    "linux-x86_64": [f"manylinux_2_{i}_x86_64" for i in range(28, 16, -1)] + ["manylinux2014_x86_64"],
+    "macos-x86_64": list(mac_platforms((14, 0), "x86_64")),
+    "macos-arm64": list(mac_platforms((14, 0), "arm64")),
+}
+
+
+def fetch(url):
+    with urllib.request.urlopen(url, timeout=60) as response:
+        return response.read(8 * 1024 * 1024 + 1)
+
+
+def generate():
+    releases = {}
+    for name, version in PINS.items():
+        url = f"https://pypi.org/pypi/{name}/{version}/json"
+        raw = fetch(url)
+        if len(raw) > 8 * 1024 * 1024:
+            raise ValueError("Unexpected PyPI metadata size")
+        releases[name] = (json.loads(raw), url, hashlib.sha256(raw).hexdigest())
+    wheels, profiles = {}, {}
+    for system, platforms in PLATFORMS.items():
+        for minor in (12, 13, 14):
+            version = (3, minor)
+            tags = list(cpython_tags(version, abis=[f"cp3{minor}"], platforms=platforms))
+            tags += list(compatible_tags(version, interpreter=f"cp3{minor}", platforms=platforms))
+            rank = {tag: i for i, tag in reversed(list(enumerate(tags)))}
+            selected = []
+            environment = default_environment()
+            environment.update(python_version=f"3.{minor}", python_full_version=f"3.{minor}.0", extra="",
+                               sys_platform={"windows": "win32", "linux": "linux", "macos": "darwin"}[system.split('-')[0]],
+                               platform_system={"windows": "Windows", "linux": "Linux", "macos": "Darwin"}[system.split('-')[0]],
+                               platform_machine=system.split('-')[1], implementation_name="cpython",
+                               platform_python_implementation="CPython", os_name="nt" if system.startswith("windows") else "posix")
+            for name, (release, url, metadata_hash) in releases.items():
+                candidates = []
+                for artifact in release["urls"]:
+                    if artifact["packagetype"] != "bdist_wheel" or artifact.get("yanked"):
+                        continue
+                    _, _, _, artifact_tags = parse_wheel_filename(artifact["filename"])
+                    compatible = [rank[tag] for tag in artifact_tags if tag in rank]
+                    if compatible:
+                        candidates.append((min(compatible), artifact["filename"], artifact))
+                if not candidates:
+                    raise ValueError(f"No official binary wheel for {name} on {system} CPython3.{minor}")
+                artifact = min(candidates)[2]
+                info = release["info"]
+                for declaration in info.get("requires_dist") or []:
+                    requirement = Requirement(declaration)
+                    if requirement.marker and not requirement.marker.evaluate(environment):
+                        continue
+                    dependency = canonicalize_name(requirement.name)
+                    if dependency not in PINS or Version(PINS[dependency]) not in requirement.specifier:
+                        raise ValueError(f"Unpinned dependency for {name}/{system}/3.{minor}: {declaration}")
+                filename = artifact["filename"]
+                wheels[filename] = {"name": name, "version": PINS[name], "filename": filename,
+                                    "url": artifact["url"], "size": artifact["size"],
+                                    "sha256": artifact["digests"]["sha256"], "release_url": url,
+                                    "release_sha256": metadata_hash,
+                                    "license": info.get("license_expression") or info.get("license"),
+                                    "requires_python": artifact.get("requires_python"),
+                                    "requires_dist": info.get("requires_dist") or []}
+                selected.append(filename)
+            profiles[f"{system}-cp3{minor}"] = {"wheels": sorted(selected), "actual_host_tested": False}
+    node_base = f"https://nodejs.org/dist/v{NODE_VERSION}/"
+    checksum_raw = fetch(node_base + "SHASUMS256.txt")
+    checksums = dict((line.split()[1], line.split()[0]) for line in checksum_raw.decode("ascii").splitlines())
+    node = {}
+    for system, suffix in {"windows-x86_64": "win-x64.zip", "linux-x86_64": "linux-x64.tar.xz",
+                           "macos-x86_64": "darwin-x64.tar.xz", "macos-arm64": "darwin-arm64.tar.xz"}.items():
+        filename = f"node-v{NODE_VERSION}-{suffix}"
+        node[system] = {"version": NODE_VERSION, "filename": filename, "url": node_base + filename,
+                        "sha256": checksums[filename], "checksum_url": node_base + "SHASUMS256.txt",
+                        "checksum_file_sha256": hashlib.sha256(checksum_raw).hexdigest(),
+                        "max_bytes": 100 * 1024 * 1024}
+    return {"schema": 1, "scope": "Private host preparation; platform execution readiness is checked separately.",
+            "pins": PINS, "profiles": profiles, "wheels": dict(sorted(wheels.items())), "node": node,
+            "network_policy": "Only manifest-pinned official artifact URLs; inherited proxy/certificate settings.",
+            "python_required": "An existing host CPython3.12,3.13 or3.14 with script/subprocess access. No OS installer is invoked."}
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output", type=Path, default=ROOT / "skills/paper-factory/host-dependencies.json")
+    args = parser.parse_args()
+    result = generate()
+    args.output.write_text(json.dumps(result, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+    print(json.dumps({"output": str(args.output), "profiles": len(result["profiles"]),
+                      "wheels": len(result["wheels"]), "sha256": hashlib.sha256(args.output.read_bytes()).hexdigest()}))

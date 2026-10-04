@@ -1,0 +1,71 @@
+name: Plugin verification
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos-private-plugin:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            machine: arm64
+            architecture: arm64
+          - os: macos-15-intel
+            machine: x86_64
+            architecture: x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+          architecture: ${{ matrix.architecture }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          architecture: ${{ matrix.architecture }}
+          package-manager-cache: false
+      - name: Install existing test and document dependencies
+        run: python -m pip install -e ".[dev,pdf,research,automation]" -r scripts/research-runtime-requirements.txt
+      - name: Verify exact plugin, private host and native macOS lifecycle
+        run: >-
+          python scripts/ci_verify_plugin.py
+          --expected-machine ${{ matrix.machine }}
+          --data "${{ runner.temp }}/paper-factory-plugin-verification"
+      - name: Retain successful exact plugin distribution
+        if: success()
+        id: distribution
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: paper-factory-plugin-${{ matrix.machine }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/paper-factory-plugin-verification/distribution/paper-factory-*.zip
+            ${{ runner.temp }}/paper-factory-plugin-verification/distribution/build-report.json
+            ${{ runner.temp }}/paper-factory-plugin-verification/distribution/verification.json
+          archive: true
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+          overwrite: false
+          include-hidden-files: false
+      - name: Retain bounded verification diagnostics separately
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: paper-factory-diagnostics-${{ matrix.machine }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/paper-factory-plugin-verification/diagnostics/
+          archive: true
+          if-no-files-found: warn
+          retention-days: 14
+          overwrite: false
+          include-hidden-files: false

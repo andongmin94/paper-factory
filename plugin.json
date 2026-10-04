@@ -1,0 +1,11 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "paper-factory",
+  "version": "0.12.0",
+  "description": "Research workflow preview with explicit private or provided host preparation, bounded QuickJS experiments and verified paper exports. Actual host readiness, resource delivery and research results must be checked.",
+  "skills": "./skills/",
+  "author": { "name": "Andongmin", "url": "https://github.com/andongmin94" },
+  "repository": "https://github.com/andongmin94/paper-factory",
+  "license": "MIT",
+  "keywords": ["research", "experiments", "manuscript", "reproducibility"]
+}

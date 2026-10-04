@@ -1,1 +1,1 @@
-"""Durable, evidence-grounded research driven by an authenticated official CLI."""
+"""Scientific validation, literature and isolated local experiment runtimes."""

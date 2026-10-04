@@ -10,3 +10,4 @@ build/
 dist/
 .paper-factory/
 .pf-smoke/
+/desktop/

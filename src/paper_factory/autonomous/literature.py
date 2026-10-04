@@ -13,10 +13,12 @@ import ipaddress
 import json
 import os
 import re
+import signal
 import socket
 import subprocess
 import sys
 import sysconfig
+import time
 from pathlib import Path
 from typing import Callable
 from urllib.parse import quote, urljoin, urlsplit
@@ -206,9 +208,49 @@ def _extract_pdf(content: bytes) -> str:
     return combined
 
 
+def _stop_pdf_process(process: subprocess.Popen) -> bool:
+    """Confirm termination of the PDF worker's owned job or process group."""
+    try:
+        if os.name == "nt":
+            job = getattr(process, "_paper_factory_job", None)
+            if job is None or not job.stop():
+                return False
+            process.wait(timeout=5)
+            return True
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait(timeout=5)
+        deadline = time.monotonic() + 1
+        while True:
+            if Path("/proc").is_dir():
+                running = False
+                for entry in Path("/proc").glob("[0-9]*/stat"):
+                    try:
+                        fields = entry.read_text().rsplit(")", 1)[1].split()
+                        if int(fields[2]) == process.pid and fields[0] not in {"Z", "X"}:
+                            running = True
+                            break
+                    except (OSError, ValueError, IndexError):
+                        continue
+            else:
+                try:
+                    os.killpg(process.pid, 0)
+                    running = True
+                except ProcessLookupError:
+                    running = False
+            if not running:
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.02)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 def _pdf_text(content: bytes) -> str:
     """Parse untrusted PDFs in a resource-limited child with no inherited secrets."""
-    from .provider import _try_stop
 
     if not content.startswith(b"%PDF-"):
         raise ValueError("Open-access response is not a PDF document")
@@ -269,7 +311,7 @@ except Exception:
                     process.wait(timeout=5)
                     cleanup_confirmed = job.stop()
                 else:
-                    cleanup_confirmed = _try_stop(process)
+                    cleanup_confirmed = _stop_pdf_process(process)
                 for stream in (process.stdin, process.stdout):
                     if stream is not None:
                         stream.close()

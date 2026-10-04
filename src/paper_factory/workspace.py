@@ -1,5 +1,6 @@
 """Small SQLite record store and workspace-local artifacts; no source writes."""
 
+import errno
 import hashlib
 import json
 import math
@@ -32,6 +33,40 @@ def ensure_unlinked(path: Path) -> None:
     absolute = path.absolute()
     if any(is_link(component) for component in (absolute, *absolute.parents)):
         raise ValueError("Artifact paths must not traverse symlinks or junctions")
+
+
+@contextmanager
+def file_lock(path: Path):
+    """Fail fast on concurrent owners; the OS releases the lease on exit."""
+    ensure_unlinked(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+b") as stream:
+        metadata = os.fstat(stream.fileno())
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise ValueError("Lease must be an ordinary, unlinked file")
+        # A byte-range lock may extend past EOF; initializing it can race with
+        # another Windows handle already locking that region.
+        stream.seek(0)
+        try:
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            contention = {errno.EACCES} if os.name == "nt" else {errno.EAGAIN, errno.EWOULDBLOCK}
+            if exc.errno not in contention:
+                raise
+            raise ValueError(f"Another operation is already running for {path.stem}") from None
+        try:
+            yield
+        finally:
+            stream.seek(0)
+            if os.name == "nt":
+                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
 
 def safe_relative(root: Path, relative: str) -> Path:
@@ -243,25 +278,5 @@ class Workspace:
     def lock(self, name: str):
         """Fail fast on concurrent study operations; OS releases locks on exit."""
         path = self.path(f"locks/{name}.lock")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a+b") as stream:
-            # Byte-range locks may extend past EOF. Initializing byte zero can
-            # race with another Windows handle already locking that region.
-            stream.seek(0)
-            try:
-                if os.name == "nt":
-                    import msvcrt
-                    msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
-                else:
-                    import fcntl
-                    fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except OSError:
-                raise ValueError(f"Another operation is already running for {name}") from None
-            try:
-                yield
-            finally:
-                stream.seek(0)
-                if os.name == "nt":
-                    msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
-                else:
-                    fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+        with file_lock(path):
+            yield

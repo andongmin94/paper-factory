@@ -1,0 +1,372 @@
+# Environment support goal
+
+The requested outcome is one Paper Factory plugin with the same research and
+export contract in Work Cloud, local Work/Codex on Windows and macOS, and ordinary
+ChatGPT Chat. Docker, WSL, operating-system feature changes and user-managed
+runtime installers are excluded. This goal started on 2026-10-04.
+
+The frozen 0.10.2 ZIP and its five completed Cloud studies are retained unchanged.
+The installed development release is frozen 0.11.0; current source development
+is 0.12.0 with explicit provided-host preparation. Installing a plugin does not
+itself establish any environment's execution support. This goal remains active.
+
+| Environment | Current observed result | Remaining proof |
+| --- | --- | --- |
+| Work Cloud | Five retained studies; installed 0.11.0 preparation/conversion/readiness regression passed | New source release regression before updating the working installation |
+| Windows local | New 0.11.0 study exported and all seven PDF pages reviewed; installed Codex 0.11.0 and corrected 0.12.0 preview readiness passed under approved host-tool permissions | Default retained-state access failed; new source release regression and installation remain distinct from these preview checks |
+| macOS local | Runtime/preparation implementation, native-only tests and Apple Silicon/Intel CI job added | Actual Mac/CI execution; no Mac host used here |
+| Ordinary Chat | Tiny and first-three-chunk original-byte transfer; native Files contracts checked; existing native PDF/DOCX/TeX converter diagnostic passed | Usable complete installed-package delivery, preparation and a full verified paper |
+
+## Work in progress
+
+1. Separate private host preparation from the shared JSON research controller.
+   Prepare complete platform dependencies and trusted runtime assets without
+   modifying the host interpreter, system PATH or installed plugin resources.
+2. Add Windows owned-worker termination/recovery and a macOS implementation.
+   Preserve the existing Linux behavior and bounded Wasm/source-call evidence.
+3. Establish ordinary Chat resource delivery using actual installed resources or
+   a verified distribution mechanism, without counting manual ZIP attachment as
+   plugin-install-only success. Test execution-space versions and permissions.
+4. Run Windows preparation, isolation/cleanup and a complete new paper export.
+   Validate the new package and regress the shared research/export behavior.
+5. Run ordinary Chat preparation and a complete paper export when its actual
+   resource delivery and tools permit it. Record concrete failures separately.
+6. Test macOS code/platform decisions here, then obtain actual macOS execution
+   evidence before calling macOS support verified. No Mac host is available in
+   this session at the start of this goal.
+
+## Completion evidence
+
+Retain exact commands, exit codes, runtime/dependency identities, original
+observations, cleanup receipts, reviews and verified delivered PDF bytes.
+Mocked platform tests are not macOS execution evidence. Converter diagnostics
+are not research papers. A manual attached package can test compatibility but
+does not establish automatic plugin resource delivery.
+
+Previous readiness observations are in
+`.paper-factory/portability-probe/2026-10-04/verification-summary.json`.
+
+## Retained increments on 2026-10-04
+
+- Windows actual QuickJS basic/Unicode/source separation and unavailable ambient
+  capabilities passed. Fresh readiness also exercised owned forced termination.
+- Actual Windows private preparation with the current HTTPX/SOCKS helper passed:
+  complete isolated dependencies, private Node 24.21.0, controller import, inherited
+  HTTPX initialization, and native PDF/DOCX/TeX converter diagnostics. The exact
+  development snapshot and results are retained under
+  `.paper-factory/host-preparation-0.11.0-current/`; this is not a research export.
+- The launcher verifies prepared Python/Node/Pandoc identities without changing
+  system PATH or inherited proxy/TLS settings. Host-context and conversion checks
+  passed 30 tests with actual document output verification.
+- macOS guardian code is implemented. Its platform tests and actual Mac execution
+  status remain separate; no Mac host has been used.
+- Ordinary Chat cannot read installed binary QuickJS/Typst resources through
+  `skills__read`. Direct container HTTPS requests failed DNS; the native remote
+  download broker rejected the exact wheel URL at its prior-web-view gate.
+- A separate installed private 0.0.1 transfer probe passed exact manifest/chunk,
+  decoded archive, original 1024-byte fixture and saved-file hashes in ordinary
+  Chat. It used a small opaque resource-text relay with stdlib data decoding,
+  without executing payload code or attaching a ZIP to the conversation. This
+  proves that small transfer only, not whole controller/runtime delivery.
+  Original evidence ZIP: 5298 bytes, SHA256
+  `14ea0841d009128da62b541ea5d3f16af424b93bd3bd59db74908f1c516c6327`,
+  retained in `.paper-factory/portability-implementation/2026-10-04/web-chat/`.
+  The original ordinary Chat transcript is retained privately with that evidence.
+
+- Final shared 0.11.0 ZIP is 1357197 bytes, SHA256
+  `11b3fb20c9eb61d12f56918176ed089738d22975cf5634302317e62e50dcd70c`.
+  Installed inventory SHA256 is
+  `d126e509dac16954657cea1f2d8334aa9da8ba13796cad8a7f5bbde3b82a777a`.
+  It was uploaded as a private new version; no public publication occurred.
+- Windows owned-worker and boundary tests passed 108/108; shared controller and
+  workflow tests passed 72/72. Independent instruction forward review found no
+  blocking interface contradiction. Actual Mac execution is still unobserved.
+- A new Windows Frontron study `research-73b2dea0df76` ran once and reached
+  analyzed with confirmed cleanup: 96 raw rows, 99 retained fixtures and 51
+  actual gate attempts. Two scientific controls passed. Manuscript review and
+  original export delivery are the next required stages; these observations do
+  not reuse earlier Cloud measurements.
+- The same new Windows study subsequently passed fresh independent manuscript
+  review and its first submit/export. Final state is completed/exported with one
+  execution, one code submission, one draft submission and confirmed cleanup.
+  All six actual exports and 29 command receipts were independently verified.
+  The delivered PDF is seven pages, 107690 bytes, SHA256
+  `0aeb00a31d888b2e3f2ff9140ce6745c6041a649582f3920dab816db1e3ba8cb`.
+  Every page was rendered with bundled Poppler and visually inspected without
+  changing the document or rerunning the study. The verified user-facing copy
+  is `output/pdf/frontron-command-option-validation-windows.pdf`; Word, TeX,
+  Markdown, validation and the original reproduction ZIP are under
+  `output/windows-study/`. The end-to-end receipt is
+  `.paper-factory/portability-implementation/2026-10-04/windows-study/windows-end-to-end-evidence.json`.
+- The exact new installed package also passed actual Work Cloud preparation,
+  private controller/import and PDF/DOCX/TeX converter diagnostics, then fresh
+  QuickJS readiness with confirmed cleanup and an empty final journal. No study
+  was executed in this regression check. Independent evidence review passed
+  with explicit limits: the outer distribution ZIP was not mounted there and
+  individual forced-kill receipts are not CLI outputs. Cloud evidence ZIP is
+  1728613 bytes, SHA256
+  `f47c61e9e2d8f4ea809f0bd115669eed456f2eab4a79adf6ffd83824d48401a3`.
+  The original Work Cloud transcript is retained privately with that evidence.
+- Ordinary Chat's existing HTTPX initialized with inherited policy but its one
+  official PyPI request failed with ConnectError. The official PyPI release
+  page was readable, but binary web-view rejected application/octet-stream.
+  No network policy change, dependency installation or study was performed.
+  Consolidated original evidence ZIP is 12303 bytes, SHA256
+  `5ab2f6e176367dabfeb24deba10eb914ab3369ba5498191b0119d8672bc49194`.
+- A separate private whole-package byte-transfer prototype contains every
+  original 0.11.0 ZIP byte in 111 hash-pinned text chunks (1809707 encoded bytes).
+  Local restoration verified all 46 original files and 41 inventory entries;
+  its actual ordinary Chat first-three-chunk pilot passed. Local full
+  restoration is not Chat whole delivery or execution evidence.
+- Whole-package transfer attempt 001 stopped at a JavaScript relay wrapper's
+  missing TextEncoder, before helper execution or any chunk request. The actual
+  manifest/helper resource reads returned, but original filesystem bytes were
+  not verified. This is a wrapper failure, not evidence of a resource gate
+  rejection or proof that a direct nested writer is unavailable. Its original
+  failure ZIP is 5176 bytes, SHA256
+  `b014afe200bede70dd89618b8e31012edf683cdb3bb928e9e689a5e0c53c33ac`.
+  A separately numbered attempt 002 tests a compatible original-text relay;
+  attempt 001 and its reported post-failure discovery deviation are preserved.
+- Attempt 002 verified the actual original manifest in ordinary Chat's execution
+  filesystem: 14320 bytes, SHA256
+  `c2d9a5a2b3880f6d1de61a4b2c24c5bcd949b2fa035dacbcf808550231a0a6e6`.
+  The next helper relay failed strict Base64 decoding with `Excess padding not
+  allowed`, exit 1, before helper execution or any chunk request. The original
+  failure ZIP is 12237 bytes, SHA256
+  `37c7e2e4877d30ea24200cb613f64950a5b63b0654b51fd065077b667e532def`.
+  This proves one larger text-resource transfer, not the three-chunk pilot or
+  complete controller delivery. Separate attempt 003 tests direct original ASCII
+  text in native structured arguments and records the actual available writer
+  catalog before making claims about a programmable bridge. No preparation or
+  research is authorized within that diagnostic.
+- Attempt 003 preserved the actual 10530-byte helper received by native
+  structured arguments, SHA256
+  `4c9ff06fb3ee83606a464be4631ac6dacc2ac014aa100f9895f6d8fe08ae3fdc`.
+  It stopped before any chunk/helper execution because the original pin failed.
+  Root inspected those downloaded bytes: appending exactly one terminal LF
+  produces the original 10531-byte helper and original SHA256
+  `57573c9ce23e5d2761b9966524e6e610c6c52a4dccf699e1e9d305f6b35e3a9c`.
+  The actual current functions.exec writer catalog did not expose a directly
+  callable native container writer; this does not establish that every possible
+  bridge is absent. Original attempt-003 ZIP is 15051 bytes, SHA256
+  `5900815b2398b4b1ef54e9bcf76403b806798757725844fab82ef4cd11399ef6`.
+  Separate attempt 004 tests this explicit terminal-LF transport repair and the
+  first three original chunks, keeping full-package delivery and execution
+  unverified. No source body or expected digest is changed by that diagnostic.
+- Attempt 004 passed the actual ordinary Chat first-three-chunk pilot. The exact
+  original helper and three 16385-byte text chunks were verified after explicit
+  single-terminal-LF transport repair; each decoded chunk is 12288 bytes.
+  The original helper ran once, exit 0, stdout 1060 bytes, stderr empty, and
+  reported `stage=chunk-pilot`, `chunks_verified=3`, `chunks_total=111`,
+  `package_verified=false`. The target package directory remained empty; no
+  dependency preparation, package execution or research occurred. This is an
+  opaque model relay with recorded LF repair, not a direct programmable bridge.
+  Original success ZIP is 99877 bytes, SHA256
+  `05dcb5bad5e60a583757a829f39f943e65d926d057dad9a6383958aaa125ca94`.
+  The original transfer-check transcript is retained privately with that evidence.
+- A separate read-only native-files capability check found no exact visible
+  `paper-factory-0.11.0.zip` file ID in this Chat's native conversation listing
+  or one exact-title Library query. Four visible conversation files were the
+  retained diagnostic ZIPs; two Library results were other diagnostic JSON files.
+  `files__materialize` was exposed but requires an actual returned file ID, so
+  no materialization, CRC/inventory check, upload, publication or execution was
+  performed. This is a bounded current-surface result, not proof of platform-wide
+  impossibility. Original evidence ZIP was downloaded and verified: 2374 bytes,
+  SHA256 `12c899fc4ca1159a6c6b4b011424e2853c3f275c0a56ebd30b12f45e918337b9`.
+  Complete 111-chunk model relay is not treated as a suitable installation
+  experience merely because three chunks pass.
+- Independent review of attempt 004 verified all 34 evidence ZIP members, 25
+  tracked hashes, exact repaired original helper/chunks, and the decoded 36864-byte
+  prefix against the frozen 0.11.0 ZIP. It accepts only the first-three-chunk pilot;
+  complete package delivery and execution remain unverified. The review receipt is
+  `read-only/attempt-004-transfer-review.json`, SHA256
+  `953f3782445e76072f21bbdb7f4e4e6d58ff89b1b6bd07ac6cf95fb1e95b4acf`.
+- The initial provided-host preparation design recorded the observed
+  ordinary Chat modules and then-remaining blockers: Node 22 was rejected by the
+  frozen 0.11.0 Node-24 gate, Typst was absent, and a pdflatex path alone was not verified
+  PDF production. The proposed mode uses actual native interpreter identity and
+  module/executable receipts, without fake private-venv claims, installation or
+  network-policy changes. No provided-host source implementation or execution
+  support is claimed from that design.
+- A second bounded native Files metadata check exposed seven tools. Its
+  `files__manage_library` upload accepts an existing container path or real file
+  reference, not raw content; `skills__read` returns text strings. No documented
+  in-memory content writer was exposed in this Chat, so no new file upload or
+  payload execution was attempted. Writing a tiny diagnostic JSON into the
+  old scratch failed because those paths had become read-only. The actual UI
+  transcript and screenshot are retained as
+  `web-chat/native-files-writer-metadata-visible-transcript.txt` and
+  `web-chat/native-files-writer-metadata-result.png`.
+- The completed 0.12.0 source-only increment implements an explicit provided-host mode,
+  compatible bounded Node 22 execution, and an explicitly selected pdflatex
+  converter for hosts that already supply the dependencies. This work does not
+  solve ordinary Chat's package delivery by itself and is not installed in the
+  frozen 0.11.0 plugin. Its completion and actual test results are recorded
+  separately from that release's successful Windows/Cloud evidence.
+- Native macOS tests and a dedicated CI job were added for Apple Silicon
+  (`macos-14`) and Intel (`macos-15-intel`). These are currently local source
+  changes, not a completed CI run or an actual Mac execution claim.
+
+- Provided-host preparation/conversion and identity checks passed 60 tests.
+  Shared controller/workflow and explicit probe selection checks passed 78 tests.
+  Actual Windows Node 24 checks passed 141 tests with two native Mac-only skips;
+  a separate actual Windows Node 22.16.0 suite passed 15 tests. These are Windows
+  results, not actual ordinary Chat or Mac execution evidence.
+- The exact source-only 0.12.0 preview ZIP has 46 entries, 41 inventory resources
+  and 22 core files. Size is 1363803 bytes, SHA256
+  `385936e25fd8a0f644d04953990500d10daadcd5787cb7403428a05efa080f70`,
+  inventory SHA256
+  `ccc17c574722282411dea2a401ccdc73241b5956e2320a0ce214176b1f1ad896`.
+  All entries passed CRC and byte comparison to the staged source; frozen
+  0.11.0 ZIP remains unchanged. The preview was not installed or published.
+- Three commands from that exact preview actually exited zero: provided
+  preparation using existing Windows Python 3.12.14, Node 22.16.0, Pandoc 3.9 and
+  Typst 0.15; trusted runtime extraction; then the schema-2 exact launcher and
+  fresh bounded Wasm readiness. Preparation downloaded and installed nothing;
+  converter outputs were reopened, and readiness confirmed cleanup. The local
+  verification harness initially expected an outer `ok` field in the third
+  command's flat environment result and raised KeyError after successful
+  execution. Read-only receipt validation corrected that interpretation without
+  rerunning any command. Receipt is `provided-host/actual-source-012/verification.json`,
+  SHA256 `4bca765e7063407f21fc1c99124dac24c693674aaece209f3d97fa03e067c83e`.
+- Ordinary Chat's existing native converter passed a separate fixed-input
+  diagnostic with no package code, dependency installation or network requests:
+  PNG 300x200, Pandoc 3.1.11.1, preserved pdflatex alias, two successful
+  no-shell-escape passes, strict PDF reopening (one page and image), DOCX reopening
+  and TeX existence. This does not test the new production converter or controller.
+  The container interface returned combined output; retained stdout-labelled logs
+  explicitly say separate stderr was unavailable. Original evidence ZIP is
+  107041 bytes, SHA256
+  `2d298000b0b23f0a377a517ad2ed61d603c1118e4aba464d566b222b9a0c23c8`,
+  downloaded and CRC-verified under `web-chat/`. Complete package delivery,
+  preparation, readiness and research flags remain false for this diagnostic.
+- Independent native converter evidence review passed all 32 tracked member
+  hashes, original PDF/DOCX embedded images and fixed body checks. Native binary
+  before/after equality is retained remote metadata; the binaries themselves were
+  not included for local rehashing. Review receipt is
+  `web-chat/read-only/provided-converter-preflight-001-review.json`, SHA256
+  `421335204d2911bcc3128d64f470ab3b1c74e1fc40cfbedf70ff80526e33867d`.
+  The primary reviewer separately rendered and inspected the original one-page
+  diagnostic, with no clipping or missing glyphs. Visual receipt SHA256 is
+  `2cdac821aa77b4e462a3276de258f7d3088b9c7d3ac37e91f9ec03f94ad43b03`.
+- Ordinary Chat's actual tool metadata exposes callable
+  `mcp__GitHub__download_workflow_artifact` with `repo_full_name`, `artifact_id`
+  and optional `file_name`, returning `result.file_uri` with a reusable connector
+  file ID. Native `files__materialize` explicitly accepts connector-backed file
+  IDs. This establishes a documented candidate contract, not actual transfer.
+  Tool interoperability, a real artifact and automatic installed-package delivery
+  remain to be tested. No GitHub access or permission change occurred in that
+  metadata check; a following bounded read-only lookup is limited to the user's
+  public `andongmin94/paper-factory` project.
+- That following lookup returned the original normal JSON
+  `{"total_count":0,"workflow_runs":[]}` for completed runs (limit five).
+  No actual run ID was available, so no artifact listing or download was called.
+  This bounded empty result is not proof that every artifact type is absent.
+  Transcript and screenshot are retained under
+  `web-chat/github-artifact-existing-run-lookup-*`.
+- Independent exact 0.12.0 preview review passed 101 read/hash/reopen checks:
+  46 ZIP entries, 41 inventory resources, 53 pinned runtime assets, 545 observed
+  module/native files, original three command streams, converter outputs and
+  the empty owned-worker journal. No native command or study was rerun.
+  Review receipt is `provided-host/independent-source-012-review.json`, SHA256
+  `d3c07cf2a922c3a4f31271e792744e607c1df487ed02bd0de238ea7f955ece3c`.
+- The next native CI increment is ready locally: `scripts/ci_verify_plugin.py`
+  and `.github/workflows/plugin-verification.yml`. It enforces actual arm64 and
+  x86_64 macOS hosts, builds the original plugin, runs private preparation and
+  the exact launcher/readiness with an empty owned journal, then requires the
+  two actual native Mac tests and real PDF/DOCX tests to pass without skipping.
+  Original bounded command streams, JUnit, converter outputs and the owned
+  journal are retained by an explicit whitelist; runtime binaries, caches,
+  environment files and private research inputs are excluded. A failed run
+  retains diagnostics but never emits a successful distribution artifact.
+  The duplicate Mac job was removed from `tests.yml`; Linux/Windows shards remain.
+- This increment passed AST/YAML/CLI-help checks and independent 20-item static
+  review with both reported evidence-retention issues resolved. Review receipt
+  is `provided-host/independent-ci-verification-review.json`, SHA256
+  `9ed81e935a0e120e79a7641bff97ce646b234a9ca56d6fa6665fc1cacde3617a`.
+  Harness SHA256 is
+  `caf0faab18a0b72ad1bf4be31921508623b2a1feaf311ca8fb2e8028a3e29b2c`;
+  workflow SHA256 is
+  `969e7a27adccc7a82089c317a15a521f4ded5909a093bd41084c8b8cf9c11b4c`.
+  No actual CI/native preparation/test/dispatch/upload was run by that review.
+- Actual remote CI now requires putting the prepared source into a GitHub
+  verification branch. Approval was requested for public
+  `andongmin94/paper-factory`, branch `codex/plugin-portability-012`; main merge
+  and OpenAI directory publication are outside that request. Until that approval
+  arrives, no public source, artifact or CI run has been created. The overall
+  goal remains active; actual Mac proof and ordinary Chat complete delivery and
+  paper export remain required.
+- The actual local Codex-installed 0.11.0 cache has 41 resources and 22 core
+  files byte-identical to the frozen ZIP. Reusing its already verified private
+  preparation required no dependency download or installation. The first exact
+  launcher command returned `ready: false`: the default tool sandbox denied
+  opening the supervisor lock (errno 13), before any guest was started. The
+  frozen response incorrectly described this as busy and reported confirmed
+  cleanup; neither field was accepted as successful readiness.
+- A narrow approved host-tool invocation of that same installed launcher, data,
+  environment and runtime returned `ready: true`, Node 24.21.0 and confirmed
+  cleanup. Read-only inspection confirmed an empty owned-worker journal. No ACL,
+  original journal or frozen package was changed. This proves installed Codex
+  readiness on the observed Windows host with those permissions, not unrestricted
+  default execution, a new study, macOS or ordinary Chat support. Independent
+  13-check review receipt is
+  `provided-host/independent-installed-codex-011-review.json`, SHA256
+  `398a98b12196b9ebf869c87bf943ce6ed1b73982088ab0e130dfe7013630ae42`.
+- Current 0.12.0 runner source separates unavailable supervisor files, a real
+  competing owner and invalid retained state. Cleanup remains unconfirmed when
+  supervisor preparation cannot be verified. Only an actual missing journal is
+  treated as empty; unreadable and invalid journals block execution. Seventeen
+  focused failure/cleanup tests passed, followed by two actual Windows Node
+  22.16.0 readiness/TypeScript checks. The earlier preview, installed 0.11.0 and
+  their original receipts remain unchanged; they do not contain this correction.
+- The shared lease helper now converts only documented nonblocking contention
+  into a busy result: Windows EACCES and POSIX EAGAIN/EWOULDBLOCK. Other native
+  locking errors retain their original OSError. The JSON environment command
+  preserves the three supervisor failure codes with bounded, allowlisted
+  diagnostics and specific instructions; known unresolved workers still take
+  priority. Thirty-two focused runner/controller tests passed. A separate
+  workspace/workflow regression passed all 88 tests with no skips and unchanged
+  before/after source hashes. Receipts are
+  `provided-host/controller-locking-focused-001/receipt.json`, SHA256
+  `4fc03b04047e1ac85be2ac5e1fedf90b51399e12ab3c0c3d1beb56b2fd5e2bf7`,
+  and `provided-host/status-shared-regression-001/receipt.json`, SHA256
+  `abe740f3b65d7af06d5b510ad363a7c3d89123b6059d938503f175bac72a3f3c`.
+- A separate corrected 0.12.0 preview contains exactly those three changed core
+  files, the updated package guide and regenerated inventory; other members
+  match the first preview. All 46 entries passed CRC and exact byte checks.
+  ZIP size is 1367184 bytes, SHA256
+  `20d41e468d4cc71b24c8af38a06521f6d6017e6d241caaea6381ad6e7892a962`,
+  inventory SHA256
+  `688fb143de322060d685369ce90683b078e456e4cf2214bc798b977ce9e3fe9c`.
+  Build record is `provided-host/package-preview-0.12.0-status-002/preview-build-report.json`.
+  It remains uninstalled and unpublished; frozen releases were not rebuilt.
+- This corrected preview's exact launcher reused the first 0.12.0 schema-2
+  preparation, runtime and controller/supervisor namespace. Under default tool
+  permissions it exited 1 with INPUT_UNAVAILABLE; that original failure is
+  retained and did not claim ready or confirmed cleanup. Under narrowly approved
+  host-tool execution, the same argv exited zero with ready, QuickJS, Node
+  22.16.0 and confirmed cleanup. Receipts and separate original streams are in
+  `provided-host/actual-status-source-012-002/`. No preparation, installation,
+  dependency download, new study, ACL change or replacement data directory was
+  used. This is actual Windows readiness with the observed permissions, not
+  default unattended execution, Mac or ordinary Chat proof.
+- Independent corrected-preview review passed 17 checks, including exact current
+  builder inputs, all ZIP/inventory/core resources, 53 runtime files, 545
+  prepared module files, original command streams and the same empty retained
+  owned-worker journal. The reviewer used narrow read-only permission for that
+  exact original journal after preserving default EACCES; no command was rerun.
+  Receipt is `provided-host/independent-status-preview-review.json`, SHA256
+  `71883d474e1eb403f6e069bc4fb506fe7a1bcf8f1f1a26cae28be3f11ccf3a12`.
+- Independent source-correction review passed 13 checks with no remaining issues.
+  The production AST changes are limited to journal loading, runner status,
+  native lease error classification and the JSON environment response. Current
+  source/test bytes match the retained before/after test receipts, and the worker
+  and frozen ZIP remain unchanged. Review is
+  `provided-host/independent-status-correction-review.json`, SHA256
+  `ec520b1accd7a01398ec2d82375dea8019ab0ad772012d7ef8e2638290f0ec06`.
+- A local source publication candidate is kept separately from plugin releases.
+  Its exact selected source bytes, tracked deletions, declared-input coverage
+  and excluded private files are recorded under
+  `provided-host/publication-candidate-002/manifest.json`. This candidate is for
+  the pending GitHub verification-branch approval only; it is not a published
+  branch, remote artifact, OpenAI directory installation or actual CI run.

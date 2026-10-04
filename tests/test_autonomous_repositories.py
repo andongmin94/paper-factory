@@ -76,10 +76,10 @@ def test_invalid_owner_never_opens_network(monkeypatch, value):
         picker.select_repositories(value)
 
 
-@pytest.mark.parametrize("count", [0, 4, -1, True, 1.5, "3"])
+@pytest.mark.parametrize("count", [0, 11, -1, True, 1.5, "3"])
 def test_count_is_bounded_before_network(monkeypatch, count):
     monkeypatch.setattr(picker, "_client", lambda: pytest.fail("Invalid count reached network"))
-    with pytest.raises(ValueError, match="integer from 1 to 3"):
+    with pytest.raises(ValueError, match="integer from 1 to 10"):
         picker.select_repositories("researcher", count=count)
 
 

@@ -1,10 +1,14 @@
 from contextlib import ExitStack, closing, contextmanager
+import errno
 import os
 import sqlite3
+import sys
+from types import SimpleNamespace
 
 import pytest
 
 from paper_factory.workspace import Workspace, loads_json
+from paper_factory import workspace as module
 
 
 @pytest.mark.parametrize("payload", [
@@ -46,6 +50,60 @@ def test_empty_lock_contender_reports_concurrency_and_can_retry_after_release(tm
             msvcrt.locking(holder.fileno(), msvcrt.LK_UNLCK, 1)
     with ws.lock("study"):
         pass
+
+
+@pytest.mark.parametrize("platform_name,error_number,is_contention", [
+    ("nt", errno.EACCES, True),
+    ("nt", errno.EAGAIN, False),
+    ("nt", errno.EDEADLK, False),
+    ("posix", errno.EAGAIN, True),
+    ("posix", errno.EWOULDBLOCK, True),
+    ("posix", errno.EACCES, False),
+    *[(platform_name, error_number, False)
+      for platform_name in ("nt", "posix")
+      for error_number in (errno.EIO, errno.EINVAL, errno.ENOSYS, errno.EBADF)],
+])
+def test_native_lease_errors_only_classify_documented_nonblocking_contention(
+        tmp_path, monkeypatch, platform_name, error_number, is_contention):
+    """Simulated native APIs; real Windows contention is checked separately."""
+    failure = OSError(error_number, "Native lock failure")
+    attempts = []
+
+    def fail(*args):
+        attempts.append(args)
+        raise failure
+
+    monkeypatch.setattr(module, "os", SimpleNamespace(name=platform_name, fstat=os.fstat))
+    if platform_name == "nt":
+        monkeypatch.setitem(sys.modules, "msvcrt", SimpleNamespace(locking=fail, LK_NBLCK=2, LK_UNLCK=0))
+    else:
+        monkeypatch.setitem(sys.modules, "fcntl", SimpleNamespace(flock=fail, LOCK_EX=2, LOCK_NB=4, LOCK_UN=8))
+    with pytest.raises(ValueError if is_contention else OSError) as caught:
+        with module.file_lock(tmp_path / "supervisor.lock"):
+            pytest.fail("Failed native locking must not yield a lease")
+    if is_contention:
+        assert str(caught.value) == "Another operation is already running for supervisor"
+    else:
+        assert caught.value is failure
+    assert len(attempts) == 1  # No retry or unlock of an unacquired lease.
+
+
+def test_lease_open_permission_error_is_not_native_lock_contention(tmp_path, monkeypatch):
+    from pathlib import Path
+    path = tmp_path / "supervisor.lock"
+    failure = PermissionError(errno.EACCES, "Private lease path")
+    original = Path.open
+
+    def denied(candidate, *args, **kwargs):
+        if candidate == path:
+            raise failure
+        return original(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", denied)
+    with pytest.raises(PermissionError) as caught:
+        with module.file_lock(path):
+            pytest.fail("An inaccessible lease must not be acquired")
+    assert caught.value is failure
 
 
 def test_unknown_commit_outcome_preserves_owned_artifacts(tmp_path, monkeypatch):

@@ -44,12 +44,12 @@ def test_existing_bindings_including_empty_take_precedence(tmp_path):
     assert profile.email == "project@example.org"
 
 
-def test_worker_authentication_root_loads_without_replacing_platform_home(tmp_path):
+def test_obsolete_worker_settings_and_platform_home_are_ignored(tmp_path):
     path = tmp_path / "private.env"
     path.write_text("PF_CODEX_AUTH_HOME=/tmp/private-worker\nCODEX_HOME=/untrusted/platform\n")
     environment = {"CODEX_HOME": "/platform/authentication"}
     load_env_file(path, environ=environment)
-    assert environment == {"CODEX_HOME": "/platform/authentication", "PF_CODEX_AUTH_HOME": "/tmp/private-worker"}
+    assert environment == {"CODEX_HOME": "/platform/authentication"}
 
 
 def test_unknown_system_and_credential_settings_are_ignored(tmp_path):

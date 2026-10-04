@@ -267,8 +267,8 @@ def select_repositories(owner_or_url: str, *, count: int = 3) -> dict:
     never substitute names or invent metadata after a failed request.
     """
     owner = _owner(owner_or_url)
-    if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 3:
-        raise ValueError("Repository count must be an integer from 1 to 3")
+    if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 10:
+        raise ValueError("Repository count must be an integer from 1 to 10")
     budget = _Budget()
     limitations = ["Selection is a feasibility heuristic; no novelty, answerable question or completed experiment is established.",
                    "Only public, non-fork, active Python/JavaScript/TypeScript repositories at most 100,000 KiB are eligible.",

@@ -321,8 +321,6 @@ def test_pdf_deadline_terminates_child(monkeypatch):
 
 @pytest.mark.parametrize("confirmed", [True, False])
 def test_completed_pdf_leader_still_requires_whole_tree_cleanup(monkeypatch, confirmed):
-    from paper_factory.autonomous import provider
-
     text = "Synthetic literal extraction fixture. " * 8
     process = SimpleNamespace(returncode=0, stdin=io.BytesIO(), stdout=io.BytesIO(),
                               communicate=lambda *args, **kwargs: (json.dumps(text).encode(), None),
@@ -330,7 +328,7 @@ def test_completed_pdf_leader_still_requires_whole_tree_cleanup(monkeypatch, con
     cleaned = []
     monkeypatch.setattr(literature, "os", SimpleNamespace(name="posix"))
     monkeypatch.setattr(literature.subprocess, "Popen", lambda *args, **kwargs: process)
-    monkeypatch.setattr(provider, "_try_stop", lambda child: cleaned.append(child) or confirmed)
+    monkeypatch.setattr(literature, "_stop_pdf_process", lambda child: cleaned.append(child) or confirmed)
     if confirmed:
         assert literature._pdf_text(b"%PDF-synthetic") == text
     else:

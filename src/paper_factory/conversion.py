@@ -1,6 +1,8 @@
-"""Use Pandoc and Typst, rather than implementing document conversion/rendering."""
+"""Convert using Pandoc and the explicitly selected native PDF engine."""
 
 import json
+import hashlib
+import os
 import shutil
 import subprocess
 from datetime import datetime, timezone
@@ -72,30 +74,43 @@ def _format_docx(output: Path, *, line_numbers: bool, page_numbers: bool) -> Non
 
 
 def pandoc_binary(explicit: str | None = None) -> str:
+    explicit = explicit or os.environ.get("PYPANDOC_PANDOC") or None
     binary = shutil.which(explicit or "pandoc")
-    if not binary:
-        raise ValueError("Pandoc is required for venue compilation. Install it or pass --pandoc <executable>.")
+    if not binary and not explicit:
+        try:
+            import pypandoc
+            binary = pypandoc.get_pandoc_path()
+        except (ImportError, OSError):
+            pass
+    if binary and not Path(binary).is_file() and Path(binary).with_suffix(".exe").is_file():
+        binary = str(Path(binary).with_suffix(".exe"))
+    if not binary or not Path(binary).is_file():
+        raise ValueError("Pandoc is required. Install the pdf extra or pass --pandoc <executable>.")
     return str(Path(binary).resolve())
 
 
-def convert(markdown: Path, output: Path, *, pandoc: str | None = None, bibliography: Path | None = None, csl: Path | None = None, metadata: dict | None = None, line_numbers: bool = False, page_numbers: bool = True) -> dict:
+def convert(markdown: Path, output: Path, *, pandoc: str | None = None, bibliography: Path | None = None, csl: Path | None = None, metadata: dict | None = None, line_numbers: bool = False, page_numbers: bool = True, pdf_engine: str | None = None, pdflatex: str | None = None) -> dict:
     suffix = output.suffix.lower()
     if suffix not in {".pdf", ".tex", ".docx"}:
         raise ValueError("Supported conversion outputs: PDF, LaTeX and DOCX")
+    pdf_engine = pdf_engine or os.environ.get("PF_PDF_ENGINE", "typst")
+    if pdf_engine not in {"typst", "pdflatex"}:
+        raise ValueError("Select the PDF engine explicitly: typst or pdflatex")
     output.parent.mkdir(parents=True, exist_ok=True)
     output.unlink(missing_ok=True)
-    target = output.with_suffix(".typ") if suffix == ".pdf" else output
+    target = (output.with_suffix(".typ") if pdf_engine == "typst" else output.with_suffix(".pdflatex.tex")) if suffix == ".pdf" else output
     target.unlink(missing_ok=True)
     binary = pandoc_binary(pandoc)
     source_digest = digest_file(markdown)
-    command = [binary, str(markdown.resolve()), "--from=markdown-smart-raw_tex-raw_html", "--standalone", "--to=" + {".pdf": "typst", ".tex": "latex", ".docx": "docx"}[suffix], "-o", str(target.resolve())]
+    format = ("typst" if pdf_engine == "typst" else "latex") if suffix == ".pdf" else {".tex": "latex", ".docx": "docx"}[suffix]
+    command = [binary, str(markdown.resolve()), "--from=markdown-smart-raw_tex-raw_html", "--standalone", "--to=" + format, "-o", str(target.resolve())]
     if bibliography:
         command += ["--citeproc", "--bibliography", str(bibliography.resolve())]
     if csl:
         command += ["--csl", str(csl.resolve())]
-    if suffix == ".pdf":
+    if suffix == ".pdf" and pdf_engine == "typst":
         metadata = {**(metadata or {}), "margin": {"x": "1in", "y": "1in"}, "page-numbering": "1" if page_numbers else None}
-    elif suffix == ".tex":
+    elif format == "latex":
         headers = []
         if line_numbers:
             headers += [r"\usepackage{lineno}", r"\linenumbers"]
@@ -111,8 +126,10 @@ def convert(markdown: Path, output: Path, *, pandoc: str | None = None, bibliogr
         metadata_path = output.parent / f"{output.stem}-pandoc-metadata.json"
         write_json(metadata_path, metadata)
         command += ["--metadata-file", str(metadata_path.resolve())]
-    if suffix == ".pdf":
-        command += ["-V", "papersize:a4", "-V", "fontsize:11pt"]
+    if suffix == ".pdf" and pdf_engine == "typst":
+        # Typst headings end at a source newline. Let Typst perform visual
+        # wrapping without turning Pandoc's continued title into body text.
+        command += ["--wrap=none", "-V", "papersize:a4", "-V", "fontsize:11pt"]
     else:
         command += ["-V", "geometry:margin=1in"]
     try:
@@ -124,6 +141,9 @@ def convert(markdown: Path, output: Path, *, pandoc: str | None = None, bibliogr
         target.unlink(missing_ok=True)
         raise ValueError(f"Pandoc failed ({result.returncode}): {result.stderr[:2000]}")
     engine = "Pandoc"
+    engine_commands = []
+    engine_passes = []
+    engine_identity = None
     if suffix == ".docx":
         try:
             _format_docx(output, line_numbers=line_numbers, page_numbers=page_numbers)
@@ -131,7 +151,7 @@ def convert(markdown: Path, output: Path, *, pandoc: str | None = None, bibliogr
             output.unlink(missing_ok=True)
             raise ValueError(f"Word document formatting failed: {exc}") from exc
         engine = "Pandoc → python-docx"
-    if suffix == ".pdf":
+    if suffix == ".pdf" and pdf_engine == "typst":
         try:
             import typst
         except ImportError as exc:
@@ -148,17 +168,55 @@ def convert(markdown: Path, output: Path, *, pandoc: str | None = None, bibliogr
         except Exception as exc:
             output.unlink(missing_ok=True)
             raise ValueError(f"Typst PDF compilation failed: {exc}") from exc
+        engine = "Pandoc → Typst"
+    elif suffix == ".pdf":
+        selected = pdflatex or os.environ.get("PF_PDFLATEX_BIN")
+        latex = Path(selected) if selected else None
+        if latex is None or not latex.is_absolute() or not latex.is_file():
+            raise ValueError("The selected pdflatex PDF engine requires its verified absolute executable path")
+        # Keep the invocation alias: TeX binaries select their format from argv[0].
+        # Resolving /usr/bin/pdflatex to pdftex changes its behavior.
+        engine_identity = {"path": str(latex), "target_path": str(latex.resolve()), "sha256": digest_file(latex)}
+        compiled = target.with_suffix(".pdf")
+        compiled.unlink(missing_ok=True)
+        engine_command = [str(latex), "-no-shell-escape", "-halt-on-error", "-interaction=nonstopmode",
+                          "-output-directory=" + str(output.parent.resolve()), str(target.resolve())]
+        try:
+            for _ in range(2):
+                engine_commands.append(list(engine_command))
+                native = subprocess.run(engine_command, cwd=output.parent, capture_output=True,
+                                        timeout=120, check=False)
+                engine_passes.append({"command": list(engine_command), "exit_code": native.returncode,
+                                      "stdout_sha256": hashlib.sha256(native.stdout).hexdigest(),
+                                      "stderr_sha256": hashlib.sha256(native.stderr).hexdigest(),
+                                      "stdout_bytes": len(native.stdout), "stderr_bytes": len(native.stderr),
+                                      "stdout": native.stdout.decode("utf-8", errors="replace")[-4000:],
+                                      "stderr": native.stderr.decode("utf-8", errors="replace")[-2000:]})
+                if native.returncode != 0 or not compiled.is_file():
+                    raise ValueError(f"pdflatex failed ({native.returncode}): {engine_passes[-1]['stdout'][-2000:]}")
+            if digest_file(latex) != engine_identity["sha256"] or str(latex.resolve()) != engine_identity["target_path"]:
+                raise ValueError("Selected pdflatex executable changed during conversion")
+            compiled.replace(output)
+        except Exception as exc:
+            compiled.unlink(missing_ok=True)
+            output.unlink(missing_ok=True)
+            raise ValueError(f"pdflatex PDF compilation failed: {exc}") from exc
+        engine = "Pandoc → pdflatex"
+    if suffix == ".pdf":
         try:
             from pypdf import PdfReader
             reader = PdfReader(output)
-            if not reader.pages or reader.is_encrypted:
-                raise ValueError("Compiled PDF is empty or encrypted")
+            if not output.read_bytes().startswith(b"%PDF-") or not reader.pages or reader.is_encrypted:
+                raise ValueError("Compiled PDF is empty, encrypted or invalid")
         except Exception as exc:
             output.unlink(missing_ok=True)
             raise ValueError(f"Compiled PDF validation failed: {exc}") from exc
-        engine = "Pandoc → Typst"
     if digest_file(markdown) != source_digest:
         output.unlink(missing_ok=True)
         raise ValueError("Manuscript changed during conversion")
-    return {"command": command, "engine": engine, "input_sha256": source_digest,
-            "output_sha256": digest_file(output), "diagnostics": result.stderr}
+    receipt = {"command": command, "engine": engine, "input_sha256": source_digest,
+               "output_sha256": digest_file(output), "diagnostics": result.stderr}
+    if engine_identity is not None:
+        receipt.update(engine_commands=engine_commands, engine_passes=engine_passes, engine_executable=engine_identity,
+                       engine_source_sha256=digest_file(target))
+    return receipt

@@ -185,13 +185,13 @@ def test_failed_attribute_initialization_never_deletes_uninitialized_list(native
 @pytest.mark.skipif(os.name != "nt", reason="Windows initial thread ownership regression")
 def test_resume_refuses_a_reused_thread_owner(tmp_path, monkeypatch):
     import subprocess
-    from paper_factory.autonomous.provider import _process_options
     native = windows_runtime
     kernel, advapi, userenv = native._api()
     marker = tmp_path / "started.txt"
     program = "from pathlib import Path;Path(" + repr(str(marker)) + ").write_text('started')"
     process = subprocess.Popen([str(Path(sys.base_prefix) / "python.exe"), "-I", "-c", program],
-        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **_process_options(suspended=True))
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW | 0x4)
     class ReusedOwner:
         def __getattr__(self, name):
             return getattr(kernel, name)

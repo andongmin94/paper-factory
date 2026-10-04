@@ -20,7 +20,7 @@ MAX_ENV_FILE_BYTES = 64 * 1024
 ALLOWED_ENV_NAMES = frozenset({
     *(f"PF_AUTHOR_{field.upper()}" for field in AuthorProfile.model_fields),
     "PF_AUTHOR_PROFILE_JSON", "PF_HOME", "PF_OJS_API_TOKEN", "PYPANDOC_PANDOC",
-    "PF_CODEX_BIN", "PF_CODEX_MODEL", "PF_CODEX_AUTH_HOME", "PF_RESEARCH_IMAGE", "PF_NODE_BIN",
+    "PF_RESEARCH_IMAGE", "PF_NODE_BIN",
 })
 
 

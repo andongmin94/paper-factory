@@ -18,11 +18,6 @@ IGNORED_DIRECTORIES = {".git", ".codex", "codex-auth", "node_modules", ".venv", 
 SECRET_NAMES = {"credentials", "credentials.json", "token.json", "auth.json", "secrets.json", "secrets.yaml", "secrets.yml", "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", ".netrc", "_netrc", ".npmrc", ".pypirc", ".git-credentials"}
 
 
-def _authentication_root() -> Path:
-    configured = os.environ.get("PF_CODEX_AUTH_HOME")
-    return (Path(configured).expanduser() if configured and configured.strip() else pf_home() / "codex-auth").absolute()
-
-
 def _secret(path: Path) -> bool:
     name = path.name.lower()
     return name.startswith(".env") or name in SECRET_NAMES or bool(re.search(r"service[-_]?account|private[-_]?key|access[-_]?token", name)) or path.suffix.lower() in {".pem", ".key", ".p12", ".pfx", ".keystore"}
@@ -51,7 +46,6 @@ def inventory(root: Path, *, sanitize: bool = False) -> list[Asset]:
     if not root.is_dir():
         raise ValueError("Snapshot root is missing or is not a directory")
     assets: list[Asset] = []
-    authentication = _authentication_root() if sanitize else None
     def inaccessible(error: OSError) -> None:
         raise error
     for directory, dirs, files in os.walk(root, followlinks=False, onerror=inaccessible):
@@ -62,7 +56,7 @@ def inventory(root: Path, *, sanitize: bool = False) -> list[Asset]:
                 if not sanitize:
                     raise ValueError("Snapshot contains a symlink")
                 dirs.remove(name)
-            elif sanitize and (name.casefold() in IGNORED_DIRECTORIES or _secret(path) or path.absolute().is_relative_to(authentication)):
+            elif sanitize and (name.casefold() in IGNORED_DIRECTORIES or _secret(path)):
                 dirs.remove(name)
         for name in files:
             path = base / name
@@ -108,7 +102,7 @@ def _git_commit(path: Path) -> str | None:
     return result.stdout.strip() or None if result.returncode == 0 else None
 
 
-def ingest(source: str, workspace_root: Path | None = None) -> Workspace:
+def ingest(source: str, workspace_root: Path | None = None, *, make_current: bool = True) -> Workspace:
     local = Path(source).expanduser()
     is_remote = bool(re.match(r"^(?:https?://|ssh://|git://|[^/\\\s]+@[^:]+:)", source))
     if not is_remote and not local.is_dir():
@@ -116,10 +110,8 @@ def ingest(source: str, workspace_root: Path | None = None) -> Workspace:
     if not is_remote:
         ensure_unlinked(local)
     source_path = local.resolve() if not is_remote else None
-    if source_path is not None:
-        authentication = _authentication_root()
-        if source_path.is_relative_to(authentication):
-            raise ValueError("Private ChatGPT authentication directories cannot be imported as research projects")
+    if source_path is not None and source_path.name.casefold() in {".codex", "codex-auth"}:
+        raise ValueError("Private authentication directories cannot be imported as research projects")
     safe_source = _safe_source(source) if is_remote else str(source_path)
     name = Path(urlsplit(safe_source).path if "://" in safe_source else safe_source).name.removesuffix(".git") or "project"
     slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", name).strip("-") or "project"
@@ -134,9 +126,13 @@ def ingest(source: str, workspace_root: Path | None = None) -> Workspace:
     with tempfile.TemporaryDirectory(prefix="paperfactory-ingest-") as temporary:
         if is_remote:
             source_path = Path(temporary) / "checkout"
-            clone_environment = dict(os.environ, GIT_TERMINAL_PROMPT="0")
+            clone_environment = {name: value for name, value in os.environ.items()
+                                 if not name.upper().startswith("GIT_")}
+            clone_environment.update(GIT_TERMINAL_PROMPT="0", GIT_CONFIG_NOSYSTEM="1",
+                                     GIT_CONFIG_GLOBAL=os.devnull, GIT_ASKPASS="")
             try:
-                result = subprocess.run(["git", "clone", "--depth", "1", "--", source, str(source_path)], capture_output=True, text=True, check=False,
+                result = subprocess.run(["git", "-c", "credential.helper=", "-c", "core.hooksPath=" + os.devnull,
+                                         "clone", "--depth", "1", "--", source, str(source_path)], capture_output=True, text=True, check=False,
                                         timeout=300, env=clone_environment)
             except subprocess.TimeoutExpired:
                 raise ValueError("Git clone timed out; check the network and repository access") from None
@@ -163,5 +159,6 @@ def ingest(source: str, workspace_root: Path | None = None) -> Workspace:
         ws.save("project", project)
         write_json(ws.path("project.json"), project)
         verify_snapshot(ws)
+    if make_current:
         ws.make_current()
-        return ws
+    return ws

@@ -1,0 +1,31 @@
+{
+  "archive_sha256": "7a28754c912a4bbfcc41dbe88598bb4ab348337b7d455547c20db29258d40b3a",
+  "archive_size": 486998,
+  "inventory_sha256": "ab3b2f965197a33c3c58ee1ca26b75871e78e8b59e4f09fd24addd6d88d7e51a",
+  "entries": 53,
+  "uncompressed_bytes": 1535757,
+  "root_directory": "quickjs-runtime",
+  "upstream": [
+    {
+      "name": "@jitl/quickjs-ffi-types",
+      "version": "0.32.0",
+      "resolved": "https://registry.npmjs.org/@jitl/quickjs-ffi-types/-/quickjs-ffi-types-0.32.0.tgz",
+      "integrity": "sha512-v9T+GQpmk43VDJ7d72sf0Nexhk+ArvtUihW27dy7lqAl0zBObFKtSBBIm5RBjwIhE8VwsPPm9PNuvPvNqLWUEg==",
+      "license": "MIT"
+    },
+    {
+      "name": "@jitl/quickjs-wasmfile-release-sync",
+      "version": "0.32.0",
+      "resolved": "https://registry.npmjs.org/@jitl/quickjs-wasmfile-release-sync/-/quickjs-wasmfile-release-sync-0.32.0.tgz",
+      "integrity": "sha512-BKNDI/TPBfGlLNGYpLrhcDGXmIk4xHm4MRAisOBnOzpXVn9HZWsfmMAc9WMBrAHjvvds6HOikKeaOBKdPdpVrg==",
+      "license": "MIT"
+    },
+    {
+      "name": "quickjs-emscripten-core",
+      "version": "0.32.0",
+      "resolved": "https://registry.npmjs.org/quickjs-emscripten-core/-/quickjs-emscripten-core-0.32.0.tgz",
+      "integrity": "sha512-QFnPfjFey8EqknSrSxe1hZrf1/8z7/6s1QzGOmKo6++02r7QRRX7ZoyNaZh7JuVjWsVW87KnQrbZqnHkOAzUyg==",
+      "license": "MIT"
+    }
+  ]
+}

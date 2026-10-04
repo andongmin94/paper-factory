@@ -12,7 +12,6 @@ from jsonschema import Draft202012Validator
 from pydantic import ValidationError
 
 from paper_factory.autonomous.models import ResearchPlan
-from paper_factory.autonomous.provider import _wire_schema
 from paper_factory.autonomous import science
 from paper_factory.project import inventory
 
@@ -45,18 +44,13 @@ def protocol():
     ("\uac00" * 80, True),
     ("\uac00" * 81, False),
 ], ids=["empty", "minimum", "maximum", "over-maximum", "unicode-maximum", "unicode-over-maximum"])
-def test_condition_name_boundaries_match_model_and_actual_wire_schema(protocol, condition, accepted):
+def test_condition_name_boundaries_match_native_schema(protocol, condition, accepted):
     schema = ResearchPlan.model_json_schema()
-    wire_schema = _wire_schema(schema)
     expected_item = {"type": "string", "minLength": 1, "maxLength": 80}
     assert schema["properties"]["conditions"]["items"] == expected_item
-    assert wire_schema["properties"]["conditions"]["items"] == expected_item
     original = protocol.model_dump(mode="json")
     original["conditions"] = [condition, "comparator"]
-    wire = {**original, "parameters": [{"key": key, "value": value}
-                                      for key, value in original["parameters"].items()]}
     assert Draft202012Validator(schema).is_valid(original) is accepted
-    assert Draft202012Validator(wire_schema).is_valid(wire) is accepted
     if accepted:
         assert ResearchPlan.model_validate(original).conditions == original["conditions"]
     else:
@@ -73,19 +67,12 @@ def test_condition_name_boundaries_match_model_and_actual_wire_schema(protocol, 
     ("\uac00" * 100, True),
     ("\uac00" * 101, False),
 ], ids=["empty", "minimum", "maximum", "over-maximum", "unicode-maximum", "unicode-over-maximum"])
-def test_parameter_key_boundaries_match_model_and_actual_wire_schema(protocol, key, accepted):
+def test_parameter_key_boundaries_match_native_schema(protocol, key, accepted):
     schema = ResearchPlan.model_json_schema()
-    wire_schema = _wire_schema(schema)
-    parameter_schema = wire_schema["properties"]["parameters"]
-    assert "propertyNames" not in parameter_schema
-    assert parameter_schema["items"]["properties"]["key"] == {
-        "type": "string", "minLength": 1, "maxLength": 100,
-    }
+    assert schema["properties"]["parameters"]["propertyNames"] == {"minLength": 1, "maxLength": 100}
     original = protocol.model_dump(mode="json")
     original["parameters"] = {key: 3}
-    wire = {**original, "parameters": [{"key": key, "value": 3}]}
     assert Draft202012Validator(schema).is_valid(original) is accepted
-    assert Draft202012Validator(wire_schema).is_valid(wire) is accepted
     if accepted:
         assert ResearchPlan.model_validate(original).parameters == {key: 3}
     else:
@@ -95,8 +82,7 @@ def test_parameter_key_boundaries_match_model_and_actual_wire_schema(protocol, k
 
 def test_units_per_seed_contract_is_required_and_explains_total_units(protocol):
     schema = ResearchPlan.model_json_schema()
-    wire_schema = _wire_schema(schema)
-    for external in (schema, wire_schema):
+    for external in (schema,):
         assert "units_per_seed" in external["required"]
         assert "sample_size" not in external["properties"]
         field = external["properties"]["units_per_seed"]
@@ -105,9 +91,7 @@ def test_units_per_seed_contract_is_required_and_explains_total_units(protocol):
         assert "units_per_seed * len(seeds)" in field["description"]
 
     original = protocol.model_dump(mode="json")
-    wire = {**original, "parameters": [{"key": key, "value": value}
-                                      for key, value in original["parameters"].items()]}
-    for external, value in ((schema, original), (wire_schema, wire)):
+    for external, value in ((schema, original),):
         assert Draft202012Validator(external).is_valid(value)
         legacy = {**value, "sample_size": value["units_per_seed"]}
         del legacy["units_per_seed"]
