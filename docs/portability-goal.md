@@ -9,16 +9,16 @@ The frozen 0.10.2 ZIP and its five completed Cloud studies are retained unchange
 The working installation remains frozen 0.11.0. A separate private 0.12.0 preview
 is installed for regression; current source development has explicit provided-host
 preparation. Installing a plugin does not itself establish any environment's
-execution support. This goal remains active.
+execution support. The bounded compatibility criteria are supported by the final evidence below; goal status is recorded separately.
 
-| Environment | Current observed result | Remaining proof |
+| Environment | Current observed result | Explicit limits and future checks |
 | --- | --- | --- |
 | Work Cloud | Five retained studies; installed 0.11.0 and separate private 0.12.0 preparation/conversion/readiness regressions passed | Validate the next source increment and keep the working-installation upgrade separate |
 | Windows local | New 0.11.0 study exported and all seven PDF pages reviewed; installed Codex 0.11.0 and corrected 0.12.0 preview readiness passed under approved host-tool permissions | Default retained-state access failed; new source release regression and installation remain distinct from these preview checks |
-| macOS local | Corrected native preparation reached the regression stage on both architectures; retained ARM receipts verify preparation, conversion and readiness; eight inconsistent platform mocks failed | Correct the fixtures and obtain successful native suites with retained mandatory-case evidence |
-| Ordinary Chat | Tiny and first-three-chunk transfer, native converter diagnostic and exact existing GitHub diagnostic-artifact-to-Files transfer passed | Complete plugin distribution delivery, preparation and a full verified paper remain unproved |
+| macOS local | Actual ARM and Intel native CI passed preparation, conversion, readiness and mandatory lifecycle tests; original artifact bytes independently verified | Evidence covers hosted native Mac CI; personal Mac installation has not been tested |
+| Ordinary Chat | Original distribution reached native Files; provided-host preparation and one controlled study completed/exported with externally reviewed manuscript, original artifact audit and six-page PDF QA | Fresh reviews used external Codex; standalone native review and single-conversation automatic production remain unproved |
 
-## Work in progress
+## Implementation and verification scope
 
 1. Separate private host preparation from the shared JSON research controller.
    Prepare complete platform dependencies and trusted runtime assets without
@@ -523,3 +523,280 @@ Previous readiness observations are in
   Linux and Windows. Eight existing native AppContainer failures remain;
   the vetted case reports unconfirmed private-DACL staging cleanup. They are
   not hidden, skipped or classified as QuickJS failures.
+
+### Original Mac byte verification checkpoint recorded 2026-10-04T07:40:44Z
+
+- The approved verification branch subsequently reached source HEAD
+  `68cb8e2463a1ddb715ff4d12f2c6ede1c2d45307`. Actual Plugin verification run
+  `37184571428`, attempt 1, completed successfully on ARM and Intel. Earlier
+  preparation failures, inconsistent-platform-fixture failures, missing JUnit
+  evidence and their original artifacts remain preserved above.
+- Both actual hosts were Darwin CPython 3.12.10, using private profiles
+  `macos-arm64-cp312` and `macos-x86_64-cp312`. Preparation verified 43 resources
+  and 22 controller core files, imported the controller and selected private
+  Node 24.21.0, official native Pandoc 3.9 and Typst 0.15.0. The five original CI
+  command receipts per architecture all exited zero; their original stdout and
+  stderr byte sizes and SHA256 digests were independently verified. Readiness
+  confirmed QuickJS cleanup, and both original owned-worker journals were empty.
+- Each original `native-tests.xml` contains 260 cases: 258 passed, two
+  Windows-only native cases skipped, and zero failures or errors. All five
+  mandatory individual cases passed on each Mac: normal guardian completion,
+  controller-crash EOF cleanup/recovery, complete PDF title, and both `[False]`
+  and `[True]` native DOCX setting cases. The four required base names are
+  `test_macos_guardian_normal_guest_has_actual_bound_completion`,
+  `test_macos_controller_crash_eof_reaps_owned_worker_and_recovers`,
+  `test_pdf_export_keeps_complete_long_title_in_one_typst_heading`, and
+  `test_docx_export_uses_native_line_and_page_settings`.
+- Both original diagnostic archives contain all six actual converter files:
+  Markdown, Typst, PDF, DOCX, TeX and PNG. Independent reopening verified the
+  21695-byte one-page diagnostic PDF, 21836-byte DOCX with one image and one
+  table, 3096-byte TeX with image/table bindings, and 9699-byte 300x200 PNG.
+  Original conversion receipts bind input/output digests and the selected
+  private Pandoc command. These are converter diagnostics, not Mac research
+  papers. Native executable/module identities are captured in the preparation
+  receipts; those native binary bodies are not included in the diagnostics.
+- Original ARM successful distribution artifact `11296387270` is 1392387 bytes,
+  SHA256 `f566a7f0614d11d5ee55046c9bfd3e047e13249254a1efb00d2646942400d336`.
+  Its original nested plugin ZIP is 1378652 bytes, SHA256
+  `aebaaffebb1126e03ee26321444e9f59c15386af0cbff8a2293c3562d1f3acf7`:
+  48 members, 43 resources, 22 core files and inventory SHA256
+  `035e2049acd609a5184cbb8b36184c904e4fb2fb465b05ed59de8dc24591eede`.
+  Forty-six copied non-inventory files match the immutable HEAD bytes; the
+  remaining `plugin.json` matches the builder's exact declared JSON
+  serialization and pyproject version. All 47 declared source-input pins were
+  also checked. Equality to the earlier local ZIP's timestamp-dependent digest
+  is not required.
+- ARM diagnostics artifact `11296402192` and Intel diagnostics artifact
+  `11296976029` were received as original bytes and checked against their
+  GitHub size/digests. The Intel successful distribution body was not received
+  for this audit. Its own original diagnostic build receipt records plugin
+  SHA256 `4c2779fad5f3052c9c609b2b8e088e84df4307a66af34624a61040b3fe3516ca`;
+  this is not an independently rehashed Intel plugin ZIP or a claim that its
+  digest equals ARM's.
+- Independent original-byte review accepted with no issues. Report:
+  `.paper-factory/portability-implementation/2026-10-04/mac-ci-independent/run-37184571428-attempt-1/original-byte-audit-001/independent-macos-original-byte-audit.json`,
+  72451 bytes, SHA256
+  `e8030b9d49f03a9d6fb5143be3f94ca4c85d5d2f4e60eeeb3a3df64b2a01c7c2`.
+  Original nested artifacts and verified members were exclusively retained in
+  that private audit directory. No foreign binary, test, scientific experiment
+  or network request was executed by the reviewer; ordinary-host verification
+  remains a separate review.
+- The combined ordinary Chat create-stage evidence ZIP is 3300321 bytes,
+  SHA256 `be5d834fe6fd99b4ac7984b3849c63d2030fa4dcee9384724848ac30f9e2d6cc`,
+  retained as
+  `web-chat/paper-factory-ordinary-full-001-create-evidence.zip`. Its actual
+  receipts record successful package delivery, explicit provided-host
+  preparation with Python 3.13.5, Node 22.16.0, Pandoc 3.1.11.1 and pdflatex,
+  and readiness with confirmed cleanup. No dependency download, installation,
+  new venv, Work, PC connection, Docker/WSL or system PATH change was used.
+  Fresh `research-9704196954a3` reached `ready/created` with code, execution and
+  draft attempts all zero. A subsequent plan-freeze request is pending; no
+  experiment, manuscript submission, export or full-paper success is claimed
+  at this checkpoint. The ordinary-host/source-create audit is separate from
+  the accepted Mac byte audit above.
+
+### Ordinary Chat code-freeze checkpoint recorded 2026-10-04T08:32:32Z
+
+- Fresh `research-9704196954a3` subsequently reached `ready/code_ready` with
+  `code_attempt=1`, `execution_attempt=0` and `draft_attempt=0`. The frozen plan,
+  both generated modules, bundle and actual independent review were compared
+  against the reviewer-preserved originals after submission. The recovery was
+  read-only and recorded no mutation calls; its owned-worker journal was empty.
+- The original recovery ZIP,
+  `web-chat/paper-factory-code-freeze-recovery-001-evidence.zip`, is 103231 bytes,
+  SHA256 `86b1a973579a92be604d0f582dcca196f4c90ce5cf0fbd2490c28200592213b2`.
+  The fresh post-freeze comparison passed with no blocking discrepancies:
+  `web-chat/ordinary-code-review-001/frozen-code-comparison.json`, SHA256
+  `999bf29472112aae70521ceb38d9f3a98a44b0f2a72e9f2e01520e6eabe2d068`.
+  This establishes frozen input identity, not successful execution or results.
+- The independent scientific reviewer was external Codex. The inspected tool
+  catalog in this ordinary Chat did not expose a native fresh scientific
+  reviewer, subagent or delegated model call. The subsequent same-Chat Deep
+  Research static-review test completed with the bounded outcome below;
+  selecting that UI mode alone does not establish reviewer independence.
+- At this code-freeze checkpoint no ordinary Chat experiment, manuscript
+  submission or export was recorded.
+  Literature collection is not complete. A full paper and single-conversation,
+  fully automatic PC-free completion remain unproved; the goal stays active.
+
+### Same-Chat native static-review checkpoint recorded 2026-10-04T08:44:00Z
+
+- The Deep Research test completed in the same ordinary Chat without a Work
+  handoff. Its report records complete input reading, source/protocol/code
+  hash comparisons and static review. It returned `accepted=false` and
+  explicitly refused to satisfy the fresh independent-review requirement:
+  no separate native reviewer job ID or isolated new context was demonstrated.
+  This is a bounded negative independence finding, not an observed source
+  algorithm or experimental-control failure; the test performed no execution.
+- The retained rendered report is
+  `web-chat/ordinary-native-review-deep-research-rendered-review.json`,
+  SHA256 `9e113336e0dbec427cafc3cd5b8c40308a50552486f34a5940f5d72eb4262064`.
+  Its provenance is
+  `web-chat/ordinary-native-review-deep-research-rendered-provenance.json`,
+  SHA256 `2ca19645fb459c03f46c94c34082ce64fec030be177744c3eda3e059905b949e`.
+  The rendered result, raw DOM and screenshot are also retained privately.
+- External Codex remains the independent reviewer used for the frozen code.
+  The completed native static review does not establish standalone,
+  single-conversation PC-free full production. Reported subsequent run results
+  await an independent original-byte audit and do not advance the verified
+  code-freeze state above.
+
+### Ordinary Chat run/literature audit checkpoint recorded 2026-10-04T09:22:55Z
+
+- `research-9704196954a3` subsequently reached independently audited
+  `ready/analyzed`: `code_attempt=1`, `execution_attempt=1`, `draft_attempt=0`,
+  and `terminal_control_failure=false`. The one captured run and one captured
+  literature collection completed; the later recovery commands were reads.
+  All 34 complete retained command receipts exited zero with empty raw stderr.
+  These receipts establish captured command coverage, not every remote action.
+- The original recovery ZIP is
+  `web-chat/paper-factory-run-literature-draft-recovery-001-evidence.zip`,
+  410283 bytes, SHA256
+  `7f24363cfe096c33fe550560c6c173e21d938ad687b9d0eab4d0e2c0eb62b575`.
+  All 200 member CRCs and safe paths, and all 198 declared main inventory
+  records passed. The inventory excludes itself and also omits
+  `runtime/inventory.json`; that runtime inventory was separately verified
+  against immutable SHA256
+  `ab3b2f965197a33c3c58ee1ca26b75871e78e8b59e4f09fd24addd6d88d7e51a`.
+- Independent raw evidence review accepted all 17 checks:
+  `web-chat/ordinary-run-draft-independent-001/independent-run-literature-draft-review.json`,
+  140068 bytes, SHA256
+  `99fc9765a420d4b50503873ba358bb37c31a6ad256a3b2f991729783aaa52495`.
+  It independently checked 36 complete input cells, 72 observations and all
+  158 fixture records totaling 74160 bytes. Actual production gate receipts
+  record 39 attempted and completed calls. Positive and aggregate two-case
+  negative controls passed; final cleanup was true and the journal was empty.
+  Compiled code and remote native executable bodies are not included in this
+  archive; their retained receipt identities were checked without executing
+  or re-transforming source.
+- The chosen first-nonempty comparison policy disagreed with production in
+  four of 36 cells; the reference disagreed in zero. The reference-minus-
+  production paired mean was `-1/9`, median zero, sample standard deviation
+  `0.3187276291558383`. These finite typed JSON results describe that comparison
+  policy, not a repository defect, population inference, SemVer, installation
+  behavior, performance or native TypeScript equivalence.
+- The three retained literature records passed raw/text/metadata binding.
+  Both TC39 sources are bounded native-tool section extraction/transcription,
+  not original whole HTML or complete retrieval wire logs. Their excerpts
+  passed whitespace-normalized containment under the controller contract;
+  exact substring containment was false. The pinned production module was
+  read completely. An earlier literature metadata fetch retained only argv,
+  so its exit and timeout duration are not independently established; the
+  later read-only recovery receipt is complete.
+- A fresh draft exists but remains unsubmitted. Its first separate manuscript
+  review requested exact fixture values, a concrete reproduction procedure,
+  and a reader route to the literature manifest/citation metadata. Author
+  revision and fresh re-review are the next steps, within the manuscript
+  schema. No manuscript submission or export is claimed. The external Codex
+  reviewer boundary and the negative same-context independence result above
+  remain in force; standalone full production is still unproved.
+
+### Ordinary Chat final export checkpoint recorded 2026-10-04T10:27:40Z
+
+- The actual final state of `research-9704196954a3` is `completed/exported`,
+  with `code_attempt=1`, `execution_attempt=1`, `draft_attempt=1` and
+  `terminal_control_failure=false`. Cleanup remained true and the original
+  owned-worker journal was empty. All 20 complete final command receipts exited
+  zero with empty stderr and no timeout: exactly one manuscript submission and
+  one export, with no second run or reanalysis command. Fifteen artifact-byte
+  responses decoded to the registered original bytes.
+- The original final evidence ZIP is
+  `web-chat/paper-factory-manuscript-submit-export-001-evidence.zip`,
+  2256714 bytes, SHA256
+  `b0a604cc585d65cee1194fa35ddc8bf7433e5b9d9200a2e146a7f12b8f9c8e62`.
+  All 139 safe member paths/CRCs and 137 main inventory records passed. The
+  self-inventory and additionally unlisted package-authority inventory are
+  explicit exceptions; the latter independently matches the original
+  `035e2049acd609a5184cbb8b36184c904e4fb2fb465b05ed59de8dc24591eede` pin.
+  The nested reproduction ZIP has 42 members and all 40 selected inventory
+  records passed, with only its declared README/self-inventory exceptions.
+- Independent final original-byte audit accepted with no issues and 16 checks:
+  `web-chat/ordinary-export-independent-001/independent-final-export-review.json`,
+  82685 bytes, SHA256
+  `24db3a22e1291d58646fbb2ac1815ced807f0806b95221593ca50fa05cfa7dc0`.
+  Frozen source files, protocol, both generated modules, code review, execution,
+  runtime receipt, 72 raw observations, analysis and all literature remain
+  byte-identical to the earlier run audit. Export's trusted data revalidation
+  is distinct from repeating the guest experiment. The preserved local parser
+  confusion treating Markdown as JSON changed no research state and is not a
+  source/control failure.
+- The actual external manuscript reviews 001 and 002 returned `accepted=false`
+  with two and three issues respectively. Review 003 accepted the revised
+  22946-byte draft, SHA256
+  `9618d98687f4d97fc03108d2d76846751424b05fac2255aa77f416b589e3b1c0`,
+  with no issues and 18 checks. Only manuscript prose changed between these
+  revisions; no source, protocol, code, literature or observations changed.
+  The original ScientificReview is
+  `web-chat/ordinary-fresh-manuscript-review-003/scientific-review.json`,
+  6108 bytes, SHA256
+  `f6e472586fdb6d235a8d0159dfdf1755971acf1896da7545f5c5462881721687`.
+  Its real external reviewer provenance is 30912 bytes, SHA256
+  `a9d206fca4b0d76d6b7cf79f9b5697d30239c37eb1115d1aa91dd332495dd73e`,
+  retained beside it as `review-provenance.json`. Actual submitted review and
+  canonical/Markdown bindings match this approved draft and its evidence.
+- The verified original files were copied without conversion or overwrite to
+  `output/ordinary-chat-study/`; standalone files, decoded controller artifacts
+  and corresponding reproduction members match exactly:
+
+  | Output | Bytes | SHA256 |
+  | --- | ---: | --- |
+  | PDF | 150310 | `77e12c6638d9dff3a1847c4c4014ecbc194c4985992565d56f92545e9115d134` |
+  | DOCX | 59952 | `59b5de5eb44778175111ccdb0e6c151a33de008b0a0cb4d190a486a3a8d3d478` |
+  | TeX | 26960 | `13a20f60e8e0b42b2559d854615b2cd37de20072c646536bc6be662c7dc2f9a1` |
+  | Markdown | 23218 | `ac04c6d658441d02fac77d251e047cb0d0f11a045d4f287d25b995aa37e6e372` |
+  | Figure | 47409 | `5dc09bbf192b3eba638127c2c9aecede7c6279a76b7a0a7495180c2601024ea9` |
+  | Reproduction ZIP | 382999 | `1bba2a77bb07b77619acfb964cb69140f7102d4af41f75d87f5c44cc5253e72b` |
+
+- The original PDF reopened as six unencrypted pages. Root rendered and read
+  every page at 115 dpi, checking title, paragraphs, tables, references and
+  figure without clipping, overlaps or missing content. All-page visual QA
+  accepted with no issues:
+  `web-chat/ordinary-export-pdf-qa-001/all-page-visual-qa.json`, 4838 bytes,
+  SHA256 `7b778da93c555f22c70144983dbb4c605c1521467fa888355ce2c40b713718be`.
+  This author-review output does not establish journal submission, acceptance
+  or a publication-ready bibliography.
+- Actual converter receipts preserve the selected `/usr/bin/pdflatex` alias,
+  `/usr/bin/pdftex` target and two successful `-no-shell-escape` passes, with
+  frozen Markdown input and actual PDF output digests. Only 4000-character
+  stdout tails accompany the declared full 6603/6318-byte stream hashes;
+  complete stdout rehashing is not possible from this archive. Empty stderr
+  hashes are independently reproducible. Remote executable bodies, compiled
+  JavaScript and the intermediate PDF-engine TeX are not supplied; receipt
+  consistency does not replace independently reading those absent bytes.
+
+### Bounded compatibility criteria assessment
+
+The required implementation/resource-delivery/compatible-execution/export
+criteria now have retained evidence: frozen Cloud research and working
+installations were preserved, Windows completed a fresh paper end-to-end,
+both actual Mac architectures passed private preparation/conversion/native
+lifecycle CI, and ordinary Chat received the verified original distribution,
+prepared its existing host and completed a controlled study through verified
+paper export. The one shared controller and evidence/export contract remain.
+Final goal status and publication checks are recorded separately.
+
+This ordinary Chat test used actual external fresh Codex code/manuscript reviews.
+Its same-conversation Deep Research `accepted=false` remains a negative native
+independence result, not a source/control failure. A standalone single-conversation,
+fully automatic PC-free workflow is not established. Personal Mac plugin
+installation, a Mac research paper, default unattended Windows tool permissions,
+public-main merge, public-directory registration and upgrading the working
+installation are separate, unverified scopes; this completion evidence does not
+claim them or universal support for every account/host.
+
+The tested execution/package source is commit
+`68cb8e2463a1ddb715ff4d12f2c6ede1c2d45307` and its frozen CI artifact/inventory,
+not a later documentation commit. README and plugin installation documentation
+are ZIP-root inputs; subsequent approved edits to those two inputs do not mean
+all 47 current source inputs still equal the tested archive. The remaining 45
+inputs and 43 skill resources are unchanged, and no frozen package is rebuilt
+by these documentation edits. The retained 0.10.2 release/research evidence and
+working 0.11.0 installation remain separate and unchanged.
+
+Separate general Tests run `37184571403` at that same source commit still has
+one Windows native staging/private-DACL cleanup failure and seven legacy
+WindowsRunner failures, preserved in
+`mac-ci-independent/general-ci-37184571403-terminal-connector-record.json`;
+these are distinct from successful Mac Plugin verification `37184571428`,
+scientific controls and native-review independence, and no wholly green test
+suite or new fallback/ACL repair is claimed.

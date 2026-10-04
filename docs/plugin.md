@@ -18,7 +18,7 @@ Frontron 첫 일반 설치 사본은 동결된 `paper-factory-0.10.0.zip`이며 
 
 동결된 `0.10.2`는 **Linux x86_64 / CPython 3.12**의 기존 호스트 의존성을 전제로 합니다. 개인 설치본 `0.11.0`은 일반 GIL CPython 3.12·3.13·3.14와 Windows x86_64·Linux x86_64(glibc 2.28 이상)·Mac 14 이상(arm64/x86_64)의 의존성을 manifest로 고정합니다. `prepare_host.py`가 완전한 private venv와 Node·Pandoc를 준비합니다. 호스트가 스크립트 실행용 Python과 원본 패키지 파일을 제공해야 하며 공식 의존성 URL에 접근할 수 있어야 합니다. 프로필이 있다는 것만으로 해당 환경의 실제 지원이 검증되지는 않습니다. 최신 검증 상태는 [환경 지원 목표](portability-goal.md)에 있습니다.
 
-현재 개인 웹 설치 사본은 `0.11.0`입니다. ZIP은 1,357,197 bytes, SHA256 `11b3fb20c9eb61d12f56918176ed089738d22975cf5634302317e62e50dcd70c`이며 설치 inventory SHA256은 `d126e509dac16954657cea1f2d8334aa9da8ba13796cad8a7f5bbde3b82a777a`입니다. Windows x86_64에서는 새 연구 `research-73b2dea0df76`의 실제 실행·분석·독립 리뷰·모든 export와 7쪽 PDF 시각 검수가 완료됐습니다. Work Cloud에서는 같은 설치 inventory의 private 준비·문서 변환·QuickJS readiness·종료 검사를 실제 통과했습니다. 이 Cloud 회귀 검사에서 새 연구를 수행한 것은 아닙니다. Mac 실제 실행과 일반 Chat 전체 제작은 아직 검증되지 않았습니다.
+현재 일반 개인 웹 설치 사본은 `0.11.0`입니다. ZIP은 1,357,197 bytes, SHA256 `11b3fb20c9eb61d12f56918176ed089738d22975cf5634302317e62e50dcd70c`이며 설치 inventory SHA256은 `d126e509dac16954657cea1f2d8334aa9da8ba13796cad8a7f5bbde3b82a777a`입니다. Windows x86_64에서는 새 연구 `research-73b2dea0df76`의 실제 실행·분석·독립 리뷰·모든 export와 7쪽 PDF 시각 검수가 완료됐습니다. Work Cloud에서는 같은 설치 inventory의 private 준비·문서 변환·QuickJS readiness·종료 검사를 실제 통과했습니다. 이 Cloud 회귀 검사에서 새 연구를 수행한 것은 아닙니다. 이후 `0.12.0` 소스의 Mac·일반 Chat 결과는 이 설치 사본의 검증으로 계산하지 않습니다.
 
 현재 Codex에 설치된 `0.11.0` 캐시도 원본 ZIP의 41개 자원과 일치합니다. 기존 private 준비를 재사용하여 승인된 호스트 실행 권한에서 readiness와 빈 종료 journal을 확인했습니다. 기본 도구 권한에서는 supervisor 잠금 파일 접근이 거부됐으며, 원래 실패를 보존했습니다. 이 결과는 해당 Windows 호스트의 승인된 실행 범위에 한정됩니다.
 
@@ -28,11 +28,17 @@ Frontron 첫 일반 설치 사본은 동결된 `paper-factory-0.10.0.zip`이며 
 
 첫 설치 전 preview ZIP은 1,363,803 bytes, SHA256 `385936e25fd8a0f644d04953990500d10daadcd5787cb7403428a05efa080f70`, inventory SHA256 `ccc17c574722282411dea2a401ccdc73241b5956e2320a0ce214176b1f1ad896`입니다. 이 정확한 사본에서 Windows의 기존 Python 3.12.14·Node 22.16.0·Pandoc 3.9·Typst 0.15로 provided 준비·PDF/DOCX/TeX 진단·fresh QuickJS readiness와 종료 확인까지 통과했습니다. 새 연구를 수행한 검사는 아니며, preview는 웹 설치나 공개 게시되지 않았습니다. 검증 기록은 `.paper-factory/portability-implementation/2026-10-04/provided-host/actual-source-012/verification.json`에 있습니다. 이후 수정한 supervisor 오류 보고는 이 첫 preview에 포함되지 않습니다.
 
-일반 Chat의 기존 Pandoc·pdflatex도 고정 진단 입력으로 PDF 1쪽·DOCX·TeX 출력을 실제 통과했습니다. 이 검사는 Paper Factory 컨트롤러를 실행하지 않았습니다. 설치 자원의 전체 원본 파일을 실행 공간에 전달하는 경로와 전체 연구 실행은 여전히 검증 대상입니다. 첫 세 text chunk 전달이나 개별 문서 변환 성공을 전체 제작 성공으로 계산하지 않습니다.
+일반 Chat의 초기 Pandoc·pdflatex 진단은 고정 입력으로 PDF 1쪽·DOCX·TeX 출력을 통과했으며 Paper Factory 컨트롤러를 실행하지 않았습니다. 첫 세 text chunk 전달이나 이 개별 변환 성공만으로 전체 제작 성공을 계산하지 않습니다. 이후 원본 전체 배포의 전달과 컨트롤러 준비 결과는 아래 최신 소스 체크포인트로 구분합니다.
 
 별도 개인 설치본 `paper-factory-preview-012`는 41개 자원·22개 core 파일의 원본을 대조하고 Work Cloud의 private 준비·PDF/DOCX/TeX 진단·fresh QuickJS readiness·종료 검사를 실제 통과했습니다. 이 사본 이후 Mac 준비 소스가 바뀌었으므로 최신 43개 자원 패키지의 성공으로 계산하지 않습니다.
 
-일반 Chat에서는 실제 GitHub 도구로 첫 Mac CI의 진단 artifact를 받고 native Files로 실행 공간에 옮겼습니다. 원본 ZIP 13,774 bytes와 GitHub digest, 8개 member와 CRC가 일치했습니다. 이 파일 전달 검사는 패키지 코드·의존성 준비·연구를 실행하지 않았습니다. 첫 Mac arm64·Intel CI는 private 준비에서 실패했으며 원래 진단을 보존했습니다. 현재 Mac 수정은 원본 wheel의 누락된 라이선스와 잘못된 arm64 바이너리 대신 아키텍처별 공식 Pandoc 3.9 ZIP과 고정한 upstream 라이선스를 사용합니다. 실제 Mac 성공과 일반 Chat의 전체 패키지 준비·논문 제작은 다음 검증 대상입니다.
+일반 Chat의 첫 GitHub→native Files 시험은 Mac CI의 실패 진단 artifact를 옮긴 검사였습니다. 원본 ZIP 13,774 bytes와 GitHub digest, 8개 member와 CRC가 일치했지만 패키지 코드·의존성 준비·연구를 실행하지 않았습니다. 첫 Mac arm64·Intel 준비 실패와 이후 모의 플랫폼 테스트 실패의 원래 진단은 보존합니다. 현재 Mac 준비는 누락된 라이선스와 잘못된 arm64 wheel 바이너리 대신 아키텍처별 공식 Pandoc 3.9 ZIP과 고정한 upstream 라이선스를 사용합니다.
+
+검증된 실행·패키지 소스 커밋 `68cb8e2463a1ddb715ff4d12f2c6ede1c2d45307`의 [실제 Mac CI run 37184571428](https://github.com/andongmin94/paper-factory/actions/runs/37184571428), attempt 1은 ARM·Intel 모두 성공했습니다. 각 Darwin CPython 3.12.10 private 프로필은 43개 자원·22개 core, Node 24.21.0·Pandoc 3.9·Typst 0.15.0 준비와 실제 변환·readiness·종료 검사를 통과했습니다. 원본 JUnit은 각 258개 통과·Windows 전용 skip 2개·실패/오류 0건이며, 필수 5개 native/문서 case와 converter bytes도 독립 확인했습니다. ARM CI의 원본 plugin ZIP은 1,378,652 bytes, SHA256 `aebaaffebb1126e03ee26321444e9f59c15386af0cbff8a2293c3562d1f3acf7`, inventory SHA256 `035e2049acd609a5184cbb8b36184c904e4fb2fb465b05ed59de8dc24591eede`입니다. 이 43개 자원 사본은 위의 설치된 41개 자원 preview와 다릅니다. Intel diagnostics 원본도 검증했으며 Intel 배포 ZIP body는 이 독립 audit에서 수신하지 않았습니다.
+
+일반 Chat에서는 이 성공한 원본 전체 배포를 실제 GitHub artifact 도구와 native Files로 전달받고 inventory를 확인했습니다. 기존 Python 3.13.5·Node 22.16.0·Pandoc 3.1.11.1·pdflatex로 명시적 `provided` 준비와 연구를 완료했으며, 의존성 다운로드·설치나 새 venv를 만들지 않았습니다. 새 `research-9704196954a3`는 `completed/exported`, 코드 제출·실험·원고 제출 각 1회이고 cleanup과 빈 journal을 확인했습니다. 36개 입력·72개 관측값·158개 fixture와 39개 production 호출, control 통과·분석·문헌·승인 원고의 원본 연결을 독립 검증했습니다. 문헌의 TC39 자료는 제한된 절의 전사로, 전체 HTML을 수집한 것은 아닙니다. 원고 수정 후 외부 독립 리뷰 003이 승인한 원본으로 첫 submit/export를 수행했습니다. PDF·DOCX·TeX·Markdown·figure·재현 ZIP의 실제 파일과 해시를 검증했으며, 150,310 bytes의 6쪽 PDF는 전쪽 시각 검수를 통과했습니다. 최종 PDF SHA256은 `77e12c6638d9dff3a1847c4c4014ecbc194c4985992565d56f92545e9115d134`입니다.
+
+이번 ordinary Chat의 실제 도구 목록에는 fresh 과학 검토자·subagent·위임 모델 호출이 노출되지 않아 코드와 최종 원고의 독립 과학 리뷰는 외부 Codex에서 받았습니다. 원고 리뷰 001·002의 실제 수정 요청과 003의 승인도 보존했습니다. 같은 Chat의 Deep Research 정적 리뷰 시험은 완료됐고 Work로 넘기지 않았습니다. 입력 전체 읽기·해시 확인·정적 검토는 가능했지만 별도 native 리뷰 job ID와 독립된 새 컨텍스트를 입증하지 못했으며, 보고서는 독립 승인을 거부하는 `accepted=false`를 반환했습니다. 이 판정은 소스 알고리즘이나 실험 control 실패를 뜻하지 않습니다. 이번 결과는 외부 독립 리뷰를 사용한 일반 Chat의 호환 실행·export 검증이며 단일 대화의 독립 검토 기능이나 전자동·PC 없는 전체 제작 성공을 입증하지 않습니다. 변환 receipt의 pdflatex 두 pass는 exit 0과 input/output 해시를 확인했지만 stdout 전체 원본은 동봉되지 않고 각 4,000자 tail만 보존했습니다. 상세 증거와 한계는 [환경 지원 목표](portability-goal.md)에 기록하며 공개 디렉터리 심사나 모든 Chat 환경의 기능을 보장하지 않습니다.
 
 개발자용 `plugin-verification.yml`은 두 실제 Mac 아키텍처에서 준비·종료·문서 출력 검사를 수행하고, 성공한 원본 ZIP·build report를 14일간 별도 artifact로 남깁니다. 이 CI artifact는 검증용이고 OpenAI 공개 디렉터리 등록을 대신하지 않습니다.
 
@@ -45,6 +51,8 @@ Cloud 명령은 필수 writable supervisor 경로를 `<data>/quickjs-supervisor`
 새 0.12.0 소스는 supervisor 파일 접근 불가, 실제 잠금 소유자와의 경합, 잘못된 journal 상태를 구분합니다. 현재 상태를 읽거나 잠금을 확보하지 못하면 cleanup을 확인했다고 보고하지 않습니다. 파일 접근 오류는 호스트의 허용된 실행 권한 안에서 해결하며, 플러그인이 ACL이나 시스템 설정을 바꾸지 않습니다.
 
 [연구 workflow](../skills/paper-factory/references/workflow.md)는 실제 명령, 동적 스키마, 원본/실험/관측값 읽기, 독립 리뷰, 실패·취소·cleanup 처리와 PDF 전달을 설명합니다. 일반 Chat에서는 스킬 문서와 실행 컨테이너의 파일 접근이 별개입니다. 바이너리 읽기나 직접 다운로드가 차단되면 원본 파일 전달을 먼저 해결해야 하며, 수동 ZIP 첨부를 설치만으로 실행하는 경로의 성공으로 계산하지 않습니다. 준비가 실패하면 원인을 해결하며, 실패한 scientific control을 새 ID나 유리한 반복 실행으로 우회하지 않습니다.
+
+도구를 찾지 못할 때는 connector catalog와 호스트의 native 내장 도구가 별도로 노출될 수 있음을 확인합니다. 실제 사용 가능한 모든 namespace를 살펴본 뒤 실행 기능의 부재를 판단하세요. 이번 일반 Chat에서는 connector 목록만으로 파일 실행 도구가 없다고 판단했지만, 전체 namespace를 다시 확인하여 native `container.exec`를 찾았습니다. 이어갈 때는 같은 연구 data·journal과 원래 실행 receipt를 보존하고, 응답 중단을 이유로 실험을 반복하지 않습니다.
 
 ## 저장소에서 패키지 만들기
 
