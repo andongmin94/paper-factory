@@ -1,39 +1,209 @@
 # Environment support goal
 
-The requested outcome is one Paper Factory plugin with the same research and
-export contract in Work Cloud, local Work/Codex on Windows and macOS, and ordinary
-ChatGPT Chat. Docker, WSL, operating-system feature changes and user-managed
-runtime installers are excluded. This goal started on 2026-10-04.
+The current support targets are one Paper Factory plugin with the same research
+and export contract in Work Cloud and local Work/Codex on Windows and macOS.
+On 2026-10-04 the user removed ordinary ChatGPT Chat from the development and
+distribution support scope. Its original research, failures and diagnostics are
+retained as historical evidence; native Chat review and standalone production
+are no longer remaining release requirements. Docker, WSL, operating-system
+feature changes and user-managed runtime installers remain excluded.
 
-The frozen 0.10.2 ZIP and its five completed Cloud studies are retained unchanged.
-The working installation remains frozen 0.11.0. A separate private 0.12.0 preview
-is installed for regression; current source development has explicit provided-host
-preparation. Installing a plugin does not itself establish any environment's
-execution support. The bounded compatibility criteria are supported by the final evidence below; goal status is recorded separately.
+Historical Work Cloud app conversations have installed-plugin research/export
+evidence: private installed probe 0.0.6 produced the separate Premiere study;
+general installed 0.10.0 produced Frontron and Neumorphism-ui, and installed
+0.10.1 produced Madi and Garak. The four general studies used actual installed
+cache commands through create/run/submit-manuscript/export/artifact-bytes, with
+the original PDFs and reproduction ZIPs verified. Their proposals and some
+retained literature were supplied separately, so this is not proof that plugin
+installation plus a repository-URL request autonomously completed every stage.
+The frozen 0.10.2 ZIP only reconverted the five already approved manuscripts
+and verified their 31-page final layout; it did not run five new studies.
+All original studies, failed checks and pinned packages remain preserved.
 
-| Environment | Current observed result | Explicit limits and future checks |
+The working general installation remains frozen 0.11.0. It now has a completed
+actual Windows Codex app study and a separate completed Work Cloud study from
+repository-URL requests with host-authored inputs and native independent reviews.
+The Cloud original PDF was recovered and verified through a backup transfer to
+the Windows receiver; Cloud native delivery of the original file remains
+unverified. A separate installed Windows local Work study also completed export,
+original-file delivery, all-page PDF QA and final evidence archive verification.
+macOS installed-app research-to-paper use and the separate private 0.12.0
+preview/current source's installed-app research remain unverified. Host
+preparation, standalone launcher studies and native CI retain their component
+scope.
+
+Completion now requires selecting the exact installed plugin in an actual
+target-app conversation, starting with the repository URL and research request,
+and letting that app's host generate the plan, code and manuscript, obtain
+native fresh independent reviews, run/analyze the controlled study, export and
+deliver the original paper. Externally prewritten plans, code, reviews or
+manuscripts must not be injected. Record the exact installation/inventory and
+all command/review/output bindings; preparation or a source-package check alone
+cannot satisfy this criterion. Goal status is recorded separately.
+
+| Support target | Installed-app research-to-paper evidence | Component evidence and remaining proof |
 | --- | --- | --- |
-| Work Cloud | Five retained studies; installed 0.11.0 and separate private 0.12.0 preparation/conversion/readiness regressions passed | Validate the next source increment and keep the working-installation upgrade separate |
-| Windows local | New 0.11.0 study exported and all seven PDF pages reviewed; installed Codex 0.11.0 and corrected 0.12.0 preview readiness passed under approved host-tool permissions | Default retained-state access failed; new source release regression and installation remain distinct from these preview checks |
-| macOS local | Actual ARM and Intel native CI passed preparation, conversion, readiness and mandatory lifecycle tests; original artifact bytes independently verified | Evidence covers hosted native Mac CI; personal Mac installation has not been tested |
-| Ordinary Chat | Original distribution reached native Files; provided-host preparation and one controlled study completed/exported with externally reviewed manuscript, original artifact audit and six-page PDF QA | Fresh reviews used external Codex; standalone native review and single-conversation automatic production remain unproved |
+| Work Cloud | General installed 0.11.0 completed URL-request research, native independent reviews and export. Original eight-page PDF received, hash-verified and visually checked through the backup transfer | Current web Work entry verified; original trial's user-visible URL mapping/access and native original direct delivery remain unverified. Standalone attachment PDF changed size, evidence ZIP remote hash/download not verified. Do not count entry visibility or backup recovery as strict full-app or PC-free delivery completion. Historical supplied-input 0.10.x studies and 0.12.0 preview remain separate |
+| Windows Codex | General installed 0.11.0 completed actual app URL-request research-to-paper use, with host-authored inputs, native fresh reviews and verified original eight-page PDF delivery | Current host danger-full-access only. Historical default retained-state access failure and eight native CI failures remain unresolved. The earlier dist-launcher seven-page study and 0.12.0 source are separate |
+| Windows local Work | Separate actual installed 0.11.0 app study completed URL-request research-to-paper use in the human-identified ChatGPT Work conversation on the observed Windows local host; original seven-page PDF delivery and all-page QA verified | Original exports, reproduction/evidence ZIPs and all 56 commands' original stdout/stderr verified. Initial ZIP timestamp failure preserved; packaging recovered without research/export repetition |
+| macOS local Work/Codex target | Not verified through an installed plugin in an actual target-app conversation | Actual ARM/Intel hosted native CI passed preparation/conversion/readiness/lifecycle tests; original diagnostics and ARM package bytes were verified. App installation, fresh research and paper delivery remain required |
+
+Linux dependencies remain part of the Work Cloud execution profile. This table
+does not add Linux desktop Work/Codex to the current support targets or claim
+installation and research verification for those products on Linux.
+
+### Actual general installed-plugin checkpoint — 2026-10-04
+
+The three actual-app trials use general paper-factory 0.11.0, not the private
+0.12.0 preview, with 41 original resources, 22 core files and inventory SHA256
+`d126e509dac16954657cea1f2d8334aa9da8ba13796cad8a7f5bbde3b82a777a`.
+Each app host starts from the repository URL and research request, authors its
+own fresh study inputs and obtains native independent reviews. No other trial's
+prewritten plan, code, review, manuscript or observations are injected.
+
+- Windows Codex `research-531f73211969` is completed/exported with one code,
+  execution and draft submission, confirmed cleanup and an empty final worker
+  journal. Original PDF: 173565 bytes, eight pages, SHA256
+  `eb28687da9578bb8b0a9bf5a7c0655301b34ab6140a89b73ea1d44246c88bf59`.
+  Original reproduction ZIP: 445799 bytes, SHA256
+  `e5c17ca99fac047053cb746bdc9410db1d8edaeb483a91532b3a12ec518de407`.
+  Real user-facing files are in `output/installed-codex-study/`; all eight PDF
+  pages passed visual QA. Native reviewers were requested with `fork_turns=none`.
+  Original files were delivered; a human click was not observed. The current
+  host uses danger-full-access and changed no ACL or supervisor journal; this
+  success does not repair the retained default-permission failure.
+- Work Cloud `research-70313f77d566` independently completed/exported with one
+  execution and submitted draft. The first native manuscript rejection and
+  revised acceptance are preserved. Original PDF: 206313 bytes, eight pages,
+  SHA256 `4f0f89ae1b8da770106c39ddabb8db6f3e09fe2e77c334780d23915dcc93a5aa`.
+  Initial native transfer failed. One retry returned success metadata, but the
+  standalone PDF became 231030 bytes. The 6662325-byte evidence ZIP's native
+  metadata is not a verified remote hash or actual download: readback failed
+  HTTP 502 and the actual Chrome URL failed `ERR_BLOCKED_BY_CLIENT`.
+  The Windows receiver subsequently recovered the exact original PDF from 21
+  untruncated host stdout items through `read_thread`, verified its SHA256 and
+  visually checked all pages. The recovered file is in
+  `output/installed-cloud-study/`. This establishes the original-PDF backup
+  delivery; Cloud native original direct delivery and a PC-free complete
+  delivery flow remain unverified. Research, reviews and exports were not
+  rerun to recover delivery.
+- Windows local Work uses the user's selected conversation, retained in the
+  private receipt. The direct human answer identified
+  `ChatGPT의 Work`, alongside actual Windows local execution; backing
+  `kind=codex` or its codex:// URL alone is not product-surface proof. Its
+  separate host-authored `research-a890a5e45870` passed actual fresh code and
+  manuscript reviews and exported with one code, execution and draft submission.
+  It retained 192 paired units, 768 scalar observations, 194 production calls,
+  195 fixtures and three passing scientific controls. Original PDF: 153986
+  bytes, seven pages, SHA256
+  `8f533373248cfd49bacb833c54f89b3a091628f90a61c91bdd283632c3bd7c53`.
+  Original reproduction ZIP: 427807 bytes, SHA256
+  `6560d20aca8be78f5c5b21c1e805ef294470f22080c9a4dd4dab548373ab5015`.
+  The receiver compared actual PDF/DOCX/Markdown/TeX/reproduction bytes and
+  hashes with independently decoded original controller artifact outputs,
+  checked ZIP CRC and all 39 inventory entries, and accepted all seven PDF
+  pages after visual inspection. Verified files are in
+  `output/frontron-study-20261004-01a106f1/delivery/`; the receiver audit is
+  `windows-work/received-original-exports-audit.json` within the acceptance
+  evidence directory. The final evidence ZIP is 7858322 bytes, SHA256
+  `9d94a53ec51167f734fc48527e7b87c7cea0dfc6d8dcb4b6456ca948cdcd9a6a`.
+  The independent read-only audit verified all 579 CRCs, 578 manifest member
+  hashes, nested original PDF/reproduction ZIP byte equality and 112 exact
+  stdout/stderr streams across 56 command receipts. Final controller state is
+  completed/exported with confirmed cleanup and an empty owned-worker journal.
+  The actual app turn completed without error;
+  its final message links the original PDF, reproduction ZIP, evidence ZIP and
+  artifact hashes in `windows-work/read-thread-final-001.json`. The final audit
+  is `windows-work/final-installed-work-result.json`. The only nonzero command
+  was the preserved first evidence-ZIP packaging failure on a pre-1980
+  timestamp; subsequent packaging succeeded without changing or repeating
+  research, manuscript or export bytes.
+
+On 2026-10-04, actual Chrome verification of the [ChatGPT homepage](https://chatgpt.com/)
+showed an enabled Work button and the `ChatGPT로 Work 시작` composer; the existing
+project conversation had no Chat/Work switcher. The historically observed
+preparation conversation URL
+redirected to the homepage with a blank new Chat composer during this check.
+The current web Work entry is verified, but its visibility does not establish
+the original remote trial's frontend URL mapping, user access or native original
+delivery. The screenshot is retained at
+`cloud/browser-delivery/work-entry-visible-20261004.png` under the evidence
+directory below. No new message or trial was submitted.
+
+Original commands, reviews, receiver receipts and all-page QA are retained
+privately under `.paper-factory/installed-app-acceptance/2026-10-04/`.
+These new observations supersede current readiness-only claims for the tested
+0.11.0 apps; the dated component and historical-study checkpoints below retain
+their original scope and failures. Strict support-goal completion is still
+pending original Cloud trial user access, native original delivery and actual macOS app use, alongside the
+separate remaining work below. Both Windows installed-app trials and local
+Work's final evidence archive verification are complete.
 
 ## 현재 남은 작업
 
-아래 우선순위는 이번 문서 정리에서 제안한 개발 순서입니다. 구현·검증이 남은 범위를 모았으며, 새 연구 실행이나 게시 작업을 시작한 상태로 기록하지 않습니다. 외부 Codex 독립 리뷰를 사용한 일반 Chat 연구·6쪽 PDF, Windows 0.11.0 연구·7쪽 PDF, ARM·Intel Mac CI와 기존 Cloud 성과는 완료된 검증으로 유지합니다.
+아래 목록은 일반 Chat 지원을 제외한 현재 남은 범위입니다. 일반 설치본 `0.11.0`의 Windows Codex·로컬 Work 전체 사용과 원본 파일 수령·PDF 검수, 로컬 Work 최종 증거 ZIP 검증, Work Cloud의 새 연구·export·원본 PDF 보조 수령은 위 checkpoint에 완료 범위로 기록했습니다. 현재 웹 Work 진입 화면은 확인됐으며 원래 Cloud 시험 대화의 사용자 접근·native 원본 직접 전달은 남았습니다. 설치 업그레이드·공개 게시를 수행한 상태로 기록하지 않습니다. 과거 Cloud 설치 실행·논문 수령, Windows standalone dist 연구·7쪽 PDF와 ARM·Intel Mac CI는 각각 당시 범위의 증거로 유지합니다. 과거 Cloud 일반 4편의 proposal·일부 문헌 입력 제공 한계, 외부 Codex 독립 리뷰를 사용한 일반 Chat 연구·6쪽 PDF와 단독 제작 실패 진단도 역사적 기록으로 보존합니다.
 
 | 우선순위 | 남은 작업 | 선행 조건과 완료 기준 |
 | --- | --- | --- |
-| P1 | 일반 Chat 내부 fresh 독립 리뷰와 단독 자동 제작 | 실제 호스트 도구에서 별도 reviewer job·독립된 새 컨텍스트와 원본 입력·리뷰 판정의 provenance를 확인해야 한다. 코드·원고의 fresh 독립 리뷰를 포함해 실제 실행·분석·export·원본 파일 전달까지 같은 Chat에서 PC 연결이나 외부 Codex 보조 없이 완료한 증거를 남긴다. 현재 외부 리뷰를 사용한 성공과 같은 Chat Deep Research의 부정적인 독립성 판정은 그대로 보존한다. |
 | P1 | Windows 기본 도구 권한의 supervisor 접근 | 호스트가 허용한 쓰기·실행 범위에서 같은 retained data·supervisor 상태를 유지하며 기본 도구 권한으로 readiness와 owned-worker cleanup을 확인한다. 원래 접근 오류와 승인된 권한에서의 성공을 각각 보존하고, journal 삭제나 새 data 경로로 우회하지 않는다. |
 | P1 | 기존 Windows native 회귀 실패 8건 | 보존된 general CI의 private-DACL staging cleanup 1건과 legacy WindowsRunner 7건을 각각 진단·해결하고 실제 Windows native 검사와 general CI 결과를 기록한다. 테스트 숨김·추가 skip·격리 또는 권한 보호 축소로 통과시키지 않는다. QuickJS 연구 성공과 이 native 검사 실패는 별개다. |
-| P2 | 최신 정확한 release 사본 검증과 작업 설치본 0.11.0 업그레이드 | 실행 검증된 `68cb8e2463a1ddb715ff4d12f2c6ede1c2d45307`의 artifact·inventory와 이후 README·plugin 문서 입력 변경을 구분한다. 최신 소스로 만든 정확한 ZIP의 입력·inventory·준비·변환·readiness·cleanup 회귀 검사를 완료한 뒤 실제 업그레이드 설치 사본을 확인한다. 기존 동결 ZIP과 연구 증거는 보존한다. |
-| P2 | 개인 Mac 설치와 실제 논문 end-to-end | 실제 개인 Mac 접근이 필요하다. 설치 원본·inventory·호스트 준비·readiness·cleanup을 확인하고 새 통제 연구의 독립 리뷰·실행·분석·원고·export·원본 파일 전달과 전쪽 PDF 검수를 완료한다. ARM·Intel CI의 native lifecycle·converter 진단은 완료됐지만 Mac 연구 논문은 아니다. |
+| P2 | 최신 정확한 release 사본 검증과 작업 설치본 0.11.0 업그레이드 | 실행 검증된 `68cb8e2463a1ddb715ff4d12f2c6ede1c2d45307`의 artifact·inventory와 이후 README·plugin 문서·manifest·skill 지침 입력 변경을 구분한다. 최신 소스로 만든 정확한 ZIP의 입력·inventory·준비·변환·readiness·cleanup 회귀 검사를 완료한 뒤 실제 업그레이드 설치 사본을 확인한다. 이 검사만으로 설치형 전체 사용을 완료 처리하지 않으며 기존 동결 ZIP과 연구 증거를 보존한다. |
+| P2 | 원래 Work Cloud 시험 대화 접근·native 원본 직접 전달 | 일반 설치본 `0.11.0`의 새 연구·native 독립 리뷰·export·원본 PDF 보조 수령과 현재 웹 Work 진입 화면은 확인됐다. 원래 원격 시험 ID와 사용자용 대화 URL의 연결·접근을 확인하고, 연구를 다시 만들지 않고 실제 Cloud native 경로에서 원본 PDF 또는 원본을 포함한 증거 ZIP을 받아 크기·SHA256을 확인한다. 과거 URL의 홈 리다이렉트·최초 전달 실패·변형된 단독 PDF·HTTP 502·Chrome 다운로드 실패를 보존한다. 진입 화면 확인이나 보조 전달 성공을 원래 시험 대화 접근·Cloud native 직접 전달·PC 없는 전체 흐름의 검증으로 바꾸지 않는다. |
+| P2 | 개인 Mac 설치와 실제 앱별 논문 제작·수령 | 실제 Mac 앱·호스트 접근이 필요하다. 정확한 설치본·inventory·호스트 준비·readiness·cleanup을 확인하고 각 지원 앱의 URL 요청부터 앱 호스트 직접 작성과 native fresh 독립 리뷰·새 통제 연구·분석·원고·export·논문 원본 수령·전쪽 PDF 검수까지 확인한다. 외부 작성 입력을 주입하지 않는다. ARM·Intel CI의 native lifecycle·converter 진단은 설치형 Mac 논문 제작 증거가 아니다. |
 | P3 | 공개 디렉터리 등록과 실제 설치 | 공개 등록·심사 완료와 설치 검증이 남아 있다. 계정 자격과 최종 제출 요건을 실제 등록 경로에서 확인하고, 등록·심사 결과와 공개 디렉터리에서 받은 설치 사본의 준비·실행을 검증한다. main 통합이나 개인 ZIP 설치가 공개 등록을 입증하지는 않는다. |
 
-P1의 Chat 독립 리뷰 수단과 두 Windows 문제는 병렬로 다룰 수 있습니다. 정확한 새 release 회귀 검사는 작업 설치본 업그레이드보다 먼저 수행합니다. 개인 Mac 검증에는 실제 호스트가 필요하며, 공개 등록·설치 검증은 별도의 P3 범위입니다.
+두 Windows 문제와 정확한 새 release 회귀 검사는 설치본 업그레이드 전에 완료해야 합니다. 완료된 `0.11.0` 연구·원본 파일 전달·최종 증거 검증과 Cloud 보조 전달은 보존하고 Cloud native 원본 직접 전달·Mac 실제 앱별 전체 사용을 각각 검증합니다. 이후 출시본의 앱별 검증은 업그레이드한 정확한 설치 사본에 따로 연결합니다. 개인 Mac 검증에는 실제 호스트가 필요하며, 공개 등록·설치 검증은 별도의 P3 범위입니다. 일반 Chat의 독립 리뷰 수단이나 단독 자동 제작은 이 목록에서 제외했습니다.
 
-## Implementation and verification scope
+## 일반 Chat 단독 제작의 선행 기능 검사 — 2026-10-04, 지원 종료 전 기록
+
+사용자가 승인한 새 일반 Chat을 실제 Chrome의 ChatGPT 웹에서 만들고, 기존
+`paper-factory-preview-012`를 지정한 Pro Chat에서 검사했습니다. 당시 단독 제작
+조건은 **미완료**였으며, 이후 사용자 결정으로 추가 개발 대상에서 제외했습니다.
+이 검사는 PC 연구 실행기나 외부 Codex 과학 리뷰를 사용한
+이전 연구의 성공을 일반 Chat 단독 제작의 성공으로 재분류하지 않습니다.
+
+| 검사 대상 | 이번 결과 |
+| --- | --- |
+| 기존 지침 읽기 | 설치된 skill·workflow 텍스트를 읽음. 실행 가능한 패키지 원본 접근과 구분 |
+| 검사한 도구 범위 | 직접 도구 11개 namespace·18개 정의, 연결 카탈로그 7개 namespace·183개 정의. Skill 리소스 44개는 실행 도구 수에서 제외 |
+| native 파일 실행·전달 | 기존 Python의 stdlib로 261바이트 JSON을 쓰고 읽음. 별도 native Python 도구가 같은 파일의 크기·SHA256을 확인. 원본 증거 ZIP 두 개를 실제 Chrome에서 다운로드하고 제시된 크기·SHA256과 대조 |
+| 독립 리뷰 | 검사 범위에서 별도 native reviewer job·새 컨텍스트 지정/확인 계약을 찾지 못함. Job은 시작하지 않았고 리뷰 입력·출력 원본 전달도 미검증 |
+| 전체 제작 | 이번 패키지 원본·inventory·준비·readiness·연구·제출·export는 검사하지 않음. `single_chat_full_production_verified: false` |
+
+최초 native Python 파일 접근은 `PermissionError`로 실패했습니다. 웹 Chat이
+새 진단 scratch 디렉터리만 `02700`에서 `02755`로 조정한 뒤 같은 파일의
+읽기에 성공했습니다. 중간 `AssertionError`와 원래 권한 기록의
+`not_yet_run`은 보존했고 이후 성공은 별도 receipt에 남겼습니다. 다른 native
+Python 도구를 통한 쓰기는 확인하지 않았습니다.
+
+원본 및 외부 무결성 검수는 private
+`.paper-factory/ordinary-chat-native/2026-10-04/attempt-001/`에 보존했습니다.
+첫 ZIP은 12211바이트, SHA256
+`cbdcd03b22c25eb4384cacb44ffbbeb843e4dd62328a6bbf2206fbfc67171add`이고,
+최종 ZIP은 16935바이트, SHA256
+`2214b84def5eedd815bb0088028c0bdced0c29d7addf832efd93b27618564d75`입니다.
+무결성 검수는 독립 과학 리뷰가 아닙니다. 도구 metadata·실행 receipt는
+전사·검사 기록이며 플랫폼 원본 registry나 완전한 명령 출력이 아닙니다.
+`command_exit_expected: 0`도 실제 exit code receipt로 인정하지 않습니다.
+보존되지 않은 카탈로그 전체 스키마·별도 reviewer 검색 원문은 unknown으로
+남겼습니다. 원격 실행기의 위치·정체와 PC 연결 상태도 독립적으로 증명하지
+않았습니다. 이후 실제 다운로드 관찰은 native 보고서의 다운로드 전
+unknown/false 값을 덮어쓰지 않고 별도 observer receipt로 기록합니다.
+
+이 결과는 현재 Pro Chat에서 검사한 범위의 판정이며 다른 모델·계정이나
+일반 Chat 전체의 불가능 판정은 아닙니다. [현재 연구 지침](../skills/paper-factory/SKILL.md)은
+“If independent review cannot be performed, explain the blocker and stop before
+the dependent submission.”이라고 명시합니다. 이 조건 때문에 독립 리뷰가
+필요한 제출을 진행하지 않았습니다. 당시 부족했던 조건은 실제 native 독립
+reviewer 도구·새 컨텍스트·원본 입출력 전달과 새 단독 연구였습니다. 현재
+지원 범위에서는 이 Chat 전용 개발·검증을 더 수행하지 않습니다.
+
+## Original implementation and verification scope — historical
+
+The original scope below included ordinary Chat. It is preserved with its
+verification history; the current support targets, installed-app completion
+criterion and remaining-work table above supersede its earlier completion
+assessment and Chat development requirements.
 
 1. Separate private host preparation from the shared JSON research controller.
    Prepare complete platform dependencies and trusted runtime assets without
@@ -57,12 +227,19 @@ Retain exact commands, exit codes, runtime/dependency identities, original
 observations, cleanup receipts, reviews and verified delivered PDF bytes.
 Mocked platform tests are not macOS execution evidence. Converter diagnostics
 are not research papers. A manual attached package can test compatibility but
-does not establish automatic plugin resource delivery.
+does not establish automatic plugin resource delivery. Completion additionally
+requires the actual installed-plugin target-app conversation from the URL
+request through host-generated work, native fresh review and paper delivery;
+standalone host commands or earlier supplied-input studies do not replace it.
 
 Previous readiness observations are in
 `.paper-factory/portability-probe/2026-10-04/verification-summary.json`.
 
 ## Retained increments on 2026-10-04
+
+The following historical component checkpoints predate the actual installed-app
+trials recorded above. Their readiness-only and unverified-app statements
+describe those earlier checkpoints; original evidence and failures are retained.
 
 - Windows actual QuickJS basic/Unicode/source separation and unavailable ambient
   capabilities passed. Fresh readiness also exercised owned forced termination.
@@ -99,7 +276,8 @@ Previous readiness observations are in
   workflow tests passed 72/72. Independent instruction forward review found no
   blocking interface contradiction. Actual Mac execution was unobserved at that
   Windows-test checkpoint.
-- A new Windows Frontron study `research-73b2dea0df76` ran once and reached
+- A new Windows Frontron study `research-73b2dea0df76` ran once through the frozen
+  0.11.0 dist launcher as a standalone local-host run and reached
   analyzed with confirmed cleanup: 96 raw rows, 99 retained fixtures and 51
   actual gate attempts. Two scientific controls passed. Manuscript review and
   original export delivery are the next required stages; these observations do
@@ -114,8 +292,10 @@ Previous readiness observations are in
   changing the document or rerunning the study. The verified user-facing copy
   is `output/pdf/frontron-command-option-validation-windows.pdf`; Word, TeX,
   Markdown, validation and the original reproduction ZIP are under
-  `output/windows-study/`. The end-to-end receipt is
+  `output/windows-study/`. The standalone-host study/export receipt is
   `.paper-factory/portability-implementation/2026-10-04/windows-study/windows-end-to-end-evidence.json`.
+  These bytes do not prove a study through the installed Codex cache or a local
+  Work app conversation; installed-app research-to-paper use remains unverified.
 - The exact new installed package also passed actual Work Cloud preparation,
   private controller/import and PDF/DOCX/TeX converter diagnostics, then fresh
   QuickJS readiness with confirmed cleanup and an empty final journal. No study
@@ -779,16 +959,19 @@ Previous readiness observations are in
   JavaScript and the intermediate PDF-engine TeX are not supplied; receipt
   consistency does not replace independently reading those absent bytes.
 
-### Bounded compatibility criteria assessment
+### Bounded compatibility criteria assessment — historical, superseded
 
-The required implementation/resource-delivery/compatible-execution/export
-criteria now have retained evidence: frozen Cloud research and working
-installations were preserved, Windows completed a fresh paper end-to-end,
-both actual Mac architectures passed private preparation/conversion/native
-lifecycle CI, and ordinary Chat received the verified original distribution,
-prepared its existing host and completed a controlled study through verified
-paper export. The one shared controller and evidence/export contract remain.
-Final goal status and publication checks are recorded separately.
+At the earlier checkpoint, implementation/resource-delivery/compatible-execution
+evidence was retained: historical Cloud research and working installations were
+preserved, Windows produced a fresh paper through a standalone dist launcher,
+both native Mac architectures passed preparation/conversion/lifecycle CI, and
+ordinary Chat completed a controlled study/export using external Codex review.
+That assessment did not verify installed-plugin research-to-paper use in the
+Windows/Mac apps or current 0.11.0/0.12.0 Work Cloud. Historical general Cloud
+studies also used separately supplied proposals and some literature. It is
+superseded by the explicit installed-app, URL-request, host-generated and native
+fresh-review completion criterion above. Component evidence and historical
+successes are retained; the current support goal is not completed by them.
 
 This ordinary Chat test used actual external fresh Codex code/manuscript reviews.
 Its same-conversation Deep Research `accepted=false` remains a negative native
@@ -799,14 +982,16 @@ public-directory registration and upgrading the working
 installation are separate, unverified scopes; this completion evidence does not
 claim them or universal support for every account/host.
 
-The tested execution/package source is commit
+The tested execution/package source at that checkpoint was commit
 `68cb8e2463a1ddb715ff4d12f2c6ede1c2d45307` and its frozen CI artifact/inventory,
-not a later documentation commit. README and plugin installation documentation
-are ZIP-root inputs; subsequent approved edits to those two inputs do not mean
-all 47 current source inputs still equal the tested archive. The remaining 45
-inputs and 43 skill resources are unchanged, and no frozen package is rebuilt
-by these documentation edits. The retained 0.10.2 release/research evidence and
-working 0.11.0 installation remain separate and unchanged.
+not a later documentation commit. At the earlier documentation-only checkpoint,
+README and plugin installation documentation were the two changed ZIP-root
+inputs; the remaining 45 inputs and 43 skill resources were unchanged. Later
+support-scope edits to documentation, manifest and skill instructions are not
+covered by that historical identity statement. No frozen package is rebuilt by
+this documentation correction. The retained 0.10.2 rendering/research evidence
+and working 0.11.0 installation remain separate and unchanged; current exact
+release installation-to-paper completion remains unverified.
 
 Separate general Tests run `37184571403` at that same source commit still has
 one Windows native staging/private-DACL cleanup failure and seven legacy
