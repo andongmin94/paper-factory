@@ -11,3 +11,12 @@ dist/
 .paper-factory/
 .pf-smoke/
 /desktop/
+
+# Local research exports and plugin installation metadata
+/output/
+/.agents/
+
+# Optional downloaded wheels; bootstrap transport wheels remain versioned
+/skills/paper-factory/wheelhouse/beautifulsoup4-*.whl
+/skills/paper-factory/wheelhouse/soupsieve-*.whl
+/skills/paper-factory/wheelhouse/typst-*.whl
