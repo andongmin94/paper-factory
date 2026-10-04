@@ -15,7 +15,7 @@ execution support. This goal remains active.
 | --- | --- | --- |
 | Work Cloud | Five retained studies; installed 0.11.0 and separate private 0.12.0 preparation/conversion/readiness regressions passed | Validate the next source increment and keep the working-installation upgrade separate |
 | Windows local | New 0.11.0 study exported and all seven PDF pages reviewed; installed Codex 0.11.0 and corrected 0.12.0 preview readiness passed under approved host-tool permissions | Default retained-state access failed; new source release regression and installation remain distinct from these preview checks |
-| macOS local | First Apple Silicon and Intel CI attempt failed private preparation; diagnostics preserved; focused preparation source fix added | Obtain a successful new native CI preparation/readiness result |
+| macOS local | Corrected native preparation reached the regression stage on both architectures; retained ARM receipts verify preparation, conversion and readiness; eight inconsistent platform mocks failed | Correct the fixtures and obtain successful native suites with retained mandatory-case evidence |
 | Ordinary Chat | Tiny and first-three-chunk transfer, native converter diagnostic and exact existing GitHub diagnostic-artifact-to-Files transfer passed | Complete plugin distribution delivery, preparation and a full verified paper remain unproved |
 
 ## Work in progress
@@ -481,3 +481,45 @@ Previous readiness observations are in
   This is a source-only package: it has not been installed or used for a native
   Mac or ordinary Chat execution test. The Windows preview003 proof above stays
   bound to its earlier snapshot.
+
+### Actual native regression checkpoint recorded 2026-10-04T06:45:06Z
+
+- The corrected source commit is
+  `7b72f5847dd1c270ea5c1ed2e8bedc75cb29ac05` on the separate approved branch.
+  Plugin verification run `37182911973`, attempt 1, reached
+  `native-regression-suites` on both real Mac architectures and failed there.
+  Neither job retained a successful distribution. The original first preparation
+  failures and this new failure remain separate evidence.
+- The ARM diagnostic artifact `11296335405` reached ordinary Chat through the
+  actual GitHub connector and native Files. Its original 117178 bytes, SHA256
+  `b4fb6c696f2cb9a00b710614466c8a551901a9b3fa4cb6e97b9a82205e222352`,
+  match the GitHub digest. The evidence ZIP is 241018 bytes, SHA256
+  `64a434143983226eb31163afd0765361ccfbb00c07db18e3a7d59b7703930fc3`.
+  The original archive has 25 members; the Chat narrative's count of 24 was a
+  reporting error, not a changed archive. Raw member inventory is authoritative.
+- Original command receipts show build, private preparation, runtime extraction
+  and launcher environment exited zero; pytest exited one. ARM preparation
+  verified 43 resources and actual native Pandoc/Typst diagnostics. Fresh
+  QuickJS readiness reports Node 24.21.0 and confirmed cleanup. The retained
+  empty journal is separate from the native regression result.
+- The actual ARM suite recorded 250 passed, eight failed and two skipped.
+  The eight failures are in Linux/Windows ownership fixtures that changed
+  `module.os` while leaving `module.sys.platform` as `darwin`. A coherent local
+  platform mock is required; assertions and actual Mac ownership tests are not
+  removed or weakened. No individual successful native case is reconstructed
+  from the quiet output.
+- `native-tests.xml` was not retained: the report records a secondary
+  `ValueError`. Collection reproduced two credential-shaped fixture URLs in
+  automatic test IDs rejected by the unchanged log guard. Explicit semantic
+  case labels preserve the fixture values and assertions; all 260 collected
+  IDs then passed that guard. This is a reproduced sufficient cause, not a
+  claim that the absent original XML proves its unique cause.
+- Ordinary Chat also has actual supplied Python 3.13.5, Node 22.16.0 and ten
+  required imported modules. The 3936-byte original capability JSON has SHA256
+  `466786e3d7ac60c66c0f2531b03c0d3c3edfb30cb048a604830cdab3415e811a`.
+  Full plugin delivery, preparation, readiness and research there remain pending.
+- General Tests run `37182911833` ended with six successful and two failed
+  jobs. The previous clone, OS mock and literature-link defects passed on actual
+  Linux and Windows. Eight existing native AppContainer failures remain;
+  the vetted case reports unconfirmed private-DACL staging cleanup. They are
+  not hidden, skipped or classified as QuickJS failures.

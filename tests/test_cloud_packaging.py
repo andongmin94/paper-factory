@@ -305,7 +305,8 @@ def test_changed_cached_download_is_retained_and_never_replaced(tmp_path, monkey
 
 
 @pytest.mark.parametrize('url', ['http://files.pythonhosted.org/file', 'https://attacker.invalid/file',
-                               'https://user:secret@nodejs.org/file', 'https://nodejs.org:443/file'])
+                               'https://user:secret@nodejs.org/file', 'https://nodejs.org:443/file'],
+                         ids=['http-scheme', 'foreign-origin', 'embedded-credentials', 'explicit-port'])
 def test_unpinned_artifact_origins_block_before_download(url):
     bootstrap = load_helper('prepare_host')
     with pytest.raises(ValueError, match='outside the pinned'):

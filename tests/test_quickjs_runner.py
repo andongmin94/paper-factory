@@ -595,6 +595,7 @@ def test_stop_rejects_reused_or_unowned_pid_before_signalling(pinned_runtime, mo
             else:
                 actual_os.close(descriptor)
     monkeypatch.setattr(module, "os", LinuxOs())
+    monkeypatch.setattr(module, "sys", SimpleNamespace(**{**vars(module.sys), "platform": "linux"}))
     monkeypatch.setattr(module, "signal", SimpleNamespace(SIGKILL=9, pidfd_send_signal=lambda *_a: pytest.fail("No reused PID signal")))
     namespace = {"pid_namespace": "pid:[4026533123]", "namespace_index": 1}
     monkeypatch.setattr(module, "_namespace", lambda: namespace)
@@ -620,7 +621,7 @@ def test_stop_rejects_reused_or_unowned_pid_before_signalling(pinned_runtime, mo
 
 def test_windows_recovery_never_terminates_an_unowned_pid(pinned_runtime, monkeypatch, supervisor_root):
     candidate = QuickJSRunner(pinned_runtime, supervisor_root=supervisor_root)
-    monkeypatch.setattr(module, "os", SimpleNamespace(**{**vars(os), "name": "nt"}))
+    mock_windows_os(monkeypatch)
     assert candidate.stop({"kind": "quickjs-worker", "pid": 12345, "owner_nonce": "a" * 32}) is False
     assert candidate._lease is None and candidate._records == {}
     assert not candidate._journal_path.exists()
@@ -669,6 +670,7 @@ def mock_windows_os(monkeypatch):
         def __getattr__(self, name):
             return getattr(actual_os, name)
     monkeypatch.setattr(module, "os", WindowsOs())
+    monkeypatch.setattr(module, "sys", SimpleNamespace(**{**vars(module.sys), "platform": "win32"}))
 
 
 def test_outer_wall_watchdog_rejects_a_frame_from_a_non_exiting_worker(pinned_runtime, monkeypatch, supervisor_root):
@@ -1101,12 +1103,7 @@ def test_successful_orphan_recovery_keeps_lease_until_fresh_spawn(pinned_runtime
             competing._prepare()
         spawned.append(True)
         return child
-    actual_os = module.os
-    class WindowsOs:
-        name = "nt"
-        def __getattr__(self, name):
-            return getattr(actual_os, name)
-    monkeypatch.setattr(module, "os", WindowsOs())
+    mock_windows_os(monkeypatch)
     monkeypatch.setattr(fresh, "_stop_recovered", recover)
     monkeypatch.setattr(module.subprocess, "Popen", spawn)
     ticks = iter([0, 5])
@@ -1132,6 +1129,7 @@ def recovery_metadata(monkeypatch):
             opened.append((pid, flags))
             raise ProcessLookupError("Recorded process is absent")
     monkeypatch.setattr(module, "os", LinuxOs())
+    monkeypatch.setattr(module, "sys", SimpleNamespace(**{**vars(module.sys), "platform": "linux"}))
     monkeypatch.setattr(module, "signal", SimpleNamespace(SIGKILL=9, pidfd_send_signal=lambda *_a: pytest.fail("No process signal")))
     namespace = {"pid_namespace": "pid:[4026533123]", "namespace_index": 1}
     monkeypatch.setattr(module, "_namespace", lambda: namespace)
@@ -1230,6 +1228,7 @@ def test_live_pidfd_order_mapping_journal_and_cleanup(pinned_runtime, supervisor
             "phase": "running", "purpose": "probe", "handle": handle}
         events.append("callback")
     monkeypatch.setattr(module, "os", LinuxOs())
+    monkeypatch.setattr(module, "sys", SimpleNamespace(**{**vars(module.sys), "platform": "linux"}))
     monkeypatch.setattr(module, "Path", proc_path)
     monkeypatch.setattr(module.subprocess, "Popen", spawn)
     monkeypatch.setattr(module, "signal", SimpleNamespace(SIGCHLD=17, SIG_DFL=0, SIGKILL=9,
@@ -1267,6 +1266,7 @@ def test_nondefault_sigchld_is_rejected_before_spawning(pinned_runtime, supervis
         def __getattr__(self, name):
             return getattr(actual_os, name)
     monkeypatch.setattr(module, "os", LinuxOs())
+    monkeypatch.setattr(module, "sys", SimpleNamespace(**{**vars(module.sys), "platform": "linux"}))
     monkeypatch.setattr(module, "signal", SimpleNamespace(SIGCHLD=17, SIG_DFL=0, getsignal=lambda _signal: 1))
     monkeypatch.setattr(module.subprocess, "Popen", lambda *_a, **_k: pytest.fail("Unsupported SIGCHLD must not spawn"))
     result = candidate._execute(Path("trusted-node"), {"timeout_seconds": 1}, purpose="probe")

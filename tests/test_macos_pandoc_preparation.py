@@ -78,7 +78,7 @@ def test_modified_native_binary_is_not_accepted(asset, tmp_path):
     ('https://release-assets.githubusercontent.com/unreviewed',False),
     ('https://attacker.invalid/pandoc.zip',True),
     ('https://user:secret@github.com/jgm/pandoc/releases/download/3.9/pandoc-3.9-arm64-macOS.zip',False),
-])
+], ids=['wrong-repository', 'unreviewed-release-host', 'foreign-redirect', 'embedded-credentials'])
 def test_native_artifact_origin_stays_bounded(url, redirect):
     bootstrap = helper('native_pandoc_origins', ROOT / 'skills/paper-factory/scripts/prepare_host.py')
     with pytest.raises(ValueError, match='outside the pinned'):
