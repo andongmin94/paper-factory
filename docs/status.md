@@ -1,6 +1,8 @@
 # Implementation status
 
-Current workspace: version 0.9.0 with the Windows Electron application and native
+이 문서는 이전 Windows Electron·수동 CLI 개발의 역사적 검증 기록입니다. 아래 버전·측정·관측과 "next increment"는 당시 범위입니다. 현재 플러그인의 [남은 작업](portability-goal.md#현재-남은-작업)과 [최신 설치 안내](plugin.md)를 별도로 확인하세요.
+
+Recorded historical workspace: version 0.9.0 with the Windows Electron application and native
 Windows automatic research. The current precision audit is recorded in
 [code audit](code-audit.md). The earlier Windows work below was verified on
 2026-10-01 (Asia/Seoul); its measured release evidence is preserved separately.

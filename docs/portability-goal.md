@@ -18,6 +18,21 @@ execution support. The bounded compatibility criteria are supported by the final
 | macOS local | Actual ARM and Intel native CI passed preparation, conversion, readiness and mandatory lifecycle tests; original artifact bytes independently verified | Evidence covers hosted native Mac CI; personal Mac installation has not been tested |
 | Ordinary Chat | Original distribution reached native Files; provided-host preparation and one controlled study completed/exported with externally reviewed manuscript, original artifact audit and six-page PDF QA | Fresh reviews used external Codex; standalone native review and single-conversation automatic production remain unproved |
 
+## 현재 남은 작업
+
+아래 우선순위는 이번 문서 정리에서 제안한 개발 순서입니다. 구현·검증이 남은 범위를 모았으며, 새 연구 실행이나 게시 작업을 시작한 상태로 기록하지 않습니다. 외부 Codex 독립 리뷰를 사용한 일반 Chat 연구·6쪽 PDF, Windows 0.11.0 연구·7쪽 PDF, ARM·Intel Mac CI와 기존 Cloud 성과는 완료된 검증으로 유지합니다.
+
+| 우선순위 | 남은 작업 | 선행 조건과 완료 기준 |
+| --- | --- | --- |
+| P1 | 일반 Chat 내부 fresh 독립 리뷰와 단독 자동 제작 | 실제 호스트 도구에서 별도 reviewer job·독립된 새 컨텍스트와 원본 입력·리뷰 판정의 provenance를 확인해야 한다. 코드·원고의 fresh 독립 리뷰를 포함해 실제 실행·분석·export·원본 파일 전달까지 같은 Chat에서 PC 연결이나 외부 Codex 보조 없이 완료한 증거를 남긴다. 현재 외부 리뷰를 사용한 성공과 같은 Chat Deep Research의 부정적인 독립성 판정은 그대로 보존한다. |
+| P1 | Windows 기본 도구 권한의 supervisor 접근 | 호스트가 허용한 쓰기·실행 범위에서 같은 retained data·supervisor 상태를 유지하며 기본 도구 권한으로 readiness와 owned-worker cleanup을 확인한다. 원래 접근 오류와 승인된 권한에서의 성공을 각각 보존하고, journal 삭제나 새 data 경로로 우회하지 않는다. |
+| P1 | 기존 Windows native 회귀 실패 8건 | 보존된 general CI의 private-DACL staging cleanup 1건과 legacy WindowsRunner 7건을 각각 진단·해결하고 실제 Windows native 검사와 general CI 결과를 기록한다. 테스트 숨김·추가 skip·격리 또는 권한 보호 축소로 통과시키지 않는다. QuickJS 연구 성공과 이 native 검사 실패는 별개다. |
+| P2 | 최신 정확한 release 사본 검증과 작업 설치본 0.11.0 업그레이드 | 실행 검증된 `68cb8e2463a1ddb715ff4d12f2c6ede1c2d45307`의 artifact·inventory와 이후 README·plugin 문서 입력 변경을 구분한다. 최신 소스로 만든 정확한 ZIP의 입력·inventory·준비·변환·readiness·cleanup 회귀 검사를 완료한 뒤 실제 업그레이드 설치 사본을 확인한다. 기존 동결 ZIP과 연구 증거는 보존한다. |
+| P2 | 개인 Mac 설치와 실제 논문 end-to-end | 실제 개인 Mac 접근이 필요하다. 설치 원본·inventory·호스트 준비·readiness·cleanup을 확인하고 새 통제 연구의 독립 리뷰·실행·분석·원고·export·원본 파일 전달과 전쪽 PDF 검수를 완료한다. ARM·Intel CI의 native lifecycle·converter 진단은 완료됐지만 Mac 연구 논문은 아니다. |
+| P3 | 공개 디렉터리 등록과 실제 설치 | 공개 등록·심사 완료와 설치 검증이 남아 있다. 계정 자격과 최종 제출 요건을 실제 등록 경로에서 확인하고, 등록·심사 결과와 공개 디렉터리에서 받은 설치 사본의 준비·실행을 검증한다. main 통합이나 개인 ZIP 설치가 공개 등록을 입증하지는 않는다. |
+
+P1의 Chat 독립 리뷰 수단과 두 Windows 문제는 병렬로 다룰 수 있습니다. 정확한 새 release 회귀 검사는 작업 설치본 업그레이드보다 먼저 수행합니다. 개인 Mac 검증에는 실제 호스트가 필요하며, 공개 등록·설치 검증은 별도의 P3 범위입니다.
+
 ## Implementation and verification scope
 
 1. Separate private host preparation from the shared JSON research controller.
@@ -780,7 +795,7 @@ Its same-conversation Deep Research `accepted=false` remains a negative native
 independence result, not a source/control failure. A standalone single-conversation,
 fully automatic PC-free workflow is not established. Personal Mac plugin
 installation, a Mac research paper, default unattended Windows tool permissions,
-public-main merge, public-directory registration and upgrading the working
+public-directory registration and upgrading the working
 installation are separate, unverified scopes; this completion evidence does not
 claim them or universal support for every account/host.
 
@@ -800,3 +815,7 @@ WindowsRunner failures, preserved in
 these are distinct from successful Mac Plugin verification `37184571428`,
 scientific controls and native-review independence, and no wholly green test
 suite or new fallback/ACL repair is claimed.
+
+### main integration checkpoint recorded 2026-10-04
+
+작업 브랜치 `codex/plugin-portability-012`의 미통합 commit 4개를 main에 fast-forward로 통합했습니다. 병합 직후 로컬·원격 main은 모두 `e3442353787cf3dd51f1d7f9909aea4ec4da2b41`였으며, 통합된 작업 브랜치는 로컬·원격에서 삭제했습니다. 다른 저장소 브랜치는 남아 있지 않습니다. 이전 날짜별 기록의 main 미병합 문구는 당시 상태로 보존합니다. 이 통합은 공개 디렉터리 등록이나 새 plugin ZIP 설치를 수행한 기록이 아닙니다.

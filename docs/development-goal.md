@@ -1,5 +1,7 @@
 # Current development goal
 
+아래 기존 Work Cloud 개발 목표의 세 milestone은 모두 완료됐습니다. 원래 연구·검증 기록은 보존하며, 최신 환경별 상태와 [현재 남은 작업](portability-goal.md#현재-남은-작업)은 환경 지원 문서에서 관리합니다.
+
 The user authorized completing all three milestones on 2026-10-04:
 
 1. Verify and implement Docker-free isolated experiments in ChatGPT Work Cloud.
