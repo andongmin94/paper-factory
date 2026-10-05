@@ -358,27 +358,27 @@ def collect(
     the declared reading scope. Metadata remains separately recorded when an
     allowed full text is fetched. ``cancelled`` preserves partial evidence.
     """
-    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 12:
-        raise ValueError("Literature source limit must be between 1 and 12")
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 0 <= limit <= 12:
+        raise ValueError("Literature source limit must be between 0 and 12")
     if not isinstance(queries, list) or not 1 <= len(queries) <= 8:
         raise ValueError("Provide between 1 and 8 literature queries")
     if any(not isinstance(query, str) or not query.strip() or len(query) > 500 or any(ord(c) < 32 for c in query) for query in queries):
         raise ValueError("Literature queries must contain 1 to 500 printable characters")
     queries = list(dict.fromkeys(query.strip() for query in queries))
     root = _prepare_root(root)
-    result: dict = {"sources": [], "searches": [], "warnings": []}
+    result: dict = {"sources": [], "searches": [
+        {"query": query, "provider": "Crossref", "status": "not_attempted", "attempted": False, "resolved_ids": []}
+        for query in queries], "warnings": []}
     seen: set[str] = set()
     try:
         with httpx.Client(timeout=httpx.Timeout(15.0, connect=5.0), follow_redirects=False,
                           headers={"User-Agent": "PaperFactory/0.6 (bounded literature collector)"}) as client:
-            for query in queries:
+            for search in result["searches"]:
                 _check_cancel(cancel)
-                if sum(source["scope"] != "metadata_only" for source in result["sources"]) >= limit:
-                    break
-                search: dict = {"query": query, "provider": "Crossref", "status": "failed", "resolved_ids": []}
-                result["searches"].append(search)
+                query = search["query"]
+                search.update(status="failed", attempted=True)
                 try:
-                    content, url, _ = _fetch(client, CROSSREF + "/works", params={"query.bibliographic": query, "rows": limit,
+                    content, url, _ = _fetch(client, CROSSREF + "/works", params={"query.bibliographic": query, "rows": max(1, limit),
                                                                                  "filter": "has-abstract:true"}, cancel=cancel)
                     path, digest = _save(root, "search-" + hashlib.sha256(query.encode()).hexdigest()[:16], "json", content)
                     search.update({"url": url, "raw_path": path, "sha256": digest})
@@ -445,10 +445,13 @@ def collect(
                     except (ValueError, OSError, httpx.HTTPError) as error:
                         result["warnings"].append(f"Crossref candidate verification failed ({type(error).__name__}); candidate was omitted")
     except (ValueError, OSError, httpx.HTTPError) as error:
+        for search in result["searches"]:
+            if not search["attempted"]:
+                search.update(status="failed", error=type(error).__name__)
         result["warnings"].append(f"Literature provider initialization failed ({type(error).__name__}); no results were inferred")
     except _Cancelled:
         result["cancelled"] = True
         result["warnings"].append("Literature collection was cancelled; partial evidence was preserved")
     if not any(source["scope"] in {"abstract", "full_text"} for source in result["sources"]):
-        result["warnings"].append("No abstract or full text was inspected; metadata does not establish related-work findings or novelty")
+        result["warnings"].append("No abstract or full text was inspected in this collection attempt. Metadata does not establish related-work findings or novelty")
     return result

@@ -1,0 +1,32 @@
+{
+  "name": "@siwc/local",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "files": ["dist", "LICENSE", "THIRD_PARTY_NOTICES.md", "docs/dependency-inventory.json"],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node copy-notices.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --experimental-strip-types --test test/*.test.mjs"
+  },
+  "engines": { "node": ">=22" },
+  "dependencies": {
+    "jose": "^6.1.0",
+    "proper-lockfile": "^4.1.2"
+  },
+  "devDependencies": { "@types/proper-lockfile": "^4.1.4" },
+  "license": "SEE LICENSE IN LICENSE",
+  "paperFactoryVendor": {
+    "repository": "https://github.com/openai/sign-in-with-chatgpt-devkit",
+    "commit": "f723814abdccec135b519c451fb6e1992ee5e933",
+    "changes": "Package/build metadata adapted for Paper Factory. responses.ts uses the application's bounded ten-minute stream deadline; response-deadline.test.mjs adds synthetic regression coverage. Other upstream source/tests are unchanged."
+  }
+}

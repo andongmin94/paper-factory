@@ -18,15 +18,6 @@ def source(tmp_path):
     return path
 
 
-def test_plugin_converter_uses_installed_pandoc_without_path_configuration(source, monkeypatch):
-    pytest.importorskip("pypandoc")
-    from docx import Document
-    monkeypatch.setattr(conversion.shutil, "which", lambda _: None)
-    output = source.with_suffix(".docx")
-    conversion.convert(source, output)
-    assert "Export contract" in " ".join(p.text for p in Document(output).paragraphs)
-    with pytest.raises(ValueError, match="Pandoc is required"):
-        conversion.pandoc_binary("missing-user-selected-converter")
 
 
 @pytest.mark.parametrize("enabled", [False, True])
@@ -188,8 +179,7 @@ def test_statistics_export_keeps_long_metric_names_outside_narrow_numeric_tables
 def test_missing_converter_cannot_leave_a_stale_successful_artifact(source, monkeypatch):
     output = source.with_suffix(".tex")
     output.write_text("stale successful export", encoding="utf-8")
-    monkeypatch.setattr(conversion.shutil, "which", lambda _: None)
-    with pytest.raises(ValueError, match="Pandoc is required"):
+    with pytest.raises(ValueError, match="verified absolute path"):
         conversion.convert(source, output, pandoc="missing-explicit-converter")
     assert not output.exists()
 
@@ -261,81 +251,19 @@ def test_pdf_engine_failure_removes_partial_pdf_and_retains_debug_source(source,
     assert "Generated debug source" in output.with_suffix(".typ").read_text(encoding="utf-8")
 
 
-def test_explicit_pdflatex_uses_safe_native_passes_and_binds_actual_pdf_bytes(source, pandoc, monkeypatch, tmp_path):
-    from pypdf import PdfWriter, PdfReader
-    engine = tmp_path / 'pdflatex'
-    engine.write_bytes(b'trusted native engine test identity; not executed')
-    original_run = conversion.subprocess.run
-    calls = []
-    def native(command, **kwargs):
-        if command[0] != str(engine):
-            return original_run(command, **kwargs)
-        calls.append(command)
-        assert '-no-shell-escape' in command and '-halt-on-error' in command
-        assert kwargs['timeout'] == 120 and kwargs['cwd'] == source.parent
-        writer = PdfWriter()
-        writer.add_blank_page(width=612, height=792)
-        with Path(command[-1]).with_suffix('.pdf').open('wb') as stream:
-            writer.write(stream)
-        return SimpleNamespace(returncode=0, stdout=b'Observed native pass warning\r\n\xff', stderr=b'')
-    monkeypatch.setattr(conversion.subprocess, 'run', native)
-    output = source.with_suffix('.pdf')
-    original = source.read_bytes()
-    receipt = conversion.convert(source, output, pandoc=pandoc, pdf_engine='pdflatex', pdflatex=str(engine), page_numbers=False)
-    assert source.read_bytes() == original and len(PdfReader(output).pages) == 1
-    assert receipt['engine'] == 'Pandoc → pdflatex' and '--to=latex' in receipt['command']
-    assert len(calls) == 2 and receipt['engine_commands'] == calls
-    assert all(item['exit_code'] == 0 and item['stdout_sha256'] == hashlib.sha256(b'Observed native pass warning\r\n\xff').hexdigest()
-               for item in receipt['engine_passes'])
-    assert receipt['engine_executable'] == {'path': str(engine), 'target_path': str(engine.resolve()), 'sha256': digest_file(engine)}
-    assert receipt['input_sha256'] == hashlib.sha256(original).hexdigest() and receipt['output_sha256'] == digest_file(output)
-    generated = output.with_suffix('.pdflatex.tex')
-    assert r'\pagestyle{empty}' in generated.read_text(encoding='utf-8')
-    assert receipt['engine_source_sha256'] == digest_file(generated)
-    assert not output.with_suffix('.typ').exists()
-    assert not generated.with_suffix('.pdf').exists()
-    conversion.convert(source, source.with_suffix('.tex'), pandoc=pandoc)
-    assert receipt['engine_source_sha256'] == digest_file(generated)
 
 
-@pytest.mark.parametrize('failure', ['nonzero', 'timeout', 'invalid_pdf', 'changed_engine'])
-def test_selected_pdflatex_failure_removes_pdf_without_typst_fallback(source, monkeypatch, tmp_path, failure):
-    from pypdf import PdfWriter
-    engine = tmp_path / 'pdflatex'
-    engine.write_bytes(b'engine test identity')
-    output = source.with_suffix('.pdf')
-    output.write_bytes(b'stale successful export')
-    monkeypatch.setattr(conversion, 'pandoc_binary', lambda _: 'trusted-pandoc-fixture')
-    def native(command, **kwargs):
-        if command[0] == 'trusted-pandoc-fixture':
-            Path(command[command.index('-o') + 1]).write_text('Trusted generated LaTeX')
-            return SimpleNamespace(returncode=0, stderr='')
-        partial = Path(command[-1]).with_suffix('.pdf')
-        partial.write_bytes(b'partial PDF')
-        if failure == 'timeout':
-            raise subprocess.TimeoutExpired(command, 120)
-        if failure == 'changed_engine':
-            writer = PdfWriter()
-            writer.add_blank_page(width=612, height=792)
-            with partial.open('wb') as stream:
-                writer.write(stream)
-            engine.write_bytes(b'changed engine identity')
-        return SimpleNamespace(returncode=8 if failure == 'nonzero' else 0, stdout=b'Actual compiler diagnostic', stderr=b'')
-    monkeypatch.setattr(conversion.subprocess, 'run', native)
-    with pytest.raises(ValueError, match='pdflatex|Compiled PDF'):
-        conversion.convert(source, output, pdf_engine='pdflatex', pdflatex=str(engine))
-    assert not output.exists() and not output.with_suffix('.pdflatex.pdf').exists()
-    assert output.with_suffix('.pdflatex.tex').read_text() == 'Trusted generated LaTeX'
-    assert not output.with_suffix('.typ').exists()
 
 
-def test_pdflatex_pdf_requires_explicit_executable_without_searching_path(source, monkeypatch):
-    monkeypatch.delenv('PF_PDFLATEX_BIN', raising=False)
-    monkeypatch.setattr(conversion, 'pandoc_binary', lambda _: 'trusted-pandoc-fixture')
-    def generated(command, **kwargs):
-        Path(command[command.index('-o') + 1]).write_text('Generated LaTeX')
-        return SimpleNamespace(returncode=0, stderr='')
-    monkeypatch.setattr(conversion.subprocess, 'run', generated)
-    with pytest.raises(ValueError, match='verified absolute executable'):
-        conversion.convert(source, source.with_suffix('.pdf'), pdf_engine='pdflatex')
-    assert not source.with_suffix('.pdf').exists()
+
+
+def test_converter_requires_explicit_absolute_path_without_discovery(source, monkeypatch, pandoc):
+    from docx import Document
+    monkeypatch.delenv("PYPANDOC_PANDOC", raising=False)
+    with pytest.raises(ValueError, match="verified absolute path"):
+        conversion.convert(source, source.with_suffix(".docx"))
+    with pytest.raises(ValueError, match="verified absolute path"):
+        conversion.pandoc_binary("pandoc")
+    output = source.with_suffix(".docx")
+    conversion.convert(source, output, pandoc=pandoc)
+    assert "Export contract" in " ".join(p.text for p in Document(output).paragraphs)

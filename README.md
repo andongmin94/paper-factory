@@ -1,61 +1,78 @@
 # Paper Factory
 
-GitHub 저장소를 연구하고, 실제 실험 근거가 연결된 논문 초안과 PDF를 만드는 플러그인입니다. 호스트 모델이 연구 계획·실험 코드·리뷰·원고를 작성하고, Paper Factory가 원본과 제출물의 해시를 고정해 격리 실험·분석·파일 검증을 수행합니다. Work Cloud와 로컬 Work·Codex는 같은 연구 컨트롤러를 사용하며, 환경에 맞는 의존성과 실행기만 준비합니다. 별도 MCP 서버나 Paper Factory 모델 로그인은 필요하지 않습니다.
+Windows·macOS용 독립 Electron 연구 앱입니다. 앱과 엔진 소스 버전은 **0.13.0**입니다. 공식 Sign in with ChatGPT SDK와 실제 neobrutal-ui 컴포넌트로 계정 연결, 크레딧 설정 안내, 계정별 모델 목록, 공개 저장소 선택, 연구 작업과 결과 파일 화면을 구현했습니다.
 
-## 지원 범위
+**열두 번째 Windows 설치본의 최종 검증까지 서로 다른 공개 저장소의 실제 구독 연구 3/3편을 완료했습니다. Premiere·navigation·Frontron CLI의 단회 실험, 새 원고와 별도 문맥 리뷰, 5종 출력과 실제 앱 저장 15개를 확인했습니다. PDF 총29쪽 직접 시각 검수, DOCX 전체 내용과 ZIP 전 멤버 무결성 검사를 통과했습니다. 앱의 PDF 열기 요청·결과 폴더 표시와 Chrome의 정확한 저장본 PDF 표시를 구분해 확인했습니다. 정상 종료 후 새 설치 앱 프로세스에서 5개 작업과 같은 연결을 복원하고 새 Astra 완료 응답을 받았습니다. 이전 실패 연구·원고·출력·관측은 보존합니다.** 첫 연결 게이트의 자체 OAuth·완전 종료 후 연결 복원과 이후 설치본의 검증 이력을 보존했습니다. 다섯 번째 설치본에서 export한 첫 preview 연구 보고서는 프로토콜 무효를 명시하므로 성공 논문에 포함하지 않습니다. 기존 플러그인 논문과 Mac 엔진 CI도 새 앱의 성공 증거와 구분합니다.
 
-지원 목표는 **ChatGPT Work Cloud와 Windows·macOS의 로컬 Work·Codex**입니다. 2026-10-04 사용자 결정으로 일반 ChatGPT Chat 지원은 개발·배포 대상에서 제외했습니다. **사용 검증의 완료 기준은 앱에 설치한 플러그인을 대화에서 호출하여 저장소 URL 요청부터 새 연구·독립 리뷰·실험·논문 생성·원본 PDF 전달까지 마치는 것입니다.** 앱 호스트가 계획·코드·원고를 작성하고 새 독립 리뷰를 받아야 하며, 외부에서 미리 만든 제출물을 주입하지 않습니다. 배포 코드를 직접 실행한 연구나 CI 통과는 구현 검사이며, 이 완료 기준을 대신하지 않습니다.
+## 현재 상태
 
-| 환경 | 설치한 플러그인의 전체 사용 검증 | 별도로 완료한 구현 검사와 남은 작업 |
-| --- | --- | --- |
-| Work Cloud | 일반 설치본 **0.11.0의 URL 요청부터 새 연구·독립 리뷰·export 완료**. 원본 8쪽 PDF는 보조 전달로 수령·해시·전쪽 검수 완료. **원래 시험 대화의 사용자 접근·Cloud native 원본 직접 전달은 미검증** | 현재 웹 Work 진입 화면은 확인됨. 원래 시험 대화의 URL 연결과 native 원본 다운로드·최신 출시본 검증이 남음. native 재첨부의 단독 PDF는 크기가 변했고 원본 증거 ZIP의 실제 다운로드는 확인하지 못함 |
-| Windows Codex | 일반 설치본 **0.11.0의 전체 사용 검증 완료**. 앱 호스트가 새 계획·코드·원고를 작성하고 native fresh 독립 리뷰·실험·export·원본 8쪽 PDF 전달·전쪽 검수 완료 | 현재 호스트의 `danger-full-access` 범위. 과거 기본 권한 접근 문제와 native 회귀 실패 8건은 별도로 남음. 소스 0.12.0의 설치형 연구 결과가 아님 |
-| Windows 로컬 Work | 일반 설치본 **0.11.0의 전체 사용 검증 완료**. 사용자가 ChatGPT Work로 확인한 Windows 로컬 대화에서 호스트 직접 작성·새 독립 리뷰·실험·export·원본 7쪽 PDF 전달·전쪽 검수 완료 | 원본 재현 ZIP·최종 증거 ZIP과 56개 명령의 원본 출력도 검증 완료. 최초 ZIP 포장 실패는 보존하고 연구·export를 반복하지 않고 복구 |
-| macOS 로컬 Work·Codex | **미완료**. 실제 앱에 설치하여 논문을 받는 과정은 미검증 | ARM·Intel 실제 CI의 준비·변환·실행기·종료 검사에서 각각 258개 통과·Windows 전용 skip 2개. 실제 Mac에서 각 앱의 설치·대화 호출·새 연구·PDF 전달 필요 |
+| 항목 | 상태 |
+| --- | --- |
+| Electron main 인증·모델 요청, 제한된 preload IPC, React 화면 | 구현·타입 검사·빌드 |
+| React 19·Tailwind 4·Base UI, 원본 neobrutal-ui Button/Card/Badge/Select/Checkbox | 실제 원본 도입, commit·라이선스·해시 보존 |
+| 자체 OAuth 등록, OS 보호 저장소, 계정별 모델 조회, `response.completed` 판정 | Windows 실제 계정 검증 통과 |
+| 앱 controller·Responses parser·공식 SDK 회귀 | 최신203 passed, 1 skipped; 전체 원문·라이선스 공지 전달·취소 상태·원고 수정·앱 내부 저장 창의 합성 자료·모의 transport 검사 |
+| Electron UI·OS 보호 저장소 fixture | 최신4 passed, 20.2초; 실제 계정·논문 증거와 분리 |
+| 화면 구성 | 연결·새 연구·결과를 고정 사이드 탭으로 분리; 탭 전환 시 입력과 모델 선택 유지. 새 Windows 설치본 적용·실제 화면 확인 |
+| 제한된 Python IPC·QuickJS·문서 변환 런타임 | 최종 Windows 런타임 4,463개 파일·30개 wheel, 전체 해시와 native probe 통과; 이전 시스템 PATH 없는 실행·한글 경로 이동·native 문서 검사도 별도 보존 |
+| 독립 엔진과 legacy 정리 | Python 21개와 QuickJS worker 1개로 구성; 최신 전체 Python 794 passed/7 skipped. 플러그인·Cloud·CLI·구 runner·투고 경로 제거 완료 |
+| 실제 연구 작업·최종 설치본·새 논문 3편 | 최종3/3편. Premiere/navigation 각18회, CLI17회 실제 생산 호출·각32관측·연구별 성공 실행1회·별도 리뷰 승인. 현재124/72/112개 동결 artifact 전량 해시와 이전 실패 보존. 정상 종료·새 프로세스의5개 작업/연결 복원·새 응답 확인, 추가 과학실험0회 |
+| macOS ARM/Intel 런타임 | 최종 소스의 외부 플랫폼 조립·해시 검사: ARM 4,349개·Intel 4,346개 파일; Mac 네이티브 실행·DMG·CI·설치 미검증 |
+| 최종 논문 파일 검수 | PDF10/10/9쪽 전쪽 직접 검수·DOCX65/66/62문단(3200/3261/3046단어)·각 표2/그림1·각 OOXML19 및 ZIP176/476/261멤버 전량 CRC/크기/SHA 검수·실제 저장본15개 원본 일치. 관리 런타임에 LibreOffice가 없어 DOCX 시각 검증 미수행 |
 
-지원 목표에 포함되었다는 뜻이 해당 앱의 사용 검증 완료를 뜻하지는 않습니다. 현재 문서·스킬의 지원 범위 변경은 기존 설치 ZIP에 자동 반영되지 않으며, 공개 디렉터리 등록·심사·설치 검증도 남아 있습니다. 다음 작업은 [환경 지원 목표](docs/portability-goal.md#현재-남은-작업)에서 관리합니다.
+[계획과 완료 기준](docs/standalone-app-plan.md), [현재 검증 기록](docs/standalone-verification.md)을 확인하세요.
 
-**설치형 검증 checkpoint — 2026-10-04:** 세 실제 앱 시험은 일반 설치본 `paper-factory` `0.11.0`의 원본 41개 자원·22개 core와 inventory SHA256 `d126e509dac16954657cea1f2d8334aa9da8ba13796cad8a7f5bbde3b82a777a`를 사용합니다. 앱 호스트가 저장소 URL 요청에서 새 연구 입력을 작성하며, 다른 시험의 계획·코드·리뷰·원고·관측값을 주입하지 않습니다. Windows Codex의 `research-531f73211969`는 실행 1회·제출 원고 1회로 완료됐고 원본 PDF는 173,565 bytes·8쪽입니다. 원본 파일과 재현 ZIP은 `output/installed-codex-study/`에 있습니다.
+## 앱의 동작
 
-Work Cloud의 별도 `research-70313f77d566`도 실행 1회·제출 원고 1회로 완료됐습니다. 첫 원고 리뷰의 거절과 수정 후 승인을 보존했습니다. native 첨부는 처음 실패했고 재첨부 결과의 단독 PDF는 원본 206,313 bytes와 다른 231,030 bytes였습니다. 증거 ZIP의 native 성공 metadata가 있어도 실제 원격 파일 해시는 미검증이며 다운로드는 HTTP 502와 Chrome `ERR_BLOCKED_BY_CLIENT`로 실패했습니다. 이후 원본 PDF를 21개 잘리지 않은 host stdout 출력에서 Windows 수신 호스트로 복구해 SHA256과 8쪽 전쪽 검수를 확인했습니다. 이 보조 전달 파일은 `output/installed-cloud-study/`에 있으며, **Cloud native 원본 직접 전달이나 PC 없이 원본을 받는 전체 흐름의 완료로 계산하지 않습니다.** 원본 명령·리뷰·수신·검수 기록은 private `.paper-factory/installed-app-acceptance/2026-10-04/`에 보존합니다.
+`Continue with ChatGPT`는 이 앱의 공식 OAuth 등록과 사용자 동의를 사용합니다. 다른 앱의 인증 파일을 읽거나 복사하지 않으며 API 키 입력이나 별도 API 결제를 요구하지 않습니다. 로그인과 ChatGPT 구독 사용 권한은 별도로 확인합니다.
 
-2026-10-04 실제 Chrome의 [ChatGPT 홈](https://chatgpt.com/)에서 활성화된 Work 버튼과 `ChatGPT로 Work 시작` 입력창을 확인했습니다. 기존 프로젝트 대화에는 이 전환 버튼이 없었습니다. 과거 준비 대화의 웹 주소는 이번 확인에서 홈의 빈 새 Chat 입력 화면으로 돌아갔으므로, 원격 시험 ID와 사용자용 대화 URL의 연결·원래 시험 대화 접근은 미검증입니다. 현재 Work 진입 화면 확인을 원래 시험 대화 접근이나 원본 파일 전달 성공으로 계산하지 않습니다. 화면 증거는 위 private 기록의 `cloud/browser-delivery/work-entry-visible-20261004.png`에 보존했습니다. 새 메시지나 시험은 제출하지 않았습니다.
+계정을 선택하고 모델을 새로 조회한 뒤 짧은 실제 응답 확인 요청을 보냅니다. 앱은 `https://api.openai.com/v1/responses`를 직접 호출하며 전체 응답 완료와 비어 있지 않은 텍스트를 확인해야 사용 성공을 표시합니다. 인터넷과 계정의 이용 권한·사용량이 필요합니다. 현재 미리보기 제약은 [공식 문서](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)를 따릅니다.
 
-Windows 로컬 Work의 별도 `research-a890a5e45870`도 코드·실행·원고 제출 각 1회로 export·원본 파일 수령을 완료했습니다. 원본 PDF는 153,986 bytes·7쪽·SHA256 `8f533373248cfd49bacb833c54f89b3a091628f90a61c91bdd283632c3bd7c53`이며 전쪽 시각 검수를 통과했습니다. PDF·Word·Markdown·TeX·원본 재현 ZIP·최종 증거 ZIP은 `output/frontron-study-20261004-01a106f1/delivery/`에 있고 원본 controller artifact·명령 출력·ZIP 구성원과 크기·SHA256을 대조했습니다. 최종 앱 대화도 오류 없이 완료돼 원본 파일 링크를 전달했습니다. 최초 ZIP timestamp 포장 오류와 실패한 사본은 보존했고, 연구·export를 반복하지 않고 포장만 복구했습니다.
+공개 GitHub 저장소 URL을 입력하거나 계정 URL의 최근 공개 저장소 최대 100개를 조회해 선택합니다. 연구 목표와 실제 목록에 있는 작성·리뷰 모델을 지정하면 고정 원본 수집, 계획, 문헌 수집, 코드와 별도 문맥 리뷰, 격리 실험, 분석, 원고와 별도 문맥 리뷰, 파일 변환을 진행합니다. 화면은 엔진의 실제 단계·오류·취소·명시 재개 상태를 표시하며, 완료 결과의 PDF·DOCX·Markdown·TeX·재현 ZIP을 검증한 뒤 저장하거나 열고 폴더를 표시합니다. 이용 가능한 Windows 환경에서 이 전체 흐름의 실제 구독 연구 3편 검증을 완료했습니다.
 
-**과거 Cloud 설치 검증:** 테스트 계정의 ChatGPT Work Cloud에서 설치한 일반 플러그인 `0.10.0`·`0.10.1`로 공개 저장소 4개의 격리 실험·분석·독립 원고 리뷰·논문 생성·파일 전달을 완료했습니다. 별도 설치한 시험 플러그인 `paper-factory-capability-probe` `0.0.6`의 연구 1편까지 포함하면 총 5편입니다. 부족한 의존성의 오프라인 준비와 실제 문헌 검색·DOI 재확인·초록 수집도 검증했습니다. 이후 설치한 `0.10.2`는 승인된 원고를 그대로 사용하여 최종 PDF 5편, 총 31쪽을 재변환하고 긴 제목의 서식 문제를 해결했으며, 새로운 연구 5편을 수행한 버전은 아닙니다. 연구별 결과·원본 증거는 [개발 목표](docs/development-goal.md), 설치 사본과 현재 소스의 구분은 [설치 안내](docs/plugin.md)에 기록합니다.
+세 연구의 Markdown·TeX가 참조하는 `figure-1.png`는 실제 저장된 재현 ZIP의 원본 bytes를 CRC·inventory·동결 SHA와 대조한 뒤 각 사용자 저장 폴더에 별도로 전달했습니다. 앱에서 저장한 기본15개 파일은 변경하지 않았으며 그림 전달을 앱 Save 동작으로 계산하지 않습니다. PDF 열기는 오류 없는 앱의 shell 요청과 Chrome의 정확한 저장본·첫 페이지 표시까지 확인했습니다. native Reader의 정확한 파일 경로·렌더링과 DOCX 페이지 시각 검증은 미확인입니다.
 
-이 과거 Cloud 시험에서는 연구 proposal과 일부 문헌을 별도 입력으로 제공했습니다. 실제 설치본으로 실행·논문 전달한 근거는 있지만, 저장소 URL 요청부터 앱 호스트가 모든 계획·코드·리뷰·원고를 생성한 위의 새 `0.11.0` 시험과는 구분합니다.
+대기 중인 생성·계획·분석 단계에서는 **추가 근거 선택**으로 UTF-8 원문 문서를 가져올 수 있습니다. 영문 파일명의 `.md`·`.txt`·`.json`을 파일마다 128 KiB, 연구 전체 최대 8개·256 KiB까지 보존합니다. 원본 바이트·SHA256·현재 가져온 시각을 기록하고 다음 작성·별도 리뷰 요청과 재현 ZIP에 포함합니다. 문서 안의 과거 활동 주장을 앱이 검증한 사실로 표시하지 않으며, 가져오기만으로 연구를 재개하거나 프로토콜·실험 결과·리뷰 판정을 바꾸지 않습니다. 여덟 번째 실제 설치본에서 6개 문서·37,667 bytes와 가져오기 후 실행 버튼의 활성 상태를 확인했습니다.
 
-패키지 `0.11.0`은 Docker·WSL 없이 private 환경과 운영체제별 프로세스 종료 처리를 사용합니다. 과거 Windows x86_64의 Frontron 실험·독립 원고 리뷰·7쪽 PDF·Word·LaTeX·재현 ZIP 검증은 `dist`의 배포 launcher를 직접 실행한 결과로 보존합니다. 이후 위의 실제 Codex 설치 cache 연구와 Work Cloud 설치형 새 연구를 별도로 수행했습니다. Codex 성공은 현재 호스트의 `danger-full-access` 범위이며 ACL·supervisor journal을 바꾸지 않았습니다. 과거 기본 권한 접근 실패나 native 회귀 실패 8건이 해결된 증거는 아닙니다.
+토큰은 Electron main에서 운영체제 보호 저장소로 암호화하며 Renderer와 Python에 전달하지 않습니다. 크레딧 설정 버튼은 공식 ChatGPT 사용량 페이지를 엽니다. 한도 오류가 나면 **“사용량 한도에 도달한 후 다른 앱에서 크레딧 사용 허용”**을 켜고 앱에서 확인 후 재시도할 수 있습니다. 앱 체크박스는 사용자 확인이며 계정의 실제 설정을 변경하거나 읽는 척하지 않습니다. 로컬 callback listener는 인증 동안만 사용하며 별도 운영 서버가 필요하지 않습니다.
 
-현재 개발 소스 `0.12.0`은 기존 호스트 도구를 사용하는 명시적 `provided` 준비와 pdflatex PDF 변환을 추가합니다. Windows에서는 기존 Python·Node 22·Pandoc·Typst로 새 다운로드·venv·설치 없이 실제 준비·문서 진단·launcher readiness를 통과했습니다. 별도 개인 preview의 41개 자원도 Work Cloud 회귀 검사를 통과했습니다. 검증된 실행·패키지 소스 커밋 `68cb8e2463a1ddb715ff4d12f2c6ede1c2d45307`의 43개 자원·22개 core는 [Mac CI run 37184571428](https://github.com/andongmin94/paper-factory/actions/runs/37184571428)에서 ARM·Intel의 실제 준비·변환·종료 검사를 모두 통과했습니다. 두 Mac 각각 258개 테스트 통과, Windows 전용 skip 2개, 실패·오류 0건이며 원본 artifact와 필수 native case도 독립 검증했습니다.
+앱 데이터는 OS 사용자 앱 데이터의 `Paper Factory Standalone/`에 저장합니다. 기존 `.paper-factory/`나 과거 Electron/플러그인의 연구 상태를 열어 복구하거나 수정하지 않습니다. `chatgpt/`는 보호된 인증 자료이고 `evidence/connection-checks.jsonl`은 계정 연결 ID·모델·시각·완료 텍스트와 해시·오류 기록입니다. `research/`와 `engine/`에는 새 앱의 작업 목록, 모델 원문 receipt, 고정 원본·프로토콜·관측·결과를 보존합니다. 인증 디렉터리를 지원 자료나 Git에 넣지 마세요.
 
-과거 일반 Chat 시험은 외부 Codex의 독립 리뷰를 받아 6쪽 PDF까지 완료했으나, Chat 단독 제작을 입증하지 못했습니다. 원본 패키지 전달·연구·실패·독립성 검사 기록은 [환경 지원 목표](docs/portability-goal.md)에 역사적 증거로 보존합니다.
+## 개발 및 검증
 
-## 사용하기
+다음 명령은 **개발자용**입니다. 최종 사용자가 Python·Node·패키지를 터미널로 설치하는 흐름은 제품 완료 기준에 포함되지 않습니다. 개발에는 Node 24와 npm이 필요합니다.
 
-1. 지원되는 호스트에서 Paper Factory 플러그인을 설치하고 새 대화에서 선택합니다. 현재 확인한 개인 ZIP 경로와 패키지 준비 방법은 [설치 안내](docs/plugin.md)에 있습니다.
-2. 연구할 공개 저장소와 원하는 결과를 요청합니다.
+```powershell
+cd desktop
+npm ci --no-audit --no-fund
+npm test
+npm run package:app
+```
 
-> Paper Factory로 https://github.com/andongmin94/frontron 의 결정적인 함수를 연구해 줘. 독립 oracle과 비교 조건을 정하고 실제 통제 실험을 수행한 뒤, 근거·재현 자료와 논문 PDF를 전달해 줘.
+`npm test`는 타입·빌드·모의 controller/Responses/공식 SDK 회귀 검사입니다. `package:app`는 해시로 고정한 런타임을 개발 단계에서 준비하고 설치본과 전체 파일 검증 기록을 생성합니다. 설치된 앱은 실행 환경을 다운로드하거나 사용자 터미널 설치를 요구하지 않습니다.
 
-여러 저장소에서 적합한 대상을 골라 달라고 요청할 수도 있습니다. 호스트는 현재 실행 환경과 실제 원본을 먼저 확인하고, 독립 리뷰를 거쳐 연구를 진행합니다. 실행 조건을 충족하지 못하면 준비한 자료와 구체적인 차단 사유를 알려줍니다.
+GUI 검사는 `npm run test:electron`으로 별도 실행합니다. 최신 Source12의 앱/SDK 203개 회귀가 통과했고 SDK 검사 1개는 Windows에서 건너뛰었습니다. Electron fixture 4개도 20.2초에 통과했습니다. 바이트가 동일한 Python 엔진의 최신 전체 검사는 794 passed, 7 skipped(138.08초)입니다. fixture의 합성 인증 암호화·재실행 복원과 모의 오류/IPC는 실제 OAuth나 논문 생성 증거로 계산하지 않습니다. 실제 로그인→모델 조회→응답 완료→앱 종료/재실행→같은 연결로 새 응답 확인은 별도 Windows 연결 체크포인트에서 통과했습니다.
 
-별도 Paper Factory 모델 로그인이나 OpenAI API 키는 필요하지 않습니다. 호스트의 모델 이용 조건·사용량 제한·도구 실행 정책은 적용됩니다.
+Windows·macOS ARM/Intel용 [독립 앱 빌드 CI](.github/workflows/desktop.yml)는 전체 런타임·설치본·패키지 검증을 요구합니다. CI 실행·통과를 실제 설치·로그인·논문 제작 성공으로 표현하지 않습니다. 여섯 번째 Windows 설치본은 분석 라이브러리 초기화와 모델 응답 deadline 보완을 포함하며 설치·전수 해시·자체 연결 복원·새 완료 응답을 통과했습니다. 이전 다섯 번째 설치본의 실패 보고서 export도 보존했습니다. 최신 Windows 설치본의 새 연구3편·최종 산출물·정상 종료/복원 검증은 완료했고, 코드 서명/공증 및 개발 도구 없는 환경 검증은 남아 있습니다.
 
-## 연구와 결과
+여덟 번째 설치는 2026-10-05 13:50:24.002–13:51:12.871 UTC에 종료 코드 0으로 완료했고, 13:51:15.081 UTC에 런타임 4,463개 파일·564,850,370 bytes·엔진 소스 22개를 전수 대조했습니다. 자체 연결 복원 후 Astra의 새 완료 응답을 13:52:54 UTC에 확인했습니다. 추가 근거 가져오기 반환값이 대기 상태를 덮어쓰던 결함도 수정해 실제 화면에서 확인했습니다. [설치본 해시와 UI 증거](docs/standalone-ui-provenance.md)에 기록했습니다.
 
-실험은 bounded QuickJS Wasm guest에서 수행합니다. 현재 대상은 순수 JavaScript와 실제 검증된 타입 제거가 가능한 TypeScript 함수입니다. Python 실험, DOM/React, Node 파일·네트워크 API, 네이티브 확장과 저장소 설치 스크립트는 이 Cloud 경로의 지원 범위 밖입니다. 실행 시 호스트 파일 시스템과 네트워크를 guest에 노출하지 않으며, 실제 환경 검사와 실행 receipt로 한계를 확인합니다. Wasm 메모리 제한은 호스트 전체 RSS 제한을 뜻하지 않습니다.
+아홉 번째 설치는 2026-10-05 14:53:20.143–14:54:11.817 UTC에 종료 코드 0으로 완료했습니다. 설치 앱·화면 파일과 런타임 4,463개/엔진 소스 22개가 현재 빌드와 일치했고, 자체 연결로 14:55:56.029 UTC에 새 Astra 응답을 받았습니다. 실제 취소 뒤 `analyzed/cancelled`와 유휴 상태를 확인했습니다. Premiere 계획 재개는 14:58:36.469 UTC에 시작됐으며 전체 planner·소비자·LICENSE·NOTICE·README 원문이 전달됐습니다. 설치·화면 근거는 `.paper-factory/standalone-verification/planning-material-install-e96560c6-5b66-460c-abde-e917ff0589de/`에 보존했습니다. 이 확인을 완료된 과학실험·승인 원고로 합산하지 않습니다.
 
-원본 파일, 계획·코드 해시, 입력 fixture, 실제 관측값, source-call receipt, 분석, 읽은 문헌, 원고와 검증 결과를 보관합니다. 실패한 scientific control은 연구를 중단합니다. 결과를 유리하게 만들기 위한 재실행이나 수동 관측값 대체는 허용하지 않습니다.
+최종 Windows·Mac ARM/Intel 세 런타임 프로필의 정적 파일 대조를 통과했습니다. Mac 런타임은 Windows에서 정적으로 조립했습니다. 원본 아카이브의 Python 실행 모드는 `0775`, Node·Pandoc은 `0755`이고 builder의 최종 실행 모드는 `0755`입니다. NTFS에서 조립한 결과로 실제 macOS 파일시스템의 POSIX 실행 권한을 증명할 수 없습니다. Mac 네이티브 probe·DMG 생성/설치·CI 실행은 미검증이며 설치본은 서명하지 않았습니다.
 
-검증된 PDF, DOCX, TeX, Markdown과 재현 ZIP을 전달합니다. 실제 파일을 호스트에서 받을 수 있는지까지 확인하며, artifact ID만 다운로드 링크로 제시하지 않습니다. 논문 초안은 저자 검토를 위한 산출물이며, 새로움·학술지 승인·출판을 보장하지 않습니다. 저자 정보는 사용자가 제공한 사실만 사용합니다.
+## 연구 엔진과 전환 경계
 
-## 개발 및 패키지
+연구 엔진의 단계·SQLite·원본 commit/SHA256·QuickJS 격리·worker receipt/journal/종료 확인·scientific controls·분석·문서 변환을 재사용합니다. 현재 연구 범위는 기존 엔진이 지원하는 JS·TS 함수입니다. Python·DOM·범용 Node·네트워크 실험 지원을 새 앱의 기능으로 주장하지 않습니다.
 
-[연구 workflow](skills/paper-factory/references/workflow.md)에 환경 준비부터 원본 읽기·독립 리뷰·실험·원고·실제 파일 전달까지의 명령이 있습니다. `python scripts/build_plugin.py --check`로 고정된 입력을 확인하고, `python scripts/build_plugin.py`로 일반 배포 ZIP을 만듭니다. 빌더는 현재 `pyproject.toml` 버전과 소스별 해시를 기록합니다.
+연구 계획·코드·원고와 독립 리뷰는 새 모델 호출로 작성하고 거절·수정·실패 기록을 보존해야 합니다. 앱 재시작이나 응답 중단을 이유로 과학실험을 자동 재실행하지 않습니다. 완료된 실험 뒤 원고 작성이 취소된 경우에는 동결 해시·성공 실행·정리 완료·양성/음성 제어·분석 연결을 검증한 뒤 명시적으로 원고만 재개할 수 있습니다. 이전 취소 상태와 재개 receipt를 추가 보존하며 실험 실행 횟수를 늘리지 않습니다. 최종 논문은 근거와 재현 자료가 연결된 초안이며 학술지 승인·출판이나 새로움을 보장하지 않습니다.
 
-일반 패키지는 MCP·모델 클라이언트·계정 정보와 private 연구 입력을 포함하지 않습니다. QuickJS 바이트와 다운로드에 필요한 검증된 transport를 포함하고, 호스트별 의존성은 공식 배포 URL·크기·SHA256으로 고정하여 private scratch에 준비합니다. 공개 게시는 별도 승인·검토 절차이며, 패키지 빌드나 개인 ZIP 설치로 완료되지 않습니다.
+legacy 정리를 완료했습니다. `plugin.json`, 호스트 skill/Cloud 실행·전달·plugin ZIP, CLI, Docker·WindowsRunner/AppContainer, 현재 범위 밖 투고·포털 코드와 직접 대응하는 설정·스크립트·CI·테스트를 제거했습니다. 필요한 QuickJS archive/metadata, host catalog와 Pandoc 라이선스는 `desktop/runtime-inputs/`로 옮겼습니다. 최종 엔진은 Python 21개와 QuickJS worker 1개를 포함하며 과학적 제어·복구·원본 검증·분석·실제 변환과 Windows/macOS worker 종료 보호를 유지합니다. 새 앱에는 플러그인 호환 fallback이 없습니다. 완료 범위와 회귀 결과는 [정리 기록](docs/standalone-cleanup-inventory.md)에 있습니다.
 
-기존 native isolated runner와 수동 CLI 도메인은 개발 코드에 남아 있습니다. Cloud 경로에서 격리가 실패했을 때 사용하는 fallback은 아닙니다. 과거 재사용·문서 변환 결정과 수동 출판 관련 기록은 `docs/`에 유지합니다.
+이전 플러그인 검증과 안내는 [0.12.0 역사적 README](docs/history/README.plugin-0.12.0.md) 및 기존 증거 문서에 보존했습니다. 역사적 문서의 설치·호스트·Cloud 명령을 독립 앱의 사용 안내로 적용하지 않습니다. 원본 연구 결과와 private 증거 자료는 삭제하지 않았습니다.
+
+서로 다른 공개 저장소 `neobrutal-ui`, `frontron`, `premiere-ai-harness`의 고정 commit·원문 라이선스·생산 함수·독립 oracle 및 선정/제외 근거는 [선정 기록](docs/standalone-repository-selection.md)에 있습니다. 선정 자료와 미실행 fixture는 실제 관측 결과가 아닙니다.
+
+## 라이선스와 출처
+
+독립 작성된 Paper Factory 코드는 [MIT](LICENSE)입니다. neobrutal-ui 원본은 MIT이며 [출처와 해시](docs/standalone-ui-provenance.md)를 보존합니다. 공식 SIWC SDK는 **Sign-in with ChatGPT DevKit Noncommercial License v1.0**이며 앱 전체를 일괄 MIT로 배포한다고 주장하지 않습니다. [SDK 라이선스](desktop/vendor/siwc-local/LICENSE), [변경 범위와 출처](desktop/vendor/siwc-local/PROVENANCE.md), [인증 조사](docs/standalone-auth-research.md)를 확인하세요.

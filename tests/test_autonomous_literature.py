@@ -268,7 +268,7 @@ def test_malformed_pdf_does_not_escape_or_upgrade_reading_scope(tmp_path, monkey
     assert any("not upgraded" in warning for warning in result["warnings"])
 
 
-@pytest.mark.parametrize("queries,limit", [([], 6), ([""], 6), (["\nprivate"], 6), (["x" * 501], 6), (["q"], 0), (["q"], True), (["q"], 13)])
+@pytest.mark.parametrize("queries,limit", [([], 6), ([""], 6), (["\nprivate"], 6), (["x" * 501], 6), (["q"], -1), (["q"], True), (["q"], 13)])
 def test_invalid_inputs_fail_before_network(tmp_path, monkeypatch, queries, limit):
     monkeypatch.setattr(literature.httpx, "Client", lambda **kwargs: pytest.fail("Invalid inputs reached network"))
     with pytest.raises(ValueError):
@@ -425,3 +425,46 @@ def test_later_query_can_replace_metadata_with_inspected_abstract(tmp_path, monk
     assert len(result["sources"]) == 1
     assert result["sources"][0]["doi"] == "10.1234/abstract"
     assert result["sources"][0]["scope"] == "abstract"
+
+
+def test_full_source_budget_still_retains_second_frozen_query_search(tmp_path, monkeypatch):
+    def handler(request):
+        if request.url.path == "/works":
+            return httpx.Response(200, json={"status": "ok", "message": {"items": [
+                {"DOI": "10.1234/first"}, {"DOI": "10.1234/second"}]}})
+        return httpx.Response(200, json=record("10.1234/" + request.url.path.rsplit("/", 1)[-1],
+                                             abstract="Inspected literal passage"))
+    requests = mocked(monkeypatch, handler)
+    result = literature.collect(["first query", "second query"], tmp_path, limit=2)
+    assert len(result["sources"]) == 2 and len(requests) == 4
+    assert [item["query"] for item in result["searches"]] == ["first query", "second query"]
+    assert all(item["status"] == "succeeded" and item["attempted"] is True for item in result["searches"])
+    assert result["searches"][1]["resolved_ids"] == []
+    for search in result["searches"]:
+        assert hashlib.sha256((tmp_path / search["raw_path"]).read_bytes()).hexdigest() == search["sha256"]
+
+
+def test_zero_remaining_source_budget_records_search_success_and_failure(tmp_path, monkeypatch):
+    def handler(request):
+        assert request.url.path == "/works"
+        assert request.url.params["rows"] == "1"
+        if request.url.params["query.bibliographic"] == "failed query":
+            return httpx.Response(503)
+        return httpx.Response(200, json={"status": "ok", "message": {"items": [{"DOI": "10.1234/not-resolved"}]}})
+    requests = mocked(monkeypatch, handler)
+    result = literature.collect(["successful query", "failed query"], tmp_path, limit=0)
+    assert len(requests) == 2 and result["sources"] == []
+    assert [item["status"] for item in result["searches"]] == ["succeeded", "failed"]
+    assert all(item["attempted"] is True for item in result["searches"])
+    assert (tmp_path / result["searches"][0]["raw_path"]).is_file()
+    assert result["searches"][1]["error"] == "HTTPStatusError"
+
+
+def test_client_initialization_failure_records_each_unattempted_query(tmp_path, monkeypatch):
+    def unavailable(**kwargs):
+        raise OSError("Mock client initialization failure")
+    monkeypatch.setattr(literature.httpx, "Client", unavailable)
+    result = literature.collect(["first", "second"], tmp_path, limit=0)
+    assert [search["query"] for search in result["searches"]] == ["first", "second"]
+    assert all(search["status"] == "failed" and search["attempted"] is False and search["error"] == "OSError"
+               for search in result["searches"])

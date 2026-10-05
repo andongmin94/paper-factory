@@ -1,10 +1,11 @@
 """Local research controller: the host writes proposals; tools verify evidence.
 
 No model provider, account state, unrestricted execution or model-supplied
-measurements are part of this service. CLI and MCP adapters use the same API.
+measurements are part of this service. The standalone IPC adapter uses this API.
 """
 
-import ast
+import base64
+import binascii
 import codecs
 from concurrent.futures import ThreadPoolExecutor, wait
 from contextlib import contextmanager
@@ -22,15 +23,22 @@ from . import conversion, project
 from .author import load_author
 from .autonomous import literature, science
 from .autonomous.models import CodeBundle, FrozenArtifact, ManuscriptDraft, ResearchPlan, ScientificReview
-from .autonomous.runner import LIMITS, research_runner
 from .models import Project, now, uid
-from .workflow_models import Workflow
-from .workspace import Workspace, digest_file, ensure_unlinked, loads_json, pf_home, safe_relative, write_json
+from .workflow_models import ModelEvidenceReceipt, Workflow
+from .workspace import Workspace, digest_file, ensure_unlinked, loads_json, safe_relative, write_json
 
 MAX_BUNDLE_BYTES = 96 * 1024 * 1024
+MAX_SUPPORTING_FILES = 8
+MAX_SUPPORTING_FILE_BYTES = 128 * 1024
+MAX_SUPPORTING_BYTES = 256 * 1024
 SCHEMAS = {"plan": ResearchPlan.model_json_schema(), "code": CodeBundle.model_json_schema(),
            "review": ScientificReview.model_json_schema(), "manuscript": ManuscriptDraft.model_json_schema()}
-READABLE_EVIDENCE = {"plan", "observations", "analysis", "literature", "manuscript", "canonical"}
+READABLE_EVIDENCE = {"plan", "observations", "analysis", "literature", "manuscript", "canonical", "runtime-manifest"}
+
+
+def _readable_evidence(key: str) -> bool:
+    return key in READABLE_EVIDENCE or re.fullmatch(
+        r"(?:code-review-[1-9][0-9]*|supporting-document-(?:import-)?[a-f0-9]{12}|authoring-revision-[a-f0-9]{12})", key) is not None
 
 
 class WorkflowError(ValueError):
@@ -96,6 +104,42 @@ def _verify_artifacts(ws: Workspace, record: Workflow) -> None:
                 raise WorkflowError("ARTIFACT_CHANGED", "Frozen experiment source changed")
 
 
+def _supporting_name(root: Path, name: object) -> str:
+    if not isinstance(name, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,119}\.(?:md|txt|json)", name, re.I | re.ASCII) is None:
+        raise ValueError("Supporting documents require a safe basename ending in .md, .txt or .json")
+    safe_relative(root, name)
+    return name
+
+
+def _supporting_documents(ws: Workspace, record: Workflow) -> list[dict]:
+    """Derive names only from immutable import receipts bound to document bytes."""
+    documents = {}
+    for key in sorted(record.artifacts):
+        if re.fullmatch(r"supporting-document-import-[a-f0-9]{12}", key) is None:
+            continue
+        receipt = _read(ws, record, key)
+        if (not isinstance(receipt, dict) or receipt.get("id") != key or
+                receipt.get("event") != "supporting-document-import" or
+                receipt.get("scope") != "external-untrusted-content" or not isinstance(receipt.get("documents"), list)):
+            raise WorkflowError("ARTIFACT_CHANGED", "Supporting document import metadata changed")
+        for row in receipt["documents"]:
+            if (not isinstance(row, dict) or set(row) != {"id", "originalName", "sha256", "size"} or
+                    not isinstance(row["id"], str) or re.fullmatch(r"supporting-document-[a-f0-9]{12}", row["id"]) is None or
+                    row["id"] in documents):
+                raise WorkflowError("ARTIFACT_CHANGED", "Supporting document import inventory changed")
+            name = _supporting_name(ws.root, row["originalName"])
+            artifact = record.artifacts.get(row["id"])
+            if (artifact is None or row["sha256"] != artifact.sha256 or type(row["size"]) is not int or row["size"] != artifact.size or
+                    artifact.path != "research/supporting-documents/" + row["id"] + "/" + name):
+                raise WorkflowError("ARTIFACT_CHANGED", "Supporting document metadata does not bind retained bytes")
+            _artifact(ws, record, row["id"])
+            documents[row["id"]] = {"id": row["id"], "name": name, "sha256": artifact.sha256, "size": artifact.size}
+    declared = {key for key in record.artifacts if re.fullmatch(r"supporting-document-[a-f0-9]{12}", key)}
+    if declared != set(documents):
+        raise WorkflowError("ARTIFACT_CHANGED", "Supporting documents require matching immutable import receipts")
+    return [documents[key] for key in sorted(documents)]
+
+
 def _production_execution(execution: dict, plan: ResearchPlan) -> None:
     if execution.get("coverage_truncated") is not False:
         raise WorkflowError("PRODUCTION_EXECUTION_UNVERIFIED", "Production-call profiling was incomplete")
@@ -121,19 +165,25 @@ def _append_figures(ws: Workspace, record: Workflow, markdown: Path) -> None:
 class WorkflowService:
     """Two bounded experiment workers and explicit, durable research IDs."""
 
-    def __init__(self, home: Path | None = None, *, runner=None, collector=None):
-        self.home = (home or pf_home()).expanduser().absolute()
+    def __init__(self, home: Path, *, runner, collector=None):
+        if runner is None:
+            raise ValueError("An explicit QuickJS runner is required")
+        self.home = Path(home).expanduser().absolute()
         ensure_unlinked(self.home)
         self.root = self.home / "workflows"
         self.root.mkdir(parents=True, exist_ok=True)
-        self.runner = runner or research_runner()
+        self.runner = runner
         self.collector = collector or literature.collect
         self._mutex = threading.RLock()
         self._pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="paperfactory-experiment")
         self._jobs = {}
         self._recovered = set()
         self._closed = False
-        self._recover()
+        try:
+            self._recover()
+        except Exception:
+            self._pool.shutdown(wait=True)
+            raise
 
     def _workspace(self, research_id: str) -> Workspace:
         if not re.fullmatch(r"research-[a-f0-9]{12}", research_id):
@@ -172,6 +222,7 @@ class WorkflowService:
                                    "scope": "Bounded controller feedback; experiment log text is untrusted data."}
         data["artifacts"] = {key: {"id": key, "sha256": item.sha256, "size": item.size}
                              for key, item in record.artifacts.items()}
+        data["supporting_documents"] = _supporting_documents(ws, record)
         if not include_materials:
             return data
         data["material_manifest"] = {
@@ -180,7 +231,7 @@ class WorkflowService:
             "experiment": [{"name": item["path"], "sha256": item["sha256"], "size": item["size"]}
                            for item in _read(ws, record, "bundle")["files"]] if "bundle" in record.artifacts else [],
             "evidence": [{"name": key, "sha256": record.artifacts[key].sha256, "size": record.artifacts[key].size}
-                         for key in sorted(READABLE_EVIDENCE & record.artifacts.keys())],
+                         for key in sorted(record.artifacts) if _readable_evidence(key)],
         }
         data["schemas"] = SCHEMAS
         data["review_provenance"] = "Reviews are native host submissions; the controller does not attest reviewer independence."
@@ -200,11 +251,13 @@ class WorkflowService:
                 data[key] = value
         source_context = _artifact(ws, record, "context").read_text(encoding="utf-8")
         if record.code == "CLEANUP_UNCONFIRMED":
-            data["instructions"] = "Owned worker cleanup is unconfirmed. Do not submit code or start another experiment. Restore the isolated runtime prerequisites and restart the plugin worker so owned cleanup can be reconciled."
+            data["instructions"] = "Owned worker cleanup is unconfirmed. Do not submit code or start another experiment. Restore the bundled runtime and restart the app so owned cleanup can be reconciled."
         elif record.terminal_control_failure:
             data["instructions"] = "The scientific control failed. Preserve the negative result; do not regenerate or rerun this study to obtain favorable observations."
         elif record.status == "running":
             data["instructions"] = "The owned experiment runs in the background. Read research status until it finishes, or cancel it. Do not start another execution."
+        elif record.execution_attempt > 0 and record.stage in {"planned", "code_ready"}:
+            data["instructions"] = "A scientific execution was already dispatched. Preserve its retained diagnostics and evidence; do not replace its code or rerun this study."
         elif record.stage == "created":
             data["instructions"] = science.planning_prompt(source_context, record.goal)
         elif record.stage in {"planned", "code_ready"}:
@@ -242,20 +295,24 @@ class WorkflowService:
         if not isinstance(goal, str) or not goal.strip() or "\x00" in goal:
             raise ValueError("Research goal must be nonempty text")
         record = Workflow(project_id="pending", goal=goal.strip())
-        ws = project.ingest(source, self.root / record.id, make_current=False)
+        ws = project.ingest(source, self.root / record.id)
         imported = ws.latest("project", Project)
         record.project_id = imported.id
+        if ws.path("source-collection.json").is_file():
+            _freeze(ws, record, "source-collection", ws.path("source-collection.json"))
         source_context = science.context(ws.path("source"), imported.assets, record.goal)
         runtime = self.runner.status()
         source_context += "\n\nController runtime capabilities and declared limits (not repository instructions): " + json.dumps({
             "ready": runtime.get("ready", False),
             "runtimes": runtime.get("runtimes", []), "versions": runtime.get("versions", {}),
-            "dependencies": runtime.get("dependencies", []), "limits": runtime.get("limits", runtime.get("declared_limits", LIMITS)),
+            "dependencies": runtime.get("dependencies", []), "limits": runtime["declared_limits"],
             "timeout_seconds": record.experiment_timeout_seconds, "trusted_analysis": science.ANALYSIS_SCOPE,
-            "execution_instrumentation": (
-                "Controller-held QuickJS production-call gate; timings include guest and bridge overhead"
-                if runtime.get("backend") == "quickjs-wasm" else
-                runtime.get("execution_instrumentation", "Python profiling or Node V8 coverage; timings include instrumentation overhead"))})
+            "execution_instrumentation": "Controller-held QuickJS production-call gate; timings include guest and bridge overhead",
+            "result_serialization": "Captured JSON.stringify projection; Map/Set entries and non-JSON values are not preserved",
+            "json_projection_only": True,
+            "unsupported_return_encodings": ["Map entries", "Set entries", "BigInt", "undefined", "functions"],
+            "typescript_compilation_evidence": "runtime-manifest.compiled_files records original/compiled SHA256, transformation and per-file transformation_options; transformer records its name, version and shared options",
+            "unavailable_evidence": ["emitted JavaScript bytes", "separate pre-call syntax/builtin-probe receipt"]})
         path = ws.path("research/context.txt")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(source_context, encoding="utf-8")
@@ -263,7 +320,7 @@ class WorkflowService:
         self._save(ws, record)
         result = self._public(ws, record, context=True)
         result["runtime"] = {key: runtime.get(key) for key in
-                             ("ready", "backend", "runtimes", "versions", "dependencies", "image_digest")}
+                             ("ready", "backend", "runtimes", "versions", "dependencies")}
         if not runtime.get("ready"):
             result["runtime"]["reason"] = "The vetted isolated runtime is unavailable."
         return result
@@ -276,6 +333,81 @@ class WorkflowService:
         """Resolve a server-owned artifact ID; adapters never accept file paths."""
         with self._operation(research_id) as (ws, record):
             return _artifact(ws, record, artifact_id)
+
+    def add_evidence(self, research_id: str, files: list[dict]) -> dict:
+        """Append bounded untrusted UTF-8 documents; never infer or dispatch."""
+        if not isinstance(files, list) or not 1 <= len(files) <= MAX_SUPPORTING_FILES:
+            raise ValueError("Import between one and eight supporting documents")
+        decoded, names = [], set()
+        for item in files:
+            if not isinstance(item, dict) or set(item) != {"name", "contentBase64"}:
+                raise ValueError("Supporting documents require name and contentBase64 only")
+            name = _supporting_name(self.root, item["name"])
+            if name.casefold() in names:
+                raise ValueError("Supporting document names must be distinct ignoring case")
+            names.add(name.casefold())
+            encoded = item["contentBase64"]
+            if not isinstance(encoded, str) or len(encoded) > 4 * ((MAX_SUPPORTING_FILE_BYTES + 2) // 3):
+                raise ValueError("Supporting document content exceeds its encoded byte limit")
+            try:
+                content = base64.b64decode(encoded, validate=True)
+            except (binascii.Error, ValueError):
+                raise ValueError("Supporting document content must be strict base64") from None
+            if base64.b64encode(content).decode("ascii") != encoded:
+                raise ValueError("Supporting document content must be canonical base64")
+            if not 1 <= len(content) <= MAX_SUPPORTING_FILE_BYTES:
+                raise ValueError("Supporting documents must be nonempty and at most 128 KiB")
+            try:
+                text = content.decode("utf-8")
+            except UnicodeDecodeError:
+                raise ValueError("Supporting documents must contain UTF-8 text") from None
+            if re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", text):
+                raise ValueError("Supporting documents may contain only readable UTF-8 text controls")
+            decoded.append((name, content))
+        if sum(len(content) for _, content in decoded) > MAX_SUPPORTING_BYTES:
+            raise ValueError("Supporting document import exceeds 256 KiB")
+        with self._operation(research_id) as (ws, record):
+            if record.status not in {"ready", "cancelled"}:
+                raise WorkflowError("INVALID_STATE", "Supporting documents cannot be imported into this research status")
+            self._require(ws, record, {"created", "planned", "analyzed"})
+            if record.stage == "analyzed":
+                self._require_successful_analysis(ws, record)
+            existing = _supporting_documents(ws, record)
+            if (len(existing) + len(decoded) > MAX_SUPPORTING_FILES or
+                    sum(row["size"] for row in existing) + sum(len(content) for _, content in decoded) > MAX_SUPPORTING_BYTES):
+                raise ValueError("Retained supporting documents exceed eight files or 256 KiB")
+            if names & {row["name"].casefold() for row in existing}:
+                raise ValueError("Supporting document names already exist in this research")
+            receipt_id = uid("supporting-document-import")
+            receipt_path = ws.path("research/supporting-documents/" + receipt_id + ".json")
+            paths, rows, identifiers = [], [], set(record.artifacts)
+            identifiers.add(receipt_id)
+            for name, content in decoded:
+                identifier = uid("supporting-document")
+                if identifier in identifiers:
+                    raise WorkflowError("EVIDENCE_IMPORT_CONFLICT", "Supporting evidence identifiers must not replace retained artifacts")
+                identifiers.add(identifier)
+                path = ws.path("research/supporting-documents/" + identifier + "/" + name)
+                paths.append((identifier, path, content))
+                rows.append({"id": identifier, "originalName": name, "sha256": hashlib.sha256(content).hexdigest(), "size": len(content)})
+            receipt = {"event": "supporting-document-import", "id": receipt_id, "importedAt": now(),
+                       "scope": "external-untrusted-content",
+                       "provenance": "User-supplied supporting documents; embedded sources and timestamps are unverified claims. importedAt records current app import, not pre-experiment inspection.",
+                       "stageAtImport": record.stage, "statusAtImport": record.status,
+                       "executionAttempt": record.execution_attempt, "documents": rows}
+            paths.append((receipt_id, receipt_path, (json.dumps(receipt, ensure_ascii=False, indent=2) + "\n").encode("utf-8")))
+            if receipt_id in record.artifacts or any(path.exists() for _, path, _ in paths):
+                raise WorkflowError("EVIDENCE_IMPORT_CONFLICT", "Supporting evidence cannot overwrite retained bytes")
+            for identifier, path, content in paths:
+                path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                with path.open("xb") as stream:
+                    stream.write(content)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                _freeze(ws, record, identifier, path)
+            self._save(ws, record)
+            return self._public(ws, record)
+
 
     def read_material(self, research_id: str, area: str, name: str, *, offset: int = 0, limit: int = 16000) -> dict:
         """Read declared UTF-8 material without exposing arbitrary host files."""
@@ -299,7 +431,7 @@ class WorkflowService:
                     raise WorkflowError("MATERIAL_NOT_DECLARED", "Experiment file is absent from the current frozen bundle")
                 expected_digest, expected_size = metadata["sha256"], metadata["size"]
             elif area == "evidence":
-                if name not in READABLE_EVIDENCE:
+                if not _readable_evidence(name):
                     raise WorkflowError("MATERIAL_NOT_DECLARED", "Only declared scientific evidence keys may be read")
                 path = _artifact(ws, record, name)
                 metadata = record.artifacts[name]
@@ -349,11 +481,7 @@ class WorkflowService:
             missing = set(plan.dependencies) - set(runtime.get("dependencies", []))
             if missing:
                 raise WorkflowError("RUNTIME_DEPENDENCY_UNAVAILABLE", "Unprovisioned dependencies: " + ", ".join(sorted(missing)))
-            plan.parameters["execution_instrumentation"] = (
-                "Controller-held QuickJS production-call gate; timings include guest and bridge overhead"
-                if plan.runtime == "quickjs" else
-                "Python profiling or Node V8 coverage is enabled; timing includes instrumentation overhead"
-            )
+            plan.parameters["execution_instrumentation"] = "Controller-held QuickJS production-call gate; timings include guest and bridge overhead"
             limitation = "Production-call instrumentation affects execution overhead; measurements cannot establish uninstrumented production performance."
             if len(plan.limitations) == 12:
                 plan.limitations[-1] += " " + limitation
@@ -369,17 +497,53 @@ class WorkflowService:
     def collect_literature(self, research_id: str) -> dict:
         with self._operation(research_id) as (ws, record):
             self._require(ws, record, {"planned", "code_ready", "analyzed"})
-            if "literature" in record.artifacts:
-                evidence = _read(ws, record, "literature")
-                if not any(source.get("scope") in {"abstract", "full_text"} and source.get("excerpts")
-                           for source in evidence.get("sources", [])):
-                    raise WorkflowError("LITERATURE_EVIDENCE_INSUFFICIENT", "Retained metadata cannot support Related Work")
-                return self._public(ws, record)
             plan = ResearchPlan.model_validate(_read(ws, record, "plan"))
-            evidence = self.collector(plan.literature_queries, ws.path("research"), limit=6, cancel=lambda: False)
-            path = ws.path("research/literature-evidence.json")
-            write_json(path, evidence)
-            _freeze(ws, record, "literature", path)
+            previous = _read(ws, record, "literature") if "literature" in record.artifacts else {}
+            queries = list(dict.fromkeys(query.strip() for query in plan.literature_queries))
+
+            def attempted_queries(value):
+                return {search.get("query") for search in value.get("searches", [])
+                        if search.get("status") in {"succeeded", "failed"} and search.get("attempted") is not False}
+
+            missing = [query for query in queries if query not in attempted_queries(previous)]
+            evidence = previous
+            if missing:
+                existing_sources = previous.get("sources", [])
+                remaining = max(0, 6 - len(existing_sources))
+                supplement = self.collector(missing, ws.path("research"), limit=remaining, cancel=lambda: False)
+                seen = {source.get("id") for source in existing_sources}
+                additions = []
+                for source in supplement.get("sources", []):
+                    if source.get("id") not in seen:
+                        seen.add(source.get("id"))
+                        additions.append(source)
+                if len(additions) > remaining:
+                    raise WorkflowError("LITERATURE_SOURCE_LIMIT", "Literature supplement exceeds the remaining source budget")
+                evidence = {**previous, **{key: value for key, value in supplement.items()
+                                           if key not in {"sources", "searches", "warnings", "history"}},
+                            "sources": existing_sources + additions,
+                            "searches": previous.get("searches", []) + supplement.get("searches", []),
+                            "warnings": previous.get("warnings", []) + supplement.get("warnings", []),
+                            "cancelled": supplement.get("cancelled", False)}
+                if previous:
+                    retained = record.artifacts["literature"]
+                    history_key = "literature-history-" + retained.sha256
+                    record.artifacts[history_key] = retained
+                    evidence["history"] = previous.get("history", []) + [
+                        {"artifact_id": history_key, "sha256": retained.sha256, "size": retained.size}]
+                    path = ws.path(f"research/literature-evidence-{uid('revision')}.json")
+                else:
+                    path = ws.path("research/literature-evidence.json")
+                if path.exists():
+                    raise WorkflowError("LITERATURE_EVIDENCE_CONFLICT", "A literature evidence revision cannot overwrite retained bytes")
+                write_json(path, evidence)
+                _freeze(ws, record, "literature", path)
+            for number, search in enumerate(evidence.get("searches", [])):
+                if search.get("raw_path"):
+                    original = safe_relative(ws.path("research"), search["raw_path"])
+                    if digest_file(original) != search.get("sha256"):
+                        raise WorkflowError("ARTIFACT_CHANGED", "Literature search differs from its retrieval digest")
+                    _freeze(ws, record, f"literature-search-{number}", original)
             for number, source in enumerate(evidence.get("sources", [])):
                 for field, digest in (("raw_path", "sha256"), ("metadata_path", "metadata_sha256"), ("text_path", "text_sha256")):
                     if source.get(field):
@@ -391,12 +555,46 @@ class WorkflowService:
             if evidence.get("cancelled") or not any(source.get("scope") in {"abstract", "full_text"} and source.get("excerpts")
                                                     for source in evidence.get("sources", [])):
                 raise WorkflowError("LITERATURE_EVIDENCE_INSUFFICIENT", "Metadata alone cannot support Related Work; retrieval evidence is retained")
+            if set(queries) - attempted_queries(evidence):
+                raise WorkflowError("LITERATURE_QUERIES_INCOMPLETE", "Some frozen literature queries were not attempted; partial evidence is retained")
             return self._public(ws, record)
+
+    def record_inference(self, research_id: str, value: dict) -> dict:
+        receipt = ModelEvidenceReceipt.model_validate(value)
+        content = receipt.model_dump(mode="json", exclude_none=True)
+        stem = f"{receipt.id}-{receipt.outcome}"
+        key = "model-evidence-" + stem
+        with self._operation(research_id) as (ws, record):
+            path = ws.path(f"research/model-evidence/{stem}.json")
+            if key in record.artifacts:
+                if _read(ws, record, key) != content:
+                    raise WorkflowError("INFERENCE_EVIDENCE_CONFLICT", "Inference evidence is append-only")
+                return {"artifactId": key, "sha256": record.artifacts[key].sha256}
+            if path.exists():
+                if loads_json(path.read_bytes()) != content:
+                    raise WorkflowError("INFERENCE_EVIDENCE_CONFLICT", "Retained inference evidence differs")
+            else:
+                write_json(path, content)
+            _freeze(ws, record, key, path)
+            event = ws.path(f"research/model-evidence/journal-{stem}.json")
+            event_content = {"event": "model-inference", "id": receipt.id, "at": receipt.at,
+                             "phase": receipt.phase, "outcome": receipt.outcome,
+                             "receipt_sha256": record.artifacts[key].sha256}
+            if event.exists():
+                if loads_json(event.read_bytes()) != event_content:
+                    raise WorkflowError("INFERENCE_EVIDENCE_CONFLICT", "Retained inference journal differs")
+            else:
+                write_json(event, event_content)
+            _freeze(ws, record, "model-journal-" + stem, event)
+            self._save(ws, record)
+            return {"artifactId": key, "sha256": record.artifacts[key].sha256}
 
     def submit_code(self, research_id: str, value: dict, review: dict) -> dict:
         bundle = CodeBundle.model_validate(value)
         accepted = _accepted(review)
         with self._operation(research_id) as (ws, record):
+            if record.execution_attempt > 0:
+                raise WorkflowError("EXPERIMENT_ALREADY_DISPATCHED", "A scientific execution was already dispatched; retained evidence cannot be replaced or rerun")
             self._require(ws, record, {"planned", "code_ready"})
             plan = ResearchPlan.model_validate(_read(ws, record, "plan"))
             if bundle.runtime != plan.runtime:
@@ -407,10 +605,10 @@ class WorkflowService:
                     raise ValueError("Experiment file collides with reserved controller metadata")
                 if project._secret(path) or any(part.startswith(".") for part in Path(item.path).parts):
                     raise ValueError("Experiment code must use public declared paths")
-                if path.suffix not in {".py", ".js", ".mjs", ".cjs", ".json", ".md", ".txt"}:
+                if path.suffix not in {".js", ".mjs", ".cjs", ".json", ".md", ".txt"}:
                     raise ValueError("Unsupported experiment file type")
-                if path.suffix == ".py":
-                    ast.parse(item.content, filename=item.path)
+            if Path(bundle.entrypoint).suffix not in {".js", ".mjs", ".cjs"}:
+                raise ValueError("Experiment entrypoint must be a JavaScript module")
             record.code_attempt += 1
             root = ws.path(f"research/generated/attempt-{record.code_attempt}")
             while root.exists():
@@ -441,6 +639,8 @@ class WorkflowService:
 
     def start_experiment(self, research_id: str) -> dict:
         with self._operation(research_id) as (ws, record):
+            if record.execution_attempt > 0:
+                raise WorkflowError("EXPERIMENT_ALREADY_DISPATCHED", "A scientific execution was already dispatched; retained evidence cannot be replaced or rerun")
             self._require(ws, record, {"code_ready"})
             if not self.runner.status().get("ready"):
                 raise WorkflowError("ISOLATION_UNAVAILABLE", "The isolated research worker is unavailable")
@@ -469,6 +669,108 @@ class WorkflowService:
                 record.status, record.code = "cancelled", "CANCELLED"
             self._save(ws, record)
             return self._public(ws, record)
+
+    def resume_writing(self, research_id: str) -> dict:
+        """Resume only authoring from verified successful retained evidence."""
+        with self._operation(research_id) as (ws, record):
+            if record.status != "cancelled" or record.stage not in {"analyzed", "manuscript"}:
+                raise WorkflowError("INVALID_STATE", "Only cancelled analyzed or manuscript authoring may resume")
+            self._require(ws, record, {"analyzed", "manuscript"})
+            self._require_successful_analysis(ws, record)
+            identifier = uid("authoring-resume")
+            path = ws.path("research/" + identifier + ".json")
+            if path.exists():
+                raise WorkflowError("RESUME_EVIDENCE_CONFLICT", "An authoring resume receipt cannot overwrite retained bytes")
+            write_json(path, {"event": "authoring-resume", "at": now(), "previous_status": record.status,
+                             "previous_stage": record.stage, "previous_workflow": record.model_dump(mode="json"),
+                             "execution_sha256": record.artifacts["execution"].sha256,
+                             "execution_attempt": record.execution_attempt,
+                             "observations_sha256": record.artifacts["observations"].sha256,
+                             "analysis_sha256": record.artifacts["analysis"].sha256})
+            _freeze(ws, record, identifier, path)
+            record.status, record.code, record.cancellation_requested = "ready", None, False
+            record.message = "Authoring resumed from retained successful evidence; no experiment was dispatched."
+            self._save(ws, record)
+            return self._public(ws, record)
+
+    def _require_successful_analysis(self, ws: Workspace, record: Workflow) -> None:
+        execution = _read(ws, record, "execution")
+        if execution.get("status") != "succeeded":
+            raise WorkflowError("EXPERIMENT_FAILED", "Authoring requires a retained successful execution")
+        if not self._confirmed_cleanup(ws, record):
+            raise WorkflowError("CLEANUP_UNCONFIRMED", "Retained execution cleanup must be confirmed before authoring resumes")
+        plan = ResearchPlan.model_validate(_read(ws, record, "plan"))
+        _production_execution(execution, plan)
+        raw = _read(ws, record, "observations")
+        try:
+            science.reject_failed_controls(raw)
+        except science.ControlFailure as error:
+            raise WorkflowError("CONTROL_FAILED", str(error)) from None
+        controls = raw.get("controls") if isinstance(raw, dict) else None
+        if (not isinstance(controls, list) or not controls or
+                any(not isinstance(control, dict) or control.get("passed") is not True or
+                    not isinstance(control.get("name"), str) for control in controls) or
+                any(not any(re.search(r"(?:^|[ _-])" + kind + r"(?:$|[ _-])", control["name"].casefold())
+                            for control in controls) for kind in ("positive", "negative"))):
+            raise WorkflowError("CONTROL_FAILED", "Retained positive and intentional-fault negative controls must have actually passed")
+        analysis = _read(ws, record, "analysis")
+        if (analysis.get("raw_sha256") != record.artifacts["observations"].sha256 or
+                analysis.get("protocol_sha256") != record.artifacts["plan"].sha256 or
+                analysis.get("controls") != controls):
+            raise WorkflowError("ARTIFACT_CHANGED", "Retained analysis does not bind the frozen raw observations, protocol and controls")
+
+    def revise_writing(self, research_id: str) -> dict:
+        """Open a new draft while preserving a completed export and its approval."""
+        with self._operation(research_id) as (ws, record):
+            if record.status != "completed" or record.stage != "exported":
+                raise WorkflowError("INVALID_STATE", "Only a completed exported manuscript may be explicitly revised")
+            self._require(ws, record, {"exported"})
+            self._require_successful_analysis(ws, record)
+            for key in ("manuscript", "canonical", "manuscript-review", "export-md", "export-pdf", "export-docx",
+                        "export-tex", "conversion", "validation", "reproducibility", "source-provenance"):
+                _artifact(ws, record, key)
+            validation = _read(ws, record, "validation")
+            if (validation.get("passed") is not True or validation.get("research_id") != record.id or
+                    validation.get("final_verification_in_archive") is not False or
+                    not isinstance(validation.get("verification_journal"), str) or
+                    re.fullmatch(r"verification-journal-[a-f0-9]{12}", validation["verification_journal"]) is None):
+                raise WorkflowError("REVISION_UNVERIFIED", "Revision requires a retained completed export validation")
+            journal = _artifact(ws, record, validation["verification_journal"])
+            rows = [loads_json(line) for line in journal.read_text(encoding="utf-8").splitlines()]
+            if (not rows or rows[-1].get("phase") != "complete" or
+                    any(row.get("research_id") != record.id for row in rows)):
+                raise WorkflowError("REVISION_UNVERIFIED", "Revision requires a completed hash-bound export verification journal")
+            review = _read(ws, record, "manuscript-review")
+            _accepted(review.get("review", {}))
+            if (review.get("origin") != "native_host_submission" or any(
+                    review.get(field + "_sha256") != record.artifacts[key].sha256
+                    for field, key in (("manuscript", "manuscript"), ("protocol", "plan"),
+                                       ("analysis", "analysis"), ("literature", "literature")))):
+                raise WorkflowError("ARTIFACT_CHANGED", "Retained manuscript approval does not bind the completed evidence")
+            identifier = uid("authoring-revision")
+            path = ws.path("research/" + identifier + ".json")
+            suffix = identifier.removeprefix("authoring-revision-")
+            aliases = {key: "authoring-history-" + suffix + "-" + key for key in record.artifacts
+                       if key in {"manuscript", "canonical", "manuscript-review", "conversion", "validation",
+                                  "reproducibility", "source-provenance"} or
+                       (key.startswith("export-") and not key.startswith("export-attempt-"))}
+            if path.exists() or identifier in record.artifacts or any(key in record.artifacts for key in aliases.values()):
+                raise WorkflowError("REVISION_EVIDENCE_CONFLICT", "A manuscript revision cannot overwrite retained evidence")
+            write_json(path, {"id": identifier, "event": "authoring-revision", "at": now(),
+                             "previous_status": record.status, "previous_stage": record.stage,
+                             "previous_workflow": record.model_dump(mode="json"), "preserved_artifacts": aliases,
+                             "execution_attempt": record.execution_attempt,
+                             "execution_sha256": record.artifacts["execution"].sha256,
+                             "observations_sha256": record.artifacts["observations"].sha256,
+                             "analysis_sha256": record.artifacts["analysis"].sha256})
+            _freeze(ws, record, identifier, path)
+            for key, retained in aliases.items():
+                record.artifacts[retained] = record.artifacts.pop(key)
+            record.status, record.stage, record.code, record.cancellation_requested = "ready", "analyzed", None, False
+            record.message = "A new manuscript draft may be authored from unchanged retained evidence; previous approval and exports are preserved."
+            self._save(ws, record)
+            return self._public(ws, record)
+
 
     def _execute(self, research_id: str, lease) -> None:
         ws = self._workspace(research_id)
@@ -622,10 +924,21 @@ class WorkflowService:
         with self._operation(research_id) as (ws, record):
             self._require(ws, record, {"manuscript", "exported"})
             if record.stage == "exported":
-                self._verify(ws, record)
+                root = ws.path("research/exports/" + uid("verification-attempt"))
+                root.mkdir(parents=True, exist_ok=False)
+                self._verify(ws, record, root / "verification.jsonl")
+                self._save(ws, record)
                 return self._public(ws, record)
-            root = ws.path("research/exports")
-            root.mkdir(parents=True, exist_ok=True)
+            attempt = uid("export-attempt")
+            root = ws.path("research/exports/" + attempt)
+            root.mkdir(parents=True, exist_ok=False)
+            receipt = root / "attempt.json"
+            write_json(receipt, {"event": "export-started", "at": now(),
+                                 "manuscript_sha256": record.artifacts["manuscript"].sha256,
+                                 "execution_sha256": record.artifacts["execution"].sha256,
+                                 "execution_attempt": record.execution_attempt})
+            _freeze(ws, record, attempt, receipt)
+            self._save(ws, record)
             markdown = root / "paper.md"
             shutil.copyfile(_artifact(ws, record, "manuscript"), markdown)
             _freeze(ws, record, "export-md", markdown)
@@ -648,7 +961,7 @@ class WorkflowService:
             if errors := conversion.verify_receipts(markdown, outputs, root / "conversion-receipts.json"):
                 raise ValueError("; ".join(errors))
             self._bundle(ws, record, root)
-            validation = self._verify(ws, record)
+            validation = self._verify(ws, record, root / "verification.jsonl")
             write_json(root / "validation.json", validation)
             _freeze(ws, record, "validation", root / "validation.json")
             record.status, record.stage = "completed", "exported"
@@ -676,9 +989,35 @@ class WorkflowService:
             if path.is_file():
                 selection["generated/" + path.relative_to(bundle).as_posix()] = path
         for key in record.artifacts:
+            if key.startswith("export-attempt-"):
+                selection["export-attempts/" + key + ".json"] = _artifact(ws, record, key)
+            if key.startswith("authoring-resume-"):
+                path = _artifact(ws, record, key)
+                selection["authoring/" + path.name] = path
+            if re.fullmatch(r"authoring-revision-[a-f0-9]{12}", key):
+                path = _artifact(ws, record, key)
+                selection["authoring/" + path.name] = path
+            if key.startswith("authoring-history-") and not key.endswith("-reproducibility"):
+                path = _artifact(ws, record, key)
+                selection["authoring/history/" + key + "/" + path.name] = path
+            if re.fullmatch(r"draft-[1-9][0-9]*|verification-journal-[a-f0-9]{12}", key):
+                path = _artifact(ws, record, key)
+                selection["authoring/retained/" + key + "/" + path.name] = path
+            if key.startswith(("model-evidence-", "model-journal-")):
+                path = _artifact(ws, record, key)
+                selection["model-evidence/" + path.name] = path
+            if re.fullmatch(r"supporting-document-import-[a-f0-9]{12}", key):
+                path = _artifact(ws, record, key)
+                selection["supporting-documents/imports/" + path.name] = path
+            elif re.fullmatch(r"supporting-document-[a-f0-9]{12}", key):
+                path = _artifact(ws, record, key)
+                selection["supporting-documents/" + key + "/" + path.name] = path
             if key.startswith("analysis-"):
                 selection["analysis/" + _artifact(ws, record, key).name] = _artifact(ws, record, key)
-            if key.startswith("literature-"):
+            if key.startswith("literature-history-"):
+                path = _artifact(ws, record, key)
+                selection["literature/history/" + key.removeprefix("literature-history-") + ".json"] = path
+            elif key.startswith("literature-"):
                 path = _artifact(ws, record, key)
                 selection["literature/" + path.relative_to(ws.path("research/literature")).as_posix()] = path
         imported = ws.latest("project", Project)
@@ -692,18 +1031,16 @@ class WorkflowService:
                    "attribution": "Source provenance does not establish manuscript authorship or redistribution permission."})
         _freeze(ws, record, "source-provenance", provenance)
         selection["source-provenance.json"] = provenance
+        if "source-collection" in record.artifacts:
+            selection["source-collection.json"] = _artifact(ws, record, "source-collection")
         if sum(path.stat().st_size for path in selection.values()) > MAX_BUNDLE_BYTES:
             raise WorkflowError("REPRODUCTION_BUNDLE_TOO_LARGE", "Reproduction archive inputs exceed 96 MiB")
         archive = root / "reproducibility.zip"
-        runtime = ResearchPlan.model_validate(_read(ws, record, "plan")).runtime
         runtime_instructions = (
-            "Use the installed Cloud plugin's verified private interpreter and extracted runtime.\n"
-            "Select --runtime-root with scripts/run_workflow.py and require environment ready before creating a study.\n"
+            "Use Paper Factory's recorded bundled Python, Node and extracted QuickJS runtime.\n"
+            "Inspect runtime-inventory.json from the desktop distribution and require runtime readiness before execution.\n"
             "QuickJS runs frozen source and generated code in separate guests using callProduction and retainFixture.\n"
             "TypeScript is erased by the recorded trusted transformer; inspect original and compiled hashes in runtime-manifest.json.\n"
-            if runtime == "quickjs" else
-            "Provision the vetted platform runtime before running generated code through its isolated runner.\n"
-            "The native runner supplies PF_SOURCE_ROOT, PF_CODE_ROOT, PF_OUTPUT_ROOT and PF_WORK.\n"
         )
         with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as output:
             output.writestr("README.md", "# Reproduce this controlled software study\n\n"
@@ -711,7 +1048,9 @@ class WorkflowService:
                 "execution.json records actual isolation, resource limits, production calls and cleanup.\n"
                 "runtime-manifest.json, when present, records source and runtime provenance.\n" + runtime_instructions +
                 "Recompute results with analysis/analysis.py and its documented arguments.\n"
+                "The final verification journal and validation are separate frozen artifacts produced after this archive; they are not archive members.\n"
                 "Reviews are native host submissions; reviewer independence is not attested by this controller.\n"
+                "Explicit authoring revisions retain prior drafts, approvals and exports in authoring/. Revision receipts preserve the full prior frozen artifact inventory. Prior reproduction ZIPs remain separate frozen artifacts and are excluded here to avoid nested archives.\n"
                 "Source license authorization has not been assessed. Author review is required; no submission occurred.\n")
             output.writestr("inventory.json", json.dumps({name: {"sha256": digest_file(path), "size": path.stat().st_size}
                                                           for name, path in selection.items()}, indent=2))
@@ -720,52 +1059,78 @@ class WorkflowService:
                 output.write(path, name)
         _freeze(ws, record, "reproducibility", archive)
 
-    def _verify(self, ws: Workspace, record: Workflow) -> dict:
-        from docx import Document
-        from pypdf import PdfReader
+    def _verify(self, ws: Workspace, record: Workflow, journal: Path) -> dict:
+        ensure_unlinked(journal)
+        with journal.open("x", encoding="utf-8") as stream:
+            def phase(name: str) -> None:
+                stream.write(json.dumps({"at": now(), "research_id": record.id, "phase": name}) + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
 
-        _verify_artifacts(ws, record)
-        plan = ResearchPlan.model_validate(_read(ws, record, "plan"))
-        _production_execution(_read(ws, record, "execution"), plan)
-        if not self._confirmed_cleanup(ws, record):
-            raise WorkflowError("CLEANUP_UNCONFIRMED", "Export requires confirmed experiment cleanup")
-        analysis = _read(ws, record, "analysis")
-        with tempfile.TemporaryDirectory(prefix="paperfactory-recompute-") as directory:
-            computed = science.analyze(_read(ws, record, "observations"), plan, Path(directory))
-        for key in ("results", "parameters", "controls", "protocol_digest", "observation_digest", "summaries", "paired_deltas"):
-            if computed.get(key) != analysis.get(key):
-                raise ValueError("Analysis differs from raw observation recomputation: " + key)
-        canonical = _read(ws, record, "canonical")
-        with tempfile.TemporaryDirectory(prefix="paperfactory-manuscript-") as directory:
-            rendered = science.validate_and_render({"title": canonical["title"], "sections": canonical["sections"]}, plan, analysis,
-                _read(ws, record, "literature"), Path(directory), author=canonical.get("author"))
-            _append_figures(ws, record, Path(rendered["markdown_path"]))
-            if digest_file(Path(rendered["markdown_path"])) != record.artifacts["manuscript"].sha256:
-                raise ValueError("Manuscript differs from independent evidence rendering")
-        if digest_file(_artifact(ws, record, "export-md")) != record.artifacts["manuscript"].sha256:
-            raise ValueError("Export source differs from verified manuscript")
-        pdf = PdfReader(_artifact(ws, record, "export-pdf"))
-        if pdf.is_encrypted or not pdf.pages or not any(page.extract_text() for page in pdf.pages):
-            raise ValueError("Native PDF cannot be independently read")
-        word = Document(_artifact(ws, record, "export-docx"))
-        if len(" ".join(paragraph.text for paragraph in word.paragraphs).split()) < 1000:
-            raise ValueError("Native Word manuscript is incomplete")
-        tex = _artifact(ws, record, "export-tex").read_text(encoding="utf-8")
-        if "\\begin{document}" not in tex or "\\end{document}" not in tex:
-            raise ValueError("Standalone LaTeX export is incomplete")
-        if errors := conversion.verify_receipts(_artifact(ws, record, "export-md"),
-                {format: _artifact(ws, record, "export-" + format) for format in ("pdf", "docx", "tex")},
-                _artifact(ws, record, "conversion")):
-            raise ValueError("; ".join(errors))
-        with zipfile.ZipFile(_artifact(ws, record, "reproducibility")) as archive:
-            if archive.testzip():
-                raise ValueError("Reproduction archive has a CRC error")
-            for name, item in loads_json(archive.read("inventory.json")).items():
-                data = archive.read(name)
-                if len(data) != item["size"] or hashlib.sha256(data).hexdigest() != item["sha256"]:
-                    raise ValueError("Reproduction archive member differs from its inventory")
+            phase("artifact-source-validation")
+            _verify_artifacts(ws, record)
+            plan = ResearchPlan.model_validate(_read(ws, record, "plan"))
+            _production_execution(_read(ws, record, "execution"), plan)
+            if not self._confirmed_cleanup(ws, record):
+                raise WorkflowError("CLEANUP_UNCONFIRMED", "Export requires confirmed experiment cleanup")
+
+            phase("trusted-analysis")
+            analysis = _read(ws, record, "analysis")
+            # Recompute the same trusted values without regenerating analysis files or figures.
+            computed = science._compute(_read(ws, record, "observations"), plan.model_dump(mode="json"))
+            for key in ("results", "parameters", "controls", "protocol_digest", "observation_digest", "summaries", "paired_deltas"):
+                if computed.get(key) != analysis.get(key):
+                    raise ValueError("Analysis differs from raw observation recomputation: " + key)
+
+            phase("manuscript-rendering")
+            canonical = _read(ws, record, "canonical")
+            with tempfile.TemporaryDirectory(prefix="paperfactory-manuscript-") as directory:
+                rendered = science.validate_and_render({"title": canonical["title"], "sections": canonical["sections"]}, plan, analysis,
+                    _read(ws, record, "literature"), Path(directory), author=canonical.get("author"))
+                _append_figures(ws, record, Path(rendered["markdown_path"]))
+                if digest_file(Path(rendered["markdown_path"])) != record.artifacts["manuscript"].sha256:
+                    raise ValueError("Manuscript differs from independent evidence rendering")
+            if digest_file(_artifact(ws, record, "export-md")) != record.artifacts["manuscript"].sha256:
+                raise ValueError("Export source differs from verified manuscript")
+
+            phase("pdf")
+            from pypdf import PdfReader
+
+            pdf = PdfReader(_artifact(ws, record, "export-pdf"))
+            if pdf.is_encrypted or not pdf.pages or not any(page.extract_text() for page in pdf.pages):
+                raise ValueError("Native PDF cannot be independently read")
+
+            phase("docx")
+            from docx import Document
+
+            word = Document(_artifact(ws, record, "export-docx"))
+            if len(" ".join(paragraph.text for paragraph in word.paragraphs).split()) < 1000:
+                raise ValueError("Native Word manuscript is incomplete")
+
+            phase("tex-conversion")
+            tex = _artifact(ws, record, "export-tex").read_text(encoding="utf-8")
+            if "\\begin{document}" not in tex or "\\end{document}" not in tex:
+                raise ValueError("Standalone LaTeX export is incomplete")
+            if errors := conversion.verify_receipts(_artifact(ws, record, "export-md"),
+                    {format: _artifact(ws, record, "export-" + format) for format in ("pdf", "docx", "tex")},
+                    _artifact(ws, record, "conversion")):
+                raise ValueError("; ".join(errors))
+
+            phase("zip")
+            with zipfile.ZipFile(_artifact(ws, record, "reproducibility")) as archive:
+                if archive.testzip():
+                    raise ValueError("Reproduction archive has a CRC error")
+                for name, item in loads_json(archive.read("inventory.json")).items():
+                    data = archive.read(name)
+                    if len(data) != item["size"] or hashlib.sha256(data).hexdigest() != item["sha256"]:
+                        raise ValueError("Reproduction archive member differs from its inventory")
+            phase("complete")
+
+        identifier = uid("verification-journal")
+        _freeze(ws, record, identifier, journal)
         return {"passed": True, "research_id": record.id, "results": len(analysis["results"]),
-                "pages": len(pdf.pages), "publication": "author review required; not submitted"}
+                "pages": len(pdf.pages), "publication": "author review required; not submitted",
+                "verification_journal": identifier, "final_verification_in_archive": False}
 
     def _recover(self) -> None:
         for path in self.root.iterdir():

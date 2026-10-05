@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "profiles": {
+    "win32-x64": {
+      "inventorySha256": "476a0042d48f5c120b6e06e54cc388dbc8773dfa70229c645c2fb51099e894ce",
+      "sourceManifestSha256": "c7f5da4ca213b77bcf0acde3c71cc9a96e82896000303a41988344b2a1e86a12",
+      "executables": {
+        "python": "python/python.exe",
+        "node": "node/node.exe",
+        "pandoc": "python/Lib/site-packages/pypandoc/files/pandoc.exe"
+      },
+      "fileCount": 4463,
+      "actualHostTested": true
+    },
+    "darwin-arm64": {
+      "inventorySha256": "9ed9b00611c1e40e1c1377a67ac85059d5a6678f54706ff0c86c7de445eabee7",
+      "sourceManifestSha256": "c7f5da4ca213b77bcf0acde3c71cc9a96e82896000303a41988344b2a1e86a12",
+      "executables": {
+        "python": "python/bin/python3.14",
+        "node": "node/bin/node",
+        "pandoc": "pandoc/pandoc"
+      },
+      "fileCount": 4349,
+      "actualHostTested": false
+    },
+    "darwin-x64": {
+      "inventorySha256": "2b51e6b6d35d048061ad7fe8fe3722ef086db2635c4154fb056946db519904ed",
+      "sourceManifestSha256": "c7f5da4ca213b77bcf0acde3c71cc9a96e82896000303a41988344b2a1e86a12",
+      "executables": {
+        "python": "python/bin/python3.14",
+        "node": "node/bin/node",
+        "pandoc": "pandoc/pandoc"
+      },
+      "fileCount": 4346,
+      "actualHostTested": false
+    }
+  }
+}

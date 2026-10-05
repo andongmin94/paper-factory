@@ -5,7 +5,6 @@ import hashlib
 import json
 import math
 import os
-import shutil
 import sqlite3
 import stat
 import tempfile
@@ -137,18 +136,13 @@ def write_json(path: Path, value: object) -> None:
             temporary.unlink(missing_ok=True)
 
 
-def pf_home() -> Path:
-    path = Path(os.environ.get("PF_HOME", str(Path.home() / ".paper-factory"))).expanduser()
-    ensure_unlinked(path)
-    return path.resolve()
-
 
 class Workspace:
     def __init__(self, root: Path):
         ensure_unlinked(root.expanduser())
         self.root = root.expanduser().resolve()
         if not self.path("records.sqlite3").is_file():
-            raise ValueError(f"Not a Paper Factory workspace: {self.root}. Run paperfactory start first.")
+            raise ValueError(f"Not a Paper Factory workspace: {self.root}.")
 
     @classmethod
     def create(cls, root: Path) -> "Workspace":
@@ -159,25 +153,10 @@ class Workspace:
         root.mkdir(parents=True, exist_ok=True)
         with closing(sqlite3.connect(root / "records.sqlite3")) as db, db:
             db.execute("CREATE TABLE records (kind TEXT NOT NULL, id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(kind,id))")
-        for name in ("source", "studies", "experiments", "runs", "literature", "manuscripts", "reports", "freezes"):
+        for name in ("source", "literature", "manuscripts", "reports"):
             (root / name).mkdir(exist_ok=True)
         return cls(root)
 
-    @classmethod
-    def current(cls, root: Path | None = None) -> "Workspace":
-        if root is None:
-            pointer = pf_home() / "current.json"
-            ensure_unlinked(pointer)
-            if not pointer.is_file():
-                raise ValueError("No current workspace. Run paperfactory start <project>.")
-            current = json.loads(pointer.read_text(encoding="utf-8"))
-            if not isinstance(current, dict) or not isinstance(current.get("workspace"), str) or not current["workspace"]:
-                raise ValueError("Current workspace pointer is invalid; select --workspace explicitly")
-            root = Path(current["workspace"])
-        return cls(root)
-
-    def make_current(self) -> None:
-        write_json(pf_home() / "current.json", {"workspace": str(self.root)})
 
     def save(self, kind: str, record: Record) -> None:
         with self._database() as db:
@@ -221,62 +200,10 @@ class Workspace:
     def path(self, relative: str) -> Path:
         return safe_relative(self.root, relative)
 
-    def rename_artifact(self, source: Path, destination: Path) -> Path:
-        """Publish a sibling artifact atomically, tolerating brief Windows locks."""
-        try:
-            source_relative = source.absolute().relative_to(self.root).as_posix()
-            destination_relative = destination.absolute().relative_to(self.root).as_posix()
-        except ValueError:
-            raise ValueError("Artifact rename must stay inside its workspace") from None
-        source = self.path(source_relative)
-        destination = self.path(destination_relative)
-        if source.parent != destination.parent:
-            raise ValueError("Atomic artifact publication requires sibling paths")
-        for attempt in range(5):
-            # Keep validation inside the retry loop; never resolve away links.
-            self.path(source_relative)
-            self.path(destination_relative)
-            if destination.exists():
-                raise ValueError("Artifact destination already exists; will not overwrite it")
-            try:
-                return source.rename(destination)
-            except PermissionError:
-                if os.name != "nt" or attempt == 4:
-                    raise
-                time.sleep(0.025 * (attempt + 1))
-
-    def discard_uncommitted_artifact(self, destination: Path, *, kind: str,
-            record_id: str, field: str, expected_value: str) -> bool:
-        """Roll back an owned artifact only after checking its durable binding.
-
-        A commit can succeed before the caller receives its acknowledgement.
-        Callers pass an immutable artifact digest so later valid state changes
-        do not make a committed artifact look like an uncommitted one.
-        """
-        if not isinstance(expected_value, str) or not expected_value:
-            return False
-        try:
-            with self._database() as db:
-                row = db.execute("SELECT data FROM records WHERE kind=? AND id=?", (kind, record_id)).fetchone()
-            if row is not None:
-                data = json.loads(row[0])
-                if not isinstance(data, dict) or data.get(field) == expected_value:
-                    return False
-            relative = destination.absolute().relative_to(self.root).as_posix()
-            target = self.path(relative)
-            for path in target.rglob("*"):
-                ensure_unlinked(path)
-                if path.is_file():
-                    path.chmod(stat.S_IMODE(path.stat().st_mode) | stat.S_IWUSR)
-            shutil.rmtree(target)
-            return True
-        except (OSError, ValueError, TypeError):
-            # An unavailable store or uncertain outcome must retain evidence.
-            return False
 
     @contextmanager
     def lock(self, name: str):
-        """Fail fast on concurrent study operations; OS releases locks on exit."""
+        """Fail fast on concurrent research operations; OS releases locks on exit."""
         path = self.path(f"locks/{name}.lock")
         with file_lock(path):
             yield

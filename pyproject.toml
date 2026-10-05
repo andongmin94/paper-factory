@@ -4,21 +4,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "paper-factory"
-version = "0.12.0"
-description = "Research skill with explicit host preparation, bounded experiments and verified manuscript exports"
+version = "0.13.0"
+description = "Standalone local research engine with bounded QuickJS experiments and verified manuscript exports"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
-dependencies = ["pydantic>=2.12,<3", "typer>=0.15,<1", "httpx[socks]>=0.28,<1", "beautifulsoup4>=4.14,<5", "python-dotenv>=1.2,<2", "jsonschema>=4.23,<5"]
+dependencies = ["pydantic>=2.12,<3", "httpx[socks]>=0.28,<1", "beautifulsoup4>=4.14,<5"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8,<10"]
+dev = ["pytest>=8,<10", "jsonschema>=4.23,<5", "packaging>=26.3,<27"]
 pdf = ["typst>=0.14,<1", "pypdf>=5,<7", "python-docx>=1.2,<2", "pypandoc_binary>=1.17,<2"]
 research = ["matplotlib>=3.10,<4", "numpy>=2,<3"]
-automation = ["mido==1.3.3", "packaging>=26.3,<27"]
-
-[project.scripts]
-paperfactory = "paper_factory.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]

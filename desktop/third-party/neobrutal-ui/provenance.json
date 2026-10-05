@@ -1,0 +1,27 @@
+{
+  "repository": "https://github.com/andongmin94/neobrutal-ui",
+  "commit": "b4da2463fe710a77bf464c65125a1a7f40424722",
+  "imported": [
+    "src/renderer/components/ui/button.tsx",
+    "src/renderer/components/ui/button-variants.ts",
+    "src/renderer/components/ui/card.tsx",
+    "src/renderer/components/ui/badge.tsx",
+    "src/renderer/components/ui/select.tsx",
+    "src/renderer/components/ui/checkbox.tsx"
+  ],
+  "utilityAdaptation": "Only cn is retained from utils.ts; upstream documentation naming helpers are not imported.",
+  "themeGeneration": "serializeThemeCss() with the upstream default Mono palette and defaultThemeSettings, with explicit Tailwind source directory added in application CSS.",
+  "sourceSha256": {
+    "registry/src/components/ui/button.tsx": "38c1c6ffcaae027df228d7181623832da34339aafca3778c5f63a8a285cd2bd7",
+    "registry/src/components/ui/button-variants.ts": "eff25fb971b38f3ae65f1911240d0a98530d1762d3f7148ec12b137e5a755c7c",
+    "registry/src/components/ui/card.tsx": "5947ad18b2bbcd4bf0fac55ba6d31945815ea2cb1a50dc9654a9809846255d41",
+    "registry/src/components/ui/badge.tsx": "95b079cc60586b6d1dbbdc69a3f19e4821261471e9001241c6759943626afb04",
+    "registry/src/components/ui/select.tsx": "621388d9760cc55182af4a48ee5d97097a93666dfe3b0db16c09858a8b0baffa",
+    "registry/src/lib/utils.ts": "57f0efb987967ef5bd28f1ce67f8d5acfdd30575cc828dba54b90ee059e75e6b",
+    "registry/src/data/colors.ts": "81eb70a6d1942e5831ab06b95f08e3cb119c7a1cc347077cc6c41360b8bab651",
+    "registry/src/data/theme.ts": "7ff32218b55f0d804ffff6366f72cd0507e190ea6c714a56324e4f7a8f2a9216",
+    "registry/src/data/theme-styles.ts": "5a9b8f7c677e05a5dd46ba5bd94fc7de8c56288cedb46352d32fb1cf6ba7107d",
+    "LICENSE": "a77140948a68fafb5e0077a287502104203b7ccb11255b311101ec8fe85fa250",
+    "registry/src/components/ui/checkbox.tsx": "b838445b04e1d57abe4963363b2596fe71869272d114eb5bee88351ebd21a827"
+  }
+}

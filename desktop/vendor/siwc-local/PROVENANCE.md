@@ -1,0 +1,9 @@
+# Sign in with ChatGPT SDK provenance
+
+Vendored from [OpenAI Sign in with ChatGPT DevKit](https://github.com/openai/sign-in-with-chatgpt-devkit/tree/f723814abdccec135b519c451fb6e1992ee5e933/packages/local), commit `f723814abdccec135b519c451fb6e1992ee5e933`, retrieved 2026-10-05.
+
+The upstream files retain their original license and notices. `src/responses.ts` has one Paper Factory adaptation: its client-side HTTP/SSE deadline is ten minutes, matching the application's bounded model-request deadline, instead of aborting a still-active streamed body after three minutes. Endpoint, OAuth authorization, request fields, failure handling and the required `response.completed` event are unchanged. This client setting is not a guarantee of server availability or duration. `test/response-deadline.test.mjs` adds synthetic regression coverage for delayed completion and cancellation. Other upstream `src/` and `test/` files are unchanged. `package.json` and `tsconfig.json` were adapted for the Paper Factory standalone workspace. `copy-notices.mjs` was added to retain the original license, third-party notices, and dependency inventory in the compiled package.
+
+OpenAI-authored SDK code remains under the Sign-in with ChatGPT DevKit Noncommercial License v1.0 in `LICENSE`. The independent Paper Factory application has its own license. The included upstream dependency inventory describes the upstream DevKit, including its example apps; it is not a complete inventory of the Paper Factory installer. Electron binary notices and all other bundled runtime notices must accompany the installer separately.
+
+The SDK is a private local workspace and was not available from the public npm registry when inspected. The application uses this pinned local package rather than an unverified registry package.

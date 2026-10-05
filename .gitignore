@@ -1,6 +1,5 @@
 .env
 .env.*
-!.env.example
 .venv/
 __pycache__/
 *.py[cod]
@@ -10,13 +9,20 @@ build/
 dist/
 .paper-factory/
 .pf-smoke/
-/desktop/
+/desktop/node_modules/
+/desktop/dist/
+/desktop/release/
+/desktop/test-results/
+/desktop/playwright-report/
+/desktop/vendor/siwc-local/dist/
+/desktop/runtime/
+**/node_modules/
+**/chatgpt-auth.json
+**/chatgpt-host.json
 
-# Local research exports and plugin installation metadata
+# Local research exports and host installation metadata
 /output/
 /.agents/
 
-# Optional downloaded wheels; bootstrap transport wheels remain versioned
-/skills/paper-factory/wheelhouse/beautifulsoup4-*.whl
-/skills/paper-factory/wheelhouse/soupsieve-*.whl
-/skills/paper-factory/wheelhouse/typst-*.whl
+# Local Windows cache directory
+/%SystemDrive%/

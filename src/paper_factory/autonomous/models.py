@@ -18,10 +18,10 @@ class ResearchPlan(Record):
     reason: str = Field(min_length=8, max_length=4000)
     title: str = Field(min_length=8, max_length=300)
     question: str = Field(min_length=12, max_length=2000)
-    runtime: Literal["python", "node", "quickjs"]
+    runtime: Literal["quickjs"]
     source_files: list[str] = Field(min_length=1, max_length=20)
     production_entrypoint: str = Field(default="", max_length=300)
-    dependencies: list[str] = Field(default_factory=list, max_length=20)
+    dependencies: list[str] = Field(default_factory=list, max_length=0)
     conditions: list[Annotated[str, Field(min_length=1, max_length=80)]] = Field(min_length=2, max_length=6)
     metrics: list[Measure] = Field(min_length=1, max_length=8)
     comparator: str = Field(min_length=12, max_length=3000)
@@ -52,7 +52,7 @@ class GeneratedFile(Record):
 
 
 class CodeBundle(Record):
-    runtime: Literal["python", "node", "quickjs"]
+    runtime: Literal["quickjs"]
     entrypoint: str = Field(min_length=1, max_length=200)
     files: list[GeneratedFile] = Field(min_length=1, max_length=12)
     explanation: str = Field(min_length=12, max_length=5000)

@@ -13,6 +13,7 @@ const MAX_IMPORTS = 512;
 const MAX_IMPORT_BYTES = 64 * 1024;
 const LINEAR_BYTES = 64 * 1024 * 1024;
 const HEAP_BYTES = 16 * 1024 * 1024;
+const TYPESCRIPT_OPTIONS = Object.freeze({ mode: 'strip', sourceMap: false });
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const guardianParent = process.env.PF_QUICKJS_GUARDIAN === undefined ? null : Number(process.env.PF_QUICKJS_GUARDIAN);
 if (guardianParent !== null && (process.platform !== 'darwin' || !Number.isInteger(guardianParent) || guardianParent < 2 || process.ppid !== guardianParent)) {
@@ -46,7 +47,8 @@ const manifest = { backend: 'quickjs-wasm', library_version: '0.32.0', node_vers
   wasm_sha256: sha256(wasm), production_entrypoint: request.production_entrypoint,
   source_files: Object.fromEntries([...source].map(([name, item]) => [name, { original_sha256: item.sha256 }])),
   compiled_files: {}, experiment_files: Object.fromEntries([...experiment].map(([name, item]) => [name, { sha256: item.sha256 }])),
-  transformer: { name: 'node:module.stripTypeScriptTypes', version: process.version, options: { mode: 'strip', sourceMap: false }, native_typescript_execution: false },
+  transformer: { name: 'node:module.stripTypeScriptTypes', version: process.version,
+    options: TYPESCRIPT_OPTIONS, options_scope: 'shared', native_typescript_execution: false },
   bridge: 'controller-held-wasm-call-gate', result_serialization: 'Captured JSON.stringify projection; Map/Set entries and non-JSON values are not preserved',
   json_projection_only: true, unsupported_return_encodings: ['Map entries', 'Set entries', 'BigInt', 'undefined', 'functions'],
   native_node_execution: false, native_host_rss_limit_claimed: false,
@@ -72,10 +74,12 @@ function moduleText(name) {
   if (compiled.has(name)) return compiled.get(name);
   const item = source.get(name);
   if (!item) throw new Error('Module is absent from frozen source map');
-  const text = name.endsWith('.ts') ? stripTypeScriptTypes(item.text, { mode: 'strip', sourceMap: false, sourceUrl: `source/${name}` }) : item.text;
+  const transformationOptions = name.endsWith('.ts') ? { ...TYPESCRIPT_OPTIONS, sourceUrl: `source/${name}` } : null;
+  const text = transformationOptions ? stripTypeScriptTypes(item.text, transformationOptions) : item.text;
   compiled.set(name, text);
   manifest.compiled_files[name] = { original_sha256: item.sha256, compiled_sha256: sha256(Buffer.from(text, 'utf8')),
-    transformation: name.endsWith('.ts') ? 'node:module.stripTypeScriptTypes' : 'identity' };
+    transformation: transformationOptions ? 'node:module.stripTypeScriptTypes' : 'identity',
+    ...(transformationOptions ? { transformation_options: transformationOptions } : {}) };
   return text;
 }
 

@@ -11,7 +11,7 @@ import pytest
 from jsonschema import Draft202012Validator
 from pydantic import ValidationError
 
-from paper_factory.autonomous.models import ResearchPlan
+from paper_factory.autonomous.models import CodeBundle, ResearchPlan
 from paper_factory.autonomous import science
 from paper_factory.project import inventory
 
@@ -22,7 +22,7 @@ def protocol():
         feasible=True, reason="Production behavior can be tested with independent fixtures.",
         title="Controlled comparison of production transformation contracts",
         question="How does production transformation preserve protected input values?",
-        runtime="python", source_files=["transform.py"],
+        runtime="quickjs", source_files=["transform.js"],
         conditions=["production", "ablation"],
         metrics=[{"name": "error", "unit": "events", "description": "Number of independently detected contract violations."}],
         comparator="The ablation removes the guard while preserving remaining behavior.",
@@ -34,6 +34,34 @@ def protocol():
         limitations=["Synthetic cases cannot establish behavior in natural input populations.", "One source snapshot does not establish universal software correctness."],
         literature_queries=["software testing independent oracle controlled study"],
     )
+
+
+@pytest.mark.parametrize("runtime", ["python", "node"])
+def test_native_experiment_runtimes_are_rejected_by_native_and_json_schemas(protocol, runtime):
+    plan = {**protocol.model_dump(mode="json"), "runtime": runtime}
+    assert not Draft202012Validator(ResearchPlan.model_json_schema()).is_valid(plan)
+    with pytest.raises(ValidationError):
+        ResearchPlan.model_validate(plan)
+    code = {"runtime": runtime, "entrypoint": "experiment.mjs",
+            "files": [{"path": "experiment.mjs", "content": "export default function run() {}"}],
+            "explanation": "An unexecuted runtime rejection fixture."}
+    assert not Draft202012Validator(CodeBundle.model_json_schema()).is_valid(code)
+    with pytest.raises(ValidationError):
+        CodeBundle.model_validate(code)
+
+
+def test_guest_dependencies_cannot_request_installed_host_packages(protocol):
+    plan = {**protocol.model_dump(mode="json"), "dependencies": ["numpy"]}
+    assert not Draft202012Validator(ResearchPlan.model_json_schema()).is_valid(plan)
+    with pytest.raises(ValidationError):
+        ResearchPlan.model_validate(plan)
+
+
+def test_python_production_sources_are_outside_the_guest_contract(tmp_path, protocol):
+    protocol.source_files = ["transform.py"]
+    protocol.production_entrypoint = "transform.py:transform"
+    with pytest.raises(ValueError, match="supported runtime"):
+        science.validate_plan(protocol, tmp_path)
 
 
 @pytest.mark.parametrize("condition,accepted", [
@@ -132,8 +160,8 @@ def literature():
 
 @pytest.fixture
 def execution():
-    return {"status": "succeeded", "coverage_mechanism": "python-profile",
-            "production_calls": [{"path": "transform.py", "function": "transform", "calls": 6}],
+    return {"status": "succeeded", "coverage_mechanism": "quickjs-controller-gate",
+            "production_calls": [{"path": "transform.js", "function": "transform", "calls": 6}],
             "coverage_truncated": False, "cleanup_confirmed": True}
 
 
@@ -381,12 +409,71 @@ def test_manuscript_resolves_only_verified_references_and_injects_author_last(tm
     assert "local@example.org" not in science.writing_prompt(protocol, analysis, literature, execution)
 
 
-def test_native_manuscript_preserves_formula_and_scoped_package_as_literal_text(tmp_path, protocol, observations, literature, pandoc):
+@pytest.mark.parametrize("raw_title,plain_title", [
+    ('The <span class="title">Oracle</span><br/> Problem &amp; Testing', 'The Oracle Problem & Testing'),
+    (' Nested <b><i>oracle</i></b>\n\t<br> titles&nbsp;and entities ', 'Nested oracle titles and entities'),
+    ('Plain <script>do not render</script><style>hidden</style> title', 'Plain title'),
+    ('&lt;span&gt;UNDERSTANDING THE ORACLE PROBLEM AND AUTOMATED TEST CASE GENERATION: A COMPARATIVE SURVEY&lt;/span&gt;\n&lt;br&gt;',
+     'UNDERSTANDING THE ORACLE PROBLEM AND AUTOMATED TEST CASE GENERATION: A COMPARATIVE SURVEY'),
+])
+def test_bibliographic_html_is_plain_display_only_and_raw_citation_evidence_is_retained(
+        tmp_path, protocol, observations, literature, raw_title, plain_title):
+    analysis = science._compute(observations, protocol.model_dump(mode="json"))
+    literature["sources"][0]["title"] = raw_title
+    draft = valid_draft()
+    draft["title"] += " with literal <span>"
+    draft["sections"][0]["text"] += " Literal prose <br> stays literal."
+    draft["sections"][0]["text"] += " Encoded prose &lt;span&gt; stays literal."
+    source = literature["sources"][0]
+    source["authors"] = ["Author <b>literal</b>"]
+    original_literature = json.dumps(literature, ensure_ascii=False).encode()
+    written = science.validate_and_render(draft, protocol, analysis, literature, tmp_path)
+    markdown = Path(written["markdown_path"]).read_text(encoding="utf-8")
+    reference = markdown.split("## References\n", 1)[1].split("## Reproducibility", 1)[0]
+    assert science._literal_text(plain_title) in reference
+    assert science._literal_text(raw_title) not in reference
+    assert not any(tag in reference.casefold() for tag in ('<span', '</span', '<br', '&lt;span', '&lt;br'))
+    assert science._literal_text(source["authors"][0]) in reference
+    assert str(source["year"]) in reference and source["doi"] in reference
+    assert science._literal_text(draft["title"]) in markdown
+    assert science._literal_text("Literal prose <br> stays literal.") in markdown
+    assert science._literal_text("Encoded prose &lt;span&gt; stays literal.") in markdown
+    canonical = json.loads(Path(written["canonical_path"]).read_bytes())
+    assert canonical["citation_evidence"][0]["title"] == raw_title
+    assert canonical["sections"] == draft["sections"] and canonical["title"] == draft["title"]
+    assert json.dumps(literature, ensure_ascii=False).encode() == original_literature
+
+
+@pytest.mark.parametrize("raw_title", [None, 42, ["invalid"], {"invalid": True}, "", "   "])
+def test_invalid_bibliographic_titles_keep_existing_plain_text_helper_behavior(
+        tmp_path, protocol, observations, literature, raw_title):
+    analysis = science._compute(observations, protocol.model_dump(mode="json"))
+    literature["sources"][0]["title"] = raw_title
+    original_literature = json.dumps(literature, ensure_ascii=False).encode()
+    written = science.validate_and_render(valid_draft(), protocol, analysis, literature, tmp_path)
+    reference = Path(written["markdown_path"]).read_text(encoding="utf-8").split("## References\n", 1)[1].split("## Reproducibility", 1)[0]
+    assert science._bibliographic_title(raw_title) == ""
+    assert "Example Author. 2024. DOI: 10.1000/example" in reference
+    canonical = json.loads(Path(written["canonical_path"]).read_bytes())
+    assert canonical["citation_evidence"][0]["title"] == raw_title
+    assert json.dumps(literature, ensure_ascii=False).encode() == original_literature
+
+
+@pytest.mark.parametrize("raw_title,plain_title", [
+    ('The <span class="title">Oracle</span><br/> Problem &amp; Testing', 'The Oracle Problem & Testing'),
+    ('&lt;span&gt;UNDERSTANDING THE ORACLE PROBLEM AND AUTOMATED TEST CASE GENERATION: A COMPARATIVE SURVEY&lt;/span&gt;\n&lt;br&gt;',
+     'UNDERSTANDING THE ORACLE PROBLEM AND AUTOMATED TEST CASE GENERATION: A COMPARATIVE SURVEY'),
+])
+def test_native_manuscript_preserves_formula_and_scoped_package_as_literal_text(
+        tmp_path, protocol, observations, literature, pandoc, raw_title, plain_title):
     from docx import Document
     from pypdf import PdfReader
     from paper_factory import conversion
 
     formula = r"state=(1664525*state+1013904223) modulo 2^32; uniform_scale; @types/node; [literal]; C:\fixtures"
+    literature["sources"][0]["title"] = raw_title
+    literature["sources"][0]["doi"] = '10.2139/ssrn.4864547'
+    original_literature = json.dumps(literature, ensure_ascii=False).encode()
     protocol.parameters["formula"] = formula
     analysis = science.analyze(observations, protocol, tmp_path / "analysis")
     draft = valid_draft()
@@ -397,19 +484,29 @@ def test_native_manuscript_preserves_formula_and_scoped_package_as_literal_text(
     rendered = science.validate_and_render(draft, protocol, analysis, literature, tmp_path / "paper")
     source = Path(rendered["markdown_path"])
     original = source.read_bytes()
+    markdown = original.decode()
+    assert plain_title in markdown and "<span" not in markdown and "<br" not in markdown
     word = source.with_suffix(".docx")
     conversion.convert(source, word, pandoc=pandoc)
     paragraphs = "\n".join(paragraph.text for paragraph in Document(word).paragraphs)
     assert formula in paragraphs and draft["title"] in paragraphs
+    assert plain_title in paragraphs and "<span" not in paragraphs and "<br" not in paragraphs
     pdf = source.with_suffix(".pdf")
     conversion.convert(source, pdf, pandoc=pandoc)
     text = " ".join(page.extract_text() or "" for page in PdfReader(pdf).pages)
     for literal in ("1664525*state+1013904223", "2^32", "uniform_scale", "@types/node", "[literal]", r"C:\fixtures"):
         assert literal in text
+    assert plain_title in " ".join(text.split()) and "<span" not in text and "<br" not in text
+    tex = source.with_suffix(".tex")
+    conversion.convert(source, tex, pandoc=pandoc)
+    tex_text = tex.read_text(encoding="utf-8")
+    assert plain_title.replace("&", r"\&") in " ".join(tex_text.split()) and "<span" not in tex_text and "<br" not in tex_text
     assert "#cite(" not in pdf.with_suffix(".typ").read_text(encoding="utf-8")
     assert source.read_bytes() == original
     canonical = json.loads(Path(rendered["canonical_path"]).read_text(encoding="utf-8"))
     assert canonical["sections"] == draft["sections"] and canonical["title"] == draft["title"]
+    assert canonical["citation_evidence"][0]["title"] == raw_title
+    assert json.dumps(literature, ensure_ascii=False).encode() == original_literature
 
 
 @pytest.mark.parametrize("suffix,reason", [
@@ -515,7 +612,7 @@ def test_short_or_incomplete_papers_are_not_complete(tmp_path, protocol, observa
 def test_context_excludes_named_and_inline_secrets_and_bounds_code(tmp_path):
     (tmp_path / "README.md").write_text("A repository with a production transform.")
     (tmp_path / ".env").write_text("API_KEY=hidden-env-test-value")
-    (tmp_path / "transform.py").write_text("password = 'inline-test-value'\n" + "# production\n" * 20000)
+    (tmp_path / "transform.js").write_text("password = 'inline-test-value'\n" + "# production\n" * 20000)
     assets = inventory(tmp_path)
     output = science.context(tmp_path, assets, "Inspect behavior")
     assert "hidden-env-test-value" not in output
@@ -549,22 +646,19 @@ def test_context_never_reads_traversal_or_linked_files(tmp_path):
         science.context(source, [{"path": linked_path, "size": 1, "kind": "code"}], "goal")
 
 
-def test_code_prompt_uses_runner_mount_and_structured_repair_feedback(protocol):
+def test_code_prompt_uses_guest_bridges_and_structured_repair_feedback(protocol):
     prompt = science.code_prompt(protocol, "production code excerpt", {
-        "reason": "Python syntax failed", "protocol_sha256": "a" * 64,
+        "reason": "Guest JavaScript syntax failed", "protocol_sha256": "a" * 64,
         "notice": "Repair measurement code without changing the protocol.",
     })
-    assert "/codebundle" not in prompt
-    assert "generated code lives at PF_CODE_ROOT" in prompt
-    assert "PF_SOURCE_ROOT" in prompt and "PF_OUTPUT_ROOT" in prompt
-    assert "PF_CODE_ROOT is also immutable" in prompt
-    assert "writable PF_WORK environment path or the configured TEMP directory" in prompt
-    assert "__file__.parent or PF_CODE_ROOT" in prompt
-    assert "retain their required raw bytes in observations.json" in prompt
-    assert "PF environment roots are already absolute, checked paths" in prompt
-    assert "pathlib.Path.resolve, os.path.realpath or fs.realpath" in prompt
-    assert "portable path joins" in prompt
-    assert '"reason": "Python syntax failed"' in prompt
+    assert "callProduction(JSON.stringify([args...]))" in prompt
+    assert "retainFixture(label, text)" in prompt
+    assert "default synchronous function run()" in prompt
+    assert "No filesystem, environment, network, Node built-ins, subprocesses" in prompt
+    assert "never copy or redefine" in prompt.casefold()
+    assert "No generated code executes on the host" in prompt
+    assert "PF_SOURCE_ROOT" not in prompt and "PF_OUTPUT_ROOT" not in prompt
+    assert '"reason": "Guest JavaScript syntax failed"' in prompt
     assert "Repair measurement code without changing the protocol." in prompt
 
 
@@ -573,46 +667,37 @@ def test_model_prompts_explain_existing_protocol_and_generation_boundaries(proto
     assert "distinct short stable labels of one to eighty characters" in planning
     assert "never in condition names" in planning
     assert "unique within its respective list" in planning
-    assert "exact approved third-party package names" in planning
-    assert "without versions or descriptions" in planning
-    assert "to be [] when no third-party package is used" in planning
+    assert "Dependencies must be []" in planning
     assert "preserving their original Unicode spelling and internal spaces" in planning
     generation = science.code_prompt(protocol, "inspected production source")
     assert "portable relative path" in generation and "using / separators" in generation
-    assert ".py, .js, .cjs, .mjs, .json, .md, .txt" in generation
-    assert "end in .py for Python, or .js, .cjs, .mjs for Node" in generation
-    assert "do not generate .ts or .tsx files" in generation
+    assert "Only .js, .mjs, .cjs, .json, .md and .txt generated files are supported" in generation
+    assert "The .js/.mjs/.cjs entrypoint must be present in files" in generation
+    assert "Do not generate .ts or\n.tsx files" in generation
     assert "512 KiB (524288 UTF-8 bytes)" in generation
     assert "262144-character" in generation
     example, _ = json.JSONDecoder().raw_decode(generation[generation.index('{"observations":'):])
     assert set(example) == {"observations", "controls", "fixtures"}
     assert set(example["fixtures"][0]) == {"label", "encoding", "content", "sha256"}
     assert example["fixtures"][0]["encoding"] == "base64"
-    assert "only observations.json from PF_OUTPUT_ROOT" in generation
-    assert "Separate output files are discarded" in generation
+    assert "controller calls run once and retains its returned observations envelope" in generation
     assert "The fixtures array must be nonempty" in generation
-    assert "canonical standard Base64" in generation
-    assert "hash those decoded bytes with SHA-256" in generation
-    assert "eight MiB (8388608-byte)" in generation
-    assert "Labels are metadata, not host extraction paths" in generation
-    assert "its execution receipt satisfies" in generation
-    assert "reset or disable the controller's profiler" in generation
-    assert "sys.setprofile, threading.setprofile, or node:inspector Profiler" in generation
+    assert "encoding, content and sha256, computed by the trusted controller" in generation
+    assert "eight MiB (8388608 bytes)" in generation
+    assert "Labels are metadata, not extraction paths" in generation
+    assert "Guest declarations of call counts are not evidence" in generation
     for prompt in (planning, generation):
-        assert "native direct import of the original" in prompt
-        assert "controller-verified Node runtime supports its syntax and" in prompt
-        for forbidden in ("stripTypeScriptTypes", "generated transpiled copies", "eval", "data URLs", "sourceURL", "coverage-origin reassociation"):
-            assert forbidden in prompt
-        assert "source-preserving resolver for existing relative or alias" in prompt
-        assert "file origins and native" in prompt
-        assert "Unsupported native syntax or unavailable dependencies make the study" in prompt
-        assert "copied-source fallback" in prompt
+        assert "compiler receipt" in prompt
+        assert "native TypeScript" in prompt or "native original .ts" in prompt
+        assert "Node built-ins" in prompt
+        assert "Python, Node or QuickJS" not in prompt
+        assert "controller-verified Node runtime supports its syntax" not in prompt
 
 
 @pytest.mark.parametrize("role", ["generation", "review"])
-def test_code_prompts_assign_protocol_provenance_to_controller_and_allow_exact_compressed_inputs(protocol, role):
-    bundle = {"runtime": "python", "entrypoint": "experiment.py",
-              "files": [{"path": "experiment.py", "content": "# Unexecuted synthetic fixture\n"}],
+def test_code_prompts_assign_protocol_and_fixture_provenance_to_controller(protocol, role):
+    bundle = {"runtime": "quickjs", "entrypoint": "experiment.mjs",
+              "files": [{"path": "experiment.mjs", "content": "export default function run() {}\n"}],
               "explanation": "Prompt payload fixture; no execution or measurements."}
     source = "Inspected Unicode production excerpt: 한글"
     prompt = science.code_prompt(protocol, source) if role == "generation" else science.code_review_prompt(protocol, bundle, source)
@@ -622,21 +707,16 @@ def test_code_prompts_assign_protocol_provenance_to_controller_and_allow_exact_c
     assert "includes the exact protocol.json in the reproducibility ZIP" in compact
     assert "do not require duplicate embedding or rehashing by the worker" in compact
     assert "A reconstructed summary is not the authoritative protocol" in compact
-    assert "Lossless compression, such as gzip, is allowed for each actual serialized unit input" in compact
-    assert "Base64-encode the compressed bytes and hash those compressed bytes in fixture.sha256" in compact
-    assert "codec, original byte length, original SHA-256 and complete decoding procedure" in compact
-    assert "linked to the input fixture label" in compact
-    assert "fixture record's exact four fields" in compact
-    assert "inside retained fixture bytes" in compact
-    assert "baseline plus mutation recipes" in compact and "insufficient" in compact
+    assert "retainFixture(label, text)" in compact
+    assert "baseline" in compact and "recipe" in compact
     assert source in prompt
 
 
 def test_code_review_prompt_preserves_static_audit_gates_and_supplied_payloads(protocol):
-    bundle = {"runtime": "python", "entrypoint": "experiment.py",
-              "files": [{"path": "experiment.py", "content": "# Unexecuted synthetic fixture\n"}],
+    bundle = {"runtime": "quickjs", "entrypoint": "experiment.mjs",
+              "files": [{"path": "experiment.mjs", "content": "export default function run() {}\n"}],
               "explanation": "Audit the proposed code before isolated execution."}
-    source = "def transform(value): return value + 1"
+    source = "export function transform(value) { return value + 1; }"
     prompt = science.code_review_prompt(protocol, bundle, source)
     compact = " ".join(prompt.split())
     supplied_plan, rest = prompt.split("\n\nGenerated code:\n")
@@ -652,7 +732,8 @@ def test_code_review_prompt_preserves_static_audit_gates_and_supplied_payloads(p
     assert "independently computes the oracle" in compact
     assert "frozen conditions, seeds, unit counts and metrics" in compact
     assert "forced-passing controls" in prompt
-    assert "sys.setprofile, threading.setprofile or node:inspector Profiler" in compact
+    assert "Require callProduction(JSON.stringify([args...])) for each production measurement" in compact
+    assert "guest-authored claims of invocation counts" in compact
     assert "Do not demand favorable outcomes" in compact
 
 
@@ -686,7 +767,7 @@ def test_standalone_analysis_also_stops_on_real_failed_controls(tmp_path, protoc
 
 
 def test_plan_requires_substantive_behavior_and_bound_production_callable(tmp_path, protocol):
-    protocol.production_entrypoint = "transform.py:transform"
+    protocol.production_entrypoint = "transform.js:transform"
     science.validate_plan(protocol, tmp_path)
     protocol.question = "What assets and file sizes are present in this sanitized project snapshot?"
     with pytest.raises(ValueError, match="asset inventory"):
@@ -695,10 +776,10 @@ def test_plan_requires_substantive_behavior_and_bound_production_callable(tmp_pa
 
 @pytest.mark.parametrize("entrypoint,reason", [
     ("", "relative source file"),
-    ("transform.py", "relative source file"),
-    ("../transform.py:transform", "safe relative artifact path"),
+    ("transform.js", "relative source file"),
+    ("../transform.js:transform", "safe relative artifact path"),
     ("other.py:transform", "declared immutable"),
-    ("transform.py:function$", "runtime"),
+    ("transform.js:invalid()", "relative source file"),
 ])
 def test_plan_entrypoint_rejects_missing_or_unbound_functions(tmp_path, protocol, entrypoint, reason):
     protocol.production_entrypoint = entrypoint
@@ -707,23 +788,23 @@ def test_plan_entrypoint_rejects_missing_or_unbound_functions(tmp_path, protocol
 
 
 def test_plan_keeps_original_unicode_production_path(tmp_path, protocol):
-    source_file = "\ubc31\uc900/Gold/1717.\u2005\uc9d1\ud569\uc758\u2005\ud45c\ud604/\uc9d1\ud569\uc758\u2005\ud45c\ud604.py"
+    source_file = "\ubc31\uc900/Gold/1717.\u2005\uc9d1\ud569\uc758\u2005\ud45c\ud604/\uc9d1\ud569\uc758\u2005\ud45c\ud604.js"
     original = tmp_path / source_file
     original.parent.mkdir(parents=True)
-    original.write_bytes(b"def find(value): return value\n")
+    original.write_bytes(b"export function find(value) { return value; }\n")
     protocol.source_files = [source_file]
     protocol.production_entrypoint = source_file + ":find"
     science.validate_plan(protocol, tmp_path)
     assert protocol.source_files == [source_file]
     assert protocol.production_entrypoint == source_file + ":find"
-    assert original.read_bytes() == b"def find(value): return value\n"
-    assert len(list(tmp_path.rglob("*.py"))) == 1
+    assert original.read_bytes() == b"export function find(value) { return value; }\n"
+    assert len(list(tmp_path.rglob("*.js"))) == 1
 
 
 @pytest.mark.parametrize("source_file", [
-    "../transform.py", "./transform.py", "pkg//transform.py", "pkg\\transform.py",
-    "/transform.py", "C:/transform.py", "pkg/transform.py:other", "CON.py",
-    "pkg/AUX.py", "pkg/transform.py.", "pkg /transform.py", "pkg/transform\n.py",
+    "../transform.js", "./transform.js", "pkg//transform.js", "pkg\\transform.js",
+    "/transform.js", "C:/transform.js", "pkg/transform.js:other", "CON.py",
+    "pkg/AUX.py", "pkg/transform.js.", "pkg /transform.js", "pkg/transform\n.py",
 ])
 def test_plan_rejects_unsafe_production_paths_using_snapshot_root(tmp_path, protocol, source_file):
     protocol.source_files = [source_file]
@@ -733,14 +814,14 @@ def test_plan_rejects_unsafe_production_paths_using_snapshot_root(tmp_path, prot
 
 
 def test_plan_cannot_freeze_nonfinite_parameters(tmp_path, protocol):
-    protocol.production_entrypoint = "transform.py:transform"
+    protocol.production_entrypoint = "transform.js:transform"
     protocol.parameters["imagined_size"] = float("inf")
     with pytest.raises(ValueError, match="finite"):
         science.validate_plan(protocol, tmp_path)
 
 
 def test_instrumented_experiments_require_methods_disclosure(tmp_path, protocol, observations, literature, execution):
-    protocol.parameters["execution_instrumentation"] = "Python profiling or Node V8 coverage is enabled; timing includes instrumentation overhead"
+    protocol.parameters["execution_instrumentation"] = "Controller-held QuickJS production-call gate; timings include guest and bridge overhead"
     analysis = science.analyze(observations, protocol, tmp_path / "analysis")
     prompt = science.writing_prompt(protocol, analysis, literature, execution)
     assert "{{parameter:setting.execution_instrumentation}}" in prompt

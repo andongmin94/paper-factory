@@ -21,7 +21,7 @@ from paper_factory.autonomous import quickjs_runner as module
 from paper_factory.autonomous.quickjs_runner import QuickJSRunner
 
 
-RUNTIME_ASSETS = Path(__file__).resolve().parents[1] / "skills/paper-factory/assets"
+RUNTIME_ASSETS = Path(__file__).resolve().parents[1] / "desktop/runtime-inputs/assets"
 SOURCE = "module.exports = {calculate(x) { return x + 1; }};\n"
 
 
@@ -289,8 +289,11 @@ def test_provided_profile_retains_actual_local_parser_guest_and_cleanup_receipts
         candidate.close()
 
 
-@pytest.mark.parametrize("defect", ["parser-unavailable", "wrong-compiled-hash", "wrong-transformer-version"])
-def test_type_parser_readiness_failure_cannot_be_bypassed(pinned_runtime, supervisor_root, monkeypatch, defect):
+@pytest.mark.parametrize("module_name", ["check.ts", "delta.ts"])
+@pytest.mark.parametrize("defect", ["parser-unavailable", "wrong-compiled-hash", "wrong-transformer-version",
+                                   "missing-transformation-options", "missing-source-url", "wrong-source-url",
+                                   "wrong-mode", "wrong-source-map", "unexpected-option", "missing-options-scope"])
+def test_type_parser_readiness_failure_cannot_be_bypassed(pinned_runtime, supervisor_root, monkeypatch, defect, module_name):
     candidate = QuickJSRunner(pinned_runtime, supervisor_root=supervisor_root, host_profile="provided")
     actual = candidate._execute
     calls = []
@@ -302,11 +305,25 @@ def test_type_parser_readiness_failure_cannot_be_bypassed(pinned_runtime, superv
         receipt = actual(node, packet, **kwargs)
         if packet["production_entrypoint"] == "check.ts:calculate":
             runtime = receipt["envelope"]["runtime_manifest"]
+            compiled = runtime["compiled_files"][module_name]
             if defect == "wrong-compiled-hash":
-                compiled = runtime["compiled_files"]["delta.ts"]
                 compiled["compiled_sha256"] = compiled["original_sha256"]
-            else:
+            elif defect == "wrong-transformer-version":
                 runtime["transformer"]["version"] = "v0.0.0"
+            elif defect == "missing-transformation-options":
+                compiled.pop("transformation_options")
+            elif defect == "missing-source-url":
+                compiled["transformation_options"].pop("sourceUrl")
+            elif defect == "wrong-source-url":
+                compiled["transformation_options"]["sourceUrl"] = "source/unrecorded.ts"
+            elif defect == "wrong-mode":
+                compiled["transformation_options"]["mode"] = "transform"
+            elif defect == "wrong-source-map":
+                compiled["transformation_options"]["sourceMap"] = True
+            elif defect == "unexpected-option":
+                compiled["transformation_options"]["unrecorded"] = True
+            elif defect == "missing-options-scope":
+                runtime["transformer"].pop("options_scope")
         return receipt
 
     monkeypatch.setattr(candidate, "_execute", parser_failure)
@@ -513,12 +530,16 @@ def test_typescript_source_imports_have_compiler_and_original_hash_receipts(runn
     assert receipt["transformer"]["native_typescript_execution"] is False
     assert receipt["native_node_execution"] is False
     assert receipt["transformer"]["name"] == "node:module.stripTypeScriptTypes"
+    assert receipt["transformer"]["options"] == {"mode": "strip", "sourceMap": False}
+    assert receipt["transformer"]["options_scope"] == "shared"
     for name, original in (("source.ts", source), ("helper.ts", helper)):
         digest = hashlib.sha256(original.encode("utf-8")).hexdigest()
         assert receipt["source_files"][name]["original_sha256"] == digest
         assert receipt["compiled_files"][name]["original_sha256"] == digest
         assert receipt["compiled_files"][name]["compiled_sha256"] != digest
         assert receipt["compiled_files"][name]["transformation"] == "node:module.stripTypeScriptTypes"
+        assert receipt["compiled_files"][name]["transformation_options"] == {
+            "mode": "strip", "sourceMap": False, "sourceUrl": "source/" + name}
     assert "source/helper.ts" in receipt["imports"]
     assert result["production_calls"] == [{"path": "source.ts", "function": "calculate", "calls": 1}]
 
@@ -607,7 +628,7 @@ def test_stop_rejects_reused_or_unowned_pid_before_signalling(pinned_runtime, mo
     actual = {**identity, field: new_value}
     monkeypatch.setattr(module, "_linux_identity", lambda pid: inspected.append(pid) or actual)
     handle = {"kind": "quickjs-worker", "pid": 6, "owner_nonce": "a" * 32, **identity, **namespace,
-              "proc_pid": 2887, "node_path": str(actual_path(shutil.which("node")).resolve()),
+              "proc_pid": 2887, "node_path": str(actual_path(shutil.which(os.environ.get("PF_NODE_BIN") or "node")).resolve()),
               "worker_sha256": module._hash(module._read(module.WORKER, 128 * 1024))}
     candidate._records[handle["owner_nonce"]] = {"phase": "unresolved", "purpose": "experiment", "handle": handle}
     candidate._persist()
@@ -1137,7 +1158,7 @@ def recovery_metadata(monkeypatch):
                         if str(path) == "/proc/sys/kernel/random/boot_id" else actual_path(path))
     handle = {"kind": "quickjs-worker", "pid": 6, "proc_pid": 2887, "owner_nonce": "a" * 32,
               **namespace, "start_time": "123456", "boot_id": "boot", "owner_uid": 100,
-              "node_path": str(actual_path(shutil.which("node")).resolve()),
+              "node_path": str(actual_path(shutil.which(os.environ.get("PF_NODE_BIN") or "node")).resolve()),
               "worker_sha256": module._hash(module._read(module.WORKER, 128 * 1024))}
     return handle, opened
 

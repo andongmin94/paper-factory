@@ -21,7 +21,7 @@ import time
 import uuid
 
 from ..workspace import ensure_unlinked, file_lock, loads_json, write_json
-from .runner import MAX_ARTIFACT_BYTES, MAX_LOG_BYTES, _production_calls, _retain_observations, _safe_tree
+from .runner_common import MAX_ARTIFACT_BYTES, MAX_LOG_BYTES, _production_calls, _retain_observations, _safe_tree
 
 
 INVENTORY_SHA256 = "ab3b2f965197a33c3c58ee1ca26b75871e78e8b59e4f09fd24addd6d88d7e51a"
@@ -705,6 +705,7 @@ class QuickJSRunner:
                     or transformer.get("name") != "node:module.stripTypeScriptTypes"
                     or transformer.get("version") != runtime["node_version"]
                     or transformer.get("options") != {"mode": "strip", "sourceMap": False}
+                    or transformer.get("options_scope") != "shared"
                     or transformer.get("native_typescript_execution") is not False):
                 raise ValueError("Actual TypeScript parser self-check failed")
             for name, item in ts_packet["source_files"].items():
@@ -714,7 +715,9 @@ class QuickJSRunner:
                         or compiled.get("original_sha256") != item["sha256"]
                         or not re.fullmatch(r"[a-f0-9]{64}", str(compiled.get("compiled_sha256", "")))
                         or compiled["compiled_sha256"] == item["sha256"]
-                        or compiled.get("transformation") != "node:module.stripTypeScriptTypes"):
+                        or compiled.get("transformation") != "node:module.stripTypeScriptTypes"
+                        or compiled.get("transformation_options") != {
+                            "mode": "strip", "sourceMap": False, "sourceUrl": "source/" + name}):
                     raise ValueError("Actual TypeScript parser receipt differs")
             # Readiness also proves that this host permits termination through
             # the owned identity path, not just that pidfd APIs are importable.

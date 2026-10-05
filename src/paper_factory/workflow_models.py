@@ -1,11 +1,42 @@
 """Persisted state for native-assistant research and owned experiment jobs."""
 
+from datetime import datetime
+import hashlib
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from .autonomous.models import FrozenArtifact
 from .models import Record, now, uid
+
+
+class ModelEvidenceReceipt(Record):
+    """Main-process SDK evidence; no credentials or execution authority."""
+    id: str = Field(pattern=r"^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$")
+    phase: Literal["plan", "code", "code-review", "manuscript", "manuscript-review"]
+    at: str = Field(max_length=40)
+    model: str = Field(min_length=1, max_length=100)
+    profileId: str = Field(min_length=1, max_length=128)
+    prompt: str = Field(min_length=1, max_length=700000)
+    promptSha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    text: str | None = Field(default=None, max_length=700000)
+    textSha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    outcome: Literal["started", "completed", "failed", "interrupted"]
+    code: str | None = Field(default=None, max_length=100)
+
+    @model_validator(mode="after")
+    def verified_receipt(self):
+        if datetime.fromisoformat(self.at.replace("Z", "+00:00")).tzinfo is None:
+            raise ValueError("Inference receipt needs a timezone")
+        if hashlib.sha256(self.prompt.encode()).hexdigest() != self.promptSha256:
+            raise ValueError("Inference prompt hash differs from its text")
+        if (self.text is None) != (self.textSha256 is None):
+            raise ValueError("Inference output and hash must be supplied together")
+        if self.text is not None and hashlib.sha256(self.text.encode()).hexdigest() != self.textSha256:
+            raise ValueError("Inference output hash differs from its text")
+        if self.outcome == "completed" and self.text is None:
+            raise ValueError("Completed inference receipt needs its original output")
+        return self
 
 
 class Workflow(Record):

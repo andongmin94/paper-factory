@@ -1,7 +1,7 @@
 """Resolve reviewed release pins to official platform wheels, without installing.
 
-Run this maintainer command when intentionally updating host dependencies. The
-generated manifest is the only download catalog used by prepare_host.py.
+Run this maintainer command when intentionally updating standalone runtime pins.
+The desktop builder validates this catalog; installed apps never run this command.
 """
 import argparse
 import hashlib
@@ -42,7 +42,6 @@ PANDOC_NOTICES = {
 }
 PLATFORMS = {
     "windows-x86_64": ["win_amd64"],
-    "linux-x86_64": [f"manylinux_2_{i}_x86_64" for i in range(28, 16, -1)] + ["manylinux2014_x86_64"],
     "macos-x86_64": list(mac_platforms((14, 0), "x86_64")),
     "macos-arm64": list(mac_platforms((14, 0), "arm64")),
 }
@@ -62,7 +61,7 @@ def pandoc_declarations():
     licenses = {}
     for name, (size, expected) in PANDOC_NOTICES.items():
         path = "licenses/pandoc/" + name
-        original = (ROOT / "skills/paper-factory" / path).read_bytes()
+        original = (ROOT / "desktop/runtime-inputs" / path).read_bytes()
         if len(original) != size or hashlib.sha256(original).hexdigest() != expected:
             raise ValueError("Reviewed original Pandoc upstream notice changed")
         licenses[path] = {"size": size, "sha256": expected,
@@ -92,7 +91,7 @@ def generate():
         releases[name] = (json.loads(raw), url, hashlib.sha256(raw).hexdigest())
     wheels, profiles = {}, {}
     for system, platforms in PLATFORMS.items():
-        for minor in (12, 13, 14):
+        for minor in (14,):
             version = (3, minor)
             tags = list(cpython_tags(version, abis=[f"cp3{minor}"], platforms=platforms))
             tags += list(compatible_tags(version, interpreter=f"cp3{minor}", platforms=platforms))
@@ -142,23 +141,22 @@ def generate():
     checksum_raw = fetch(node_base + "SHASUMS256.txt")
     checksums = dict((line.split()[1], line.split()[0]) for line in checksum_raw.decode("ascii").splitlines())
     node = {}
-    for system, suffix in {"windows-x86_64": "win-x64.zip", "linux-x86_64": "linux-x64.tar.xz",
+    for system, suffix in {"windows-x86_64": "win-x64.zip",
                            "macos-x86_64": "darwin-x64.tar.xz", "macos-arm64": "darwin-arm64.tar.xz"}.items():
         filename = f"node-v{NODE_VERSION}-{suffix}"
         node[system] = {"version": NODE_VERSION, "filename": filename, "url": node_base + filename,
                         "sha256": checksums[filename], "checksum_url": node_base + "SHASUMS256.txt",
                         "checksum_file_sha256": hashlib.sha256(checksum_raw).hexdigest(),
                         "max_bytes": 100 * 1024 * 1024}
-    return {"schema": 1, "scope": "Private host preparation; platform execution readiness is checked separately.",
+    return {"schema": 1, "scope": "Maintainer-only pinned standalone runtime catalog for Windows x64 and macOS Intel/ARM; installed apps never download dependencies.",
             "pins": PINS, "profiles": profiles, "wheels": dict(sorted(wheels.items())), "node": node,
             "pandoc": pandoc_declarations(),
-            "network_policy": "Only manifest-pinned official artifact URLs; inherited proxy/certificate settings.",
-            "python_required": "An existing host CPython3.12,3.13 or3.14 with script/subprocess access. No OS installer is invoked."}
+            "network_policy": "Only manifest-pinned official artifact URLs; inherited proxy/certificate settings."}
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, default=ROOT / "skills/paper-factory/host-dependencies.json")
+    parser.add_argument("--output", type=Path, default=ROOT / "desktop/runtime-inputs/host-dependencies.json")
     args = parser.parse_args()
     result = generate()
     args.output.write_text(json.dumps(result, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
