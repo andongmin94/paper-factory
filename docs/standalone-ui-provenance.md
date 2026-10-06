@@ -2,6 +2,40 @@
 
 The desktop workspace uses genuine [neobrutal-ui](https://github.com/andongmin94/neobrutal-ui) source pinned to [`b4da2463fe710a77bf464c65125a1a7f40424722`](https://github.com/andongmin94/neobrutal-ui/tree/b4da2463fe710a77bf464c65125a1a7f40424722), inspected on 2026-10-05. The upstream README and installation guide support React 19 + Tailwind CSS 4 UI components in Vite. Next.js App Router page templates are not imported.
 
+## Five-stage improvements: 0.13.1 verification (2026-10-06)
+
+All five source improvements are implemented. Stage 1 limits Tailwind class scanning to renderer source and bundles the original Pretendard Variable WOFF2 and OFL. Stage 2 retains the work/account lock until owned experiment cleanup and pending inference/index writes are confirmed. Stage 3 makes window close and app quit share one cleanup task: failed shutdown keeps the window and evidence available for retry, and the Python IPC exits only after an acknowledged shutdown and actual process closure. Delayed replies and failed account-journal writes do not bypass these gates.
+
+Stage 4 replaces the obsolete `workflow.resumeWriting` RPC with `workflow.resume`. Public metadata exposes `preparation`, `authoring` or null. The first two permit respectively the first experiment after verified preparation or writing from retained successful analysis. The engine verifies source/artifacts/protocol/approval and cleanup evidence again before appending an immutable resume receipt; main checks the fresh response before any account/model call. Ambiguous executions, pending cleanup and failed scientific controls expose no resume button. Neither restart nor resume clears a previously recorded dispatch marker.
+
+Stage 5 removes `SaveArtifactDialog` and the renderer's destination-path argument. Main supplies native file/folder selection, holds a single save task across verification, the dialog and the commit, and waits for it before shutdown. PDF/DOCX/ZIP/validation JSON use a verified temporary file and atomic replacement. Markdown/TeX use a new folder containing unchanged manuscript bytes and all referenced frozen PNG bytes, published only after every write succeeds. Engine and main verify figure names, directory, size and SHA; the engine also checks manuscript references against the frozen inventory. Cancellation creates no output, and a failed commit preserves previous exports. No compatibility path for the removed dialog/RPC remains.
+
+Final source checks used isolated homes and synthetic transports: **260 desktop/SDK passed, 1 Windows skip; 10 Electron passed (full suite 9 in 1.3 minutes, then one added native IPC case in 9.0 seconds); 856 Python passed, 7 skipped (251.44 seconds)**. Python covered native QuickJS, cancellation/shutdown deadlines, terminal-control preservation, preparation/authoring resumes, supporting-document behavior, and real Pandoc/Typst exports with frozen figures. Node regressions include commit failures that retain old bytes. Electron covers actual font loading, account/work gates, retryable close and the production native-save helper with mocked OS choices. The helper-based save fixture replaces main IPC; the additional native IPC case keeps every original main handler and the actual bundled engine. Logs are retained under ignored `.paper-factory/stage5-{node,electron,python-full}.log`. The earlier stage-specific subsets below overlap these checks and are not added to the final totals.
+
+The additional native IPC case seeds only a new owned engine directory with one completed synthetic Workflow and frozen PDF/Markdown/TeX/PNG bytes. Only native dialogs are mocked. It verifies PDF selection cancellation, Markdown with its original PNG, and nine actual main lease rejections during a deferred save: sign-in, disconnect, profile/model changes, model verification, create/resume/revise and duplicate save. Concurrent window close and `app.quit()` wait for the native chooser; the selected PDF commits before actual engine shutdown and process closure. Source artifact bytes, the Workflow row and the launch-only connection journal remain unchanged. These fixture bytes are for saving, not document rendering or scientific evidence. This test skips only if runtime inventory is absent; it ran successfully against the built Windows runtime in this checkpoint.
+
+The Windows runtime builder now extracts only the verified Node executable and license from the official ZIP; the unused npm tree had exceeded Windows path limits. The pinned host-dependency catalog SHA is updated to its tracked bytes, with the same Windows package inputs. The final bundled runtime has **4,463 files, 564,868,337 bytes** and inventory SHA256 `0330fbc474fb159212d20e64bc69f9ed3f8e60a482c4cf4665a07e7ff5cf8c1a`. Native Python/Node/QuickJS/Pandoc and PDF/DOCX/TeX diagnostics passed. The packaged IPC performed `runtime.status`, empty `workflow.list` and acknowledged `shutdown` twice in a separate temporary home; both processes exited 0, confirming restart after the first lease was released.
+
+`desktop/release/standalone-package-verification.json` records ASAR's 7,667 members, current main/preload/renderer bytes, full engine-source equality, locally bundled Pretendard/OFL and every runtime file hash. Package verification never starts the installed application or signs in.
+
+| Windows artifact | Bytes | SHA256 |
+| --- | ---: | --- |
+| `Paper Factory Setup 0.13.1.exe` | 236,934,358 | `4f5a5177ef30597da26b9ddd32f77cee55d9fabb825832d0c9f8fde3f254ef36` |
+| `win-unpacked/resources/app.asar` | 44,703,805 | `58d8269885b6a270e238633c20606ac17229fc23f11f4425255c3b882ffa5ba5` |
+| `win-unpacked/Paper Factory.exe` | 245,726,208 | `3272c1d00da8540f042031f04ac5c960a116670c8db9c92b616bec79eee24afd` |
+
+The 0.13.1 installer was built and its packaged contents verified; installation, live OAuth/inference, new papers and macOS packaging were not performed in this checkpoint. Existing authentication/research data was not accessed. Prior dated installation and research evidence below remains historical 0.13.0 evidence.
+
+## Five-stage improvements: stage 2 source verification (2026-10-06)
+
+Cancellation now waits for the owned Python workflow future outside the workflow locks, then verifies termination using the retained worker identity and hash-bound execution/cleanup receipts. A successful cancellation reply explicitly includes `cleanup_confirmed: true` and `cleanup_pending: false`. The planned worker wait and native stop share a 30-second budget; the main-process request uses a 45-second transport deadline. Unexpected OS, lock or I/O delays remain subject to that transport failure gate.
+
+Main retains a durable per-job cleanup marker across model abort, transport failure, runtime refresh and restart. It releases the work/account lock only after verified cancellation and inference/index persistence. Index write failure still sends the engine stop request. Partial model bytes are retained and reconciled without overwriting conflicting evidence. Natural completion and failed scientific controls retain their authoritative states and artifacts. Missing worker identity and missing verified cleanup evidence keep the job locked rather than claiming termination.
+
+`결과` exposes `정리 다시 확인` even without login or a ready runtime. Account selection and disconnection now publish explicit busy states; research and account changes have mutual guards. Startup restoration holds the same gate until stored metadata and the engine listing have been inspected. An invalid index remains preserved and locked.
+
+Verification used isolated temporary homes and synthetic transports: **220 desktop/SDK passed, 1 skipped; 6 Electron passed (11.3 seconds); 171 workflow/IPC passed (68.65 seconds)**. Regressions cover delayed cleanup, negative/missing confirmation, persistence failure, exact interrupted bytes, multiple pending workflows, restart, startup races and completed-state preservation. Logs are retained locally under `.paper-factory/stage2-verification/`. No actual authentication, model inference or existing research was invoked. Installed-app delivery, shutdown handling, resume eligibility and native document save improvements are subsequent stages; prior dated installation/research evidence below remains historical.
+
 ## Imported files and responsibilities
 
 | Upstream source | Desktop destination | Use |
@@ -16,7 +50,11 @@ The desktop workspace uses genuine [neobrutal-ui](https://github.com/andongmin94
 | `registry/src/data/{colors,theme,theme-styles}.ts` | `desktop/src/renderer/neobrutal.css` | Exact output of upstream `serializeThemeCss()` with default Mono palette and settings |
 | `LICENSE` | `desktop/third-party/neobrutal-ui/LICENSE` | Original MIT copyright and permission notice |
 
-The component source files are copied without behavioral or styling changes. Git blob SHA256 values are recorded in `desktop/third-party/neobrutal-ui/provenance.json`, including upstream utility and theme inputs. The imported sources use the renderer's `@` alias. Application CSS adds layout, system fonts, error/response containers and reduced-motion handling around these components.
+The component source files are copied without behavioral or styling changes. Git blob SHA256 values are recorded in `desktop/third-party/neobrutal-ui/provenance.json`, including upstream utility and theme inputs. The imported sources use the renderer's `@` alias. Application CSS adds layout, locally bundled Pretendard Variable, error/response containers and reduced-motion handling around these components.
+
+The application stylesheet imports the original theme with `source(none)` and explicitly registers only `src/renderer/` for Tailwind class detection. Historical desktop output and runtime files are ignored local artifacts rather than UI sources. Their presence must not expand the renderer build's scan scope.
+
+Pretendard Variable's full WOFF2 is bundled under `src/renderer/assets/fonts/` and loaded by application-owned `@font-face` CSS, with weights 45–920. Font source, version and SHA256 are recorded in `desktop/third-party/pretendard/provenance.json`, alongside the original SIL Open Font License. The renderer does not request a font from a CDN or require a system font installation. Package verification checks the CSS-referenced WOFF2 and license bytes; isolated Electron fixtures check actual font loading at body and heading weights.
 
 The local reference checkout and one-time source preparation script are retained under ignored `.paper-factory/standalone-reference/`. They are development evidence, not runtime requirements. Consumers and installed applications need only the tracked renderer source, pinned desktop package lock, and license files.
 

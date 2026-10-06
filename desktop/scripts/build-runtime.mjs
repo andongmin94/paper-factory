@@ -286,14 +286,22 @@ for (const entry of await readdir(interpreterLaunchers, { withFileTypes: true })
 
 const nodeRecord = host.node[profile.hostFamily];
 const nodeArchive = await artifact(nodeRecord);
-const nodeExtracted = join(attempt, 'node-extracted');
-await unpack(nodeArchive, nodeExtracted, 'node-extract');
-const nodeRoot = join(nodeExtracted, nodeRecord.filename.replace(/\.(?:zip|tar\.xz)$/, ''));
+const nodeArchiveRoot = nodeRecord.filename.replace(/\.(?:zip|tar\.xz)$/, '');
 const nodeDestination = join(staging, profile.paths.node);
 await mkdir(dirname(nodeDestination), { recursive: true });
-await copyFile(join(nodeRoot, platform === 'win32' ? 'node.exe' : 'bin/node'), nodeDestination);
 await mkdir(join(staging, 'licenses', 'node'), { recursive: true });
-await copyFile(join(nodeRoot, 'LICENSE'), join(staging, 'licenses', 'node', 'LICENSE'));
+const nodeLicense = join(staging, 'licenses', 'node', 'LICENSE');
+if (platform === 'win32') {
+  // The app needs no npm tree; its nested paths exceed Windows extraction limits.
+  await run(bootstrap, ['-I', '-B', helper, 'member', nodeArchive, nodeDestination, `${nodeArchiveRoot}/node.exe`], environment, 'node-extract');
+  await run(bootstrap, ['-I', '-B', helper, 'member', nodeArchive, nodeLicense, `${nodeArchiveRoot}/LICENSE`], environment, 'node-license-extract');
+} else {
+  const nodeExtracted = join(attempt, 'node-extracted');
+  await unpack(nodeArchive, nodeExtracted, 'node-extract');
+  const nodeRoot = join(nodeExtracted, nodeArchiveRoot);
+  await copyFile(join(nodeRoot, 'bin/node'), nodeDestination);
+  await copyFile(join(nodeRoot, 'LICENSE'), nodeLicense);
+}
 if (platform !== 'win32') {
   const pandocRecord = host.pandoc[profile.hostFamily];
   const pandocArchive = await artifact(pandocRecord);

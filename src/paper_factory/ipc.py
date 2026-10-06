@@ -9,18 +9,20 @@ from pathlib import Path
 import re
 import sys
 import threading
+import time
 
 from pydantic import ValidationError
 
 from .standalone_runtime import StandaloneRuntime
-from .workflow import WorkflowError, _diagnostic
+from .workflow import SHUTDOWN_CLEANUP_SECONDS, WorkflowError, _diagnostic
 from .workflow_models import Workflow
-from .workspace import Workspace, digest_file, ensure_unlinked, loads_json
+from .workspace import Workspace, ensure_unlinked, loads_json
 
 MAX_INPUT_BYTES = 2 * 1024 * 1024
 MAX_OUTPUT_BYTES = 16 * 1024 * 1024
 MAX_QUEUED_REQUESTS = 32
 MAX_RECENT_IDS = 1024
+SHUTDOWN_ALLOWED = {"shutdown", "runtime.status", "workflow.list", "workflow.status", "workflow.recordInference", "workflow.cancel"}
 METHODS = {
     "runtime.status": set(), "workflow.create": {"source", "goal"}, "workflow.list": set(),
     "workflow.status": {"researchId", "includeMaterials"},
@@ -28,7 +30,7 @@ METHODS = {
     "workflow.addEvidence": {"researchId", "files"},
     "workflow.submitPlan": {"researchId", "value"}, "workflow.submitCode": {"researchId", "value", "review"},
     "workflow.collectLiterature": {"researchId"}, "workflow.startExperiment": {"researchId"},
-    "workflow.cancel": {"researchId"}, "workflow.resumeWriting": {"researchId"}, "workflow.reviseWriting": {"researchId"},
+    "workflow.cancel": {"researchId"}, "workflow.resume": {"researchId"}, "workflow.reviseWriting": {"researchId"},
     "workflow.submitManuscript": {"researchId", "value", "review"},
     "workflow.export": {"researchId"}, "artifact.resolve": {"researchId", "artifactId"}, "shutdown": set(),
     "workflow.recordInference": {"researchId", "receipt"},
@@ -140,18 +142,21 @@ class Dispatcher:
         if research_id and method != "workflow.cancel":
             with self._event_lock:
                 self._cancel_events.setdefault(research_id, []).append(event)
-        self._pool.submit(self._run, data, event)
+        deadline = time.monotonic() + SHUTDOWN_CLEANUP_SECONDS if method == "shutdown" else None
+        return self._pool.submit(self._run, data, event, deadline)
 
-    def _run(self, data, event):
+    def _run(self, data, event, deadline):
         identifier, method, params = data["id"], data["method"], data["params"]
         try:
-            if method not in {"workflow.cancel", "shutdown"} and (event.is_set() or self._stopping.is_set()):
+            if method not in SHUTDOWN_ALLOWED and (event.is_set() or self._stopping.is_set()):
                 raise WorkflowError("CANCELLED", "Queued engine request was cancelled")
             self.runtime.set_cancel(lambda: event.is_set() or self._stopping.is_set())
-            result = self.execute(method, params)
+            result = self.execute(method, params, deadline=deadline)
             self.write({"id": identifier, "ok": True, "result": result})
+            return method == "shutdown"
         except Exception as error:
             self.write({"id": identifier, "ok": False, "error": public_error(error)})
+            return False
         finally:
             research_id = params.get("researchId")
             if research_id and method != "workflow.cancel":
@@ -166,7 +171,7 @@ class Dispatcher:
                 self._active_ids.discard(identifier)
                 self._recent_ids.append(identifier)
 
-    def execute(self, method, p):
+    def execute(self, method, p, *, deadline=None):
         if method == "runtime.status":
             return self.runtime.runner.status()
         if method == "workflow.create":
@@ -185,7 +190,7 @@ class Dispatcher:
                     ws = Workspace(path)
                     if not ws.list("workflow", Workflow):
                         continue
-                    with self.service._operation(path.name) as (ws, record):
+                    with self.service._operation(path.name, during_shutdown=True) as (ws, record):
                         records.append(self.service._public(ws, record, include_materials=False))
                     if len(records) >= 100:
                         break
@@ -211,14 +216,13 @@ class Dispatcher:
         if method == "artifact.resolve":
             if not isinstance(p["artifactId"], str) or not 1 <= len(p["artifactId"]) <= 200:
                 raise ValueError("Invalid artifact identifier")
-            path = self.service.artifact_path(p["researchId"], p["artifactId"])
-            return {"path": str(path), "sha256": digest_file(path), "size": path.stat().st_size}
+            return self.service.resolve_artifact(p["researchId"], p["artifactId"])
         if method == "shutdown":
-            self.runtime.close()
+            self.runtime.close(deadline=deadline)
             return {"closed": True}
         operation = {"workflow.collectLiterature": self.service.collect_literature,
                      "workflow.startExperiment": self.service.start_experiment,
-                     "workflow.resumeWriting": self.service.resume_writing,
+                     "workflow.resume": self.service.resume,
                      "workflow.reviseWriting": self.service.revise_writing,
                      "workflow.cancel": self.service.cancel, "workflow.export": self.service.export}[method]
         return operation(p["researchId"])
@@ -231,6 +235,7 @@ class Dispatcher:
                     event.set()
 
     def finish(self):
+        self.stop()
         self._pool.shutdown(wait=True)
         self.runtime.close()
 
@@ -251,8 +256,8 @@ def main(argv=None):
             for raw in iter(lambda: sys.stdin.buffer.readline(MAX_INPUT_BYTES + 1), b""):
                 try:
                     data = request(raw)
-                    dispatcher.submit(data)
-                    if data["method"] == "shutdown":
+                    submitted = dispatcher.submit(data)
+                    if data["method"] == "shutdown" and submitted is not None and submitted.result():
                         break
                 except Exception as error:
                     identifier = None

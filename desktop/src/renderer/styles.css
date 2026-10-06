@@ -1,10 +1,18 @@
-@import "./neobrutal.css";
+@import "./neobrutal.css" source(none);
 
 @source "./";
 
+@font-face {
+  font-family: "Pretendard Variable";
+  font-style: normal;
+  font-weight: 45 920;
+  font-display: swap;
+  src: url("./assets/fonts/PretendardVariable.woff2") format("woff2");
+}
+
 @layer base {
   html {
-    font-family: "Malgun Gothic", "Apple SD Gothic Neo", system-ui, sans-serif;
+    font-family: "Pretendard Variable", "Malgun Gothic", "Apple SD Gothic Neo", system-ui, sans-serif;
     font-synthesis: none;
     height: 100%;
   }

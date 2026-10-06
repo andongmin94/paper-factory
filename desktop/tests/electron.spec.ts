@@ -1,10 +1,13 @@
 import { _electron, expect, test, type ElectronApplication, type Page } from "@playwright/test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
 import { tmpdir } from "node:os";
 import { basename, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import type { AppSnapshot, PaperFactoryApi } from "../src/shared/contracts";
 import type { ResearchSnapshot } from "../src/shared/research";
+import type { OpenDialogOptions, SaveDialogOptions } from "electron";
 
 declare global {
   interface Window {
@@ -115,11 +118,11 @@ test("connection window uses genuine components and exposes only limited, token-
       }, request);
       expect(denied).toBe(true);
     }
-    for (const destination of ["", "relative/paper.pdf", "bad\u0000path", "x".repeat(4097)]) {
-      expect(await page.evaluate(async path => {
-        try { await window.paperFactory.saveArtifact("research-abcdef123456", "export-pdf", path); return false; }
+    for (const request of [{ id: "invalid", artifactId: "export-pdf" }, { id: "research-abcdef123456", artifactId: "unsupported" }]) {
+      expect(await page.evaluate(async ({ id, artifactId }) => {
+        try { await window.paperFactory.saveArtifact(id, artifactId); return false; }
         catch { return true; }
-      }, destination)).toBe(true);
+      }, request)).toBe(true);
     }
     const preferences = await (await electronApp.browserWindow(page)).evaluate((browserWindow) => {
       const settings = browserWindow.webContents.getLastWebPreferences();
@@ -139,6 +142,33 @@ test("connection window uses genuine components and exposes only limited, token-
     });
     expect(buttonStyle.border).toBe("2px");
     expect(buttonStyle.shadow).not.toBe("none");
+
+    const fonts = await page.evaluate(async () => {
+      const loaded = await Promise.all([500, 700].map(async (weight) => {
+        const faces = await document.fonts.load(`${weight} 14px "Pretendard Variable"`, "연구 작업실 Paper Factory");
+        return faces.map((face) => ({ family: face.family, status: face.status }));
+      }));
+      const sources: string[] = [];
+      for (const sheet of document.styleSheets) {
+        for (const rule of sheet.cssRules) {
+          if (!(rule instanceof CSSFontFaceRule) || !rule.style.fontFamily.includes("Pretendard Variable")) continue;
+          const source = rule.style.getPropertyValue("src").match(/url\(["']?([^"')]+)/)?.[1];
+          if (source) sources.push(new URL(source, sheet.href ?? location.href).href);
+        }
+      }
+      return {
+        loaded,
+        family: getComputedStyle(document.documentElement).fontFamily,
+        sources,
+      };
+    });
+    expect(fonts.family).toMatch(/^"Pretendard Variable"/);
+    for (const faces of fonts.loaded) {
+      expect(faces).toHaveLength(1);
+      expect(faces[0]).toEqual({ family: "Pretendard Variable", status: "loaded" });
+    }
+    expect(fonts.sources).toHaveLength(1);
+    expect(fonts.sources[0]).toMatch(/^file:\/\/\/.*\/PretendardVariable-[\w-]+\.woff2$/);
 
     // Use the actual supported IPC method while disconnected; no OAuth or network call is made.
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -187,6 +217,7 @@ test("credit retry is explicit, research draft models persist, and synthetic bus
   const fixtureResearch: ResearchSnapshot = {
     runtime: { state: "ready", message: "합성 fixture 실행 환경입니다. 실제 런타임 검증이 아닙니다." },
     busy: false,
+    cleanupResearchIds: [],
     jobs: [],
     error: null,
   };
@@ -203,9 +234,8 @@ test("credit retry is explicit, research draft models persist, and synthetic bus
 
     // Override only this owned fixture process. The normal preload bridge and usage handler remain intact.
     // Fake verification never invokes OAuth, the SDK, or the network; shell interception opens no browser.
-    await electronApp.evaluate(async ({ BrowserWindow, ipcMain, shell }, { snapshot, research, artifactModule, protectedRoot }) => {
-      const { validateSaveDestination, writeArtifactCopy } = process.getBuiltinModule('module').createRequire(artifactModule)('./artifacts.js');
-      const fixture = { snapshot, research, verifyCalls: 0, researchCalls: 0, revisions: [] as string[][], saves: [] as string[][], openedUrls: [] as string[] };
+    await electronApp.evaluate(async ({ BrowserWindow, ipcMain, shell }, { snapshot, research }) => {
+      const fixture = { snapshot, research, verifyCalls: 0, researchCalls: 0, revisions: [] as string[][], openedUrls: [] as string[] };
       (globalThis as typeof globalThis & { __paperFactoryCreditFixture?: typeof fixture }).__paperFactoryCreditFixture = fixture;
       const publish = () => BrowserWindow.getAllWindows()[0]?.webContents.send("connection:changed", fixture.snapshot);
       ipcMain.removeHandler("connection:snapshot");
@@ -219,22 +249,13 @@ test("credit retry is explicit, research draft models persist, and synthetic bus
         fixture.researchCalls++;
         return fixture.research;
       });
-      ipcMain.removeHandler("research:save-artifact");
-      ipcMain.handle("research:save-artifact", async (_event, id: string, artifactId: string, path: string) => {
-        const destination = validateSaveDestination(path);
-        const job = fixture.research.jobs.find(job => job.id === id);
-        if (!job || job.status !== "completed" || !job.artifacts.some(artifact => artifact.id === artifactId)) throw new Error("Unexpected fixture artifact");
-        await writeArtifactCopy(Buffer.from("OWNED SYNTHETIC " + artifactId), destination, protectedRoot);
-        fixture.saves.push([id, artifactId, destination]);
-        return true;
-      });
       ipcMain.removeHandler("research:revise-writing");
       ipcMain.handle("research:revise-writing", (_event, id: string, model: string, reviewer: string) => {
         const job = fixture.research.jobs.find(job => job.id === id);
         if (!job || job.stage !== "exported" || job.status !== "completed" || fixture.research.busy) throw new Error("Unexpected fixture revision");
         fixture.revisions.push([id, model, reviewer]);
         fixture.research = { ...fixture.research, busy: true, jobs: fixture.research.jobs.map(current => current.id === id
-          ? { ...current, stage: "analyzed", status: "ready", pipeline: "running", phase: "manuscript", model, reviewerModel: reviewer } : current) };
+          ? { ...current, stage: "analyzed", status: "ready", pipeline: "running", phase: "manuscript", resumeKind: null, model, reviewerModel: reviewer } : current) };
         BrowserWindow.getAllWindows()[0]?.webContents.send("research:changed", fixture.research);
         return fixture.research;
       });
@@ -255,13 +276,13 @@ test("credit retry is explicit, research draft models persist, and synthetic bus
       shell.openExternal = async (url) => { fixture.openedUrls.push(url); };
       publish();
       BrowserWindow.getAllWindows()[0]?.webContents.send("research:changed", fixture.research);
-    }, { snapshot: fixtureSnapshot, research: fixtureResearch, artifactModule: new URL("../dist/artifacts.js", import.meta.url).href, protectedRoot: dataDir });
+    }, { snapshot: fixtureSnapshot, research: fixtureResearch });
     const inspectFixture = () => electronApp!.evaluate(() => {
       const fixture = (globalThis as typeof globalThis & {
-        __paperFactoryCreditFixture: { verifyCalls: number; researchCalls: number; revisions: string[][]; saves: string[][]; openedUrls: string[]; snapshot: AppSnapshot };
+        __paperFactoryCreditFixture: { verifyCalls: number; researchCalls: number; revisions: string[][]; openedUrls: string[]; snapshot: AppSnapshot };
       }).__paperFactoryCreditFixture;
       return { verifyCalls: fixture.verifyCalls, researchCalls: fixture.researchCalls,
-        revisions: fixture.revisions, saves: fixture.saves, openedUrls: fixture.openedUrls, profileId: fixture.snapshot.session.profileId };
+        revisions: fixture.revisions, openedUrls: fixture.openedUrls, profileId: fixture.snapshot.session.profileId };
     });
 
     await selectView(page, "새 연구");
@@ -346,6 +367,7 @@ test("credit retry is explicit, research draft models persist, and synthetic bus
     const completedResearch: ResearchSnapshot = { ...fixtureResearch, jobs: [{
       id: "research-abcdef123456", source: draftSource, goal: draftGoal, supportingDocuments: [],
       model: "fixture-model", reviewerModel: "fixture-model", phase: "idle", pipeline: "completed",
+      resumeKind: null,
       stage: "exported", status: "completed", code: null, message: "Synthetic completed paper; no real experiment.",
       updatedAt: "2026-01-01T00:00:00.000Z", artifacts: ["export-pdf", "export-docx", "export-md", "export-tex", "reproducibility"]
         .map(id => ({ id, sha256: "a".repeat(64), size: 18 })),
@@ -356,45 +378,14 @@ test("credit retry is explicit, research draft models persist, and synthetic bus
       BrowserWindow.getAllWindows()[0]?.webContents.send("research:changed", research);
     }, completedResearch);
     await selectView(page, "결과");
-    const markdownSave = page.getByRole("button", { name: "Markdown 저장", exact: true });
-    await expect(markdownSave).toBeVisible();
-    await markdownSave.click();
-    const saveDialog = page.getByRole("dialog", { name: "Markdown 저장", exact: true });
-    await expect(saveDialog).toBeVisible();
-    await expect(saveDialog.getByLabel("저장 파일 경로", { exact: true })).toBeFocused();
-    await expect(saveDialog.getByRole("button", { name: "저장", exact: true })).toBeDisabled();
-    await saveDialog.getByRole("button", { name: "취소", exact: true }).click();
-    await expect(saveDialog).toHaveCount(0); await expect(markdownSave).toBeFocused();
-    expect((await inspectFixture()).saves).toEqual([]);
-    // These five files contain only harmless synthetic bytes; they are not actual research outputs.
-    for (const [artifactId, label] of [["export-pdf", "PDF"], ["export-docx", "Word"], ["export-md", "Markdown"], ["export-tex", "LaTeX"], ["reproducibility", "재현 패키지 ZIP"]]) {
-      const trigger = page.getByRole("button", { name: label + " 저장", exact: true });
-      await trigger.click();
-      const popup = page.getByRole("dialog", { name: label + " 저장", exact: true });
-      const pathInput = popup.getByLabel("저장 파일 경로", { exact: true });
-      await expect(pathInput).toBeFocused();
-      if (artifactId === "export-pdf") {
-        await pathInput.fill("relative/paper.pdf");
-        await popup.getByRole("button", { name: "저장", exact: true }).click();
-        await expect(popup.getByRole("alert")).toContainText("저장하지 못했습니다");
-        await expect(pathInput).toBeEnabled(); expect((await inspectFixture()).saves).toEqual([]);
-      }
-      const destination = join(tmpdir(), basename(dataDir) + "-" + artifactId + ".bin");
-      try {
-        await pathInput.fill(destination);
-        if (artifactId === "export-pdf") await page.screenshot({ path: testInfo.outputPath("internal-save-path-modal.png"), animations: "disabled", fullPage: true });
-        await popup.getByRole("button", { name: "저장", exact: true }).click();
-        await expect(popup).toHaveCount(0); await expect(trigger).toBeFocused();
-        await expect(page.getByRole("tabpanel", { name: "결과", exact: true }).getByText("결과 파일을 저장했습니다.", { exact: true })).toBeVisible();
-        expect(await readFile(destination)).toEqual(Buffer.from("OWNED SYNTHETIC " + artifactId));
-      } finally { await rm(destination, { force: true }); }
-    }
-    expect((await inspectFixture()).saves).toHaveLength(5);
+    await expect(page.getByRole("button", { name: "Markdown 저장", exact: true })).toBeVisible();
     await page.getByText("재개·원고 수정에 사용할 모델", { exact: true }).click();
     await expect(page.getByRole("combobox", { name: "재개 작성 모델", exact: true })).toContainText("Fixture writer");
     await expect(page.getByRole("combobox", { name: "재개 리뷰 모델", exact: true })).toContainText("Fixture reviewer");
     const revision = page.getByRole("button", { name: "원고 수정", exact: true });
     await expect(revision).toBeEnabled(); expect((await inspectFixture()).revisions).toEqual([]);
+    await expect(page.getByRole("button", { name: "연구 준비 재개", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "원고 작성 재개", exact: true })).toHaveCount(0);
     await page.screenshot({ path: testInfo.outputPath("completed-paper-revision.png"), animations: "disabled", fullPage: true });
     await revision.click();
     await expect.poll(async () => (await inspectFixture()).revisions).toEqual([["research-abcdef123456", "fixture-writer", "fixture-reviewer"]]);
@@ -412,6 +403,7 @@ test("credit retry is explicit, research draft models persist, and synthetic bus
       busy: true,
       jobs: [{ id: "synthetic-busy-receipt", source: draftSource, goal: draftGoal, supportingDocuments: [],
         model: "fixture-writer", reviewerModel: "fixture-reviewer", phase: "plan", pipeline: "running",
+        resumeKind: null,
         stage: "synthetic-ui-fixture", status: "running", code: null, message: busyReceipt,
         updatedAt: "2026-01-01T00:00:00.000Z", artifacts: [] }],
     };
@@ -585,6 +577,642 @@ test("account URL selects an explicitly public repository through main IPC and s
     expect(layout.sidebarHeight).toBeCloseTo(sidebarBeforeScroll!.height, 0);
     await page.locator("#research-panel").evaluate((panel) => { panel.scrollTop = 0; });
     await page.screenshot({ path: testInfo.outputPath("public-repository-research-720x640.png"), animations: "disabled", fullPage: true });
+  } finally {
+    if (electronApp) await electronApp.close();
+    await removeOwnedTemp(dataDir);
+  }
+});
+
+test("window close and app quit share cleanup; failed evidence keeps the window open and retry closes only after preservation", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "paper-factory-electron-"));
+  let electronApp: ElectronApplication | undefined;
+  let exited = false;
+  const original = Buffer.from('{"synthetic":"partial');
+  try {
+    await mkdir(join(dataDir, "research")); await mkdir(join(dataDir, "evidence"));
+    // Invalid owned index prevents runtime startup; there can be no engine/guest.
+    await writeFile(join(dataDir, "research", "jobs.json"), "{}");
+    const journal = join(dataDir, "evidence", "connection-checks.jsonl");
+    await writeFile(journal, original);
+    electronApp = await launch(dataDir);
+    const page = await electronApp.firstWindow();
+    await expect.poll(() => page.evaluate(() => window.paperFactory.snapshot())).toMatchObject({ error: { code: "evidence_write_failed" } });
+    await electronApp.evaluate(({ dialog }) => {
+      const fixture = { dialogs: [] as string[], release: undefined as undefined | ((response: number) => void) };
+      (globalThis as typeof globalThis & { __shutdownFixture: typeof fixture }).__shutdownFixture = fixture;
+      dialog.showMessageBox = (async (...args: unknown[]) => {
+        const options = args.at(-1) as { message: string };
+        fixture.dialogs.push(options.message);
+        const response = await new Promise<number>(resolve => { fixture.release = resolve; });
+        return { response, checkboxChecked: false };
+      }) as typeof dialog.showMessageBox;
+    });
+    await electronApp.evaluate(({ app, BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0]!.close(); app.quit(); app.quit();
+    });
+    await expect.poll(() => electronApp!.evaluate(() =>
+      (globalThis as typeof globalThis & { __shutdownFixture: { dialogs: string[] } }).__shutdownFixture.dialogs.length)).toBe(1);
+    await expect(page.getByRole("heading", { name: "Paper Factory", exact: true })).toBeVisible();
+    expect(await readFile(journal)).toEqual(original);
+    await electronApp.evaluate(() => {
+      (globalThis as typeof globalThis & { __shutdownFixture: { release: (choice: number) => void } }).__shutdownFixture.release(0);
+    });
+    await page.waitForTimeout(20);
+    await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.close());
+    await expect.poll(() => electronApp!.evaluate(() =>
+      (globalThis as typeof globalThis & { __shutdownFixture: { dialogs: string[] } }).__shutdownFixture.dialogs.length)).toBe(2);
+    const preserved = journal + ".original";
+    await rename(journal, preserved);
+    const closed = new Promise<void>(resolve => electronApp!.once("close", () => { exited = true; resolve(); }));
+    await electronApp.evaluate(() => {
+      (globalThis as typeof globalThis & { __shutdownFixture: { release: (choice: number) => void } }).__shutdownFixture.release(1);
+    });
+    await closed;
+    expect(await readFile(preserved)).toEqual(original);
+    const records = (await readFile(journal, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+    expect(records.map(record => record.event)).toEqual(["launch"]);
+    expect(await readFile(join(dataDir, "research", "jobs.json"), "utf8")).toBe("{}");
+  } finally {
+    // This owned fixture cannot start Python because its invalid index blocks restoration.
+    if (electronApp && !exited) { electronApp.process().kill(); await new Promise<void>(resolve => electronApp!.process().once("exit", () => resolve())); }
+    await removeOwnedTemp(dataDir);
+  }
+});
+
+type NativeSaveLeaseFixture = {
+  dialogs: Array<{ kind: "file" | "directory"; title: string | undefined }>;
+  shutdownDialogs: string[];
+  releaseSelection?: (destination: string | null) => void;
+};
+
+test("production main save lease blocks account and research IPC and waits for the selected file commit before closing the native engine", async ({}, testInfo) => {
+  const runtimeRoot = join(desktopRoot, "runtime", `${process.platform}-${process.arch}`);
+  const inventoryPath = join(runtimeRoot, "runtime-inventory.json");
+  const runtimePresent = await access(inventoryPath).then(() => true, error => {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  });
+  test.skip(!runtimePresent, "Requires the built native runtime; absent runtime profiles are checked separately.");
+  test.setTimeout(120_000);
+  const inventory = JSON.parse(await readFile(inventoryPath, "utf8")) as { executables: { python: string } };
+  const python = join(runtimeRoot, ...inventory.executables.python.split("/"));
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "paper-factory-electron-"));
+  const dataDir = join(fixtureRoot, "app-data");
+  const engineHome = join(dataDir, "engine");
+  const exports = join(fixtureRoot, "exports");
+  const id = "research-abcdef123456";
+  await mkdir(exports);
+  let electronApp: ElectronApplication | undefined;
+  let exited = false;
+  const seed = String.raw`
+from pathlib import Path
+import sys
+from paper_factory.standalone_runtime import OWNER
+from paper_factory.workflow_models import Workflow
+from paper_factory.autonomous.models import FrozenArtifact
+from paper_factory.workspace import Workspace, digest_file, write_json
+engine_home = Path(sys.argv[1]).resolve()
+engine_home.mkdir(parents=True, exist_ok=False)
+write_json(engine_home / "owner.json", OWNER)
+identifier = "research-abcdef123456"
+ws = Workspace.create(engine_home / "workflows" / identifier)
+root = ws.path("research/exports/export-attempt-fixture")
+root.mkdir(parents=True)
+record = Workflow(id=identifier, project_id="fixture-save-only", goal="Owned synthetic save fixture; no scientific execution.",
+                  status="completed", stage="exported", message="Synthetic save test only; no models or experiment.")
+files = {
+    "export-pdf": ("paper.pdf", b"%PDF-1.4\n% OWNED SYNTHETIC SAVE FIXTURE\n"),
+    "export-md": ("paper.md", b"# Synthetic save fixture\n\n![Owned synthetic figure](figure-1.png)\n"),
+    "export-tex": ("paper.tex", br"\includegraphics{figure-1.png}"),
+    "export-figure-1": ("figure-1.png", b"\x89PNG\r\n\x1a\nOWNED SYNTHETIC SAVE BYTES"),
+}
+for key, (name, body) in files.items():
+    path = root / name
+    path.write_bytes(body)
+    record.artifacts[key] = FrozenArtifact(path=path.relative_to(ws.root).as_posix(), sha256=digest_file(path), size=path.stat().st_size)
+ws.save("workflow", record)
+print(record.model_dump_json())
+`;
+  // The bundled interpreter only seeds this fresh temp workspace. No runner, model, or account is invoked.
+  const seedEnv: Record<string, string> = { HOME: fixtureRoot, USERPROFILE: fixtureRoot, APPDATA: fixtureRoot, LOCALAPPDATA: fixtureRoot,
+    TEMP: fixtureRoot, TMP: fixtureRoot, MPLCONFIGDIR: join(fixtureRoot, "matplotlib"), PYTHONUTF8: "1", PYTHONDONTWRITEBYTECODE: "1",
+    ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}), ...(process.env.WINDIR ? { WINDIR: process.env.WINDIR } : {}) };
+  try {
+    const { stdout: originalRecord } = await promisify(execFile)(python, ["-I", "-B", "-c", seed, engineHome],
+      { cwd: fixtureRoot, env: seedEnv, timeout: 30_000, windowsHide: true });
+    const artifactRoot = join(engineHome, "workflows", id, "research", "exports", "export-attempt-fixture");
+    const originals = new Map(await Promise.all(["paper.pdf", "paper.md", "paper.tex", "figure-1.png"].map(async name =>
+      [name, await readFile(join(artifactRoot, name))] as const)));
+    electronApp = await launch(dataDir);
+    const page = await electronApp.firstWindow();
+    await expect.poll(async () => (await page.evaluate(() => window.paperFactory.researchSnapshot())).runtime.state, { timeout: 60_000 }).toBe("ready");
+    const connection = await page.evaluate(() => window.paperFactory.snapshot());
+    expect(connection.session).toEqual({ connected: false, sharing: false });
+    expect(connection.profiles).toEqual([]); expect(connection.models).toEqual([]);
+    const research = await page.evaluate(() => window.paperFactory.researchSnapshot());
+    expect(research.busy).toBe(false); expect(research.cleanupResearchIds).toEqual([]);
+    expect(research.jobs).toHaveLength(1);
+    expect(research.jobs[0]).toMatchObject({ id, pipeline: "completed", stage: "exported", status: "completed", resumeKind: null });
+    const journal = join(dataDir, "evidence", "connection-checks.jsonl");
+    const originalJournal = await readFile(journal);
+    expect(originalJournal.toString("utf8").trim().split("\n").map(line => JSON.parse(line).event)).toEqual(["launch"]);
+    await electronApp.evaluate(({ dialog }) => {
+      const fixture: NativeSaveLeaseFixture = { dialogs: [], shutdownDialogs: [] };
+      (globalThis as typeof globalThis & { __paperFactoryNativeSaveLease: NativeSaveLeaseFixture }).__paperFactoryNativeSaveLease = fixture;
+      const choose = (kind: "file" | "directory", title: string | undefined) => {
+        fixture.dialogs.push({ kind, title });
+        return new Promise<string | null>(resolve => { fixture.releaseSelection = resolve; });
+      };
+      dialog.showSaveDialog = (async (_window: unknown, options: SaveDialogOptions) => {
+        const path = await choose("file", options.title);
+        return { canceled: path === null, filePath: path ?? undefined };
+      }) as typeof dialog.showSaveDialog;
+      dialog.showOpenDialog = (async (_window: unknown, options: OpenDialogOptions) => {
+        const path = await choose("directory", options.title);
+        return { canceled: path === null, filePaths: path === null ? [] : [path] };
+      }) as typeof dialog.showOpenDialog;
+      dialog.showMessageBox = (async (_window: unknown, options: { message?: string }) => {
+        fixture.shutdownDialogs.push(options.message ?? "Unexpected shutdown dialog");
+        return { response: 0, checkboxChecked: false };
+      }) as typeof dialog.showMessageBox;
+    });
+    const inspect = () => electronApp!.evaluate(() => {
+      const fixture = (globalThis as typeof globalThis & { __paperFactoryNativeSaveLease: NativeSaveLeaseFixture }).__paperFactoryNativeSaveLease;
+      return { dialogs: fixture.dialogs, shutdownDialogs: fixture.shutdownDialogs };
+    });
+    const release = (destination: string | null) => electronApp!.evaluate((_electron, destination) => {
+      (globalThis as typeof globalThis & { __paperFactoryNativeSaveLease: NativeSaveLeaseFixture }).__paperFactoryNativeSaveLease.releaseSelection!(destination);
+    }, destination);
+    await selectView(page, "결과");
+    const pdf = page.getByRole("button", { name: "PDF 저장", exact: true });
+    await pdf.click();
+    await expect.poll(async () => (await inspect()).dialogs).toHaveLength(1);
+    // Production main handlers remain intact. Every operation is rejected by saveTask before reaching the SDK or a research controller.
+    const rejected = await page.evaluate(async id => {
+      const operations = [
+        () => window.paperFactory.signIn(), () => window.paperFactory.disconnect(), () => window.paperFactory.selectProfile("fixture-never-created"),
+        () => window.paperFactory.refreshModels(), () => window.paperFactory.verify("fixture-never-requested"),
+        () => window.paperFactory.createResearch({ source: "https://github.com/fixture-owner/never-fetched", goal: "This operation must be rejected before any account or research request.", model: "fixture", reviewerModel: "fixture" }),
+        () => window.paperFactory.resumeResearch(id, "fixture", "fixture"), () => window.paperFactory.reviseResearchWriting(id, "fixture", "fixture"),
+        () => window.paperFactory.saveArtifact(id, "export-pdf"),
+      ];
+      const failures: string[] = [];
+      for (const operation of operations) {
+        try { await operation(); failures.push("unexpected-success"); }
+        catch (error) { failures.push(String(error)); }
+      }
+      return failures;
+    }, id);
+    expect(rejected).toHaveLength(9);
+    for (const [index, failure] of rejected.entries()) {
+      expect(failure).toContain(index < 5
+        ? "결과 파일 저장이 끝난 뒤 계정 작업을 시작하세요."
+        : "결과 파일 저장이 끝난 뒤 연구 작업을 시작하세요.");
+    }
+    expect((await inspect()).dialogs).toHaveLength(1);
+    expect(await readFile(journal)).toEqual(originalJournal);
+    await release(null); await expect(pdf).toBeEnabled();
+    await expect(page.getByRole("tabpanel", { name: "결과", exact: true }).getByText("결과 파일을 저장했습니다.", { exact: true })).toHaveCount(0);
+    expect(await readdir(exports)).toEqual([]);
+
+    // Resolve real frozen MD/PNG IDs through Python; only the native folder selection is synthetic.
+    await page.getByRole("button", { name: "Markdown 저장", exact: true }).click();
+    await expect.poll(async () => (await inspect()).dialogs).toHaveLength(2);
+    expect((await inspect()).dialogs[1].kind).toBe("directory");
+    await release(exports);
+    await expect(page.getByRole("tabpanel", { name: "결과", exact: true }).getByText("결과 파일을 저장했습니다.", { exact: true })).toBeVisible();
+    const folders = await readdir(exports);
+    expect(folders).toHaveLength(1); expect(folders[0]).toMatch(/^Paper Factory-abcdef123456-md-[a-f0-9]{8}$/);
+    for (const name of ["paper.md", "figure-1.png"]) expect(await readFile(join(exports, folders[0], name))).toEqual(originals.get(name));
+
+    // The quit request waits for this pending native chooser and the final atomic file write.
+    await pdf.click();
+    await expect.poll(async () => (await inspect()).dialogs).toHaveLength(3);
+    const destination = join(exports, "paper.pdf");
+    const closed = new Promise<void>(resolveClosed => electronApp!.once("close", () => { exited = true; resolveClosed(); }));
+    await electronApp.evaluate(({ app, BrowserWindow }) => { BrowserWindow.getAllWindows()[0]!.close(); app.quit(); });
+    await expect(page.getByRole("heading", { name: "Paper Factory", exact: true })).toBeVisible();
+    expect(exited).toBe(false); expect(await access(destination).then(() => true, () => false)).toBe(false);
+    expect(await readFile(journal)).toEqual(originalJournal);
+    expect((await inspect()).shutdownDialogs).toEqual([]);
+    const closing = await page.evaluate(async id => {
+      try { await window.paperFactory.saveArtifact(id, "export-pdf"); return "unexpected-success"; }
+      catch (error) { return String(error); }
+    }, id);
+    expect(closing).toContain("앱 종료를 위해 작업과 기록을 정리하고 있습니다.");
+    await page.screenshot({ path: testInfo.outputPath("production-native-save-before-close.png"), animations: "disabled", fullPage: true });
+    await release(destination);
+    await closed;
+    expect(exited).toBe(true); expect(await readFile(destination)).toEqual(originals.get("paper.pdf"));
+    for (const [name, bytes] of originals) expect(await readFile(join(artifactRoot, name))).toEqual(bytes);
+    expect(await readFile(journal)).toEqual(originalJournal);
+    const readRecord = String.raw`from pathlib import Path; import sys; from paper_factory.workflow_models import Workflow; from paper_factory.workspace import Workspace; print(Workspace(Path(sys.argv[1]) / "workflows" / "research-abcdef123456").get("workflow", "research-abcdef123456", Workflow).model_dump_json())`;
+    const { stdout: finalRecord } = await promisify(execFile)(python, ["-I", "-B", "-c", readRecord, engineHome],
+      { cwd: fixtureRoot, env: seedEnv, timeout: 30_000, windowsHide: true });
+    expect(JSON.parse(finalRecord)).toEqual(JSON.parse(originalRecord));
+  } finally {
+    if (electronApp && !exited) {
+      await electronApp.evaluate(() => {
+        (globalThis as typeof globalThis & { __paperFactoryNativeSaveLease?: NativeSaveLeaseFixture }).__paperFactoryNativeSaveLease?.releaseSelection?.(null);
+      }).catch(() => {});
+      await electronApp.close();
+    }
+    await removeOwnedTemp(fixtureRoot);
+  }
+});
+
+type SaveFixture = {
+  calls: string[][];
+  dialogs: Array<{ kind: "file" | "directory"; title: string | undefined; defaultPath: string | undefined; extensions: string[]; properties: string[] }>;
+  releaseSelection?: (destination: string | null) => void;
+};
+
+test("native artifact chooser cancellation, protected destinations, and portable figure bundles keep the renderer locked until saving settles", async ({}, testInfo) => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "paper-factory-electron-"));
+  const dataDir = join(fixtureRoot, "app-data");
+  const documentsPath = join(fixtureRoot, "exports");
+  await mkdir(dataDir); await mkdir(documentsPath);
+  let electronApp: ElectronApplication | undefined;
+  const id = "research-abcdef123456";
+  const formats = [
+    { artifactId: "export-pdf", label: "PDF", fileName: "paper.pdf", extension: "pdf" },
+    { artifactId: "export-docx", label: "Word", fileName: "paper.docx", extension: "docx" },
+    { artifactId: "export-md", label: "Markdown", fileName: "paper.md", extension: "md" },
+    { artifactId: "export-tex", label: "LaTeX", fileName: "paper.tex", extension: "tex" },
+    { artifactId: "reproducibility", label: "재현 패키지 ZIP", fileName: "reproducibility.zip", extension: "zip" },
+  ];
+  const connection: AppSnapshot = { version: "fixture", session: { connected: true, sharing: true, profileId: "fixture-a" },
+    profiles: [{ id: "fixture-a", label: "Synthetic account", connected: true, sharing: true }],
+    models: [{ slug: "fixture-model", displayName: "Synthetic model" }], busy: null, error: null, verification: null };
+  const research: ResearchSnapshot = { runtime: { state: "ready", message: "합성 파일 저장 fixture" }, busy: false,
+    cleanupResearchIds: [], error: null, jobs: [{ id, source: "https://github.com/fixture-owner/synthetic-save-study",
+      goal: "네이티브 파일 선택과 합성 바이트 저장만 검증합니다.", model: "fixture-model", reviewerModel: "fixture-model",
+      phase: "idle", pipeline: "completed", stage: "exported", status: "completed", resumeKind: null,
+      code: null, message: "Synthetic bytes only; no scientific or model execution.", updatedAt: "2026-01-01T00:00:00.000Z",
+      artifacts: formats.map(({ artifactId }) => ({ id: artifactId, sha256: "a".repeat(64), size: 18 })), supportingDocuments: [] }] };
+  try {
+    electronApp = await launch(dataDir);
+    const page = await electronApp.firstWindow();
+    await expect.poll(async () => (await page.evaluate(() => window.paperFactory.researchSnapshot())).runtime.state).not.toBe("checking");
+    await installGateFixture(electronApp, connection, research);
+    await electronApp.evaluate(({ BrowserWindow, dialog, ipcMain }, { artifactModule, formats, documentsPath, protectedRoot }) => {
+      const { saveArtifactWithDialog } = process.getBuiltinModule("module").createRequire(artifactModule)("./artifacts.js");
+      const fixture: SaveFixture = { calls: [], dialogs: [] };
+      (globalThis as typeof globalThis & { __paperFactorySaveFixture: SaveFixture }).__paperFactorySaveFixture = fixture;
+      const choose = (kind: "file" | "directory", options: SaveDialogOptions | OpenDialogOptions) => {
+        fixture.dialogs.push({ kind, title: options.title, defaultPath: options.defaultPath,
+          extensions: options.filters?.flatMap(filter => filter.extensions) ?? [], properties: options.properties ?? [] });
+        return new Promise<string | null>(resolve => { fixture.releaseSelection = resolve; });
+      };
+      dialog.showSaveDialog = (async (_window: unknown, options: SaveDialogOptions) => {
+        const filePath = await choose("file", options);
+        return { canceled: filePath === null, filePath: filePath ?? undefined };
+      }) as typeof dialog.showSaveDialog;
+      dialog.showOpenDialog = (async (_window: unknown, options: OpenDialogOptions) => {
+        const parent = await choose("directory", options);
+        return { canceled: parent === null, filePaths: parent === null ? [] : [parent] };
+      }) as typeof dialog.showOpenDialog;
+      // Only artifact resolution is synthetic. Selection and atomic copies use the production helper.
+      // This proves UI/preload and chooser/write behavior; the original main saveTask lease is not exercised.
+      ipcMain.removeHandler("research:save-artifact");
+      ipcMain.handle("research:save-artifact", async (_event, ...args: unknown[]) => {
+        const gate = (globalThis as typeof globalThis & { __paperFactoryGateFixture: GateFixture }).__paperFactoryGateFixture;
+        if (args.length !== 2 || typeof args[0] !== "string" || typeof args[1] !== "string") throw new Error("Unexpected synthetic save arguments");
+        const [researchId, artifactId] = args;
+        const job = gate.research.jobs.find(job => job.id === researchId);
+        const format = formats.find(format => format.artifactId === artifactId);
+        if (!format || job?.pipeline !== "completed" || !job.artifacts.some(artifact => artifact.id === artifactId)) throw new Error("Unexpected synthetic artifact");
+        fixture.calls.push([researchId, artifactId]);
+        const body = "OWNED SYNTHETIC " + artifactId;
+        const files = [{ name: format.fileName, bytes: Buffer.from(body) }];
+        if (["md", "tex"].includes(format.extension)) files.push({ name: "figure-1.png", bytes: Buffer.from("OWNED SYNTHETIC FIGURE") });
+        try {
+          return await saveArtifactWithDialog({ artifact: { path: protectedRoot + "/" + format.fileName, files },
+            artifactId, researchId, documentsPath, protectedRoot,
+            chooseFile: (options: SaveDialogOptions) => dialog.showSaveDialog(BrowserWindow.getAllWindows()[0]!, options),
+            chooseDirectory: (options: OpenDialogOptions) => dialog.showOpenDialog(BrowserWindow.getAllWindows()[0]!, options) });
+        } finally { fixture.releaseSelection = undefined; }
+      });
+    }, { artifactModule: new URL("../dist/artifacts.js", import.meta.url).href, formats, documentsPath, protectedRoot: dataDir });
+    const inspect = () => electronApp!.evaluate(() => {
+      const fixture = (globalThis as typeof globalThis & { __paperFactorySaveFixture: SaveFixture }).__paperFactorySaveFixture;
+      return { calls: fixture.calls, dialogs: fixture.dialogs };
+    });
+    const releaseSelection = (destination: string | null) => electronApp!.evaluate((_electron, destination) => {
+      (globalThis as typeof globalThis & { __paperFactorySaveFixture: SaveFixture }).__paperFactorySaveFixture.releaseSelection!(destination);
+    }, destination);
+    await selectView(page, "새 연구");
+    await page.getByLabel("공개 GitHub 저장소 또는 계정 URL", { exact: true }).fill("https://github.com/fixture-owner/synthetic-save-study");
+    await page.getByLabel("연구 목표", { exact: true }).fill("저장 중 연구와 계정 작업 잠금을 확인하는 합성 목표입니다.");
+    await expect(page.getByRole("button", { name: "연구 시작", exact: true })).toBeEnabled();
+    await selectView(page, "결과");
+    const results = page.getByRole("tabpanel", { name: "결과", exact: true });
+    const success = results.getByText("결과 파일을 저장했습니다.", { exact: true });
+    expect(await inspect()).toEqual({ calls: [], dialogs: [] });
+    const markdown = page.getByRole("button", { name: "Markdown 저장", exact: true });
+    await markdown.click();
+    await expect.poll(async () => (await inspect()).dialogs).toHaveLength(1);
+    for (const { label } of formats) await expect(page.getByRole("button", { name: label + " 저장", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "원고 수정", exact: true })).toBeDisabled();
+    await expect(page.getByLabel("저장 파일 경로", { exact: true })).toHaveCount(0);
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath("native-save-pending.png"), animations: "disabled", fullPage: true });
+    await selectView(page, "연결");
+    for (const name of ["Continue with ChatGPT", "계정 추가", "연결 해제", "실제 응답 확인"]) {
+      await expect(page.getByRole("button", { name, exact: true })).toBeDisabled();
+    }
+    await expect(page.getByRole("combobox", { name: "ChatGPT 계정", exact: true })).toBeDisabled();
+    await selectView(page, "새 연구");
+    await expect(page.getByRole("button", { name: "연구 시작", exact: true })).toBeDisabled();
+    await releaseSelection(null);
+    await expect(page.getByRole("button", { name: "연구 시작", exact: true })).toBeEnabled();
+    await selectView(page, "결과");
+    await expect(markdown).toBeEnabled(); await expect(success).toHaveCount(0);
+    await expect(results.getByRole("alert")).toHaveCount(0);
+    expect(await readdir(documentsPath)).toEqual([]);
+
+    // A rejected destination returns control without a success notice or an app-data write.
+    const pdf = page.getByRole("button", { name: "PDF 저장", exact: true });
+    await pdf.click();
+    await expect.poll(async () => (await inspect()).dialogs).toHaveLength(2);
+    await releaseSelection(join(dataDir, "paper.pdf"));
+    await expect(results.getByRole("alert")).toContainText("선택한 위치의 접근 권한과 남은 공간");
+    await expect(pdf).toBeEnabled(); await expect(success).toHaveCount(0);
+    expect(await readdir(dataDir)).not.toContain("paper.pdf");
+
+    for (const [index, format] of formats.entries()) {
+      const before = await readdir(documentsPath);
+      await page.getByRole("button", { name: format.label + " 저장", exact: true }).click();
+      await expect.poll(async () => (await inspect()).dialogs).toHaveLength(index + 3);
+      const chooser = (await inspect()).dialogs.at(-1)!;
+      const bundle = ["md", "tex"].includes(format.extension);
+      expect(chooser.kind).toBe(bundle ? "directory" : "file");
+      expect(chooser.properties).toContain("dontAddToRecent");
+      if (bundle) {
+        expect(chooser.defaultPath).toBe(documentsPath);
+        expect(chooser.properties).toContain("openDirectory");
+        await releaseSelection(documentsPath);
+      } else {
+        expect(chooser.defaultPath).toBe(join(documentsPath, format.fileName));
+        expect(chooser.extensions).toEqual([format.extension]);
+        await releaseSelection(join(documentsPath, format.fileName));
+      }
+      await expect(success).toBeVisible();
+      await expect(results.getByRole("alert")).toHaveCount(0);
+      await expect(page.getByRole("button", { name: format.label + " 저장", exact: true })).toBeEnabled();
+      const added = (await readdir(documentsPath)).filter(name => !before.includes(name));
+      expect(added).toHaveLength(1);
+      const destination = bundle ? join(documentsPath, added[0], format.fileName) : join(documentsPath, added[0]);
+      expect(await readFile(destination)).toEqual(Buffer.from("OWNED SYNTHETIC " + format.artifactId));
+      if (bundle) {
+        expect(added[0]).toMatch(new RegExp(`^Paper Factory-abcdef123456-${format.extension}-[a-f0-9]{8}$`));
+        expect((await readdir(join(documentsPath, added[0]))).sort()).toEqual(["figure-1.png", format.fileName].sort());
+        expect(await readFile(join(documentsPath, added[0], "figure-1.png"))).toEqual(Buffer.from("OWNED SYNTHETIC FIGURE"));
+      }
+    }
+    expect((await inspect()).calls).toEqual([[id, "export-md"], [id, "export-pdf"], ...formats.map(format => [id, format.artifactId])]);
+    expect(await electronApp.evaluate(() =>
+      (globalThis as typeof globalThis & { __paperFactoryGateFixture: GateFixture }).__paperFactoryGateFixture.forbiddenCalls)).toEqual([]);
+    // A cancellation after a completed save clears the old success notice too.
+    await pdf.click();
+    await expect.poll(async () => (await inspect()).dialogs).toHaveLength(8);
+    await expect(success).toHaveCount(0); await releaseSelection(null);
+    await expect(pdf).toBeEnabled(); await expect(success).toHaveCount(0);
+  } finally {
+    if (electronApp) await electronApp.close();
+    await removeOwnedTemp(fixtureRoot);
+  }
+});
+
+type GateFixture = {
+  connection: AppSnapshot;
+  research: ResearchSnapshot;
+  cancelledIds: string[];
+  forbiddenCalls: string[];
+  releaseCleanup?: () => void;
+};
+
+async function installGateFixture(electronApp: ElectronApplication, connection: AppSnapshot, research: ResearchSnapshot) {
+  await electronApp.evaluate(({ BrowserWindow, ipcMain }, { connection, research }) => {
+    // This owned process exercises the actual renderer/preload with synthetic state.
+    // Account, model, and scientific handlers are replaced so no live request can occur.
+    const fixture: GateFixture = { connection, research, cancelledIds: [], forbiddenCalls: [] };
+    (globalThis as typeof globalThis & { __paperFactoryGateFixture: GateFixture }).__paperFactoryGateFixture = fixture;
+    const publish = () => {
+      const contents = BrowserWindow.getAllWindows()[0]?.webContents;
+      contents?.send("connection:changed", fixture.connection);
+      contents?.send("research:changed", fixture.research);
+    };
+    for (const channel of ["connection:snapshot", "research:snapshot", "research:cancel", "research:runtime",
+      "connection:sign-in", "connection:select-profile", "connection:disconnect", "connection:models", "connection:verify",
+      "research:create", "research:resume", "research:revise-writing", "research:add-evidence"]) ipcMain.removeHandler(channel);
+    ipcMain.handle("connection:snapshot", () => fixture.connection);
+    ipcMain.handle("research:snapshot", () => fixture.research);
+    ipcMain.handle("research:runtime", () => fixture.research);
+    ipcMain.handle("research:cancel", async (_event, id: string) => {
+      if (!fixture.research.cleanupResearchIds.includes(id)) throw new Error("Unexpected synthetic cleanup id");
+      fixture.cancelledIds.push(id);
+      await new Promise<void>(resolve => { fixture.releaseCleanup = resolve; });
+      fixture.research = { ...fixture.research, busy: false, cleanupResearchIds: [], error: null,
+        jobs: fixture.research.jobs.map(job => job.id === id
+          ? { ...job, status: "cancelled", code: "CANCELLED", message: "합성 정리 확인 완료", resumeKind: "preparation" as const } : job) };
+      publish();
+      return fixture.research;
+    });
+    for (const channel of ["connection:sign-in", "connection:select-profile", "connection:disconnect", "connection:models", "connection:verify",
+      "research:create", "research:resume", "research:revise-writing", "research:add-evidence"]) {
+      ipcMain.handle(channel, () => { fixture.forbiddenCalls.push(channel); throw new Error("A locked fixture action was invoked"); });
+    }
+    publish();
+  }, { connection, research });
+}
+
+test("unconfirmed cleanup is retried without login or ready runtime while account and new research actions stay locked", async ({}, testInfo) => {
+  const dataDir = await mkdtemp(join(tmpdir(), "paper-factory-electron-"));
+  let electronApp: ElectronApplication | undefined;
+  const id = "research-abcdef123456";
+  const connection: AppSnapshot = { version: "fixture", session: { connected: false, sharing: false },
+    profiles: [{ id: "fixture-a", label: "Synthetic disconnected account", connected: false, sharing: false }],
+    models: [], busy: null, error: null, verification: null };
+  const research: ResearchSnapshot = { runtime: { state: "unavailable", message: "합성 런타임 실패" }, busy: true,
+    cleanupResearchIds: [id], error: { code: "CLEANUP_UNCONFIRMED", message: "합성 정리 미확인", action: "retry" },
+    jobs: [{ id, source: "https://github.com/fixture-owner/synthetic-study", goal: "합성 정리 복구만 검증합니다.",
+      model: "", reviewerModel: "", phase: "idle", pipeline: "paused", stage: "planned", status: "cancelled",
+      resumeKind: null,
+      code: "CLEANUP_UNCONFIRMED", message: "합성 작업자는 실행하지 않았습니다.", updatedAt: new Date().toISOString(),
+      artifacts: [], supportingDocuments: [] }] };
+  try {
+    electronApp = await launch(dataDir);
+    const page = await electronApp.firstWindow();
+    await expect.poll(async () => (await page.evaluate(() => window.paperFactory.researchSnapshot())).runtime.state).not.toBe("checking");
+    await installGateFixture(electronApp, connection, research);
+    await expect(page.getByRole("button", { name: "Continue with ChatGPT", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "계정 추가", exact: true })).toBeDisabled();
+    await expect(page.getByRole("combobox", { name: "ChatGPT 계정", exact: true })).toBeDisabled();
+    await selectView(page, "새 연구");
+    await expect(page.getByRole("button", { name: "연구 시작", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "실행 환경 다시 확인", exact: true })).toBeDisabled();
+    await selectView(page, "결과");
+    const retry = page.getByRole("button", { name: "정리 다시 확인", exact: true });
+    await expect(retry).toBeEnabled();
+    await expect(page.getByText("실험 종료와 기록 보존을 확인해야 새 연구와 계정 변경을 할 수 있습니다. 로그인 없이 정리 확인을 다시 시도할 수 있습니다.", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "연구 준비 재개", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "원고 작성 재개", exact: true })).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath("synthetic-cleanup-retry.png"), animations: "disabled", fullPage: true });
+    await retry.click();
+    await expect(page.getByRole("button", { name: "정리 확인 중…", exact: true })).toBeDisabled();
+    await expect.poll(() => electronApp!.evaluate(() =>
+      (globalThis as typeof globalThis & { __paperFactoryGateFixture: GateFixture }).__paperFactoryGateFixture.cancelledIds)).toEqual([id]);
+    await selectView(page, "연결");
+    await expect(page.getByRole("button", { name: "Continue with ChatGPT", exact: true })).toBeDisabled();
+    await electronApp.evaluate(() => {
+      (globalThis as typeof globalThis & { __paperFactoryGateFixture: GateFixture }).__paperFactoryGateFixture.releaseCleanup!();
+    });
+    await expect(page.getByRole("button", { name: "Continue with ChatGPT", exact: true })).toBeEnabled();
+    await expect(page.getByRole("combobox", { name: "ChatGPT 계정", exact: true })).toBeEnabled();
+    await selectView(page, "결과");
+    await expect(page.getByRole("button", { name: "정리 다시 확인", exact: true })).toHaveCount(0);
+    await expect(page.getByText("합성 정리 확인 완료", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "연구 준비 재개", exact: true })).toBeDisabled();
+    await selectView(page, "새 연구");
+    await expect(page.getByRole("button", { name: "연구 시작", exact: true })).toBeDisabled();
+    const calls = await electronApp.evaluate(() => {
+      const fixture = (globalThis as typeof globalThis & { __paperFactoryGateFixture: GateFixture }).__paperFactoryGateFixture;
+      return { cancelledIds: fixture.cancelledIds, forbiddenCalls: fixture.forbiddenCalls, runtime: fixture.research.runtime.state };
+    });
+    expect(calls).toEqual({ cancelledIds: [id], forbiddenCalls: [], runtime: "unavailable" });
+  } finally {
+    if (electronApp) await electronApp.close();
+    await removeOwnedTemp(dataDir);
+  }
+});
+
+test("account selection and disconnection busy events lock model and research actions until the account operation settles", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "paper-factory-electron-"));
+  let electronApp: ElectronApplication | undefined;
+  const connection: AppSnapshot = { version: "fixture", session: { connected: true, sharing: true, profileId: "fixture-a" },
+    profiles: ["a", "b"].map(id => ({ id: `fixture-${id}`, label: `Synthetic account ${id}`, connected: true, sharing: true })),
+    models: [{ slug: "fixture-model", displayName: "Synthetic model" }], busy: null, error: null, verification: null };
+  const research: ResearchSnapshot = { runtime: { state: "ready", message: "합성 실행 환경" }, busy: false,
+    cleanupResearchIds: [], jobs: [], error: null };
+  try {
+    electronApp = await launch(dataDir);
+    const page = await electronApp.firstWindow();
+    await expect.poll(async () => (await page.evaluate(() => window.paperFactory.researchSnapshot())).runtime.state).not.toBe("checking");
+    await installGateFixture(electronApp, connection, research);
+    await selectView(page, "새 연구");
+    await page.getByLabel("공개 GitHub 저장소 또는 계정 URL", { exact: true }).fill("https://github.com/fixture-owner/synthetic-study");
+    await page.getByLabel("연구 목표", { exact: true }).fill("계정 작업 잠금만 확인하는 합성 목표입니다.");
+    await expect(page.getByRole("button", { name: "연구 시작", exact: true })).toBeEnabled();
+    for (const [busy, label] of [["select-profile", "선택한 ChatGPT 계정으로 전환하고 있습니다."], ["disconnect", "이 계정의 연결을 해제하고 있습니다."]] as const) {
+      await electronApp.evaluate(({ BrowserWindow }, busy) => {
+        const fixture = (globalThis as typeof globalThis & { __paperFactoryGateFixture: GateFixture }).__paperFactoryGateFixture;
+        fixture.connection = { ...fixture.connection, busy };
+        BrowserWindow.getAllWindows()[0]?.webContents.send("connection:changed", fixture.connection);
+      }, busy);
+      await expect(page.getByRole("button", { name: "연구 시작", exact: true })).toBeDisabled();
+      await expect(page.getByRole("combobox", { name: "작성 모델 (writer)", exact: true })).toBeDisabled();
+      await selectView(page, "연결");
+      await expect(page.getByText(label, { exact: true })).toBeVisible();
+      for (const name of ["Continue with ChatGPT", "계정 추가", "연결 해제", "실제 응답 확인"]) {
+        await expect(page.getByRole("button", { name, exact: true })).toBeDisabled();
+      }
+      await expect(page.getByRole("button", { name: "모델 새로고침" })).toBeDisabled();
+      await expect(page.getByRole("combobox", { name: "ChatGPT 계정", exact: true })).toBeDisabled();
+      await expect(page.getByRole("button", { name: "취소", exact: true })).toHaveCount(0);
+      await electronApp.evaluate(({ BrowserWindow }) => {
+        const fixture = (globalThis as typeof globalThis & { __paperFactoryGateFixture: GateFixture }).__paperFactoryGateFixture;
+        fixture.connection = { ...fixture.connection, busy: null };
+        BrowserWindow.getAllWindows()[0]?.webContents.send("connection:changed", fixture.connection);
+      });
+      await expect(page.getByRole("button", { name: "연결 해제", exact: true })).toBeEnabled();
+      await selectView(page, "새 연구");
+      await expect(page.getByRole("button", { name: "연구 시작", exact: true })).toBeEnabled();
+    }
+    expect(await electronApp.evaluate(() =>
+      (globalThis as typeof globalThis & { __paperFactoryGateFixture: GateFixture }).__paperFactoryGateFixture.forbiddenCalls)).toEqual([]);
+  } finally {
+    if (electronApp) await electronApp.close();
+    await removeOwnedTemp(dataDir);
+  }
+});
+
+test("resume actions follow authoritative preparation and authoring kinds and never appear for blocked or ambiguous science", async ({}, testInfo) => {
+  const dataDir = await mkdtemp(join(tmpdir(), "paper-factory-electron-"));
+  let electronApp: ElectronApplication | undefined;
+  const connection: AppSnapshot = { version: "fixture", session: { connected: true, sharing: true, profileId: "fixture-a" },
+    profiles: [{ id: "fixture-a", label: "Synthetic account", connected: true, sharing: true }],
+    models: [{ slug: "fixture-model", displayName: "Synthetic model" }], busy: null, error: null, verification: null };
+  const base: Omit<ResearchSnapshot["jobs"][number], "id" | "source" | "resumeKind"> = {
+    goal: "재개 화면과 명시적 클릭만 확인하는 합성 작업입니다.", model: "fixture-model", reviewerModel: "fixture-model",
+    phase: "idle", pipeline: "paused", stage: "planned", status: "cancelled", code: "CANCELLED", message: null,
+    updatedAt: "2026-01-01T00:00:00.000Z", artifacts: [], supportingDocuments: [],
+  };
+  const research: ResearchSnapshot = { runtime: { state: "ready", message: "합성 재개 fixture" }, busy: false,
+    cleanupResearchIds: [], error: null, jobs: [
+      { ...base, id: "research-111111111111", source: "https://github.com/fixture-owner/preparation-study", resumeKind: "preparation" },
+      { ...base, id: "research-222222222222", source: "https://github.com/fixture-owner/authoring-study", stage: "analyzed", resumeKind: "authoring" },
+      { ...base, id: "research-333333333333", source: "https://github.com/fixture-owner/control-failure", pipeline: "failed", stage: "analyzed",
+        status: "blocked", code: "SCIENTIFIC_CONTROL_FAILED", resumeKind: null },
+      { ...base, id: "research-444444444444", source: "https://github.com/fixture-owner/ambiguous-execution", pipeline: "failed",
+        status: "failed", code: "RUN_INTERRUPTED", resumeKind: null },
+      { ...base, id: "research-555555555555", source: "https://github.com/fixture-owner/unconfirmed-cleanup",
+        code: "CLEANUP_UNCONFIRMED", resumeKind: null },
+    ] };
+  try {
+    electronApp = await launch(dataDir);
+    const page = await electronApp.firstWindow();
+    await expect.poll(async () => (await page.evaluate(() => window.paperFactory.researchSnapshot())).runtime.state).not.toBe("checking");
+    await installGateFixture(electronApp, connection, research);
+    await electronApp.evaluate(({ BrowserWindow, ipcMain }) => {
+      const fixture = (globalThis as typeof globalThis & { __paperFactoryGateFixture: GateFixture }).__paperFactoryGateFixture;
+      const resumeCalls: string[][] = [];
+      (globalThis as typeof globalThis & { __paperFactoryResumeCalls: string[][] }).__paperFactoryResumeCalls = resumeCalls;
+      ipcMain.removeHandler("research:resume");
+      ipcMain.handle("research:resume", (_event, id: string, model: string, reviewerModel: string) => {
+        const job = fixture.research.jobs.find(job => job.id === id);
+        if (!job?.resumeKind || fixture.research.busy || [model, reviewerModel].some(model => model !== "fixture-model")) {
+          throw new Error("Unexpected synthetic resume");
+        }
+        resumeCalls.push([id, model, reviewerModel]);
+        fixture.research = { ...fixture.research, busy: true, jobs: fixture.research.jobs.map(current => current.id === id
+          ? { ...current, pipeline: "running", phase: current.resumeKind === "authoring" ? "manuscript" : "plan", resumeKind: null } : current) };
+        BrowserWindow.getAllWindows()[0]?.webContents.send("research:changed", fixture.research);
+        return fixture.research;
+      });
+    });
+    const inspectCalls = () => electronApp!.evaluate(() =>
+      (globalThis as typeof globalThis & { __paperFactoryResumeCalls: string[][] }).__paperFactoryResumeCalls);
+    await selectView(page, "결과");
+    const preparation = page.getByRole("article", { name: "preparation-study", exact: true });
+    const authoring = page.getByRole("article", { name: "authoring-study", exact: true });
+    await expect(preparation.getByRole("button", { name: "연구 준비 재개", exact: true })).toBeEnabled();
+    await expect(authoring.getByRole("button", { name: "원고 작성 재개", exact: true })).toBeEnabled();
+    for (const name of ["control-failure", "ambiguous-execution", "unconfirmed-cleanup"]) {
+      const job = page.getByRole("article", { name, exact: true });
+      await expect(job.getByRole("button", { name: "연구 준비 재개", exact: true })).toHaveCount(0);
+      await expect(job.getByRole("button", { name: "원고 작성 재개", exact: true })).toHaveCount(0);
+    }
+    expect(await inspectCalls()).toEqual([]);
+    await page.screenshot({ path: testInfo.outputPath("synthetic-resume-kinds.png"), animations: "disabled", fullPage: true });
+    await preparation.getByRole("button", { name: "연구 준비 재개", exact: true }).click();
+    await expect.poll(inspectCalls).toEqual([["research-111111111111", "fixture-model", "fixture-model"]]);
+    await expect(preparation.getByRole("button", { name: "연구 취소", exact: true })).toBeEnabled();
+    await expect(authoring.getByRole("button", { name: "원고 작성 재개", exact: true })).toBeDisabled();
+    await electronApp.evaluate(({ BrowserWindow }, research) => {
+      const fixture = (globalThis as typeof globalThis & { __paperFactoryGateFixture: GateFixture }).__paperFactoryGateFixture;
+      fixture.research = research;
+      BrowserWindow.getAllWindows()[0]?.webContents.send("research:changed", research);
+    }, research);
+    await expect(authoring.getByRole("button", { name: "원고 작성 재개", exact: true })).toBeEnabled();
+    await authoring.getByRole("button", { name: "원고 작성 재개", exact: true }).click();
+    await expect.poll(inspectCalls).toEqual([
+      ["research-111111111111", "fixture-model", "fixture-model"], ["research-222222222222", "fixture-model", "fixture-model"],
+    ]);
+    await expect(authoring).toContainText("원고 작성 (manuscript)");
+    await expect(authoring.getByRole("button", { name: "원고 작성 재개", exact: true })).toHaveCount(0);
+    expect(await electronApp.evaluate(() =>
+      (globalThis as typeof globalThis & { __paperFactoryGateFixture: GateFixture }).__paperFactoryGateFixture.forbiddenCalls)).toEqual([]);
   } finally {
     if (electronApp) await electronApp.close();
     await removeOwnedTemp(dataDir);

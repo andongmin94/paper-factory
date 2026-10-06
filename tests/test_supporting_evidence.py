@@ -53,7 +53,7 @@ def forbid_execution(service, runner, monkeypatch):
     monkeypatch.setattr(runner, "run", forbidden)
     monkeypatch.setattr(service, "start_experiment", forbidden)
     monkeypatch.setattr(service, "_analyze", forbidden)
-    monkeypatch.setattr(service, "resume_writing", forbidden)
+    monkeypatch.setattr(service, "resume", forbidden)
 
 
 def freeze_json(ws, record, key, value):

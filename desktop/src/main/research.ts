@@ -10,13 +10,15 @@ import type { SupportingEvidenceFile } from './supporting-evidence.js';
 export { readSupportingEvidence } from './supporting-evidence.js';
 
 type Workflow = { id: string; goal: string; stage: string; status: string; code: string | null; message: string | null;
-  terminal_control_failure: boolean; execution_attempt: number; active_handle?: unknown;
+  cleanup_pending: boolean; cleanup_confirmed?: boolean;
+  resume_kind: ResearchItem['resumeKind'];
+  terminal_control_failure: boolean; execution_attempt: number;
   artifacts: Record<string, { id: string; sha256: string; size: number }>; instructions: string;
   source_context?: string; plan?: Record<string, unknown>; analysis?: unknown; literature?: unknown; execution?: unknown;
   supporting_documents: SupportingDocument[];
   material_manifest?: { source: { name: string; sha256: string; size: number }[]; experiment: { name: string }[] };
   schemas: Record<'plan' | 'code' | 'review' | 'manuscript', unknown> };
-type StoredJob = ResearchItem & { experimentDispatched: boolean };
+type StoredJob = ResearchItem & { experimentDispatched: boolean; cleanupRequired: boolean };
 type Receipt = { id: string; phase: ResearchPhase; at: string; model: string; profileId: string;
   prompt: string; promptSha256: string; outcome: 'started' | 'completed' | 'failed' | 'interrupted';
   text?: string; textSha256?: string; code?: string };
@@ -38,26 +40,45 @@ export async function durableJson(path: string, value: unknown, exclusive = fals
 }
 
 export class ResearchController {
-  private state: ResearchSnapshot = { runtime: { state: 'checking', message: '앱 실행 환경을 확인하고 있습니다.' }, busy: false, jobs: [], error: null };
+  private state: ResearchSnapshot = { runtime: { state: 'checking', message: '앱 실행 환경을 확인하고 있습니다.' }, busy: true, cleanupResearchIds: [], jobs: [], error: null };
   private jobs = new Map<string, StoredJob>();
   private current?: { id: string; abort: AbortController; task: Promise<void> };
   private checking?: Promise<void>;
   private starting = false;
+  private restoring = true;
   private stopping = false;
+  private pendingReceipts = new Map<string, { jobId: string; receipt: Receipt }>();
+  private initialization?: Promise<void>;
+  private shutdownTask?: Promise<void>;
+  private shutdownPending = false;
 
   constructor(private client: ChatGPTClient, private engine: EngineBridge, private dataDir: string,
     private publish: (snapshot: ResearchSnapshot) => void) {}
 
   snapshot(): ResearchSnapshot { return structuredClone(this.state); }
   private emit() {
-    this.state.jobs = [...this.jobs.values()].map(({ experimentDispatched: _private, ...job }) => job).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-    this.state.busy = Boolean(this.current) || this.starting;
-    if (!this.stopping) this.publish(this.snapshot());
+    this.state.jobs = [...this.jobs.values()].map(({ experimentDispatched: _private, cleanupRequired, ...job }) =>
+      ({ ...job, resumeKind: cleanupRequired ? null : job.resumeKind })).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    this.state.cleanupResearchIds = [...this.jobs.values()].filter(job => job.cleanupRequired).map(job => job.id);
+    this.state.busy = Boolean(this.current) || this.starting || this.restoring || this.stopping || this.shutdownPending || this.state.cleanupResearchIds.length > 0;
+    this.publish(this.snapshot());
   }
   private async save() { await durableJson(join(this.dataDir, 'jobs.json'), [...this.jobs.values()]); this.emit(); }
   private async phase(job: StoredJob, phase: ResearchPhase) { job.phase = phase; job.updatedAt = new Date().toISOString(); await this.save(); }
 
-  async initialize() {
+  private assertIdle() {
+    if (this.current || this.starting || this.restoring || this.stopping || this.shutdownPending || [...this.jobs.values()].some(job => job.cleanupRequired)) {
+      throw new EngineError('RESEARCH_BUSY', '현재 연구 작업과 실험 정리를 먼저 완료하거나 확인하세요.');
+    }
+  }
+
+  initialize(): Promise<void> {
+    this.initialization ??= this.restore();
+    return this.initialization;
+  }
+
+  private async restore() {
+    this.restoring = true; this.emit();
     await mkdir(this.dataDir, { recursive: true });
     try {
       const stored = JSON.parse(await readFile(join(this.dataDir, 'jobs.json'), 'utf8')) as StoredJob[];
@@ -66,6 +87,8 @@ export class ResearchController {
         if (!/^research-[a-f0-9]{12}$/.test(job.id)) throw new Error('Invalid research id');
         // Attached-document metadata is projected only from the verified engine listing.
         job.supportingDocuments = [];
+        job.resumeKind = null;
+        job.cleanupRequired = Boolean(job.cleanupRequired || job.status === 'running' || job.code === 'CLEANUP_UNCONFIRMED');
         if (job.pipeline === 'running') { job.pipeline = 'paused'; job.message = '앱 실행이 중단되었습니다. 보존된 단계와 실험 기록을 확인한 뒤 재개하세요.'; }
         this.jobs.set(job.id, job);
       }
@@ -76,10 +99,16 @@ export class ResearchController {
       }
     }
     await this.save();
-    await this.checkRuntime();
+    await this.inspectRuntime();
+    this.restoring = false; this.emit();
   }
 
   async checkRuntime() {
+    if (this.restoring) return this.snapshot();
+    return this.inspectRuntime();
+  }
+
+  private async inspectRuntime() {
     if (!this.checking) {
       this.checking = (async () => {
         this.state.runtime = { state: 'checking', message: '앱에 포함된 실행 파일과 로컬 엔진을 검증하고 있습니다.' }; this.emit();
@@ -92,13 +121,13 @@ export class ResearchController {
             let job = this.jobs.get(workflow.id);
             if (!job) {
               job = { id: workflow.id, source: '', goal: workflow.goal, model: '', reviewerModel: '', phase: 'idle', pipeline: 'paused',
-                stage: workflow.stage, status: workflow.status, code: workflow.code, message: null, artifacts: [], supportingDocuments: [],
-                updatedAt: new Date().toISOString(), experimentDispatched: workflow.stage !== 'created' && workflow.stage !== 'planned' };
+                stage: workflow.stage, status: workflow.status, code: workflow.code, message: null, artifacts: [], supportingDocuments: [], resumeKind: null,
+                updatedAt: new Date().toISOString(), experimentDispatched: workflow.execution_attempt > 0, cleanupRequired: workflow.cleanup_pending };
               this.jobs.set(job.id, job);
             }
             this.update(job, workflow);
           }
-          this.state.error = null;
+          if (![...this.jobs.values()].some(job => job.cleanupRequired)) this.state.error = null;
           await this.save();
         } catch (error) {
           this.state.error = this.error(error)!;
@@ -126,6 +155,13 @@ export class ResearchController {
     job.stage = workflow.stage; job.status = workflow.status; job.code = workflow.code; job.message = workflow.message;
     job.artifacts = Object.values(workflow.artifacts); job.updatedAt = new Date().toISOString();
     job.supportingDocuments = workflow.supporting_documents;
+    if (workflow.cleanup_pending || workflow.code === 'CLEANUP_UNCONFIRMED') job.cleanupRequired = true;
+    const preparation = workflow.resume_kind === 'preparation' && workflow.execution_attempt === 0 &&
+      ['created', 'planned', 'code_ready'].includes(workflow.stage) && !job.experimentDispatched;
+    const authoring = workflow.resume_kind === 'authoring' && workflow.execution_attempt === 1 && ['analyzed', 'manuscript'].includes(workflow.stage);
+    job.resumeKind = workflow.cleanup_pending !== false || workflow.terminal_control_failure || workflow.code === 'CLEANUP_UNCONFIRMED' ||
+      !['ready', 'cancelled'].includes(workflow.status)
+      ? null : preparation ? 'preparation' : authoring ? 'authoring' : null;
     if (workflow.status === 'completed') { job.pipeline = 'completed'; job.phase = 'idle'; }
     else if (job.pipeline === 'completed') { job.pipeline = 'paused'; job.phase = 'idle'; }
   }
@@ -139,7 +175,7 @@ export class ResearchController {
   }
 
   async create(input: CreateResearchInput) {
-    if (this.current || this.starting || this.stopping) throw new EngineError('RESEARCH_BUSY', '현재 연구 작업을 먼저 완료하거나 취소하세요.');
+    this.assertIdle();
     if (this.state.runtime.state !== 'ready') throw new EngineError('ENGINE_UNAVAILABLE', '앱 실행 환경을 먼저 확인하세요.');
     this.starting = true; this.emit();
     try {
@@ -147,8 +183,8 @@ export class ResearchController {
     const workflow = await this.engine.request<Workflow>('workflow.create', { source: input.source, goal: input.goal });
     const job: StoredJob = { id: workflow.id, source: input.source, goal: input.goal, model: input.model, reviewerModel: input.reviewerModel,
       phase: 'idle', pipeline: 'idle', stage: workflow.stage, status: workflow.status, code: workflow.code, message: workflow.message,
-      artifacts: Object.values(workflow.artifacts), supportingDocuments: workflow.supporting_documents,
-      updatedAt: new Date().toISOString(), experimentDispatched: false };
+      artifacts: Object.values(workflow.artifacts), supportingDocuments: workflow.supporting_documents, resumeKind: null,
+      updatedAt: new Date().toISOString(), experimentDispatched: false, cleanupRequired: false };
     this.jobs.set(job.id, job); await this.save();
     this.launch(job);
     return this.snapshot();
@@ -158,7 +194,7 @@ export class ResearchController {
   }
 
   async resume(id: string, model: string, reviewerModel: string) {
-    if (this.current || this.starting || this.stopping) throw new EngineError('RESEARCH_BUSY', '현재 연구 작업을 먼저 완료하거나 취소하세요.');
+    this.assertIdle();
     const job = this.jobs.get(id);
     if (!job) throw new EngineError('RESEARCH_NOT_FOUND', '연구 기록을 찾을 수 없습니다.');
     this.starting = true; this.emit();
@@ -168,12 +204,21 @@ export class ResearchController {
       throw new EngineError(this.state.error?.code ?? 'ENGINE_UNAVAILABLE',
         this.state.error?.message ?? '로컬 엔진과 보존된 연구 기록을 먼저 확인해야 합니다.');
     }
+    if ([...this.jobs.values()].some(job => job.cleanupRequired)) throw new EngineError('RESEARCH_BUSY', '실험 정리 확인을 먼저 완료하세요.');
     const workflow = await this.engine.request<Workflow>('workflow.status', { researchId: id });
-    await this.validateModels(model, reviewerModel);
-    if (workflow.status === 'cancelled' && ['analyzed', 'manuscript'].includes(workflow.stage)) {
-      this.update(job, await this.engine.request<Workflow>('workflow.resumeWriting', { researchId: id }));
+    this.update(job, workflow);
+    if (!job.resumeKind) {
       await this.save();
+      throw new EngineError('RESEARCH_NOT_RESUMABLE', '현재 단계와 실행 기록으로는 이 연구를 재개할 수 없습니다. 실험을 다시 실행하지 않습니다.');
     }
+    const resumed = await this.engine.request<Workflow>('workflow.resume', { researchId: id });
+    if (resumed.id !== id || resumed.status !== 'ready' || resumed.code !== null || resumed.stage !== workflow.stage ||
+        resumed.execution_attempt !== workflow.execution_attempt || resumed.cleanup_pending !== false ||
+        resumed.terminal_control_failure || resumed.resume_kind !== job.resumeKind) {
+      throw new EngineError('RESEARCH_STATE_INVALID', '엔진의 재개 확인 상태가 기존 연구 기록과 맞지 않습니다.');
+    }
+    this.update(job, resumed); await this.save();
+    await this.validateModels(model, reviewerModel);
     job.model = model; job.reviewerModel = reviewerModel;
     this.launch(job);
     return this.snapshot();
@@ -183,7 +228,7 @@ export class ResearchController {
   }
 
   async addEvidence(id: string, selectFiles: () => Promise<SupportingEvidenceFile[] | null>): Promise<ResearchSnapshot | false> {
-    if (this.current || this.starting || this.stopping) throw new EngineError('RESEARCH_BUSY', '현재 연구 작업을 먼저 완료하거나 취소하세요.');
+    this.assertIdle();
     const job = this.jobs.get(id);
     if (!job) throw new EngineError('RESEARCH_NOT_FOUND', '연구 기록을 찾을 수 없습니다.');
     this.starting = true; this.emit();
@@ -209,7 +254,7 @@ export class ResearchController {
   }
 
   async reviseWriting(id: string, model: string, reviewerModel: string) {
-    if (this.current || this.starting || this.stopping) throw new EngineError('RESEARCH_BUSY', '현재 연구 작업을 먼저 완료하거나 취소하세요.');
+    this.assertIdle();
     const job = this.jobs.get(id);
     if (!job) throw new EngineError('RESEARCH_NOT_FOUND', '연구 기록을 찾을 수 없습니다.');
     this.starting = true; this.emit();
@@ -220,7 +265,7 @@ export class ResearchController {
       const workflow = await this.engine.request<Workflow>('workflow.status', { researchId: id });
       if (workflow.stage !== 'exported' || workflow.status !== 'completed' || workflow.terminal_control_failure ||
           workflow.code === 'CLEANUP_UNCONFIRMED' || !Number.isInteger(workflow.execution_attempt) || workflow.execution_attempt < 1 ||
-          (workflow.active_handle && Object.keys(workflow.active_handle).length) || this.stopping) {
+          workflow.cleanup_pending !== false || this.stopping) {
         throw new EngineError('AUTHORING_REVISION_NOT_ALLOWED', '원고 수정은 실험과 정리가 검증된 완료 연구에만 요청할 수 있습니다.');
       }
       await this.validateModels(model, reviewerModel);
@@ -228,7 +273,7 @@ export class ResearchController {
       const revised = await this.engine.request<Workflow>('workflow.reviseWriting', { researchId: id });
       if (revised.id !== id || revised.stage !== 'analyzed' || revised.status !== 'ready' || revised.terminal_control_failure ||
           revised.execution_attempt !== workflow.execution_attempt || revised.code === 'CLEANUP_UNCONFIRMED' ||
-          (revised.active_handle && Object.keys(revised.active_handle).length)) {
+          revised.cleanup_pending !== false) {
         throw new EngineError('RESEARCH_STATE_INVALID', '원고 수정 준비가 검증된 분석 단계로 완료되지 않았습니다. 후속 모델 요청을 중단했습니다.');
       }
       this.update(job, revised);
@@ -255,12 +300,31 @@ export class ResearchController {
   }
 
   private async receipt(job: StoredJob, receipt: Receipt) {
-    const directory = join(this.dataDir, job.id, 'inference'); await mkdir(directory, { recursive: true });
-    await durableJson(join(directory, `${receipt.id}-${receipt.outcome}.json`), receipt, true);
-    await this.engine.request('workflow.recordInference', { researchId: job.id, receipt });
+    const directory = join(this.dataDir, job.id, 'inference');
+    const path = join(directory, `${receipt.id}-${receipt.outcome}.json`);
+    this.pendingReceipts.set(path, { jobId: job.id, receipt });
+    try {
+      await mkdir(directory, { recursive: true });
+      await durableJson(path, receipt, true);
+      await this.engine.request('workflow.recordInference', { researchId: job.id, receipt });
+      this.pendingReceipts.delete(path);
+    } catch (error) { job.cleanupRequired = true; throw error; }
   }
 
   private async reconcileReceipts(job: StoredJob) {
+    for (const [path, pending] of this.pendingReceipts) {
+      if (pending.jobId !== job.id) continue;
+      await mkdir(join(this.dataDir, job.id, 'inference'), { recursive: true });
+      let stored: string | undefined;
+      try { stored = await readFile(path, 'utf8'); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+      if (stored === undefined) await durableJson(path, pending.receipt, true);
+      else if (stored !== JSON.stringify(pending.receipt, null, 2) + '\n') {
+        throw new EngineError('INFERENCE_EVIDENCE_INVALID', '보존된 모델 증거 파일이 원문과 다릅니다. 기존 파일은 덮어쓰지 않았습니다.');
+      }
+      await this.engine.request('workflow.recordInference', { researchId: job.id, receipt: pending.receipt });
+      this.pendingReceipts.delete(path);
+    }
     const directory = join(this.dataDir, job.id, 'inference');
     let names: string[];
     try { names = await readdir(directory); }
@@ -463,6 +527,9 @@ export class ResearchController {
     let workflow = await this.engine.request<Workflow>('workflow.status', { researchId: job.id });
     while (true) {
       signal.throwIfAborted(); this.update(job, workflow); await this.save();
+      if (!this.starting && workflow.cleanup_pending === false && workflow.status !== 'running' && workflow.code !== 'CLEANUP_UNCONFIRMED') {
+        job.cleanupRequired = false;
+      }
       if (workflow.terminal_control_failure || workflow.code === 'CLEANUP_UNCONFIRMED' || ['failed', 'cancelled', 'blocked'].includes(workflow.status)) {
         throw new EngineError(workflow.code ?? 'EXPERIMENT_STOPPED', workflow.message ?? '중단된 연구를 자동 재실행하지 않습니다. 기존 관측과 정리 기록을 먼저 확인하세요.');
       }
@@ -479,7 +546,7 @@ export class ResearchController {
       } else if (workflow.stage === 'code_ready') {
         if (job.experimentDispatched || workflow.execution_attempt > 0) throw new EngineError('REDISPATCH_FORBIDDEN', '이 실험의 실행 요청 기록이 있습니다. 중단되거나 결과가 불명확한 과학실험을 다시 실행하지 않습니다.');
         await this.phase(job, 'experiment');
-        job.experimentDispatched = true; await this.save(); signal.throwIfAborted();
+        job.experimentDispatched = true; job.cleanupRequired = true; await this.save(); signal.throwIfAborted();
         workflow = await this.engine.request('workflow.startExperiment', { researchId: job.id });
       } else if (workflow.stage === 'execute' && workflow.status === 'running') {
         await this.phase(job, 'experiment');
@@ -497,29 +564,69 @@ export class ResearchController {
   }
 
   async cancel(id: string) {
-    if (this.current?.id === id) {
+    if (this.restoring) throw new EngineError('RESEARCH_BUSY', '보존된 연구 기록 확인이 끝난 뒤 취소 또는 정리 확인을 시도하세요.');
+    const job = this.jobs.get(id);
+    if (!job) return this.snapshot();
+    if (this.current?.id === id || job.cleanupRequired) {
       if (this.starting) throw new EngineError('RESEARCH_BUSY', '현재 연구 요청이 끝난 뒤 취소하세요.');
+      if (this.current && this.current.id !== id) throw new EngineError('RESEARCH_BUSY', '현재 연구 작업을 먼저 완료하거나 취소하세요.');
+      job.cleanupRequired = true;
       this.starting = true; this.emit();
-      const current = this.current; current.abort.abort();
+      const current = this.current; current?.abort.abort();
       try {
+        let saved = true;
+        try { await this.save(); } catch { saved = false; }
+        if (!current) await this.engine.start();
         let cancelled: Workflow;
-        try { cancelled = await this.engine.request<Workflow>('workflow.cancel', { researchId: id }); }
-        finally { await current.task; }
-        const job = this.jobs.get(id)!;
+        try { cancelled = await this.engine.request<Workflow>('workflow.cancel', { researchId: id }, 45_000); }
+        finally { await current?.task; }
+        if (cancelled.id !== id || cancelled.cleanup_confirmed !== true || cancelled.cleanup_pending !== false ||
+            cancelled.status === 'running' || cancelled.code === 'CLEANUP_UNCONFIRMED') {
+          throw new EngineError('CLEANUP_UNCONFIRMED', '실험 종료를 확인하지 못했습니다. 정리 확인을 다시 시도하세요.');
+        }
         this.update(job, cancelled);
-        this.update(job, await this.engine.request<Workflow>('workflow.status', { researchId: id }));
-        this.state.error = null;
+        if (!current || [...this.pendingReceipts.values()].some(pending => pending.jobId === id)) await this.reconcileReceipts(job);
+        if (!saved) throw new EngineError('EVIDENCE_WRITE_FAILED', '실험 정리는 확인했지만 취소 기록을 저장하지 못했습니다. 저장 경로를 확인한 뒤 다시 시도하세요.');
+        job.pipeline = cancelled.status === 'completed' ? 'completed' : cancelled.terminal_control_failure ? 'failed' : 'paused';
+        job.phase = 'idle'; job.cleanupRequired = false;
+        this.state.error = cancelled.terminal_control_failure || ['failed', 'blocked'].includes(cancelled.status)
+          ? this.error(new EngineError(cancelled.code ?? 'EXPERIMENT_STOPPED', cancelled.message ?? '보존된 실험이 실패했습니다.')) : null;
         await this.save();
       } catch (error) {
-        this.state.error = this.error(error); throw error;
+        await current?.task;
+        job.cleanupRequired = true;
+        this.state.error = this.error(error);
+        try { await this.save(); }
+        catch { this.state.error = { code: 'EVIDENCE_WRITE_FAILED', message: '정리 확인 기록을 저장하지 못했습니다. 저장 경로를 확인한 뒤 다시 시도하세요.', action: null }; }
+        throw error;
       } finally { this.starting = false; this.emit(); }
     }
     return this.snapshot();
   }
 
-  async shutdown() {
+  shutdown(): Promise<void> {
+    this.shutdownTask ??= this.finishShutdown().finally(() => { this.shutdownTask = undefined; });
+    return this.shutdownTask;
+  }
+
+  private async finishShutdown() {
     this.stopping = true;
-    if (this.current) await this.cancel(this.current.id);
-    await this.engine.close();
+    this.emit();
+    try {
+      await this.initialization;
+      await this.checking;
+      if (this.starting) throw new EngineError('RESEARCH_BUSY', '현재 연구 요청이 끝난 뒤 앱 종료를 다시 시도하세요.');
+      if (this.current) await this.cancel(this.current.id);
+      for (const job of this.jobs.values()) {
+        if (job.cleanupRequired) await this.cancel(job.id);
+        if ([...this.pendingReceipts.values()].some(pending => pending.jobId === job.id)) await this.reconcileReceipts(job);
+      }
+      this.shutdownPending = true;
+      await this.engine.close();
+      this.shutdownPending = false;
+    } catch (error) {
+      this.state.error = this.error(error);
+      throw error;
+    } finally { this.stopping = false; this.emit(); }
   }
 }

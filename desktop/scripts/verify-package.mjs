@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, join, posix, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import asar from '@electron/asar';
 import { verifyRuntime } from '../dist/engine.js';
@@ -22,6 +22,7 @@ const required = [
   'node_modules/@siwc/local/LICENSE', 'node_modules/@siwc/local/THIRD_PARTY_NOTICES.md',
   'node_modules/jose/package.json', 'node_modules/proper-lockfile/package.json',
   'third-party/neobrutal-ui/LICENSE', 'third-party/neobrutal-ui/provenance.json',
+  'third-party/pretendard/LICENSE', 'third-party/pretendard/provenance.json',
 ];
 for (const name of required) assert(files.includes(name), `Missing package member: ${name}`);
 const packaged = JSON.parse(extract('package.json').toString());
@@ -37,6 +38,34 @@ assert(assets.some((name) => name.endsWith('.js')) && assets.some((name) => name
 for (const name of assets) {
   assert(files.includes(name), `Missing renderer asset: ${name}`);
   assert.deepEqual(extract(name), await readFile(name), `Package renderer asset differs: ${name}`);
+}
+const fontProvenancePath = 'third-party/pretendard/provenance.json';
+assert.deepEqual(extract(fontProvenancePath), await readFile(fontProvenancePath), 'Packaged font provenance differs');
+const fontProvenance = JSON.parse(extract(fontProvenancePath).toString());
+assert.equal(fontProvenance.repository, 'https://github.com/orioncactus/pretendard');
+assert.equal(fontProvenance.version, '1.3.9');
+const fontSource = fontProvenance.files.find(item => item.destination === 'src/renderer/assets/fonts/PretendardVariable.woff2');
+const fontLicense = fontProvenance.files.find(item => item.destination === 'third-party/pretendard/LICENSE');
+assert(fontSource && fontLicense, 'Font source and license provenance missing');
+for (const item of [fontSource, fontLicense]) {
+  const bytes = await readFile(item.destination);
+  assert.equal(bytes.length, item.size, `Font source size differs: ${item.destination}`);
+  assert.equal(createHash('sha256').update(bytes).digest('hex'), item.sha256, `Font source hash differs: ${item.destination}`);
+}
+assert.deepEqual(extract(fontLicense.destination), await readFile(fontLicense.destination), 'Packaged font license differs');
+const fontAssets = new Set();
+for (const name of assets.filter(name => name.endsWith('.css'))) {
+  for (const match of extract(name).toString().matchAll(/url\(\s*(['"]?)([^'"()\s]+\.woff2)\1\s*\)/g)) {
+    fontAssets.add(posix.normalize(posix.join(posix.dirname(name), match[2])));
+  }
+}
+assert.equal(fontAssets.size, 1, 'Renderer CSS must reference the bundled Pretendard font');
+for (const name of fontAssets) {
+  assert(files.includes(name), `Missing CSS-referenced font: ${name}`);
+  const bytes = extract(name);
+  assert.deepEqual(bytes, await readFile(name), `Packaged font asset differs: ${name}`);
+  assert.equal(bytes.length, fontSource.size, 'Packaged font size differs from provenance');
+  assert.equal(createHash('sha256').update(bytes).digest('hex'), fontSource.sha256, 'Packaged font hash differs from provenance');
 }
 
 const inspection = await mkdtemp(join(tmpdir(), 'pf-package-inspect-'));
@@ -78,6 +107,7 @@ const receipt = {
   scope: 'Static standalone app and complete runtime verification; no installed execution or live research',
   verifiedAt: new Date().toISOString(), appVersion: packaged.version, platform: process.platform,
   memberCount: files.length, sdkModuleImport: true, rendererAssetsPresent: true,
+  localPretendardVerified: true,
   liveSignIn: 'unverified', liveInference: 'unverified', restartAuthentication: 'unverified',
   researchRuntime: runtimeVerification,
   files: await Promise.all([archive, executable, ...(await readdir(release)).filter(name => /\.(exe|dmg)$/.test(name)).map(name => join(release, name))].map(async (path) => ({

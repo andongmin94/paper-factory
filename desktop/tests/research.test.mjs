@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rename, rm, rmdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -12,12 +12,12 @@ const sourceText = 'export const actual = value => value;';
 const digest = text => createHash('sha256').update(text).digest('hex');
 const sourceInventory = texts => Object.entries(texts).map(([name, text]) => ({ name, sha256: digest(text), size: Buffer.byteLength(text) }));
 const base = () => ({ id, goal: 'A synthetic controller test; no actual research', stage: 'planned', status: 'ready', code: null, message: null,
-  terminal_control_failure: false, execution_attempt: 0, artifacts: {}, instructions: 'Frozen test instructions',
+  terminal_control_failure: false, execution_attempt: 0, cleanup_pending: false, resume_kind: 'preparation', artifacts: {}, instructions: 'Frozen test instructions',
   plan: { source_files: ['module.ts'] }, literature: { sources: [] }, supporting_documents: [],
   material_manifest: { source: sourceInventory({ 'module.ts': sourceText }), experiment: [] },
   schemas: { plan: {}, code: {}, review: {}, manuscript: {} } });
 const accepted = { accepted: true, issues: [], checks: ['production', 'controls', 'evidence'] };
-const observed = () => ({ ...base(), stage: 'analyzed', execution_attempt: 1,
+const observed = () => ({ ...base(), stage: 'analyzed', execution_attempt: 1, resume_kind: 'authoring',
   artifacts: { observations: {}, 'runtime-manifest': {}, 'code-review-2': {}, 'code-review-10': {} },
   material_manifest: { source: sourceInventory({ 'module.ts': sourceText }), experiment: [{ name: 'experiment.mjs' }] } });
 const retainedMaterials = {
@@ -41,17 +41,23 @@ function fakeEngineError(code) {
 async function fixture(responses = [], workflow = base(), transport = {}) {
   const home = await mkdtemp(join(tmpdir(), 'paper-factory-research-test-'));
   const calls = []; const prompts = []; const events = []; const published = []; let responseIndex = 0; let starts = 0;
+  const publicWorkflow = () => {
+    workflow.resume_kind = ['ready', 'cancelled'].includes(workflow.status) && !workflow.cleanup_pending && !workflow.terminal_control_failure && workflow.code !== 'CLEANUP_UNCONFIRMED'
+      ? ['created', 'planned', 'code_ready'].includes(workflow.stage) && workflow.execution_attempt === 0 ? 'preparation'
+        : ['analyzed', 'manuscript'].includes(workflow.stage) && workflow.execution_attempt === 1 ? 'authoring' : null : null;
+    return structuredClone(workflow);
+  };
   const engine = {
     async start() { events.push('engine.start'); starts++; await transport.start?.(starts); },
-    async close() {},
-    async request(method, params = {}) {
+    async close() { events.push('engine.close'); await transport.close?.(); },
+    async request(method, params = {}, timeoutMs) {
       events.push('engine.' + method);
-      calls.push({ method, params });
+      calls.push({ method, params, timeoutMs });
       const override = await transport.request?.(method, params);
       if (override !== undefined) return override;
       if (method === 'runtime.status') return { ready: true, versions: { test: 'synthetic' } };
-      if (method === 'workflow.list') return [structuredClone(workflow)];
-      if (method === 'workflow.create' || method === 'workflow.status') return structuredClone(workflow);
+      if (method === 'workflow.list') return [publicWorkflow()];
+      if (method === 'workflow.create' || method === 'workflow.status') return publicWorkflow();
       if (method === 'workflow.readMaterial') return { text: params.area === 'source'
         ? sourceText : retainedMaterials[params.name], next_offset: null,
         ...(params.area === 'source' ? { sha256: digest(sourceText) } : {}) };
@@ -63,13 +69,14 @@ async function fixture(responses = [], workflow = base(), transport = {}) {
         workflow.artifacts = observed().artifacts; workflow.material_manifest = observed().material_manifest;
       }
       else if (method === 'workflow.collectLiterature') { /* bounded synthetic retrieval, no network */ }
-      else if (method === 'workflow.resumeWriting') { workflow.status = 'ready'; workflow.code = null; }
+      else if (method === 'workflow.resume') { workflow.status = 'ready'; workflow.code = null; }
       else if (method === 'workflow.reviseWriting') { workflow.stage = 'analyzed'; workflow.status = 'ready'; workflow.code = null; }
       else if (method === 'workflow.submitManuscript') workflow.stage = 'manuscript';
       else if (method === 'workflow.export') { workflow.stage = 'exported'; workflow.status = 'completed'; }
-      else if (method === 'workflow.cancel') workflow.status = 'cancelled';
+      else if (method === 'workflow.cancel') { workflow.status = 'cancelled'; workflow.code = 'CANCELLED'; workflow.cleanup_pending = false;
+        return { ...publicWorkflow(), cleanup_confirmed: true }; }
       else throw new Error('Unexpected fake method ' + method);
-      return structuredClone(workflow);
+      return publicWorkflow();
     },
   };
   const client = {
@@ -96,6 +103,57 @@ async function settled(controller) {
 }
 
 const input = { source: 'https://github.com/fixture/repository', goal: 'Inspect a synthetic test fixture only.', model: 'writer', reviewerModel: 'reviewer' };
+
+test('shutdown holds one lease through initial restoration and confirmed engine close', async () => {
+  const starting = deferred(), restored = deferred(), closing = deferred(), closed = deferred();
+  const f = await fixture([], observed(), { async start() { starting.resolve(); await restored.promise; },
+    async close() { closing.resolve(); await closed.promise; } });
+  let shutdown;
+  try {
+    const initialization = f.controller.initialize(); await starting.promise;
+    shutdown = f.controller.shutdown(); assert.equal(f.controller.shutdown(), shutdown);
+    assert.equal(f.controller.snapshot().busy, true);
+    restored.resolve(); await initialization; await closing.promise;
+    assert.equal(f.controller.snapshot().busy, true);
+    await assert.rejects(f.controller.create(input), error => error.code === 'RESEARCH_BUSY');
+    closed.resolve(); await shutdown;
+    assert.equal(f.controller.snapshot().busy, false);
+  } finally { restored.resolve(); closed.resolve(); await Promise.allSettled(shutdown ? [shutdown] : []); await f.cleanup(); }
+});
+
+test('shutdown failure preserves the public cleanup gate and retries all pending workflows before engine close', async () => {
+  let fails = true;
+  const f = await fixture([], { ...observed(), cleanup_pending: true }, { request(method) {
+    if (method === 'workflow.cancel' && fails) throw fakeEngineError('CLEANUP_UNCONFIRMED');
+  } });
+  try {
+    await f.controller.initialize();
+    await assert.rejects(f.controller.shutdown(), error => error.code === 'CLEANUP_UNCONFIRMED');
+    assert.equal(f.controller.snapshot().busy, true);
+    assert.deepEqual(f.controller.snapshot().cleanupResearchIds, [id]);
+    assert.equal(f.published.at(-1).error.code, 'CLEANUP_UNCONFIRMED');
+    assert.equal(f.events.includes('engine.close'), false);
+    fails = false; await f.controller.shutdown();
+    assert.equal(f.controller.snapshot().busy, false);
+    assert.equal(f.events.at(-1), 'engine.close');
+    assert.equal(f.events.some(event => event.startsWith('client.')), false);
+  } finally { fails = false; await f.cleanup(); }
+});
+
+test('engine-close failure publishes its error and leaves research shutdown retry available', async () => {
+  let fails = true;
+  const f = await fixture([], observed(), { async close() { if (fails) throw fakeEngineError('ENGINE_SHUTDOWN_UNCONFIRMED'); } });
+  try {
+    await f.controller.initialize();
+    await assert.rejects(f.controller.shutdown(), error => error.code === 'ENGINE_SHUTDOWN_UNCONFIRMED');
+    assert.equal(f.published.at(-1).error.code, 'ENGINE_SHUTDOWN_UNCONFIRMED');
+    assert.equal(f.controller.snapshot().busy, true);
+    await assert.rejects(f.controller.create(input), error => error.code === 'RESEARCH_BUSY');
+    fails = false; await f.controller.shutdown();
+    assert.equal(f.controller.snapshot().busy, false);
+    assert.equal(f.events.filter(event => event === 'engine.close').length, 2);
+  } finally { fails = false; await f.cleanup(); }
+});
 
 test('retains independent review rejections and stops before any experiment', async () => {
   const rejected = { accepted: false, issues: ['oracle independence failed'], checks: ['production', 'controls', 'evidence'] };
@@ -144,12 +202,67 @@ test('ambiguous prior dispatch prohibits a new experiment even when engine attem
     await f.controller.initialize();
     assert.equal(f.controller.snapshot().jobs[0].pipeline, 'paused');
     assert.equal(f.prompts.length, 0);
-    await f.controller.resume(id, 'writer', 'reviewer');
-    const state = await settled(f.controller);
-    assert.equal(state.jobs[0].code, 'REDISPATCH_FORBIDDEN');
+    await assert.rejects(f.controller.resume(id, 'writer', 'reviewer'), error => error.code === 'RESEARCH_NOT_RESUMABLE');
+    assert.equal(f.controller.snapshot().error.code, 'RESEARCH_NOT_RESUMABLE');
     assert.equal(f.calls.some(c => c.method === 'workflow.startExperiment'), false);
   } finally { await f.cleanup(); }
 });
+
+for (const stage of ['created', 'planned', 'code_ready']) {
+  test('cancelled zero-attempt ' + stage + ' is prepared explicitly before account/model requests', async () => {
+    const f = await fixture([new Error('Synthetic intentional writing interruption')], { ...base(), stage, status: 'cancelled', code: 'CANCELLED' });
+    try {
+      await f.controller.initialize();
+      assert.equal(f.controller.snapshot().jobs[0].resumeKind, 'preparation');
+      assert.equal(f.prompts.length, 0);
+      await f.controller.resume(id, 'writer', 'reviewer');
+      const state = await settled(f.controller);
+      assert.equal(state.jobs[0].pipeline, 'failed');
+      assert.ok(f.events.indexOf('engine.workflow.resume') < f.events.indexOf('client.getSession'));
+      assert.equal(f.calls.filter(call => call.method === 'workflow.resume').length, 1);
+      assert.equal(f.calls.filter(call => call.method === 'workflow.startExperiment').length, stage === 'code_ready' ? 1 : 0);
+      assert.equal(state.jobs[0].resumeKind, stage === 'code_ready' ? 'authoring' : 'preparation');
+    } finally { await f.cleanup(); }
+  });
+}
+
+for (const change of [
+  { status: 'failed', code: 'CONTROL_FAILED', terminal_control_failure: true },
+  { status: 'blocked', code: 'EXPERIMENT_FAILED' },
+  { stage: 'execute', status: 'running', cleanup_pending: true },
+  { stage: 'code_ready', execution_attempt: 1 },
+  { stage: 'exported', status: 'completed' },
+]) {
+  test('ineligible live resume stops before account and inference: ' + JSON.stringify(change), async () => {
+    const workflow = observed(); let live = false;
+    const f = await fixture([], workflow, { request(method) {
+      if (method === 'workflow.status' && live) return { ...structuredClone(workflow), ...change };
+    } });
+    try {
+      await f.controller.initialize(); live = true;
+      await assert.rejects(f.controller.resume(id, 'writer', 'reviewer'), error => error.code === 'RESEARCH_NOT_RESUMABLE');
+      assert.equal(f.calls.some(call => call.method === 'workflow.resume'), false);
+      assert.equal(f.events.some(event => event.startsWith('client.')), false);
+      assert.equal(f.controller.snapshot().jobs[0].resumeKind, null);
+    } finally { live = false; await f.cleanup(); }
+  });
+}
+
+for (const change of [{ id: 'research-000000000000' }, { status: 'cancelled' }, { stage: 'planned' }, { code: 'CLEANUP_UNCONFIRMED' }, { code: 'CANCELLED' },
+  { execution_attempt: 2 }, { cleanup_pending: true }, { terminal_control_failure: true }, { resume_kind: null }]) {
+  test('unverified resume reply cannot reach account/models: ' + JSON.stringify(change), async () => {
+    const workflow = observed();
+    const f = await fixture([], workflow, { request(method) {
+      if (method === 'workflow.resume') return { ...structuredClone(workflow), ...change };
+    } });
+    try {
+      await f.controller.initialize();
+      await assert.rejects(f.controller.resume(id, 'writer', 'reviewer'), error => error.code === 'RESEARCH_STATE_INVALID');
+      assert.equal(f.events.some(event => event.startsWith('client.')), false);
+      assertNoScientificDispatch(f);
+    } finally { await f.cleanup(); }
+  });
+}
 
 test('explicit manuscript resume gives both fresh models full retained evidence without redispatch', async () => {
   const f = await fixture([{ sections: [] }, accepted], observed());
@@ -201,8 +314,8 @@ test('explicit writing resume asks the engine to verify cancelled completed scie
   try {
     await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer');
     assert.equal((await settled(f.controller)).jobs[0].pipeline, 'completed');
-    assert.equal(f.calls.filter(c => c.method === 'workflow.resumeWriting').length, 1);
-    assert.ok(f.events.indexOf('engine.workflow.resumeWriting') < f.events.indexOf('client.streamResponse'));
+    assert.equal(f.calls.filter(c => c.method === 'workflow.resume').length, 1);
+    assert.ok(f.events.indexOf('engine.workflow.resume') < f.events.indexOf('client.streamResponse'));
     assert.equal(f.calls.some(c => c.method === 'workflow.collectLiterature'), false);
     assert.equal(f.calls.some(c => c.method === 'workflow.startExperiment'), false);
     assert.equal(f.workflow.execution_attempt, 1);
@@ -258,7 +371,7 @@ test('exclusive evidence writes preserve original bytes and JSON accepts no embe
 });
 
 test('explicit resume reconciles durable main receipts before any further work', async () => {
-  const f = await fixture([], { ...base(), stage: 'code_ready' });
+  const f = await fixture([], observed());
   try {
     await f.controller.initialize();
     const { mkdir } = await import('node:fs/promises');
@@ -270,10 +383,10 @@ test('explicit resume reconciles durable main receipts before any further work',
     await durableJson(join(directory, receipt.id + '-completed.json'), receipt, true);
     await f.controller.resume(id, 'writer', 'reviewer');
     const state = await settled(f.controller);
-    assert.equal(state.jobs[0].code, 'REDISPATCH_FORBIDDEN');
+    assert.equal(state.jobs[0].pipeline, 'failed');
     assert.deepEqual(f.calls.find(c => c.method === 'workflow.recordInference')?.params.receipt, receipt);
     assert.equal(f.calls.some(c => c.method === 'workflow.startExperiment'), false);
-    assert.equal(f.prompts.length, 0);
+    assert.equal(f.prompts.length, 1);
   } finally { await f.cleanup(); }
 });
 
@@ -288,7 +401,7 @@ test('committed engine workflows absent from the app index reappear paused witho
   } finally { await f.cleanup(); }
 });
 
-test('a timed-out scientific dispatch invalidates runtime and explicit resume recovers retained analysis before model validation', async () => {
+test('a timed-out scientific dispatch holds the lease until explicit cleanup, then resume recovers retained analysis', async () => {
   let online = true;
   const workflow = base();
   const f = await fixture([{ files: [] }, accepted, { sections: [] }, accepted], workflow, {
@@ -306,14 +419,26 @@ test('a timed-out scientific dispatch invalidates runtime and explicit resume re
   });
   try {
     await f.controller.initialize(); await f.controller.create(input);
-    const failed = await settled(f.controller);
+    await waitFor(() => f.controller.snapshot().jobs[0].pipeline === 'failed');
+    const failed = f.controller.snapshot();
     assert.equal(failed.jobs[0].pipeline, 'failed');
     assert.equal(failed.jobs[0].code, 'ENGINE_TIMEOUT');
     assert.equal(failed.runtime.state, 'unavailable');
     assert.equal(failed.error.code, 'ENGINE_TIMEOUT');
+    assert.equal(failed.busy, true);
+    assert.deepEqual(failed.cleanupResearchIds, [id]);
     assert.equal(f.starts, 1);
     assert.equal(f.prompts.length, 2);
     assert.equal(f.calls.filter(c => c.method === 'workflow.startExperiment').length, 1);
+
+    await assert.rejects(f.controller.resume(id, 'writer', 'reviewer'), error => error.code === 'RESEARCH_BUSY');
+    const cleanupOffset = f.events.length;
+    const cleaned = await f.controller.cancel(id);
+    assert.equal(cleaned.busy, false);
+    assert.deepEqual(cleaned.cleanupResearchIds, []);
+    assert.equal(f.starts, 2);
+    assert.equal(f.prompts.length, 2);
+    assert.equal(f.events.slice(cleanupOffset).some(event => event.startsWith('client.')), false);
 
     const offset = f.events.length;
     await f.controller.resume(id, 'writer', 'reviewer');
@@ -321,7 +446,7 @@ test('a timed-out scientific dispatch invalidates runtime and explicit resume re
     const recoveryEvents = f.events.slice(offset);
     assert.equal(recovered.runtime.state, 'ready');
     assert.equal(recovered.jobs[0].pipeline, 'completed');
-    assert.equal(f.starts, 2);
+    assert.equal(f.starts, 3);
     assert.deepEqual(recoveryEvents.slice(0, 3), ['engine.start', 'engine.runtime.status', 'engine.workflow.list']);
     assert.ok(recoveryEvents.indexOf('engine.workflow.list') < recoveryEvents.indexOf('client.getSession'));
     assert.ok(recoveryEvents.indexOf('engine.workflow.status') < recoveryEvents.indexOf('client.getSession'));
@@ -534,7 +659,7 @@ test('evidence import preserves paused science, stores only public document meta
     assert.equal(JSON.stringify(stored).includes('contentBase64'), false);
     assert.equal(f.prompts.length, 0);
     assert.equal(f.events.some(event => event.startsWith('client.')), false);
-    assert.equal(f.calls.some(call => ['workflow.startExperiment', 'workflow.resumeWriting'].includes(call.method)), false);
+    assert.equal(f.calls.some(call => ['workflow.startExperiment', 'workflow.resume'].includes(call.method)), false);
   } finally { await f.cleanup(); }
 });
 
@@ -584,7 +709,7 @@ for (const state of [{ stage: 'code_ready', status: 'ready' }, { stage: 'execute
   });
 }
 
-test('selector failure and shutdown release the evidence lease without importing', async () => {
+test('selector failure releases its lease but shutdown waits for native selection to settle before closing', async () => {
   const f = await fixture([], observed());
   let release;
   try {
@@ -597,9 +722,10 @@ test('selector failure and shutdown release the evidence lease without importing
     });
     const importing = f.controller.addEvidence(id, f.select);
     await began;
+    await assert.rejects(f.controller.shutdown(), error => error.code === 'RESEARCH_BUSY');
+    release(null);
+    assert.equal(await importing, false);
     await f.controller.shutdown();
-    release([{ name: 'fixture.md', contentBase64: 'eA==' }]);
-    await assert.rejects(importing, error => error.code === 'ENGINE_STOPPING');
     assert.equal(f.controller.snapshot().busy, false);
     assert.equal(f.calls.some(call => call.method === 'workflow.addEvidence'), false);
     assert.equal(f.prompts.length, 0);
@@ -995,16 +1121,15 @@ const pendingModel = (started, aborted, cleanup) => async options => {
   throw new Error('Synthetic pending model unexpectedly completed');
 };
 
-test('cancel holds the lease through model cleanup and authoritative engine status, then returns the published cancelled state', async () => {
-  const started = deferred(), aborted = deferred(), cleanup = deferred(), cancelling = deferred(), cancelled = deferred(), checking = deferred(), checked = deferred();
-  const workflow = observed(); let cancellationReturned = false;
+test('cancel holds the lease through model cleanup and verified engine cancellation, then returns the published cancelled state', async () => {
+  const started = deferred(), aborted = deferred(), cleanup = deferred(), cancelling = deferred(), cancelled = deferred();
+  const workflow = observed();
   const f = await fixture([pendingModel(started, aborted, cleanup)], workflow, { async request(method) {
     if (method === 'workflow.cancel') {
-      cancelling.resolve(); await cancelled.promise; cancellationReturned = true;
+      cancelling.resolve(); await cancelled.promise;
       Object.assign(workflow, { status: 'cancelled', code: 'CANCELLED', message: 'Authoritative synthetic engine cancellation settled.' });
-      return { ...structuredClone(workflow), code: 'CANCEL_RETURNED', message: 'Interim cancellation reply' };
+      return { ...structuredClone(workflow), cleanup_pending: false, cleanup_confirmed: true };
     }
-    if (method === 'workflow.status' && cancellationReturned) { checking.resolve(); await checked.promise; return structuredClone(workflow); }
   } });
   let cancellation;
   try {
@@ -1019,13 +1144,13 @@ test('cancel holds the lease through model cleanup and authoritative engine stat
       () => f.controller.addEvidence(id, async () => { throw new Error('A concurrent selector must not open'); })]) {
       await assert.rejects(operation(), error => error.code === 'RESEARCH_BUSY');
     }
-    cancelled.resolve(); await checking.promise;
-    assert.equal(f.controller.snapshot().busy, true);
     assert.ok(f.published.slice(firstEvent).every(snapshot => snapshot.busy), 'No idle event may precede authoritative cancellation reconciliation');
-    checked.resolve(); const returned = await cancellation;
+    cancelled.resolve(); const returned = await cancellation;
     assert.deepEqual(returned, f.published.at(-1));
     assert.equal(returned.busy, false); assert.equal(returned.error, null);
+    assert.deepEqual(returned.cleanupResearchIds, []);
     const job = returned.jobs[0];
+    assert.equal(job.resumeKind, 'authoring');
     assert.equal(job.pipeline, 'paused'); assert.equal(job.status, 'cancelled'); assert.equal(job.code, 'CANCELLED');
     assert.equal(job.message, workflow.message); assert.equal(job.stage, 'analyzed');
     assert.ok(Date.parse(job.updatedAt) >= before && Date.parse(job.updatedAt) <= Date.now());
@@ -1035,18 +1160,21 @@ test('cancel holds the lease through model cleanup and authoritative engine stat
     assert.deepEqual(receipts.map(receipt => receipt.outcome), ['started', 'interrupted']);
     assert.equal(receipts[1].text, '{"synthetic":"partial');
     assert.equal(f.calls.filter(call => call.method === 'workflow.cancel').length, 1);
-    assert.equal(f.calls.at(-1).method, 'workflow.status');
+    assert.equal(f.calls.find(call => call.method === 'workflow.cancel').timeoutMs, 45_000);
+    const cancelIndex = f.calls.findIndex(call => call.method === 'workflow.cancel');
+    assert.equal(f.calls.slice(cancelIndex + 1).some(call => call.method === 'workflow.status'), false);
     assert.equal(f.prompts.length, 1); assert.equal(workflow.execution_attempt, 1);
     assertNoScientificDispatch(f);
   } finally {
-    cleanup.resolve(); cancelled.resolve(); checked.resolve(); await Promise.allSettled(cancellation ? [cancellation] : []); await f.cleanup();
+    cleanup.resolve(); cancelled.resolve(); await Promise.allSettled(cancellation ? [cancellation] : []); await f.cleanup();
   }
 });
 
-test('a failed cancellation propagates only after model cleanup and releases the busy lease with its own error', async () => {
+test('a failed cancellation retains the lease and partial receipt until cleanup retry without model or account requests', async () => {
   const started = deferred(), aborted = deferred(), cleanup = deferred(), cancelling = deferred();
+  let fails = true;
   const f = await fixture([pendingModel(started, aborted, cleanup)], observed(), { request(method) {
-    if (method === 'workflow.cancel') { cancelling.resolve(); throw fakeEngineError('SYNTHETIC_CANCEL_FAILED'); }
+    if (method === 'workflow.cancel' && fails) { cancelling.resolve(); throw fakeEngineError('SYNTHETIC_CANCEL_FAILED'); }
   } });
   let cancellation; let resolved = false;
   try {
@@ -1063,16 +1191,219 @@ test('a failed cancellation propagates only after model cleanup and releases the
     await assert.rejects(cancellation, error => error.code === 'SYNTHETIC_CANCEL_FAILED'); await outcome;
     const state = f.controller.snapshot();
     assert.deepEqual(state, f.published.at(-1));
-    assert.equal(state.busy, false); assert.equal(state.error.code, 'SYNTHETIC_CANCEL_FAILED');
+    assert.equal(state.busy, true); assert.equal(state.error.code, 'SYNTHETIC_CANCEL_FAILED');
+    assert.deepEqual(state.cleanupResearchIds, [id]);
     assert.equal(state.jobs[0].pipeline, 'paused');
     assert.equal(f.calls.some(call => call.method === 'workflow.recordInference' && call.params.receipt.outcome === 'interrupted'), true);
     assert.equal(f.calls.some(call => call.method === 'workflow.submitManuscript'), false);
     assert.equal(f.calls.filter(call => call.method === 'workflow.cancel').length, 1);
+    await f.controller.checkRuntime();
+    assert.equal(f.controller.snapshot().busy, true);
+    assert.equal(f.controller.snapshot().error.code, 'SYNTHETIC_CANCEL_FAILED');
+    for (const operation of [() => f.controller.create(input), () => f.controller.resume(id, 'writer', 'reviewer'),
+      () => f.controller.reviseWriting(id, 'writer', 'reviewer'),
+      () => f.controller.addEvidence(id, async () => { throw new Error('A concurrent selector must not open'); })]) {
+      await assert.rejects(operation(), error => error.code === 'RESEARCH_BUSY');
+    }
+    fails = false;
+    const retryOffset = f.events.length;
+    const recovered = await f.controller.cancel(id);
+    assert.equal(recovered.busy, false); assert.equal(recovered.error, null);
+    assert.deepEqual(recovered.cleanupResearchIds, []);
+    assert.equal(f.events.slice(retryOffset).some(event => event.startsWith('client.')), false);
+    assert.equal(recovered.jobs[0].resumeKind, 'authoring');
+    assert.equal(f.prompts.length, 1);
+    assert.equal(JSON.parse(await readFile(join(f.home, 'jobs.json'), 'utf8'))[0].cleanupRequired, false);
     assertNoScientificDispatch(f);
   } finally { cleanup.resolve(); await Promise.allSettled(cancellation ? [cancellation] : []); await f.cleanup(); }
 });
 
-const exported = () => ({ ...observed(), stage: 'exported', status: 'completed', active_handle: {},
+for (const [reason, reply] of [
+  ['missing confirmation', { cleanup_confirmed: undefined }],
+  ['negative confirmation', { cleanup_confirmed: false }],
+  ['pending cleanup', { cleanup_pending: true }],
+  ['still running', { status: 'running' }],
+  ['unconfirmed receipt', { code: 'CLEANUP_UNCONFIRMED' }],
+  ['different research', { id: 'research-000000000000' }],
+]) {
+  test('cancellation keeps its lease when the engine reply has ' + reason, async () => {
+    let invalid = true;
+    const workflow = { ...observed(), cleanup_pending: true };
+    const f = await fixture([], workflow, { request(method) {
+      if (method === 'workflow.cancel' && invalid) return { ...structuredClone(workflow), status: 'cancelled', code: 'CANCELLED',
+        cleanup_pending: false, cleanup_confirmed: true, ...reply };
+    } });
+    try {
+      await f.controller.initialize();
+      await assert.rejects(f.controller.cancel(id), error => error.code === 'CLEANUP_UNCONFIRMED');
+      assert.equal(f.controller.snapshot().busy, true);
+      assert.deepEqual(f.controller.snapshot().cleanupResearchIds, [id]);
+      assert.equal(f.controller.snapshot().jobs[0].id, id);
+      assert.equal(f.controller.snapshot().jobs[0].status, 'ready', 'An invalid reply must not replace authoritative metadata');
+      await assert.rejects(f.controller.create(input), error => error.code === 'RESEARCH_BUSY');
+      invalid = false;
+      assert.equal((await f.controller.cancel(id)).busy, false);
+      assert.equal(f.events.some(event => event.startsWith('client.')), false);
+    } finally { await f.cleanup(); }
+  });
+}
+
+test('startup reconciliation leases account and research operations until retained workflow inspection finishes', async () => {
+  const checking = deferred(), checked = deferred();
+  const f = await fixture([], observed(), { async request(method) {
+    if (method === 'workflow.list') { checking.resolve(); await checked.promise; }
+  } });
+  let initialization;
+  try {
+    assert.equal(f.controller.snapshot().busy, true, 'Even the first IPC snapshot must be leased');
+    await assert.rejects(f.controller.create(input), error => error.code === 'RESEARCH_BUSY');
+    initialization = f.controller.initialize(); await checking.promise;
+    const callCount = f.calls.length;
+    await f.controller.checkRuntime();
+    assert.equal(f.calls.length, callCount, 'A public runtime check must not race startup index restoration');
+    assert.equal(f.controller.snapshot().busy, true);
+    await assert.rejects(f.controller.resume(id, 'writer', 'reviewer'), error => error.code === 'RESEARCH_BUSY');
+    assert.ok(f.published.every(snapshot => snapshot.busy));
+    await assert.rejects(f.controller.cancel(id), error => error.code === 'RESEARCH_BUSY');
+    checked.resolve(); await initialization;
+    assert.equal(f.controller.snapshot().busy, false);
+    assert.equal(f.events.some(event => event.startsWith('client.')), false);
+  } finally { checked.resolve(); await Promise.allSettled(initialization ? [initialization] : []); await f.cleanup(); }
+});
+
+test('invalid retained index keeps startup locked and preserves original bytes', async () => {
+  const f = await fixture();
+  try {
+    const path = join(f.home, 'jobs.json');
+    await durableJson(path, { invalid: true }); const bytes = await readFile(path);
+    await f.controller.initialize();
+    assert.equal(f.controller.snapshot().busy, true);
+    assert.equal(f.controller.snapshot().error.code, 'RESEARCH_STATE_INVALID');
+    await f.controller.checkRuntime();
+    await assert.rejects(f.controller.create(input), error => error.code === 'RESEARCH_BUSY');
+    assert.deepEqual(await readFile(path), bytes);
+    assert.equal(f.calls.length, 0);
+  } finally { await f.cleanup(); }
+});
+
+test('persisted cleanup survives restart and a readonly healthy runtime check until explicit verified cleanup', async () => {
+  const f = await fixture([], observed());
+  try {
+    await durableJson(join(f.home, 'jobs.json'), [{ id, ...input, phase: 'idle', pipeline: 'paused', stage: 'analyzed', status: 'ready',
+      code: null, message: null, artifacts: [], updatedAt: new Date().toISOString(), experimentDispatched: true, cleanupRequired: true }]);
+    await f.controller.initialize(); await f.controller.checkRuntime();
+    assert.equal(f.controller.snapshot().runtime.state, 'ready');
+    assert.equal(f.controller.snapshot().busy, true);
+    assert.deepEqual(f.controller.snapshot().cleanupResearchIds, [id]);
+    const restored = new ResearchController(f.client, f.engine, f.home, snapshot => f.published.push(snapshot));
+    await restored.initialize();
+    assert.equal(restored.snapshot().busy, true);
+    assert.equal((await restored.cancel(id)).busy, false);
+    assert.equal(f.events.some(event => event.startsWith('client.')), false);
+    assert.equal(JSON.parse(await readFile(join(f.home, 'jobs.json'), 'utf8'))[0].cleanupRequired, false);
+  } finally { await f.cleanup(); }
+});
+
+test('multiple recovered cleanup jobs retain the account lease until every owned workflow is verified', async () => {
+  const otherId = 'research-000000000000';
+  const workflows = [{ ...observed(), cleanup_pending: true }, { ...observed(), id: otherId, cleanup_pending: true }];
+  const f = await fixture([], workflows[0], { request(method, params) {
+    if (method === 'workflow.list') return structuredClone(workflows);
+    if (method === 'workflow.cancel') {
+      const workflow = workflows.find(value => value.id === params.researchId);
+      Object.assign(workflow, { status: 'cancelled', code: 'CANCELLED', cleanup_pending: false });
+      return { ...structuredClone(workflow), cleanup_confirmed: true };
+    }
+  } });
+  try {
+    await f.controller.initialize();
+    assert.deepEqual(f.controller.snapshot().cleanupResearchIds, [id, otherId]);
+    const first = await f.controller.cancel(id);
+    assert.equal(first.busy, true); assert.deepEqual(first.cleanupResearchIds, [otherId]);
+    await assert.rejects(f.controller.create(input), error => error.code === 'RESEARCH_BUSY');
+    const second = await f.controller.cancel(otherId);
+    assert.equal(second.busy, false); assert.deepEqual(second.cleanupResearchIds, []);
+    assert.equal(f.events.some(event => event.startsWith('client.')), false);
+  } finally { await f.cleanup(); }
+});
+
+for (const failureAt of ['before cancellation', 'after confirmed cleanup']) {
+  test('jobs index write failure ' + failureAt + ' cannot skip engine cleanup or unlock the lease', async () => {
+    let obstructed = false;
+    const workflow = { ...observed(), cleanup_pending: true };
+    let f;
+    const obstruct = async () => {
+      await rename(join(f.home, 'jobs.json'), join(f.home, 'jobs.saved.json'));
+      await mkdir(join(f.home, 'jobs.json')); obstructed = true;
+    };
+    f = await fixture([], workflow, { async request(method) {
+      if (method === 'workflow.cancel' && failureAt === 'after confirmed cleanup' && !obstructed) await obstruct();
+    } });
+    try {
+      await f.controller.initialize();
+      if (failureAt === 'before cancellation') await obstruct();
+      await assert.rejects(f.controller.cancel(id));
+      assert.equal(f.calls.filter(call => call.method === 'workflow.cancel').length, 1, 'The independent engine must still receive the stop request');
+      assert.equal(f.controller.snapshot().busy, true);
+      assert.deepEqual(f.controller.snapshot().cleanupResearchIds, [id]);
+      assert.equal(f.controller.snapshot().error.code, 'EVIDENCE_WRITE_FAILED');
+      assert.equal(JSON.parse(await readFile(join(f.home, 'jobs.saved.json'), 'utf8'))[0].cleanupRequired, true);
+      await rmdir(join(f.home, 'jobs.json'));
+      await rename(join(f.home, 'jobs.saved.json'), join(f.home, 'jobs.json'));
+      assert.equal((await f.controller.cancel(id)).busy, false);
+      assert.equal(f.events.some(event => event.startsWith('client.')), false);
+    } finally { await f.cleanup(); }
+  });
+}
+
+test('failed interrupted-receipt commit holds cleanup and retries exact partial bytes before releasing the lease', async () => {
+  const started = deferred(), aborted = deferred(), cleanup = deferred();
+  let fails = true;
+  const f = await fixture([pendingModel(started, aborted, cleanup)], observed(), { request(method, params) {
+    if (method === 'workflow.recordInference' && params.receipt.outcome === 'interrupted' && fails) {
+      throw fakeEngineError('SYNTHETIC_RECEIPT_COMMIT_FAILED');
+    }
+  } });
+  let cancellation;
+  try {
+    await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer'); await started.promise;
+    cancellation = f.controller.cancel(id); await aborted.promise; cleanup.resolve();
+    await assert.rejects(cancellation, error => error.code === 'SYNTHETIC_RECEIPT_COMMIT_FAILED');
+    assert.equal(f.controller.snapshot().busy, true);
+    const name = (await readdir(join(f.home, id, 'inference'))).find(name => name.endsWith('-interrupted.json'));
+    const bytes = await readFile(join(f.home, id, 'inference', name));
+    assert.equal(JSON.parse(bytes).text, '{"synthetic":"partial');
+    fails = false; const offset = f.events.length;
+    assert.equal((await f.controller.cancel(id)).busy, false);
+    assert.deepEqual(await readFile(join(f.home, id, 'inference', name)), bytes);
+    assert.equal(f.events.slice(offset).some(event => event.startsWith('client.')), false);
+    assert.equal(f.prompts.length, 1); assertNoScientificDispatch(f);
+  } finally { cleanup.resolve(); await Promise.allSettled(cancellation ? [cancellation] : []); await f.cleanup(); }
+});
+
+test('completion that wins the cancellation race preserves completed state and exports', async () => {
+  const started = deferred(), aborted = deferred(), cleanup = deferred();
+  const workflow = observed(); const artifact = { id: 'export-md', sha256: digest('Already completed synthetic paper'), size: 33 };
+  const f = await fixture([pendingModel(started, aborted, cleanup)], workflow, { request(method) {
+    if (method === 'workflow.cancel') {
+      Object.assign(workflow, { stage: 'exported', status: 'completed', code: null, cleanup_pending: false,
+        artifacts: { ...workflow.artifacts, 'export-md': artifact } });
+      return { ...structuredClone(workflow), cleanup_confirmed: true };
+    }
+  } });
+  let cancellation;
+  try {
+    await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer'); await started.promise;
+    cancellation = f.controller.cancel(id); await aborted.promise; cleanup.resolve();
+    const completed = await cancellation;
+    assert.equal(completed.busy, false); assert.equal(completed.error, null);
+    assert.equal(completed.jobs[0].pipeline, 'completed'); assert.equal(completed.jobs[0].status, 'completed');
+    assert.deepEqual(completed.jobs[0].artifacts.find(value => value.id === 'export-md'), artifact);
+    assert.equal(f.calls.some(call => call.method === 'workflow.export'), false);
+  } finally { cleanup.resolve(); await Promise.allSettled(cancellation ? [cancellation] : []); await f.cleanup(); }
+});
+
+const exported = () => ({ ...observed(), stage: 'exported', status: 'completed',
   artifacts: { ...observed().artifacts, 'export-md': { id: 'export-md', sha256: digest('OLD APPROVED PAPER'), size: 18 } } });
 const assertWritingOnly = f => {
   for (const method of ['workflow.create', 'workflow.submitPlan', 'workflow.submitCode', 'workflow.startExperiment', 'workflow.collectLiterature']) {
@@ -1134,7 +1465,7 @@ for (const [name, patch] of [
   ['cancelled exported state', { status: 'cancelled' }],
   ['failed scientific controls', { terminal_control_failure: true }],
   ['unconfirmed cleanup', { code: 'CLEANUP_UNCONFIRMED' }],
-  ['active execution handle', { active_handle: { worker_pid: 123 } }],
+  ['pending execution cleanup', { cleanup_pending: true }],
   ['no actual execution', { execution_attempt: 0 }],
   ['invalid execution count', { execution_attempt: undefined }],
 ]) test('paper revision refuses authoritative ' + name + ' even when cached UI was completed', async () => {
@@ -1175,7 +1506,7 @@ test('revision runtime, models and backend failures release the lease without an
 });
 
 for (const patch of [{ stage: 'planned' }, { status: 'completed' }, { execution_attempt: 2 },
-  { terminal_control_failure: true }, { active_handle: { worker_pid: 123 } }, { id: 'research-000000000000' }]) {
+  { terminal_control_failure: true }, { cleanup_pending: true }, { id: 'research-000000000000' }]) {
   test('invalid backend revision preparation cannot regenerate science or launch a model: ' + JSON.stringify(patch), async () => {
     const f = await fixture([], exported(), { request(method) {
       if (method === 'workflow.reviseWriting') return { ...exported(), stage: 'analyzed', status: 'ready', ...patch };

@@ -303,13 +303,17 @@ class QuickJSRunner:
                 and type(handle.get("pid")) is int and handle["pid"] > 0
                 and bool(re.fullmatch(r"[a-f0-9]{32}", str(handle.get("owner_nonce", "")))))
 
-    def close(self) -> None:
+    def close(self, *, deadline: float | None = None) -> None:
         with self._mutex:
             if self._lease is None:
-                self._release_lease()
-                return
+                lease = file_lock(self.supervisor_root / "supervisor.lock")
+                lease.__enter__()
+                self._lease = lease
+                self._records = self._load_journal()
             handles = [dict(record["handle"]) for record in self._records.values()]
         for handle in handles:
+            if deadline is not None and deadline - time.monotonic() < 10:
+                raise ValueError("Owned QuickJS worker cleanup exceeded the shutdown deadline")
             if self.stop(handle):
                 self._finish(handle["owner_nonce"])
         with self._mutex:

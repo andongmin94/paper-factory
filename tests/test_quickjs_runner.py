@@ -29,6 +29,56 @@ def experiment(body: str) -> str:
     return "export default function run() {\n" + body + "\n}\n"
 
 
+def test_shutdown_reconciles_a_retained_worker_journal_before_releasing_ownership(tmp_path, monkeypatch):
+    supervisor = tmp_path / "synthetic-supervisor"
+    supervisor.mkdir()
+    handle = {"kind": "quickjs-worker", "pid": 123, "owner_nonce": "a" * 32}
+    journal = supervisor / "owned-workers.json"
+    journal.write_text(json.dumps({"format": "paper-factory-quickjs-supervisor-v1", "workers": [
+        {"phase": "unresolved", "purpose": "experiment", "handle": handle}]}), encoding="utf-8")
+    candidate = QuickJSRunner(tmp_path / "unused-runtime", supervisor_root=supervisor)
+    calls = []
+    monkeypatch.setattr(candidate, "stop", lambda value: calls.append(value) or False)
+    with pytest.raises(ValueError, match="cleanup remains unconfirmed"):
+        candidate.close(deadline=time.monotonic() + 30)
+    assert calls == [handle] and candidate._lease is not None and len(candidate._records) == 1
+    retained = journal.read_bytes()
+    with pytest.raises(ValueError, match="shutdown deadline"):
+        candidate.close(deadline=time.monotonic() + 0.1)
+    assert calls == [handle] and journal.read_bytes() == retained
+    monkeypatch.setattr(candidate, "stop", lambda value: calls.append(value) or True)
+    candidate.close(deadline=time.monotonic() + 30)
+    assert calls == [handle, handle] and candidate._lease is None and not candidate._records
+    assert json.loads(journal.read_bytes())["workers"] == []
+
+
+def test_shutdown_worker_cleanup_does_not_reset_the_shared_deadline(tmp_path, monkeypatch):
+    supervisor = tmp_path / "synthetic-supervisor"
+    supervisor.mkdir()
+    handles = [{"kind": "quickjs-worker", "pid": 123 + index, "owner_nonce": letter * 32}
+               for index, letter in enumerate(("a", "b"))]
+    journal = supervisor / "owned-workers.json"
+    journal.write_text(json.dumps({"format": "paper-factory-quickjs-supervisor-v1", "workers": [
+        {"phase": "unresolved", "purpose": "experiment", "handle": handle} for handle in handles]}), encoding="utf-8")
+    candidate = QuickJSRunner(tmp_path / "unused-runtime", supervisor_root=supervisor)
+    elapsed, calls = [0], []
+
+    def stopped(handle):
+        calls.append(handle)
+        elapsed[0] += 21
+        return True
+
+    monkeypatch.setattr(candidate, "stop", stopped)
+    with monkeypatch.context() as clock_patch:
+        clock_patch.setattr(module, "time", SimpleNamespace(monotonic=lambda: elapsed[0]))
+        with pytest.raises(ValueError, match="shutdown deadline"):
+            candidate.close(deadline=30)
+    assert calls == handles[:1] and list(candidate._records) == [handles[1]["owner_nonce"]]
+    assert json.loads(journal.read_bytes())["workers"][0]["handle"] == handles[1]
+    candidate.close(deadline=time.monotonic() + 30)
+    assert calls == handles and not candidate._records and candidate._lease is None
+
+
 def envelope(value: str = "value", *, fixtures: str = "[JSON.parse(retainFixture('input', '[41]'))]") -> str:
     return """return {
         observations: [{unit_id: 'unit', seed: 11, condition: 'production', metric: 'value', value: VALUE}],

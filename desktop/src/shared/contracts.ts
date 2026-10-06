@@ -14,7 +14,7 @@ export interface AppSnapshot {
   };
   profiles: Array<{ id: string; label: string; email?: string; connected: boolean; sharing: boolean; pending?: boolean }>;
   models: Array<{ slug: string; displayName: string }>;
-  busy: 'sign-in' | 'models' | 'verify' | null;
+  busy: 'sign-in' | 'select-profile' | 'disconnect' | 'models' | 'verify' | null;
   error: AppError | null;
   verification: { model: string; text: string; completedAt: string } | null;
 }

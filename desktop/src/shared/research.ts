@@ -1,6 +1,7 @@
 export type ResearchPhase = 'idle' | 'plan' | 'literature' | 'code' | 'code-review' | 'experiment' | 'manuscript' | 'manuscript-review' | 'export';
 export interface SupportingDocument { id: string; name: string; sha256: string; size: number }
 export interface ResearchItem {
+  resumeKind: 'preparation' | 'authoring' | null;
   id: string;
   source: string;
   goal: string;
@@ -19,6 +20,7 @@ export interface ResearchItem {
 export interface ResearchSnapshot {
   runtime: { state: 'checking' | 'ready' | 'unavailable'; message: string; versions?: Record<string, string> };
   busy: boolean;
+  cleanupResearchIds: string[];
   jobs: ResearchItem[];
   error: { code: string; message: string; action: 'usage' | 'sign-in' | 'retry' | null } | null;
 }
@@ -33,7 +35,7 @@ export interface ResearchApi {
   reviseResearchWriting(id: string, model: string, reviewerModel: string): Promise<ResearchSnapshot>;
   cancelResearch(id: string): Promise<ResearchSnapshot>;
   addResearchEvidence(id: string): Promise<ResearchSnapshot | false>;
-  saveArtifact(id: string, artifactId: string, destinationPath: string): Promise<boolean>;
+  saveArtifact(id: string, artifactId: string): Promise<boolean>;
   openArtifact(id: string, artifactId: string): Promise<void>;
   showArtifactFolder(id: string, artifactId: string): Promise<void>;
   listPublicRepositories(accountUrl: string): Promise<PublicRepository[]>;

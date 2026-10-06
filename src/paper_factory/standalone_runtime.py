@@ -4,10 +4,11 @@ from contextlib import ExitStack
 import os
 from pathlib import Path
 import stat
+import time
 
 from .autonomous import literature
 from .autonomous.quickjs_runner import QuickJSRunner
-from .workflow import WorkflowService
+from .workflow import SHUTDOWN_CLEANUP_SECONDS, WorkflowError, WorkflowService
 from .workspace import ensure_unlinked, file_lock, loads_json, write_json
 
 OWNER = {"format": "paper-factory-standalone-engine-v1", "app_id": "com.andongmin.paperfactory.standalone"}
@@ -97,22 +98,26 @@ class StandaloneRuntime:
         # The command executor is serial; the input thread only sets its Event.
         self._cancel = callback
 
-    def close(self):
+    def close(self, *, deadline: float | None = None):
         if self._closed:
             return
-        self._closed = True
+        deadline = deadline if deadline is not None else time.monotonic() + SHUTDOWN_CLEANUP_SECONDS
         error = None
         try:
             if self.service is not None:
-                self.service.close()
+                self.service.close(deadline=deadline)
         except Exception as exc:
             error = exc
         try:
             if self.runner is not None:
-                self.runner.close()
+                self.runner.close(deadline=deadline)
         except Exception as exc:
             error = error or exc
-        finally:
-            self._stack.close()
         if error:
-            raise error
+            if isinstance(error, WorkflowError):
+                raise error
+            raise WorkflowError("CLEANUP_UNCONFIRMED", "Local engine shutdown remains unconfirmed; retry shutdown") from error
+        if time.monotonic() >= deadline:
+            raise WorkflowError("CLEANUP_UNCONFIRMED", "Local engine shutdown did not finish before its deadline")
+        self._stack.close()
+        self._closed = True

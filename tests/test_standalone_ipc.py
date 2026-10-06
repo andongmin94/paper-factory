@@ -11,6 +11,7 @@ import subprocess
 import sys
 import threading
 import time
+from types import SimpleNamespace
 import zipfile
 
 import httpx
@@ -21,7 +22,7 @@ from paper_factory.autonomous.models import ResearchPlan
 from paper_factory.models import Project
 from paper_factory.standalone_runtime import OWNER, StandaloneRuntime
 from paper_factory.workflow import WorkflowError
-from paper_factory.workspace import digest_file, loads_json, write_json
+from paper_factory.workspace import digest_file, file_lock, loads_json, write_json
 
 
 @pytest.fixture(autouse=True)
@@ -115,7 +116,7 @@ def test_request_byte_limit():
         ipc.request(b" " * (ipc.MAX_INPUT_BYTES + 1))
 
 
-@pytest.mark.parametrize("method", ["workflow.resumeWriting", "workflow.reviseWriting"])
+@pytest.mark.parametrize("method", ["workflow.resume", "workflow.reviseWriting"])
 def test_authoring_ipc_accepts_only_research_id_and_maps_to_explicit_method(method):
     from types import SimpleNamespace
     valid = {"id": "authoring", "method": method, "params": {"researchId": "research-abcdefabcdef"}}
@@ -124,13 +125,13 @@ def test_authoring_ipc_accepts_only_research_id_and_maps_to_explicit_method(meth
         with pytest.raises(ValueError):
             ipc.request(json.dumps({**valid, "params": params}).encode())
     calls = []
-    service = SimpleNamespace(resume_writing=lambda identifier: calls.append(("resume", identifier)) or {"status": "ready"},
+    service = SimpleNamespace(resume=lambda identifier: calls.append(("resume", identifier)) or {"status": "ready"},
                               revise_writing=lambda identifier: calls.append(("revise", identifier)) or {"status": "ready"},
                               collect_literature=None, start_experiment=None, cancel=None, export=None)
     dispatcher = ipc.Dispatcher(SimpleNamespace(service=service), io.BytesIO())
     try:
         assert dispatcher.execute(valid["method"], valid["params"]) == {"status": "ready"}
-        assert calls == [("resume" if method.endswith("resumeWriting") else "revise", "research-abcdefabcdef")]
+        assert calls == [("resume" if method == "workflow.resume" else "revise", "research-abcdefabcdef")]
     finally:
         dispatcher._pool.shutdown(wait=True)
 
@@ -237,7 +238,7 @@ def test_native_plotting_precedes_runner_and_recovery_after_owned_environment(tm
             assert events == ["matplotlib", "backend:Agg", "matplotlib.pyplot"]
             events.append("runner")
 
-        def close(self):
+        def close(self, *, deadline=None):
             pass
 
     class Service:
@@ -245,7 +246,7 @@ def test_native_plotting_precedes_runner_and_recovery_after_owned_environment(tm
             assert events == ["matplotlib", "backend:Agg", "matplotlib.pyplot", "runner"]
             events.append("service-recovery")
 
-        def close(self):
+        def close(self, *, deadline=None):
             pass
 
     monkeypatch.setattr(builtins, "__import__", observe_import)
@@ -281,6 +282,124 @@ def test_native_plotting_failure_stops_recovery_and_releases_home_lease(tmp_path
         with pytest.raises(ImportError, match="Synthetic unavailable native plotting"):
             StandaloneRuntime(home, quickjs, node, pandoc)
     assert loads_json((home / "owner.json").read_bytes()) == OWNER
+
+
+@pytest.fixture
+def synthetic_shutdown_runtime(tmp_path, monkeypatch):
+    from test_workflow import FixtureRunner
+    resources = tmp_path / "synthetic-resources"
+    quickjs = resources / "quickjs-runtime"
+    quickjs.mkdir(parents=True)
+    node, pandoc = resources / "node", resources / "pandoc"
+    node.write_bytes(b"synthetic executable placeholder; never executed")
+    pandoc.write_bytes(b"synthetic executable placeholder; never executed")
+    monkeypatch.delenv("TYPST_FONT_PATHS", raising=False)
+
+    class Runner(FixtureRunner):
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+            self.shutdown_cleanable = False
+            self.close_deadlines = []
+
+        def close(self, *, deadline=None):
+            self.close_deadlines.append(deadline)
+            if not self.shutdown_cleanable:
+                raise ValueError("Synthetic owned worker cleanup remains unconfirmed")
+
+    monkeypatch.setattr(standalone_runtime, "QuickJSRunner", Runner)
+    engine = StandaloneRuntime(tmp_path / "synthetic-owned-home", quickjs, node, pandoc)
+    source = tmp_path / "synthetic-source"
+    source.mkdir()
+    (source / "transform.js").write_text("export function transform(values) { return values.slice(); }\n", encoding="utf-8")
+    identifier = engine.service.create(str(source), "Verify synthetic shutdown evidence retention and retry.")["id"]
+    yield engine, identifier
+    engine.runner.shutdown_cleanable = True
+    engine.runner.cleanable = True
+    if engine.runner.release:
+        engine.runner.release.set()
+    engine.close()
+
+
+def test_shutdown_failure_keeps_runtime_home_lease_and_allows_preservation_then_retry(synthetic_shutdown_runtime):
+    engine, identifier = synthetic_shutdown_runtime
+    owner_bytes = (engine.home / "owner.json").read_bytes()
+    with pytest.raises(WorkflowError) as rejected:
+        engine.close()
+    assert rejected.value.code == "CLEANUP_UNCONFIRMED" and engine._closed is False
+    assert engine.service._closed is True
+    with pytest.raises(ValueError, match="Another operation"):
+        with file_lock(engine.home / "engine.lock"):
+            pytest.fail("Failed shutdown released the ownership lease")
+    assert engine.service.status(identifier)["id"] == identifier
+    saved = engine.service.record_inference(identifier, receipt("started"))
+    assert engine.service.artifact_path(identifier, saved["artifactId"]).is_file()
+    with pytest.raises(ValueError, match="closed"):
+        engine.service.create(str(engine.home.parent / "synthetic-source"), "No new study during shutdown.")
+    engine.runner.shutdown_cleanable = True
+    engine.close()
+    engine.close()
+    assert engine._closed is True and len(engine.runner.close_deadlines) == 2
+    assert (engine.home / "owner.json").read_bytes() == owner_bytes
+    with file_lock(engine.home / "engine.lock"):
+        pass
+
+
+def test_shutdown_runtime_shares_one_deadline_and_keeps_lease_when_budget_is_exhausted(synthetic_shutdown_runtime, monkeypatch):
+    engine, _ = synthetic_shutdown_runtime
+    engine.runner.shutdown_cleanable = True
+    started, elapsed, deadlines = time.monotonic(), [0], []
+    original_close = engine.service.close
+
+    def late_service_close(*, deadline):
+        deadlines.append(deadline)
+        original_close(deadline=deadline)
+        elapsed[0] = 31
+
+    with monkeypatch.context() as clock_patch:
+        clock_patch.setattr(standalone_runtime, "time", SimpleNamespace(monotonic=lambda: started + elapsed[0]))
+        clock_patch.setattr(engine.service, "close", late_service_close)
+        with pytest.raises(WorkflowError) as rejected:
+            engine.close()
+        assert rejected.value.code == "CLEANUP_UNCONFIRMED" and engine._closed is False
+    assert deadlines == [started + 30] and engine.runner.close_deadlines == deadlines
+    with pytest.raises(ValueError, match="Another operation"):
+        with file_lock(engine.home / "engine.lock"):
+            pytest.fail("Expired shutdown released the ownership lease")
+    engine.close()
+    assert engine._closed is True
+
+
+def test_shutdown_main_keeps_command_loop_after_failure_and_exits_only_after_retry(synthetic_shutdown_runtime, monkeypatch):
+    engine, identifier = synthetic_shutdown_runtime
+    original_status = engine.runner.status
+
+    def status_and_enable_cleanup():
+        engine.runner.shutdown_cleanable = True
+        return original_status()
+
+    monkeypatch.setattr(engine.runner, "status", status_and_enable_cleanup)
+    monkeypatch.setattr(ipc, "StandaloneRuntime", lambda *args: engine)
+    requests = [frame("first", "shutdown"), frame("runtime", "runtime.status"), frame("list", "workflow.list"),
+                frame("retained", "workflow.status", researchId=identifier, includeMaterials=False),
+                frame("receipt", "workflow.recordInference", researchId=identifier, receipt=receipt("started")),
+                frame("new", "workflow.create", source="https://github.com/fixture-owner/fixture", goal="Must not create a new study."),
+                frame("retry", "shutdown"), frame("after", "runtime.status")]
+    incoming = io.BytesIO(b"".join((json.dumps(item) + "\n").encode() for item in requests))
+    output = io.BytesIO()
+    monkeypatch.setattr(ipc.sys, "stdin", SimpleNamespace(buffer=incoming))
+    monkeypatch.setattr(ipc.sys, "stdout", SimpleNamespace(buffer=output))
+    monkeypatch.setattr(ipc.sys, "stderr", io.StringIO())
+    args = [part for name, value in (("home", engine.home), ("runtime-root", engine.runtime_root),
+                                    ("node", engine.node), ("pandoc", engine.pandoc)) for part in ("--" + name, str(value))]
+    assert ipc.main(args) == 0
+    replies = [loads_json(raw) for raw in output.getvalue().splitlines()]
+    assert [reply["id"] for reply in replies] == [item["id"] for item in requests[:-1]]
+    assert replies[0]["ok"] is False and replies[0]["error"]["code"] == "CLEANUP_UNCONFIRMED"
+    assert all(reply["ok"] for reply in replies[1:5])
+    assert replies[2]["result"][0]["id"] == identifier and replies[3]["result"]["id"] == identifier
+    assert replies[5]["ok"] is False and replies[5]["error"]["code"] == "CANCELLED"
+    assert replies[6] == {"id": "retry", "ok": True, "result": {"closed": True}}
+    assert engine._closed is True and len(engine.runner.close_deadlines) == 2
 
 
 def test_ipc_real_process_has_json_stdout_and_explicit_shutdown(tmp_path, runtime_files, pandoc):
@@ -333,6 +452,193 @@ def test_cancel_interrupts_blocked_collection_before_serial_cancel(runtime, tmp_
     assert cancelled.is_set()
     assert values[0]["error"]["code"] == "LITERATURE_EVIDENCE_INSUFFICIENT"
     assert values[1]["ok"] and values[1]["result"]["status"] == "cancelled"
+
+
+@pytest.fixture
+def synthetic_cancel_engine(tmp_path, monkeypatch):
+    from test_workflow import FixtureRunner, collect, prepare
+    from paper_factory.workflow import WorkflowService
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
+    source = tmp_path / "synthetic-source"
+    source.mkdir()
+    (source / "transform.js").write_text("export function transform(values) { return values.slice(); }\n", encoding="utf-8")
+    runner = FixtureRunner()
+    service = WorkflowService(tmp_path / "synthetic-home", runner=runner, collector=collect)
+    research_id = service.create(str(source), "Verify the synthetic IPC cancellation acknowledgement contract.")["id"]
+    prepare(service, research_id)
+    runtime = SimpleNamespace(service=service, set_cancel=lambda callback: None, close=service.close)
+    yield runtime, runner, research_id
+    runner.cleanable = True
+    if runner.release:
+        runner.release.set()
+    service.close()
+
+
+@pytest.fixture
+def synthetic_export_resolution(synthetic_cancel_engine):
+    from paper_factory.workflow import _freeze
+    from paper_factory.workflow_models import Workflow
+    from paper_factory.workspace import Workspace
+    runtime, runner, research_id = synthetic_cancel_engine
+    ws = Workspace(runtime.service.root / research_id)
+    record = ws.get("workflow", research_id, Workflow)
+    root = ws.path("research/exports/export-attempt-fixture")
+    root.mkdir(parents=True)
+    files = {"export-md": ("paper.md", b"# Synthetic manuscript\n\n![Computed figure.](figure-1.png)\n"),
+             "export-tex": ("paper.tex", br"\pandocbounded{\includegraphics[keepaspectratio,alt={Computed figure.}]{figure-1.png}}"),
+             "export-pdf": ("paper.pdf", b"Synthetic PDF bytes; never rendered"),
+             "export-figure-1": ("figure-1.png", b"\x89PNG\r\n\x1a\nSynthetic frozen figure bytes; never rendered")}
+    paths = {}
+    for key, (name, content) in files.items():
+        path = root / name
+        path.write_bytes(content)
+        _freeze(ws, record, key, path)
+        paths[key] = path
+    ws.save("workflow", record)
+    yield runtime, runner, research_id, ws, record, paths
+
+
+@pytest.mark.parametrize("artifact_id", ["export-md", "export-tex"])
+def test_artifact_resolve_returns_verified_companions_without_modifying_bytes(synthetic_export_resolution, artifact_id):
+    runtime, runner, research_id, _, _, paths = synthetic_export_resolution
+    original = {key: path.read_bytes() for key, path in paths.items()}
+    dispatcher = ipc.Dispatcher(runtime, io.BytesIO())
+    try:
+        result = dispatcher.execute("artifact.resolve", {"researchId": research_id, "artifactId": artifact_id})
+    finally:
+        dispatcher._pool.shutdown(wait=True)
+    primary, figure = paths[artifact_id], paths["export-figure-1"]
+    assert result == {"path": str(primary), "sha256": digest_file(primary), "size": primary.stat().st_size,
+                      "companions": [{"name": "figure-1.png", "path": str(figure),
+                                      "sha256": digest_file(figure), "size": figure.stat().st_size}]}
+    assert {key: path.read_bytes() for key, path in paths.items()} == original and runner.calls == 0
+
+
+@pytest.mark.parametrize("artifact_id", ["context", "export-pdf", "export-figure-1"])
+def test_artifact_resolve_regular_artifacts_have_empty_companions(synthetic_export_resolution, artifact_id):
+    runtime, _, research_id, _, _, _ = synthetic_export_resolution
+    dispatcher = ipc.Dispatcher(runtime, io.BytesIO())
+    try:
+        result = dispatcher.execute("artifact.resolve", {"researchId": research_id, "artifactId": artifact_id})
+    finally:
+        dispatcher._pool.shutdown(wait=True)
+    path = runtime.service.artifact_path(research_id, artifact_id)
+    assert result == {"path": str(path), "sha256": digest_file(path), "size": path.stat().st_size, "companions": []}
+
+
+@pytest.mark.parametrize("artifact_id", ["export-md", "export-tex"])
+@pytest.mark.parametrize("change", ["missing-file", "changed-bytes", "missing-entry", "duplicate-name", "unsafe-name", "other-directory", "markdown-reference"])
+def test_artifact_resolve_refuses_incomplete_or_changed_figure_inventory(synthetic_export_resolution, artifact_id, change):
+    from paper_factory.workflow import _freeze
+    runtime, runner, research_id, ws, record, paths = synthetic_export_resolution
+    figure = paths["export-figure-1"]
+    if change == "missing-file":
+        figure.unlink()
+    elif change == "changed-bytes":
+        figure.write_bytes(b"Changed PNG bytes with an untrusted image")
+    elif change == "missing-entry":
+        del record.artifacts["export-figure-1"]
+    elif change == "duplicate-name":
+        record.artifacts["export-figure-2"] = record.artifacts["export-figure-1"].model_copy()
+    elif change in {"unsafe-name", "other-directory"}:
+        destination = figure.with_name("unowned-image.png") if change == "unsafe-name" else ws.path("research/other/figure-1.png")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(figure.read_bytes())
+        _freeze(ws, record, "export-figure-1", destination)
+    else:
+        paths["export-md"].write_bytes(b"# Synthetic manuscript\n\n![Unowned figure.](../outside.png)\n")
+        _freeze(ws, record, "export-md", paths["export-md"])
+    ws.save("workflow", record)
+    dispatcher = ipc.Dispatcher(runtime, io.BytesIO())
+    try:
+        with pytest.raises(WorkflowError) as rejected:
+            dispatcher.execute("artifact.resolve", {"researchId": research_id, "artifactId": artifact_id})
+        assert rejected.value.code == "ARTIFACT_CHANGED" and runner.calls == 0
+    finally:
+        dispatcher._pool.shutdown(wait=True)
+
+
+def test_artifact_resolve_refuses_tex_references_outside_frozen_inventory(synthetic_export_resolution):
+    from paper_factory.workflow import _freeze
+    runtime, runner, research_id, ws, record, paths = synthetic_export_resolution
+    paths["export-tex"].write_bytes(br"\includegraphics{../unowned.png}")
+    _freeze(ws, record, "export-tex", paths["export-tex"])
+    ws.save("workflow", record)
+    with pytest.raises(WorkflowError) as rejected:
+        runtime.service.resolve_artifact(research_id, "export-tex")
+    assert rejected.value.code == "ARTIFACT_CHANGED" and runner.calls == 0
+
+
+def test_cancellation_ack_waits_for_owned_worker_cleanup_before_serial_ipc_reply(synthetic_cancel_engine, monkeypatch):
+    runtime, runner, research_id = synthetic_cancel_engine
+    requested, release = threading.Event(), threading.Event()
+
+    def delayed_cleanup(*args, cancel, on_handle, **kwargs):
+        runner.calls += 1
+        on_handle({"kind": "fixture", "pid": 123, "simulation": True})
+        runner.entered.set()
+        deadline = time.monotonic() + 5
+        while not cancel() and time.monotonic() < deadline:
+            requested.wait(0.01)
+        assert cancel()
+        requested.set()
+        assert release.wait(5)
+        return {"status": "cancelled", "cleanup_confirmed": True, "simulation": True}
+
+    monkeypatch.setattr(runner, "run", delayed_cleanup)
+    monkeypatch.setattr(runner, "stop", lambda handle: False)
+    runtime.service.start_experiment(research_id)
+    assert runner.entered.wait(2)
+    output = io.BytesIO()
+    dispatcher = ipc.Dispatcher(runtime, output)
+    try:
+        dispatcher.submit(frame("cancel", "workflow.cancel", researchId=research_id))
+        assert requested.wait(2)
+        assert output.getvalue() == b""
+        pending = runtime.service.status(research_id)
+        assert pending["status"] == "running" and pending["cleanup_pending"] is True
+        assert "active_handle" not in pending and "cleanup_confirmed" not in pending
+    finally:
+        release.set()
+        dispatcher.finish()
+    replies = [loads_json(raw) for raw in output.getvalue().splitlines()]
+    assert len(replies) == 1 and replies[0]["id"] == "cancel" and replies[0]["ok"] is True
+    result = replies[0]["result"]
+    assert result["status"] == "cancelled" and result["cleanup_pending"] is False
+    assert result["cleanup_confirmed"] is True and "active_handle" not in result and runner.calls == 1
+
+
+def test_cancellation_ack_failure_and_retry_preserve_engine_evidence(synthetic_cancel_engine):
+    from test_workflow import finished
+    runtime, runner, research_id = synthetic_cancel_engine
+    runner.cleanup_confirmed = False
+    runner.cleanable = False
+    runtime.service.start_experiment(research_id)
+    initial = finished(runtime.service, research_id)
+    runtime.service._jobs[research_id].result(timeout=2)
+    original_execution = runtime.service.artifact_path(research_id, "execution").read_bytes()
+    output = io.BytesIO()
+    dispatcher = ipc.Dispatcher(runtime, output)
+    try:
+        dispatcher.submit(frame("first", "workflow.cancel", researchId=research_id))
+        dispatcher._pool.submit(lambda: None).result(timeout=2)
+        failed = loads_json(output.getvalue().splitlines()[0])
+        assert failed["id"] == "first" and failed["ok"] is False
+        assert failed["error"]["code"] == "CLEANUP_UNCONFIRMED" and "result" not in failed
+        assert runtime.service.status(research_id)["cleanup_pending"] is True
+        runner.cleanable = True
+        dispatcher.submit(frame("retry", "workflow.cancel", researchId=research_id))
+        dispatcher._pool.submit(lambda: None).result(timeout=5)
+        succeeded = loads_json(output.getvalue().splitlines()[1])
+        assert succeeded["id"] == "retry" and succeeded["ok"] is True
+        result = succeeded["result"]
+        assert result["status"] == "cancelled" and result["stage"] == "analyzed"
+        assert result["cleanup_confirmed"] is True and result["cleanup_pending"] is False
+        assert result["execution_attempt"] == initial["execution_attempt"] == 1 and runner.calls == 1
+        assert runtime.service.artifact_path(research_id, "execution").read_bytes() == original_execution
+    finally:
+        runner.cleanable = True
+        dispatcher.finish()
 
 
 def test_literature_search_original_reply_is_frozen(runtime, tmp_path, monkeypatch):

@@ -22,6 +22,8 @@ import {
 
 const busyLabels = {
   "sign-in": "브라우저에서 ChatGPT 로그인을 완료해 주세요.",
+  "select-profile": "선택한 ChatGPT 계정으로 전환하고 있습니다.",
+  disconnect: "이 계정의 연결을 해제하고 있습니다.",
   models: "이 계정에서 사용할 수 있는 모델을 조회하고 있습니다.",
   verify: "선택한 모델의 실제 응답을 기다리고 있습니다.",
 };
@@ -324,12 +326,14 @@ export function App() {
                 <LoaderCircle className="status-spinner" aria-hidden="true" />
                 {busyLabels[busy]}
               </p>
-              <Button
-                variant="neutral"
-                onClick={() => void runAction("cancel", () => window.paperFactory.cancel())}
-              >
-                취소
-              </Button>
+              {(busy === "sign-in" || busy === "models" || busy === "verify") && (
+                <Button
+                  variant="neutral"
+                  onClick={() => void runAction("cancel", () => window.paperFactory.cancel())}
+                >
+                  취소
+                </Button>
+              )}
             </div>
           )}
 

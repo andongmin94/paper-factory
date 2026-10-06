@@ -12,6 +12,8 @@ dist/
 /desktop/node_modules/
 /desktop/dist/
 /desktop/release/
+/desktop/output/
+/desktop/resources/
 /desktop/test-results/
 /desktop/playwright-report/
 /desktop/vendor/siwc-local/dist/

@@ -1,5 +1,5 @@
 import { ChatGPTError, type ChatGPTClient } from '@siwc/local';
-import { appendFile, mkdir } from 'node:fs/promises';
+import { appendFile, mkdir, readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import type { AppError, AppSnapshot } from '../shared/contracts.js';
@@ -42,6 +42,7 @@ const messages: Record<string, [string, AppError['action']]> = {
   revocation_failed: ['이 기기의 연결 정보는 삭제했지만 원격 권한 해제를 확인하지 못했습니다. ChatGPT 설정에서 앱 연결을 확인해 주세요.', 'usage'],
   evidence_write_failed: ['검증 기록을 저장하지 못했습니다. 디스크와 저장 경로를 확인해 주세요.', null],
   connection_busy: ['현재 요청이 끝나거나 취소된 후 다시 시도해 주세요.', null],
+  connection_shutdown_unconfirmed: ['계정 요청 종료를 확인하지 못했습니다. 앱을 유지합니다. 요청이 끝난 뒤 종료를 다시 시도해 주세요.', null],
 };
 
 export function safeError(error: unknown): AppError {
@@ -117,6 +118,10 @@ export class ConnectionController {
   private request?: AbortController;
   private active?: Promise<AppSnapshot>;
   private stopping = false;
+  private disposed = false;
+  private shutdownTask?: Promise<void>;
+  private pendingRecords: string[] = [];
+  private writing?: Promise<void>;
   private unsubscribe: () => void;
 
   constructor(private client: ChatGPTClient, version: string, private evidenceDir: string,
@@ -131,6 +136,7 @@ export class ConnectionController {
   }
 
   snapshot(): AppSnapshot { return structuredClone(this.state); }
+  isBusy(): boolean { return Boolean(this.active) || this.state.busy !== null || this.stopping || this.pendingRecords.length > 0; }
   private emit() { if (!this.stopping) this.publish(this.snapshot()); }
 
   private async sync() {
@@ -153,15 +159,47 @@ export class ConnectionController {
   }
 
   private async record(event: Record<string, string | number | boolean>) {
-    try {
-      await mkdir(this.evidenceDir, { recursive: true });
-      await appendFile(join(this.evidenceDir, 'connection-checks.jsonl'), JSON.stringify({ at: new Date().toISOString(), version: this.state.version,
-        ...(this.state.session.profileId ? { profileId: this.state.session.profileId } : {}), ...event }) + '\n', { mode: 0o600 });
-    } catch { throw new ChatGPTError('evidence_write_failed', ''); }
+    this.pendingRecords.push(JSON.stringify({ at: new Date().toISOString(), version: this.state.version,
+      ...(this.state.session.profileId ? { profileId: this.state.session.profileId } : {}), ...event }) + '\n');
+    await this.flushRecords();
   }
 
-  private run(busy: AppSnapshot['busy'], operation: (signal: AbortSignal) => Promise<void>): Promise<AppSnapshot> {
-    if (this.active || this.stopping) return Promise.resolve({ ...this.snapshot(), error: safeError(new ChatGPTError('connection_busy', '')) });
+  private flushRecords(): Promise<void> {
+    if (this.writing) return this.writing;
+    if (!this.pendingRecords.length) return Promise.resolve();
+    const task = (async () => {
+      try {
+        await mkdir(this.evidenceDir, { recursive: true });
+        const path = join(this.evidenceDir, 'connection-checks.jsonl');
+        while (this.pendingRecords.length) {
+          let bytes: Buffer;
+          try { bytes = await readFile(path); }
+          catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+            bytes = Buffer.alloc(0);
+          }
+          const text = bytes.toString('utf8');
+          if (!Buffer.from(text, 'utf8').equals(bytes) || (text && !text.endsWith('\n'))) throw new Error('Incomplete evidence journal');
+          const lines = text ? text.slice(0, -1).split('\n') : [];
+          for (const line of lines) {
+            const value: unknown = JSON.parse(line);
+            if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid evidence journal');
+          }
+          const pending = this.pendingRecords[0]!;
+          // A failed append may already have committed the whole line. Never
+          // append it twice, and never overwrite or extend a partial journal.
+          if (!lines.some(line => line + '\n' === pending)) await appendFile(path, pending, { mode: 0o600 });
+          this.pendingRecords.shift();
+        }
+      } catch { throw new ChatGPTError('evidence_write_failed', ''); }
+      finally { this.writing = undefined; }
+    })();
+    this.writing = task;
+    return task;
+  }
+
+  private run(busy: NonNullable<AppSnapshot['busy']>, operation: (signal: AbortSignal) => Promise<void>): Promise<AppSnapshot> {
+    if (this.isBusy()) return Promise.resolve({ ...this.snapshot(), error: safeError(new ChatGPTError('connection_busy', '')) });
     const controller = new AbortController();
     let expired = false;
     const timeout = setTimeout(() => { expired = true; controller.abort(); }, busy === 'sign-in' ? 9 * 60_000 : 180_000);
@@ -172,7 +210,7 @@ export class ConnectionController {
     this.emit();
     const task = (async () => {
       try {
-        await this.record({ event: 'request-started', operation: busy ?? 'account' });
+        await this.record({ event: 'request-started', operation: busy });
         controller.signal.throwIfAborted();
         await operation(controller.signal);
       }
@@ -185,7 +223,7 @@ export class ConnectionController {
           // at the evidence boundary rather than persisting a raw response body.
           const param = error instanceof ChatGPTError ? safeDiagnosticParam(error.param) : undefined;
           const responseShape = error instanceof ChatGPTError ? safeDiagnosticShape(error.responseShape) : undefined;
-          await this.record({ event: 'request-failed', operation: busy ?? 'account', code: this.state.error.code,
+          await this.record({ event: 'request-failed', operation: busy, code: this.state.error.code,
             ...(error instanceof ChatGPTError && error.status !== undefined ? { httpStatus: error.status } : {}),
             ...(error instanceof ChatGPTError && error.requestId && /^[a-zA-Z0-9_.:[\]-]{1,160}$/.test(error.requestId) ? { requestId: error.requestId } : {}),
             ...(param ? { param } : {}), ...(responseShape ? { responseShape } : {}) });
@@ -218,7 +256,7 @@ export class ConnectionController {
   }
 
   selectProfile(profileId: string) {
-    return this.run(null, async () => {
+    return this.run('select-profile', async () => {
       this.state.models = [];
       this.state.verification = null;
       await this.client.selectProfile(profileId);
@@ -258,7 +296,7 @@ export class ConnectionController {
   }
 
   disconnect() {
-    return this.run(null, async () => {
+    return this.run('disconnect', async () => {
       this.state.models = [];
       this.state.verification = null;
       await this.client.disconnect();
@@ -266,9 +304,34 @@ export class ConnectionController {
     });
   }
 
-  async shutdown() {
+  shutdown(): Promise<void> {
+    if (this.disposed) return Promise.resolve();
+    if (this.shutdownTask) return this.shutdownTask;
     this.stopping = true;
-    await this.cancel();
-    this.unsubscribe();
+    const task = (async () => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          (async () => { await this.cancel(); await this.flushRecords(); })(),
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(() => reject(new ChatGPTError('connection_shutdown_unconfirmed', messages.connection_shutdown_unconfirmed[0])), 15_000);
+            timer.unref();
+          }),
+        ]);
+        this.unsubscribe();
+        this.disposed = true;
+      } catch (error) {
+        const failure = error instanceof ChatGPTError ? error : new ChatGPTError('connection_shutdown_unconfirmed', messages.connection_shutdown_unconfirmed[0]);
+        this.state.error = safeError(failure);
+        this.stopping = false;
+        this.emit();
+        throw failure;
+      } finally {
+        clearTimeout(timer);
+        this.shutdownTask = undefined;
+      }
+    })();
+    this.shutdownTask = task;
+    return task;
   }
 }

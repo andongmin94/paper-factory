@@ -17,6 +17,7 @@ import re
 import shutil
 import tempfile
 import threading
+import time
 import zipfile
 
 from . import conversion, project
@@ -31,6 +32,9 @@ MAX_BUNDLE_BYTES = 96 * 1024 * 1024
 MAX_SUPPORTING_FILES = 8
 MAX_SUPPORTING_FILE_BYTES = 128 * 1024
 MAX_SUPPORTING_BYTES = 256 * 1024
+CANCEL_CLEANUP_SECONDS = 30
+CANCEL_STOP_SECONDS = 10  # Owned job stop and process wait each allow five seconds.
+SHUTDOWN_CLEANUP_SECONDS = 30
 SCHEMAS = {"plan": ResearchPlan.model_json_schema(), "code": CodeBundle.model_json_schema(),
            "review": ScientificReview.model_json_schema(), "manuscript": ManuscriptDraft.model_json_schema()}
 READABLE_EVIDENCE = {"plan", "observations", "analysis", "literature", "manuscript", "canonical", "runtime-manifest"}
@@ -178,6 +182,7 @@ class WorkflowService:
         self._pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="paperfactory-experiment")
         self._jobs = {}
         self._recovered = set()
+        self._closing = False
         self._closed = False
         try:
             self._recover()
@@ -194,10 +199,12 @@ class WorkflowService:
         return ws
 
     @contextmanager
-    def _operation(self, research_id: str):
+    def _operation(self, research_id: str, *, during_shutdown: bool = False):
         with self._mutex:
-            if self._closed:
+            if self._closed and not during_shutdown:
                 raise ValueError("Research service is closed")
+            if self._closing and not during_shutdown:
+                raise WorkflowError("ENGINE_CLOSING", "Research shutdown is pending; new operations are unavailable")
             ws = self._workspace(research_id)
             with ws.lock("workflow"):
                 yield ws, ws.get("workflow", research_id, Workflow)
@@ -208,6 +215,11 @@ class WorkflowService:
 
     def _public(self, ws: Workspace, record: Workflow, *, context: bool = False, include_materials: bool = True) -> dict:
         data = record.model_dump(mode="json", exclude={"active_handle"})
+        future = self._jobs.get(record.id)
+        data["cleanup_pending"] = bool(record.status == "running" or record.active_handle or
+                                       record.code == "CLEANUP_UNCONFIRMED" or
+                                       (future is not None and not future.done()))
+        data["resume_kind"] = self._resume_kind(record)
         # Execution exceptions may contain private host paths. Keep diagnostics
         # local; public state describes the actionable failure category.
         if record.status in {"blocked", "failed"}:
@@ -280,11 +292,29 @@ class WorkflowService:
             data["instructions"] = "Verified artifacts are ready for the author's scientific review. Download server-owned artifact IDs; no journal submission or publication approval has occurred."
         return data
 
-    def _require(self, ws: Workspace, record: Workflow, stages: set[str]) -> None:
+    def _resume_kind(self, record: Workflow) -> str | None:
+        future = self._jobs.get(record.id)
+        if (self._closing or self._closed or record.status not in {"ready", "cancelled"} or
+                record.active_handle or record.code == "CLEANUP_UNCONFIRMED" or record.terminal_control_failure or
+                (future is not None and not future.done())):
+            return None
+        if record.execution_attempt == 0 and record.stage in {"created", "planned", "code_ready"}:
+            if future is not None or any(key in {"execution", "observations", "analysis", "runtime-manifest"} or
+                                         key.startswith(("execution-", "observations-", "analysis-", "cleanup-"))
+                                         for key in record.artifacts):
+                return None
+            return "preparation"
+        if record.execution_attempt > 0 and record.stage in {"analyzed", "manuscript"}:
+            return "authoring"
+        return None
+
+    def _require(self, ws: Workspace, record: Workflow, stages: set[str], *, allow_cancelled: bool = False) -> None:
         if record.active_handle or record.code == "CLEANUP_UNCONFIRMED":
             raise WorkflowError("CLEANUP_UNCONFIRMED", "Owned worker cleanup must be confirmed before another operation")
         if record.terminal_control_failure:
             raise WorkflowError("CONTROL_FAILED", "A failed scientific control is terminal; retained evidence cannot be rerun for a favorable result")
+        if not allow_cancelled and (record.status == "cancelled" or (record.cancellation_requested and record.status != "completed")):
+            raise WorkflowError("CANCELLED", "Resume explicitly before submitting or executing another research stage")
         if record.status == "running" or record.stage not in stages:
             raise WorkflowError("INVALID_STATE", "Operation is unavailable at research stage " + record.stage)
         _verify_artifacts(ws, record)
@@ -292,6 +322,8 @@ class WorkflowService:
     def create(self, source: str, goal: str) -> dict:
         if self._closed:
             raise ValueError("Research service is closed")
+        if self._closing:
+            raise WorkflowError("ENGINE_CLOSING", "Research shutdown is pending; new operations are unavailable")
         if not isinstance(goal, str) or not goal.strip() or "\x00" in goal:
             raise ValueError("Research goal must be nonempty text")
         record = Workflow(project_id="pending", goal=goal.strip())
@@ -326,13 +358,40 @@ class WorkflowService:
         return result
 
     def status(self, research_id: str, *, include_materials: bool = True) -> dict:
-        with self._operation(research_id) as (ws, record):
+        with self._operation(research_id, during_shutdown=True) as (ws, record):
             return self._public(ws, record, context=True, include_materials=include_materials)
 
     def artifact_path(self, research_id: str, artifact_id: str) -> Path:
         """Resolve a server-owned artifact ID; adapters never accept file paths."""
-        with self._operation(research_id) as (ws, record):
+        with self._operation(research_id, during_shutdown=True) as (ws, record):
             return _artifact(ws, record, artifact_id)
+
+    def resolve_artifact(self, research_id: str, artifact_id: str) -> dict:
+        """Bind saved manuscript bytes to the frozen figures they reference."""
+        with self._operation(research_id, during_shutdown=True) as (ws, record):
+            path = _artifact(ws, record, artifact_id)
+            frozen = record.artifacts[artifact_id]
+            companions, names = [], set()
+            if artifact_id in {"export-md", "export-tex"}:
+                for key in sorted(record.artifacts):
+                    if not key.startswith("export-figure-"):
+                        continue
+                    figure = _artifact(ws, record, key)
+                    if (re.fullmatch(r"figure-[0-9]+\.png", figure.name, re.ASCII) is None or
+                            key != "export-" + figure.stem or figure.parent != path.parent or figure.name.casefold() in names):
+                        raise WorkflowError("ARTIFACT_CHANGED", "Export figures require unique safe names in the manuscript directory")
+                    names.add(figure.name.casefold())
+                    item = record.artifacts[key]
+                    companions.append({"name": figure.name, "path": str(figure), "sha256": item.sha256, "size": item.size})
+                markdown = _artifact(ws, record, "export-md")
+                references = set(re.findall(r"!\[[^\]]*\]\(([^)]+)\)", markdown.read_text(encoding="utf-8")))
+                if markdown.parent != path.parent or references != names:
+                    raise WorkflowError("ARTIFACT_CHANGED", "Markdown figure references differ from the frozen export inventory")
+                if artifact_id == "export-tex":
+                    references = set(re.findall(r"\\includegraphics(?:\[[^\]]*\])?\{([^{}]+)\}", path.read_text(encoding="utf-8")))
+                    if references != names:
+                        raise WorkflowError("ARTIFACT_CHANGED", "TeX figure references differ from the frozen export inventory")
+            return {"path": str(path), "sha256": frozen.sha256, "size": frozen.size, "companions": companions}
 
     def add_evidence(self, research_id: str, files: list[dict]) -> dict:
         """Append bounded untrusted UTF-8 documents; never infer or dispatch."""
@@ -369,7 +428,7 @@ class WorkflowService:
         with self._operation(research_id) as (ws, record):
             if record.status not in {"ready", "cancelled"}:
                 raise WorkflowError("INVALID_STATE", "Supporting documents cannot be imported into this research status")
-            self._require(ws, record, {"created", "planned", "analyzed"})
+            self._require(ws, record, {"created", "planned", "analyzed"}, allow_cancelled=True)
             if record.stage == "analyzed":
                 self._require_successful_analysis(ws, record)
             existing = _supporting_documents(ws, record)
@@ -564,7 +623,7 @@ class WorkflowService:
         content = receipt.model_dump(mode="json", exclude_none=True)
         stem = f"{receipt.id}-{receipt.outcome}"
         key = "model-evidence-" + stem
-        with self._operation(research_id) as (ws, record):
+        with self._operation(research_id, during_shutdown=True) as (ws, record):
             path = ws.path(f"research/model-evidence/{stem}.json")
             if key in record.artifacts:
                 if _read(ws, record, key) != content:
@@ -661,35 +720,122 @@ class WorkflowService:
             return self._public(ws, record)
 
     def cancel(self, research_id: str) -> dict:
-        with self._operation(research_id) as (ws, record):
-            if record.status == "completed":
-                return self._public(ws, record)
-            record.cancellation_requested = True
-            if record.status != "running" and not record.terminal_control_failure:
+        """Acknowledge cancellation only after the owned worker and cleanup settle."""
+        deadline = time.monotonic() + CANCEL_CLEANUP_SECONDS
+        with self._operation(research_id, during_shutdown=True) as (ws, record):
+            if record.status != "completed":
+                record.cancellation_requested = True
+            if record.status == "ready" and not record.terminal_control_failure and record.code != "CLEANUP_UNCONFIRMED":
                 record.status, record.code = "cancelled", "CANCELLED"
             self._save(ws, record)
-            return self._public(ws, record)
+            future = self._jobs.get(research_id)
 
-    def resume_writing(self, research_id: str) -> dict:
-        """Resume only authoring from verified successful retained evidence."""
+        # The worker needs these same workflow locks to commit its final receipt.
+        if future is not None and not future.done():
+            _, pending = wait((future,), timeout=max(0, deadline - time.monotonic()))
+            if pending and not future.done():
+                with self._operation(research_id, during_shutdown=True) as (ws, record):
+                    record.code = "CLEANUP_UNCONFIRMED"
+                    record.message = "Owned experiment did not finish cleanup before the cancellation deadline."
+                    self._save(ws, record)
+                raise WorkflowError("CLEANUP_UNCONFIRMED", "Owned experiment cleanup remains unconfirmed")
+
+        with self._operation(research_id, during_shutdown=True) as (ws, record):
+            handle = dict(record.active_handle)
+        stopped = False
+        # Native stop uses the private identity and must fit the same deadline.
+        if handle and deadline - time.monotonic() >= CANCEL_STOP_SECONDS:
+            try:
+                stopped = self.runner.stop(handle)
+            except Exception:
+                pass
+
+        with self._operation(research_id, during_shutdown=True) as (ws, record):
+            # Only the exact identity inspected outside the lock may be cleared.
+            cleanup_verified = stopped and record.active_handle == handle
+            if cleanup_verified:
+                self._record_cleanup(ws, record)
+                record.active_handle = {}
+                # Reconcile retained evidence only; never dispatch another run.
+                try:
+                    if record.status != "completed" and "observations" in record.artifacts:
+                        science.reject_failed_controls(_read(ws, record, "observations"))
+                    if (record.status != "completed" and not record.terminal_control_failure and
+                            "execution" in record.artifacts and _read(ws, record, "execution").get("status") == "succeeded"):
+                        self._analyze(ws, record)
+                        record.status, record.stage, record.code = "ready", "analyzed", None
+                except science.ControlFailure:
+                    record.terminal_control_failure, record.code = True, "CONTROL_FAILED"
+                except ValueError as exc:
+                    record.code, record.message = getattr(exc, "code", "EXPERIMENT_INVALID"), str(exc)[:1500]
+            future = self._jobs.get(research_id)
+            cleanup_verified = cleanup_verified or ("execution" in record.artifacts and self._confirmed_cleanup(ws, record))
+            future_failed = future is not None and future.done() and (future.cancelled() or future.exception() is not None)
+            unresolved = bool(record.active_handle or (future is not None and not future.done()) or
+                              (record.status == "running" and future is None and not cleanup_verified) or
+                              (future_failed and not cleanup_verified) or
+                              (record.code == "CLEANUP_UNCONFIRMED" and not cleanup_verified))
+            if unresolved:
+                record.code = "CLEANUP_UNCONFIRMED"
+                record.message = "Owned experiment cleanup remains unconfirmed."
+                self._save(ws, record)
+                raise WorkflowError("CLEANUP_UNCONFIRMED", record.message)
+            if record.status != "completed":
+                if record.terminal_control_failure:
+                    record.code = "CONTROL_FAILED"
+                elif record.status not in {"blocked", "failed"} or record.code == "CLEANUP_UNCONFIRMED":
+                    record.status, record.code = "cancelled", "CANCELLED"
+                    if record.stage == "execute":
+                        record.stage = "code_ready"
+            self._save(ws, record)
+            if future_failed:
+                self._jobs.pop(research_id, None)
+            result = self._public(ws, record)
+            result["cleanup_confirmed"] = True
+            return result
+
+    def resume(self, research_id: str) -> dict:
+        """Explicitly resume preparation or authoring, without dispatching a run."""
         with self._operation(research_id) as (ws, record):
-            if record.status != "cancelled" or record.stage not in {"analyzed", "manuscript"}:
-                raise WorkflowError("INVALID_STATE", "Only cancelled analyzed or manuscript authoring may resume")
-            self._require(ws, record, {"analyzed", "manuscript"})
-            self._require_successful_analysis(ws, record)
-            identifier = uid("authoring-resume")
+            future = self._jobs.get(research_id)
+            if future is not None and not future.done():
+                raise WorkflowError("CLEANUP_UNCONFIRMED", "Owned worker completion must be confirmed before resuming")
+            self._require(ws, record, {"created", "planned", "code_ready", "analyzed", "manuscript"}, allow_cancelled=True)
+            kind = self._resume_kind(record)
+            if kind is None:
+                raise WorkflowError("INVALID_STATE", "Only unexecuted preparation or verified authoring may resume")
+            if kind == "authoring":
+                self._require_successful_analysis(ws, record)
+            else:
+                _artifact(ws, record, "context")
+                if ws.path("research/executions").exists():
+                    raise WorkflowError("EXPERIMENT_ALREADY_DISPATCHED", "Preparation cannot resume over retained execution files")
+                if record.stage in {"planned", "code_ready"}:
+                    ResearchPlan.model_validate(_read(ws, record, "plan"))
+                if record.stage == "code_ready":
+                    metadata = _read(ws, record, "bundle")
+                    review = _read(ws, record, f"code-review-{record.code_attempt}")
+                    _accepted(review.get("review", {}))
+                    if (metadata.get("source_digest") != ws.latest("project", Project).snapshot_digest or
+                            metadata.get("protocol_sha256") != record.artifacts["plan"].sha256 or
+                            review.get("origin") != "native_host_submission" or
+                            review.get("bundle_sha256") != record.artifacts["bundle"].sha256 or
+                            review.get("protocol_sha256") != record.artifacts["plan"].sha256):
+                        raise WorkflowError("ARTIFACT_CHANGED", "Prepared code and its approval must bind the frozen source and protocol")
+            identifier = uid("workflow-resume")
             path = ws.path("research/" + identifier + ".json")
-            if path.exists():
-                raise WorkflowError("RESUME_EVIDENCE_CONFLICT", "An authoring resume receipt cannot overwrite retained bytes")
-            write_json(path, {"event": "authoring-resume", "at": now(), "previous_status": record.status,
-                             "previous_stage": record.stage, "previous_workflow": record.model_dump(mode="json"),
-                             "execution_sha256": record.artifacts["execution"].sha256,
-                             "execution_attempt": record.execution_attempt,
-                             "observations_sha256": record.artifacts["observations"].sha256,
-                             "analysis_sha256": record.artifacts["analysis"].sha256})
+            if path.exists() or identifier in record.artifacts:
+                raise WorkflowError("RESUME_EVIDENCE_CONFLICT", "A workflow resume receipt cannot overwrite retained bytes")
+            receipt = {"event": "workflow-resume", "kind": kind, "at": now(), "previous_status": record.status,
+                       "previous_stage": record.stage, "previous_workflow": record.model_dump(mode="json"),
+                       "execution_attempt": record.execution_attempt}
+            if kind == "authoring":
+                receipt.update({name + "_sha256": record.artifacts[key].sha256 for name, key in
+                                (("execution", "execution"), ("observations", "observations"), ("analysis", "analysis"))})
+            write_json(path, receipt)
             _freeze(ws, record, identifier, path)
             record.status, record.code, record.cancellation_requested = "ready", None, False
-            record.message = "Authoring resumed from retained successful evidence; no experiment was dispatched."
+            record.message = "Research resumed from verified retained evidence; no experiment was dispatched."
             self._save(ws, record)
             return self._public(ws, record)
 
@@ -776,7 +922,7 @@ class WorkflowService:
         ws = self._workspace(research_id)
 
         def stopped():
-            return self._closed or ws.get("workflow", research_id, Workflow).cancellation_requested
+            return self._closing or self._closed or ws.get("workflow", research_id, Workflow).cancellation_requested
 
         def retain(handle):
             with self._mutex, ws.lock("workflow"):
@@ -991,7 +1137,7 @@ class WorkflowService:
         for key in record.artifacts:
             if key.startswith("export-attempt-"):
                 selection["export-attempts/" + key + ".json"] = _artifact(ws, record, key)
-            if key.startswith("authoring-resume-"):
+            if key.startswith("workflow-resume-"):
                 path = _artifact(ws, record, key)
                 selection["authoring/" + path.name] = path
             if re.fullmatch(r"authoring-revision-[a-f0-9]{12}", key):
@@ -1153,7 +1299,7 @@ class WorkflowService:
                 with ws.lock("execution"), ws.lock("workflow"):
                     record = ws.get("workflow", path.name, Workflow)
                     self._recovered.add(record.id)
-                    cleaned = not record.active_handle
+                    cleaned = not record.active_handle and self._confirmed_cleanup(ws, record)
                     if record.active_handle:
                         try:
                             cleaned = self.runner.stop(record.active_handle)
@@ -1181,8 +1327,12 @@ class WorkflowService:
                 if "Another operation is already running" not in str(exc):
                     raise
 
-    def close(self) -> None:
+    def close(self, *, deadline: float | None = None) -> None:
+        deadline = deadline if deadline is not None else time.monotonic() + SHUTDOWN_CLEANUP_SECONDS
         with self._mutex:
+            if self._closed:
+                return
+            self._closing = True
             jobs = dict(self._jobs)
             owned_ids = set(jobs) | self._recovered
             for research_id, future in jobs.items():
@@ -1192,45 +1342,62 @@ class WorkflowService:
                         record = ws.get("workflow", research_id, Workflow)
                         record.cancellation_requested = True
                         self._save(ws, record)
-            self._closed = True
-        _, pending = wait(jobs.values(), timeout=10) if jobs else (set(), set())
+        _, pending = wait(jobs.values(), timeout=max(0, deadline - time.monotonic())) if jobs else (set(), set())
         if pending:
             for research_id, future in jobs.items():
-                if future in pending:
+                if future in pending and not future.done():
                     ws = self._workspace(research_id)
-                    record = ws.get("workflow", research_id, Workflow)
-                    if record.active_handle:
-                        try:
-                            self.runner.stop(record.active_handle)
-                        except Exception:
-                            pass
-            _, pending = wait(pending, timeout=10)
-        self._pool.shutdown(wait=not pending, cancel_futures=False)
-        if pending:
+                    with self._mutex, ws.lock("workflow"):
+                        record = ws.get("workflow", research_id, Workflow)
+                        record.code = "CLEANUP_UNCONFIRMED"
+                        record.message = "Owned experiment did not finish cleanup before the shutdown deadline."
+                        self._save(ws, record)
+            if any(not future.done() for future in pending):
+                raise WorkflowError("CLEANUP_UNCONFIRMED", "Owned experiment jobs did not finish cleanup before shutdown")
+        if time.monotonic() >= deadline:
             raise WorkflowError("CLEANUP_UNCONFIRMED", "Owned experiment jobs did not finish cleanup before shutdown")
         for research_id in owned_ids:
             ws = self._workspace(research_id)
             with self._mutex, ws.lock("workflow"):
                 record = ws.get("workflow", research_id, Workflow)
-                if record.active_handle:
-                    try:
-                        cleaned = self.runner.stop(record.active_handle)
-                    except Exception:
-                        cleaned = False
-                    if cleaned:
-                        self._record_cleanup(ws, record)
-                        record.active_handle = {}
+                handle = dict(record.active_handle)
+            cleaned = False
+            if handle and deadline - time.monotonic() >= CANCEL_STOP_SECONDS:
+                try:
+                    cleaned = self.runner.stop(handle)
+                except Exception:
+                    pass
+            with self._mutex, ws.lock("workflow"):
+                record = ws.get("workflow", research_id, Workflow)
+                cleanup_verified = cleaned and record.active_handle == handle
+                if cleanup_verified:
+                    self._record_cleanup(ws, record)
+                    record.active_handle = {}
+                    if record.status != "completed":
                         record.code = "INTERRUPTED"
                         try:
                             if "observations" in record.artifacts:
                                 science.reject_failed_controls(_read(ws, record, "observations"))
-                            if "execution" in record.artifacts and _read(ws, record, "execution").get("status") == "succeeded":
+                            if (not record.terminal_control_failure and "execution" in record.artifacts and
+                                    _read(ws, record, "execution").get("status") == "succeeded"):
                                 self._analyze(ws, record)
                                 record.status, record.stage, record.code = "ready", "analyzed", None
                         except science.ControlFailure:
                             record.terminal_control_failure, record.code = True, "CONTROL_FAILED"
                         except ValueError as exc:
                             record.code, record.message = getattr(exc, "code", "EXPERIMENT_INVALID"), str(exc)[:1500]
-                        self._save(ws, record)
-                if record.active_handle or record.code == "CLEANUP_UNCONFIRMED":
+                        if record.terminal_control_failure:
+                            record.code = "CONTROL_FAILED"
+                    self._save(ws, record)
+                cleanup_verified = cleanup_verified or ("execution" in record.artifacts and self._confirmed_cleanup(ws, record))
+                future = jobs.get(research_id)
+                future_failed = future is not None and (future.cancelled() or future.exception() is not None)
+                if (record.active_handle or (future_failed and not cleanup_verified) or
+                        (record.status == "running" and future is None and not cleanup_verified) or
+                        (record.code == "CLEANUP_UNCONFIRMED" and not cleanup_verified)):
+                    record.code = "CLEANUP_UNCONFIRMED"
+                    record.message = "Owned experiment cleanup remains unconfirmed."
+                    self._save(ws, record)
                     raise WorkflowError("CLEANUP_UNCONFIRMED", "Owned experiment cleanup remains unconfirmed")
+        self._pool.shutdown(wait=True, cancel_futures=False)
+        self._closed = True

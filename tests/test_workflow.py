@@ -2,6 +2,7 @@
 
 import base64
 import copy
+from concurrent.futures import Future, ThreadPoolExecutor
 import hashlib
 import json
 import os
@@ -364,8 +365,284 @@ def test_start_is_immediate_and_cancellation_stops_owned_execution(setup):
     assert rejected.value.code == "EXPERIMENT_ALREADY_DISPATCHED"
     cancelled = service.cancel(research_id)
     assert cancelled["cancellation_requested"]
-    result = finished(service, research_id)
-    assert result["status"] == "cancelled" and runner.calls == 1
+    assert cancelled["status"] == "cancelled" and runner.calls == 1
+    assert cancelled["cleanup_confirmed"] is True and cancelled["cleanup_pending"] is False
+    assert service._jobs[research_id].done()
+    assert not Workspace(service.root / research_id).get("workflow", research_id, Workflow).active_handle
+
+
+def test_cancel_waits_for_worker_checkpoint_without_holding_workflow_locks(setup, monkeypatch):
+    service, runner, research_id = setup
+    entered, requested, release = threading.Event(), threading.Event(), threading.Event()
+
+    def delayed_cleanup(*args, cancel, on_handle, **kwargs):
+        runner.calls += 1
+        on_handle({"kind": "fixture", "pid": 123, "simulation": True})
+        entered.set()
+        deadline = time.monotonic() + 5
+        while not cancel() and time.monotonic() < deadline:
+            requested.wait(0.01)
+        assert cancel()
+        requested.set()
+        assert release.wait(5)
+        return {"status": "cancelled", "cleanup_confirmed": True, "simulation": True}
+
+    monkeypatch.setattr(runner, "run", delayed_cleanup)
+    monkeypatch.setattr(runner, "stop", lambda handle: False)
+    prepare(service, research_id)
+    service.start_experiment(research_id)
+    assert entered.wait(2)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        cancellation = pool.submit(service.cancel, research_id)
+        try:
+            assert requested.wait(2)
+            assert not cancellation.done()
+            pending = service.status(research_id)
+            assert pending["status"] == "running" and pending["cleanup_pending"] is True
+            assert pending["cancellation_requested"] is True
+        finally:
+            release.set()
+        result = cancellation.result(timeout=2)
+    assert result["status"] == "cancelled" and result["cleanup_confirmed"] is True
+    assert result["cleanup_pending"] is False and runner.calls == 1
+
+
+def test_cancel_deadline_preserves_pending_identity_and_retry_never_redispatches(setup, monkeypatch):
+    from paper_factory import workflow as workflow_module
+    service, runner, research_id = setup
+    release = threading.Event()
+
+    def delayed_cleanup(*args, on_handle, **kwargs):
+        runner.calls += 1
+        on_handle({"kind": "fixture", "pid": 123, "simulation": True})
+        runner.entered.set()
+        assert release.wait(5)
+        return {"status": "cancelled", "cleanup_confirmed": True, "simulation": True}
+
+    monkeypatch.setattr(runner, "run", delayed_cleanup)
+    monkeypatch.setattr(runner, "stop", lambda handle: False)
+    monkeypatch.setattr(workflow_module, "CANCEL_CLEANUP_SECONDS", 0.05)
+    prepare(service, research_id)
+    service.start_experiment(research_id)
+    assert runner.entered.wait(2)
+    try:
+        started = time.monotonic()
+        with pytest.raises(WorkflowError) as rejected:
+            service.cancel(research_id)
+        assert rejected.value.code == "CLEANUP_UNCONFIRMED"
+        assert time.monotonic() - started < 1
+        pending = service.status(research_id)
+        assert pending["code"] == "CLEANUP_UNCONFIRMED" and pending["cleanup_pending"] is True
+        assert "cleanup_confirmed" not in pending
+        record = Workspace(service.root / research_id).get("workflow", research_id, Workflow)
+        assert record.active_handle["pid"] == 123 and record.execution_attempt == 1
+    finally:
+        release.set()
+        service._jobs[research_id].result(timeout=2)
+    result = service.cancel(research_id)
+    assert result["status"] == "cancelled" and result["cleanup_pending"] is False
+    assert result["cleanup_confirmed"] is True and result["execution_attempt"] == 1 and runner.calls == 1
+
+
+def test_cancel_does_not_restart_the_deadline_for_post_worker_cleanup(setup, monkeypatch):
+    from paper_factory import workflow as workflow_module
+    service, runner, research_id = setup
+    release, entered = threading.Event(), threading.Event()
+
+    def unresolved_cleanup(*args, on_handle, **kwargs):
+        runner.calls += 1
+        handle = {"kind": "fixture", "pid": 123, "simulation": True}
+        on_handle(handle)
+        entered.set()
+        assert release.wait(5)
+        return {"status": "cancelled", "cleanup_confirmed": False, "active_handle": handle, "simulation": True}
+
+    monkeypatch.setattr(runner, "run", unresolved_cleanup)
+    prepare(service, research_id)
+    service.start_experiment(research_id)
+    assert entered.wait(2)
+    elapsed, stop_calls = [0], []
+
+    def late_worker_exit(futures, timeout):
+        assert timeout == workflow_module.CANCEL_CLEANUP_SECONDS
+        release.set()
+        for future in futures:
+            future.result(timeout=2)
+        elapsed[0] = workflow_module.CANCEL_CLEANUP_SECONDS - 0.5
+        return set(futures), set()
+
+    with monkeypatch.context() as clock_patch:
+        clock_patch.setattr(workflow_module, "time", SimpleNamespace(monotonic=lambda: elapsed[0]))
+        clock_patch.setattr(workflow_module, "wait", late_worker_exit)
+        clock_patch.setattr(runner, "stop", lambda handle: stop_calls.append(handle) or True)
+        try:
+            with pytest.raises(WorkflowError) as rejected:
+                service.cancel(research_id)
+            assert rejected.value.code == "CLEANUP_UNCONFIRMED" and stop_calls == []
+            assert service.status(research_id)["cleanup_pending"] is True
+        finally:
+            release.set()
+    result = service.cancel(research_id)
+    assert result["cleanup_confirmed"] is True and result["cleanup_pending"] is False and runner.calls == 1
+
+
+@pytest.mark.parametrize("failed_control", [False, True])
+def test_cancel_retry_confirms_cleanup_and_retains_success_or_failed_control_evidence(setup, failed_control):
+    service, runner, research_id = setup
+    runner.cleanup_confirmed = False
+    runner.cleanable = False
+    if failed_control:
+        runner.outputs["controls"][1]["passed"] = False
+    prepare(service, research_id)
+    service.start_experiment(research_id)
+    initial = finished(service, research_id)
+    assert initial["code"] == "CLEANUP_UNCONFIRMED" and initial["cleanup_pending"] is True
+    service._jobs[research_id].result(timeout=2)
+    retained = {key: service.artifact_path(research_id, key).read_bytes() for key in initial["artifacts"]}
+    with pytest.raises(WorkflowError) as rejected:
+        service.cancel(research_id)
+    assert rejected.value.code == "CLEANUP_UNCONFIRMED"
+    pending = service.status(research_id)
+    assert pending["code"] == "CLEANUP_UNCONFIRMED" and pending["cleanup_pending"] is True
+    runner.cleanable = True
+    result = service.cancel(research_id)
+    assert result["cleanup_confirmed"] is True and result["cleanup_pending"] is False
+    assert runner.calls == 1 and result["execution_attempt"] == 1
+    assert all(service.artifact_path(research_id, key).read_bytes() == raw for key, raw in retained.items())
+    cleanup = json.loads(service.artifact_path(research_id, "cleanup-1").read_bytes())
+    assert cleanup["confirmed"] is True and cleanup["execution_sha256"] == initial["artifacts"]["execution"]["sha256"]
+    if failed_control:
+        assert result["status"] == "blocked" and result["code"] == "CONTROL_FAILED"
+        assert result["terminal_control_failure"] is True and "analysis" not in result
+    else:
+        assert result["status"] == "cancelled" and result["stage"] == "analyzed"
+        assert result["code"] == "CANCELLED" and "analysis" in result
+
+
+def test_cancel_cannot_confirm_an_orphan_cleanup_failure_without_an_identity_or_receipt(setup):
+    service, runner, research_id = setup
+    ws = Workspace(service.root / research_id)
+    record = ws.get("workflow", research_id, Workflow)
+    record.status, record.code = "blocked", "CLEANUP_UNCONFIRMED"
+    ws.save("workflow", record)
+    for _ in range(2):
+        with pytest.raises(WorkflowError) as rejected:
+            service.cancel(research_id)
+        assert rejected.value.code == "CLEANUP_UNCONFIRMED"
+        pending = service.status(research_id)
+        assert pending["status"] == "blocked" and pending["code"] == "CLEANUP_UNCONFIRMED"
+        assert pending["cleanup_pending"] is True and "cleanup_confirmed" not in pending
+    assert runner.calls == 0
+
+
+def test_cancel_rejects_a_failed_future_until_the_retained_identity_is_actually_stopped(setup):
+    service, runner, research_id = setup
+    future = Future()
+    future.set_exception(OSError("Synthetic worker checkpoint failure"))
+    service._jobs[research_id] = future
+    ws = Workspace(service.root / research_id)
+    record = ws.get("workflow", research_id, Workflow)
+    record.status, record.stage, record.execution_attempt = "running", "execute", 1
+    ws.save("workflow", record)
+    with pytest.raises(WorkflowError) as rejected:
+        service.cancel(research_id)
+    assert rejected.value.code == "CLEANUP_UNCONFIRMED"
+    assert service.status(research_id)["cleanup_pending"] is True
+    record = ws.get("workflow", research_id, Workflow)
+    record.active_handle = {"kind": "fixture", "pid": 123, "simulation": True}
+    ws.save("workflow", record)
+    runner.cleanable = False
+    with pytest.raises(WorkflowError) as rejected:
+        service.cancel(research_id)
+    assert rejected.value.code == "CLEANUP_UNCONFIRMED"
+    runner.cleanable = True
+    result = service.cancel(research_id)
+    assert result["status"] == "cancelled" and result["stage"] == "code_ready"
+    assert result["cleanup_confirmed"] is True and result["cleanup_pending"] is False
+    assert "execution" not in result["artifacts"] and result["execution_attempt"] == 1 and runner.calls == 0
+    assert service.cancel(research_id)["cleanup_confirmed"] is True
+
+
+@pytest.mark.parametrize("previous_code", [None, "CLEANUP_UNCONFIRMED"])
+def test_cancel_failure_without_identity_or_receipt_remains_pending_after_restart(setup, previous_code):
+    service, runner, research_id = setup
+    ws = Workspace(service.root / research_id)
+    record = ws.get("workflow", research_id, Workflow)
+    record.status, record.stage, record.code = "running", "execute", previous_code
+    ws.save("workflow", record)
+    recovered = WorkflowService(service.home, runner=runner, collector=collect)
+    try:
+        pending = recovered.status(research_id)
+        assert pending["code"] == "CLEANUP_UNCONFIRMED" and pending["cleanup_pending"] is True
+        with pytest.raises(WorkflowError) as rejected:
+            recovered.cancel(research_id)
+        assert rejected.value.code == "CLEANUP_UNCONFIRMED"
+        assert recovered.status(research_id)["cleanup_pending"] is True and runner.calls == 0
+    finally:
+        with pytest.raises(WorkflowError) as rejected:
+            recovered.close()
+        assert rejected.value.code == "CLEANUP_UNCONFIRMED"
+
+
+def test_cancel_waiting_for_a_worker_preserves_its_natural_completion(setup, monkeypatch):
+    service, runner, research_id = setup
+    entered, release = threading.Event(), threading.Event()
+
+    def finish_naturally(identifier, lease):
+        try:
+            entered.set()
+            assert release.wait(5)
+            with service._operation(identifier) as (ws, record):
+                record.status, record.stage, record.code = "completed", "exported", None
+                service._save(ws, record)
+        finally:
+            lease.__exit__(None, None, None)
+
+    monkeypatch.setattr(service, "_execute", finish_naturally)
+    prepare(service, research_id)
+    service.start_experiment(research_id)
+    assert entered.wait(2)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        cancellation = pool.submit(service.cancel, research_id)
+        try:
+            deadline = time.monotonic() + 2
+            while not service.status(research_id)["cancellation_requested"] and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert service.status(research_id)["cancellation_requested"] is True
+            assert not cancellation.done()
+        finally:
+            release.set()
+        result = cancellation.result(timeout=2)
+    assert result["status"] == "completed" and result["stage"] == "exported" and result["code"] is None
+    assert result["cleanup_confirmed"] is True and result["cleanup_pending"] is False and runner.calls == 0
+
+
+def test_cancel_preserves_a_completed_workflow_and_existing_artifacts(setup):
+    service, runner, research_id = setup
+    ws = retained_authoring_fixture(service, research_id)
+    record = ws.get("workflow", research_id, Workflow)
+    record.status, record.stage = "completed", "exported"
+    ws.save("workflow", record)
+    retained = {key: service.artifact_path(research_id, key).read_bytes() for key in record.artifacts}
+    result = service.cancel(research_id)
+    assert result["status"] == "completed" and result["stage"] == "exported"
+    assert result["cancellation_requested"] is False
+    assert result["cleanup_confirmed"] is True and result["cleanup_pending"] is False
+    assert all(service.artifact_path(research_id, key).read_bytes() == raw for key, raw in retained.items())
+    assert runner.calls == 0
+
+
+def test_cancel_preserves_a_terminal_control_failure(setup):
+    service, runner, research_id = setup
+    runner.outputs["controls"][1]["passed"] = False
+    prepare(service, research_id)
+    service.start_experiment(research_id)
+    initial = finished(service, research_id)
+    assert initial["terminal_control_failure"] is True
+    result = service.cancel(research_id)
+    assert result["status"] == "blocked" and result["code"] == "CONTROL_FAILED"
+    assert result["terminal_control_failure"] is True and result["artifacts"] == initial["artifacts"]
+    assert result["cleanup_confirmed"] is True and result["cleanup_pending"] is False and runner.calls == 1
 
 
 def retained_authoring_fixture(service, research_id):
@@ -395,38 +672,172 @@ def retained_authoring_fixture(service, research_id):
     return ws
 
 
+@pytest.mark.parametrize("stage", ["created", "planned", "code_ready"])
+@pytest.mark.parametrize("previous_status", ["ready", "cancelled"])
+def test_preparation_resume_preserves_verified_inputs_and_never_dispatches(setup, stage, previous_status, monkeypatch):
+    service, runner, research_id = setup
+    if stage == "planned":
+        service.submit_plan(research_id, protocol())
+    elif stage == "code_ready":
+        prepare(service, research_id)
+    state = service.cancel(research_id) if previous_status == "cancelled" else service.status(research_id)
+    assert state["resume_kind"] == "preparation" and state["execution_attempt"] == 0
+    ws = Workspace(service.root / research_id)
+    prior = ws.get("workflow", research_id, Workflow).model_dump(mode="json")
+    retained = {key: service.artifact_path(research_id, key).read_bytes() for key in state["artifacts"]}
+    monkeypatch.setattr(runner, "run", lambda *args, **kwargs: pytest.fail("Preparation resume dispatched a measurement"))
+    monkeypatch.setattr(runner, "status", lambda: pytest.fail("Preparation resume launched a worker probe"))
+    result = service.resume(research_id)
+    assert result["status"] == "ready" and result["stage"] == stage and result["resume_kind"] == "preparation"
+    assert result["execution_attempt"] == 0 and result["cancellation_requested"] is False and runner.calls == 0
+    keys = [key for key in result["artifacts"] if key.startswith("workflow-resume-")]
+    assert len(keys) == 1
+    resumed = json.loads(service.artifact_path(research_id, keys[0]).read_bytes())
+    assert resumed["event"] == "workflow-resume" and resumed["kind"] == "preparation"
+    assert resumed["previous_workflow"] == prior and resumed["execution_attempt"] == 0
+    assert "execution_sha256" not in resumed
+    assert all(service.artifact_path(research_id, key).read_bytes() == content for key, content in retained.items())
+
+
+@pytest.mark.parametrize("defect,expected_code", [
+    ("source_changed", None), ("plan_changed", "ARTIFACT_CHANGED"), ("bundle_missing", "ARTIFACT_MISSING"),
+    ("review_rejected", "REVIEW_REJECTED"), ("execution_attempt", "INVALID_STATE"),
+    ("execution_artifact", "INVALID_STATE"), ("execution_files", "EXPERIMENT_ALREADY_DISPATCHED"),
+    ("pending_future", "CLEANUP_UNCONFIRMED"), ("terminal_control", "CONTROL_FAILED"),
+    ("cleanup_unconfirmed", "CLEANUP_UNCONFIRMED"),
+])
+def test_preparation_resume_rejects_unknown_execution_or_changed_frozen_inputs(setup, defect, expected_code):
+    service, runner, research_id = setup
+    prepare(service, research_id)
+    service.cancel(research_id)
+    ws = Workspace(service.root / research_id)
+    record = ws.get("workflow", research_id, Workflow)
+    pending = None
+    if defect == "source_changed":
+        source = ws.path("source/transform.js")
+        source.chmod(0o644)
+        source.write_text("export function changed() { return 0; }", encoding="utf-8")
+    elif defect == "plan_changed":
+        service.artifact_path(research_id, "plan").write_text("{}", encoding="utf-8")
+    elif defect == "bundle_missing":
+        record.artifacts.pop("bundle")
+    elif defect == "review_rejected":
+        key = "code-review-1"
+        path = service.artifact_path(research_id, key)
+        review = json.loads(path.read_bytes())
+        review["review"]["accepted"], review["review"]["issues"] = False, ["Synthetic reviewer rejection"]
+        write_json(path, review)
+        record.artifacts[key] = FrozenArtifact(path=path.relative_to(ws.root).as_posix(), sha256=digest_file(path), size=path.stat().st_size)
+    elif defect == "execution_attempt":
+        record.execution_attempt = 1
+    elif defect == "execution_artifact":
+        record.artifacts["execution-1"] = record.artifacts["context"]
+    elif defect == "execution_files":
+        path = ws.path("research/executions/attempt-1")
+        path.mkdir(parents=True)
+        write_json(path / "execution.json", {"fixture": "uncheckpointed execution bytes"})
+    elif defect == "pending_future":
+        pending = Future()
+        service._jobs[research_id] = pending
+    elif defect == "terminal_control":
+        record.terminal_control_failure = True
+    else:
+        record.code = "CLEANUP_UNCONFIRMED"
+    ws.save("workflow", record)
+    before = record.model_dump(mode="json")
+    try:
+        with pytest.raises(ValueError) as rejected:
+            service.resume(research_id)
+        if expected_code:
+            assert rejected.value.code == expected_code
+        after = ws.get("workflow", research_id, Workflow).model_dump(mode="json")
+        assert after == before and runner.calls == 0
+        assert not any(key.startswith("workflow-resume-") for key in after["artifacts"])
+    finally:
+        if pending is not None:
+            pending.set_result(None)
+            service._jobs.pop(research_id)
+
+
+def test_cancelled_preparation_requires_explicit_resume_before_first_and_only_dispatch(setup):
+    service, runner, research_id = setup
+    prepare(service, research_id)
+    service.cancel(research_id)
+    for submit in (lambda: service.start_experiment(research_id), lambda: service.submit_code(research_id, BUNDLE, REVIEW)):
+        with pytest.raises(WorkflowError) as rejected:
+            submit()
+        assert rejected.value.code == "CANCELLED" and runner.calls == 0
+    service.resume(research_id)
+    service.start_experiment(research_id)
+    result = finished(service, research_id)
+    assert result["stage"] == "analyzed" and result["execution_attempt"] == 1 and runner.calls == 1
+    service.cancel(research_id)
+    assert service.resume(research_id)["resume_kind"] == "authoring"
+    with pytest.raises(WorkflowError) as rejected:
+        service.start_experiment(research_id)
+    assert rejected.value.code == "EXPERIMENT_ALREADY_DISPATCHED" and runner.calls == 1
+
+
+@pytest.mark.parametrize("executed", [False, True])
+def test_resume_after_restart_preserves_dispatch_history_and_frozen_evidence(setup, executed, monkeypatch):
+    service, runner, research_id = setup
+    prepare(service, research_id)
+    if executed:
+        service.start_experiment(research_id)
+        assert finished(service, research_id)["stage"] == "analyzed"
+    prior = service.cancel(research_id)
+    retained = {key: service.artifact_path(research_id, key).read_bytes() for key in prior["artifacts"]}
+    service.close()
+    recovered = WorkflowService(service.home, runner=runner, collector=collect)
+    try:
+        kind = "authoring" if executed else "preparation"
+        assert recovered.status(research_id)["resume_kind"] == kind
+        monkeypatch.setattr(runner, "run", lambda *args, **kwargs: pytest.fail("Resume redispatched an experiment"))
+        result = recovered.resume(research_id)
+        assert result["resume_kind"] == kind and result["execution_attempt"] == int(executed)
+        assert all(recovered.artifact_path(research_id, key).read_bytes() == content for key, content in retained.items())
+        if executed:
+            with pytest.raises(WorkflowError) as rejected:
+                recovered.start_experiment(research_id)
+            assert rejected.value.code == "EXPERIMENT_ALREADY_DISPATCHED" and runner.calls == 1
+    finally:
+        recovered.close()
+
+
 @pytest.mark.parametrize("stage", ["analyzed", "manuscript"])
-def test_cancelled_authoring_resumes_without_dispatch_and_preserves_prior_state(setup, stage, monkeypatch):
+@pytest.mark.parametrize("previous_status", ["ready", "cancelled"])
+def test_authoring_resumes_without_dispatch_and_preserves_prior_state(setup, stage, previous_status, monkeypatch):
     service, runner, research_id = setup
     ws = retained_authoring_fixture(service, research_id)
     record = ws.get("workflow", research_id, Workflow)
     record.stage = stage
     ws.save("workflow", record)
-    cancelled = service.cancel(research_id)
-    before = {key: service.artifact_path(research_id, key).read_bytes() for key in cancelled["artifacts"]}
+    state = service.cancel(research_id) if previous_status == "cancelled" else service.status(research_id)
+    assert state["resume_kind"] == "authoring"
+    before = {key: service.artifact_path(research_id, key).read_bytes() for key in state["artifacts"]}
     prior = ws.get("workflow", research_id, Workflow).model_dump(mode="json")
     monkeypatch.setattr(service, "start_experiment", lambda *args: pytest.fail("Authoring resume dispatched an experiment"))
     monkeypatch.setattr(runner, "run", lambda *args, **kwargs: pytest.fail("Authoring resume called the runner"))
-    resumed = service.resume_writing(research_id)
+    resumed = service.resume(research_id)
     assert resumed["status"] == "ready" and resumed["stage"] == stage
     assert resumed["code"] is None and resumed["cancellation_requested"] is False
     assert resumed["execution_attempt"] == 1 and runner.calls == 0
-    keys = [key for key in resumed["artifacts"] if key.startswith("authoring-resume-")]
+    keys = [key for key in resumed["artifacts"] if key.startswith("workflow-resume-")]
     assert len(keys) == 1
     receipt = json.loads(service.artifact_path(research_id, keys[0]).read_bytes())
-    assert receipt["previous_workflow"] == prior and receipt["previous_status"] == "cancelled"
+    assert receipt["previous_workflow"] == prior and receipt["previous_status"] == previous_status
+    assert receipt["event"] == "workflow-resume" and receipt["kind"] == "authoring"
     assert receipt["previous_stage"] == stage and receipt["execution_attempt"] == 1
     assert receipt["execution_sha256"] == resumed["artifacts"]["execution"]["sha256"]
     assert receipt["at"].endswith("+00:00")
     for key, content in before.items():
         assert service.artifact_path(research_id, key).read_bytes() == content
-    with pytest.raises(WorkflowError) as repeated:
-        service.resume_writing(research_id)
-    assert repeated.value.code == "INVALID_STATE"
     original_receipt = service.artifact_path(research_id, keys[0]).read_bytes()
+    repeated = service.resume(research_id)
+    assert len([key for key in repeated["artifacts"] if key.startswith("workflow-resume-")]) == 2
     service.cancel(research_id)
-    again = service.resume_writing(research_id)
-    assert len([key for key in again["artifacts"] if key.startswith("authoring-resume-")]) == 2
+    again = service.resume(research_id)
+    assert len([key for key in again["artifacts"] if key.startswith("workflow-resume-")]) == 3
     assert service.artifact_path(research_id, keys[0]).read_bytes() == original_receipt
     assert again["execution_attempt"] == 1 and runner.calls == 0
 
@@ -473,11 +884,11 @@ def test_authoring_resume_rejects_unsafe_or_changed_retained_evidence(setup, def
                                                    sha256=digest_file(path), size=path.stat().st_size)
     ws.save("workflow", record)
     with pytest.raises(WorkflowError) as rejected:
-        service.resume_writing(research_id)
+        service.resume(research_id)
     assert rejected.value.code == expected_code
     after = ws.get("workflow", research_id, Workflow)
     assert after.status == "cancelled" and after.execution_attempt == 1 and runner.calls == 0
-    assert not any(key.startswith("authoring-resume-") for key in after.artifacts)
+    assert not any(key.startswith("workflow-resume-") for key in after.artifacts)
     if defect == "active_handle":
         # The fixture identity is not a real process; keep fixture teardown local.
         after.active_handle = {}
@@ -500,7 +911,7 @@ def test_authoring_resume_accepts_hash_bound_confirmed_cleanup_receipt(setup):
     record.artifacts["cleanup-1"] = FrozenArtifact(path=cleanup_path.relative_to(ws.root).as_posix(),
                                                    sha256=digest_file(cleanup_path), size=cleanup_path.stat().st_size)
     ws.save("workflow", record)
-    assert service.resume_writing(research_id)["status"] == "ready" and runner.calls == 0
+    assert service.resume(research_id)["status"] == "ready" and runner.calls == 0
 
 
 def test_close_cancels_workers_and_prevents_new_operations(setup):
@@ -515,6 +926,77 @@ def test_close_cancels_workers_and_prevents_new_operations(setup):
     ws = Workspace(service.home / "workflows" / research_id)
     record = ws.get("workflow", research_id, Workflow)
     assert record.status == "cancelled" and not record.active_handle
+
+
+def test_close_timeout_keeps_worker_identity_and_allows_evidence_cancel_and_shutdown_retry(setup, monkeypatch):
+    from test_standalone_ipc import receipt
+    service, runner, research_id = setup
+    entered, release = threading.Event(), threading.Event()
+
+    def delayed_cleanup(*args, on_handle, **kwargs):
+        runner.calls += 1
+        on_handle({"kind": "fixture", "pid": 123, "simulation": True})
+        entered.set()
+        assert release.wait(5)
+        return {"status": "cancelled", "cleanup_confirmed": True, "simulation": True}
+
+    monkeypatch.setattr(runner, "run", delayed_cleanup)
+    prepare(service, research_id)
+    service.start_experiment(research_id)
+    assert entered.wait(2)
+    try:
+        started = time.monotonic()
+        with pytest.raises(WorkflowError) as rejected:
+            service.close(deadline=started + 0.05)
+        assert rejected.value.code == "CLEANUP_UNCONFIRMED" and time.monotonic() - started < 1
+        assert service._closing is True and service._closed is False
+        pending = service.status(research_id)
+        assert pending["cleanup_pending"] is True and pending["code"] == "CLEANUP_UNCONFIRMED"
+        record = Workspace(service.root / research_id).get("workflow", research_id, Workflow)
+        assert record.active_handle["pid"] == 123 and not service._jobs[research_id].done()
+        with pytest.raises(WorkflowError) as rejected:
+            service.start_experiment(research_id)
+        assert rejected.value.code == "ENGINE_CLOSING"
+        saved = service.record_inference(research_id, receipt("started"))
+        receipt_path = service.artifact_path(research_id, saved["artifactId"])
+        retained_receipt = receipt_path.read_bytes()
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            cancellation = pool.submit(service.cancel, research_id)
+            release.set()
+            result = cancellation.result(timeout=3)
+        assert result["cleanup_confirmed"] is True and result["cleanup_pending"] is False
+        service.close()
+        service.close()
+        assert service._closed is True and runner.calls == 1 and receipt_path.read_bytes() == retained_receipt
+    finally:
+        release.set()
+
+
+def test_close_rejects_failed_future_without_cleanup_proof_and_retries_exact_identity(setup):
+    service, runner, research_id = setup
+    future = Future()
+    future.set_exception(OSError("Synthetic final checkpoint failed"))
+    service._jobs[research_id] = future
+    ws = Workspace(service.root / research_id)
+    record = ws.get("workflow", research_id, Workflow)
+    record.status, record.stage, record.execution_attempt = "running", "execute", 1
+    ws.save("workflow", record)
+    with pytest.raises(WorkflowError) as rejected:
+        service.close()
+    assert rejected.value.code == "CLEANUP_UNCONFIRMED"
+    assert service._closed is False and service.status(research_id)["cleanup_pending"] is True
+    record = ws.get("workflow", research_id, Workflow)
+    record.active_handle = {"kind": "fixture", "pid": 123, "simulation": True}
+    ws.save("workflow", record)
+    runner.cleanable = False
+    with pytest.raises(WorkflowError) as rejected:
+        service.close()
+    assert rejected.value.code == "CLEANUP_UNCONFIRMED"
+    assert ws.get("workflow", research_id, Workflow).active_handle["pid"] == 123
+    runner.cleanable = True
+    service.close()
+    service.close()
+    assert service._closed is True and not ws.get("workflow", research_id, Workflow).active_handle and runner.calls == 0
 
 
 def test_unconfirmed_cleanup_preserves_identity_and_blocks_reexecution(setup):
@@ -542,6 +1024,14 @@ def test_native_export_reopens_files_and_recomputes_observations(setup, pandoc):
         result = service.export(research_id)
     assert result["status"] == "completed" and result["stage"] == "exported"
     assert set(result["artifacts"]) >= {"export-md", "export-pdf", "export-docx", "export-tex", "validation", "reproducibility"}
+    for artifact_id in ("export-md", "export-tex"):
+        resolved = service.resolve_artifact(research_id, artifact_id)
+        images = re.findall(r"!\[[^\]]*\]\(([^)]+)\)", service.artifact_path(research_id, "export-md").read_text(encoding="utf-8"))
+        assert {item["name"] for item in resolved["companions"]} == set(images) and images
+        for item in resolved["companions"]:
+            path = Path(item["path"])
+            assert path.parent == Path(resolved["path"]).parent
+            assert item["sha256"] == digest_file(path) and item["size"] == path.stat().st_size
     validation = json.loads(service.artifact_path(research_id, "validation").read_text())
     assert validation["passed"] is True
     assert validation["final_verification_in_archive"] is False

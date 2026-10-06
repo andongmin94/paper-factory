@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "profiles": {
     "win32-x64": {
-      "inventorySha256": "476a0042d48f5c120b6e06e54cc388dbc8773dfa70229c645c2fb51099e894ce",
-      "sourceManifestSha256": "c7f5da4ca213b77bcf0acde3c71cc9a96e82896000303a41988344b2a1e86a12",
+      "inventorySha256": "0330fbc474fb159212d20e64bc69f9ed3f8e60a482c4cf4665a07e7ff5cf8c1a",
+      "sourceManifestSha256": "8051f140da134605dbcc1ac9c0f079efd1a139646f43a441fff0f06bee4c1ace",
       "executables": {
         "python": "python/python.exe",
         "node": "node/node.exe",

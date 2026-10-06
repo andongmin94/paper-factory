@@ -6,7 +6,6 @@ import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
-import { SaveArtifactDialog } from "./SaveArtifactDialog";
 
 const phaseLabels: Record<ResearchPhase, string> = {
   idle: "대기", plan: "연구 계획", literature: "문헌 수집", code: "실험 코드 작성",
@@ -17,10 +16,6 @@ const pipelineLabels = { idle: "대기", running: "진행 중", paused: "중단�
 const outputLabels: Record<string, string> = {
   "export-pdf": "PDF", "export-docx": "Word", "export-md": "Markdown",
   "export-tex": "LaTeX", reproducibility: "재현 패키지 ZIP",
-};
-const outputNames: Record<string, string> = {
-  "export-pdf": "paper.pdf", "export-docx": "paper.docx", "export-md": "paper.md",
-  "export-tex": "paper.tex", reproducibility: "reproducibility.zip",
 };
 
 function ModelPicker({ id, label, models, value, onChange, disabled }: {
@@ -54,7 +49,6 @@ export function ResearchPane({ connection, connectionBusy, onBusyChange, view, o
   const [pending, setPending] = useState<string | null>(null);
   const [localError, setLocalError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [saveTarget, setSaveTarget] = useState<{ id: string; artifactId: string; label: string; trigger: HTMLElement } | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -92,10 +86,13 @@ export function ResearchPane({ connection, connectionBusy, onBusyChange, view, o
       }
       if (name === "evidence") setNotice(result === false ? "추가 근거 선택을 취소했습니다." : "추가 근거를 보존했습니다. 연구를 이어가려면 재개 버튼을 누르세요.");
       if (name === "open") setNotice("결과 파일 열기를 요청했습니다.");
+      if (name === "save" && result === true) setNotice("결과 파일을 저장했습니다.");
     } catch {
       setLocalError(name === "repositories"
         ? "GitHub 공개 저장소 목록을 조회하지 못했습니다. 계정 URL과 인터넷 연결, GitHub 조회 한도를 확인해 주세요."
-        : "연구 작업 요청을 완료하지 못했습니다. 엔진 상태와 ChatGPT 연결을 확인해 주세요.");
+        : name === "save"
+          ? "결과 파일을 저장하지 못했습니다. 선택한 위치의 접근 권한과 남은 공간을 확인해 주세요."
+          : "연구 작업 요청을 완료하지 못했습니다. 엔진 상태와 ChatGPT 연결을 확인해 주세요.");
     } finally {
       setPending(null);
     }
@@ -260,14 +257,25 @@ export function ResearchPane({ connection, connectionBusy, onBusyChange, view, o
                 </dl>
                 {job.message && <p className="detail-note">{job.message}</p>}
                 {job.code && <p className="detail-note">오류 코드: {job.code}</p>}
+                {snapshot.cleanupResearchIds.includes(job.id) && job.pipeline !== "running" && (
+                  <p className="detail-note" role="status">실험 종료와 기록 보존을 확인해야 새 연구와 계정 변경을 할 수 있습니다. 로그인 없이 정리 확인을 다시 시도할 수 있습니다.</p>
+                )}
                 <div className="action-row">
                   {job.pipeline === "running" && (
                     <Button variant="outline" disabled={pending !== null}
                       onClick={() => void runAction("cancel", () => window.paperFactory.cancelResearch(job.id))}>연구 취소</Button>
                   )}
-                  {["idle", "paused", "failed"].includes(job.pipeline) && (
+                  {snapshot.cleanupResearchIds.includes(job.id) && job.pipeline !== "running" && (
+                    <Button variant="outline" disabled={pending !== null || snapshot.runtime.state === "checking"}
+                      onClick={() => void runAction("cancel", () => window.paperFactory.cancelResearch(job.id))}>
+                      {pending === "cancel" ? "정리 확인 중…" : "정리 다시 확인"}
+                    </Button>
+                  )}
+                  {["idle", "paused", "failed"].includes(job.pipeline) && job.resumeKind && !snapshot.cleanupResearchIds.includes(job.id) && (
                     <Button variant="outline" disabled={!canRun}
-                      onClick={() => void runAction("resume", () => window.paperFactory.resumeResearch(job.id, model, reviewerModel))}>선택한 모델로 재개</Button>
+                      onClick={() => void runAction("resume", () => window.paperFactory.resumeResearch(job.id, model, reviewerModel))}>
+                      {job.resumeKind === "preparation" ? "연구 준비 재개" : "원고 작성 재개"}
+                    </Button>
                   )}
                   {["idle", "paused", "failed"].includes(job.pipeline) && ["created", "planned", "analyzed"].includes(job.stage) &&
                     ["ready", "cancelled"].includes(job.status) && (
@@ -303,8 +311,7 @@ export function ResearchPane({ connection, connectionBusy, onBusyChange, view, o
                         <p className="text-sm">{outputLabels[artifact.id]} · {artifact.size.toLocaleString("ko-KR")} 바이트</p>
                         <div className="action-row">
                           <Button variant="outline" size="sm" disabled={locked}
-                            onClick={(event) => { setNotice(null); setLocalError(null); setSaveTarget({ id: job.id, artifactId: artifact.id,
-                              label: outputLabels[artifact.id], trigger: event.currentTarget }); }}>
+                            onClick={() => void runAction("save", () => window.paperFactory.saveArtifact(job.id, artifact.id))}>
                             <Download aria-hidden="true" /> {outputLabels[artifact.id]} 저장
                           </Button>
                           <Button variant="ghost" size="sm" disabled={locked}
@@ -323,16 +330,6 @@ export function ResearchPane({ connection, connectionBusy, onBusyChange, view, o
       </CardContent>
     </Card>
     </section>
-    {saveTarget && <SaveArtifactDialog label={saveTarget.label} fileName={outputNames[saveTarget.artifactId]} returnFocus={saveTarget.trigger}
-      onCancel={() => { setSaveTarget(null); setNotice("파일 저장을 취소했습니다."); }}
-      onSave={async (destinationPath) => {
-        setPending("save");
-        try {
-          const saved = await window.paperFactory.saveArtifact(saveTarget.id, saveTarget.artifactId, destinationPath);
-          if (saved !== true) throw new Error("Artifact save was not confirmed");
-          setSaveTarget(null); setNotice("결과 파일을 저장했습니다.");
-        } finally { setPending(null); }
-      }} />}
     </>
   );
 }
