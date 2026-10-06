@@ -96,7 +96,7 @@ def convert(markdown: Path, output: Path, *, pandoc: str | None = None, bibliogr
     if csl:
         command += ["--csl", str(csl.resolve())]
     if suffix == ".pdf":
-        metadata = {**(metadata or {}), "margin": {"x": "1in", "y": "1in"}, "page-numbering": "1" if page_numbers else None}
+        metadata = {**(metadata or {}), "mainfont": "Pretendard", "margin": {"x": "1in", "y": "1in"}, "page-numbering": "1" if page_numbers else None}
     elif format == "latex":
         headers = []
         if line_numbers:
@@ -117,8 +117,6 @@ def convert(markdown: Path, output: Path, *, pandoc: str | None = None, bibliogr
         # Typst headings end at a source newline. Let Typst perform visual
         # wrapping without turning Pandoc's continued title into body text.
         command += ["--wrap=none", "-V", "papersize:a4", "-V", "fontsize:11pt"]
-        if os.environ.get("TYPST_FONT_PATHS"):
-            command += ["-V", "mainfont:DejaVu Serif"]
     else:
         command += ["-V", "geometry:margin=1in"]
     try:
@@ -151,9 +149,12 @@ def convert(markdown: Path, output: Path, *, pandoc: str | None = None, bibliogr
             target.write_text('#show: body => {\n' + settings + 'body\n}\n' + typst_source, encoding="utf-8")
             # Pandoc generates the source; Typst's sandbox root is this directory.
             fonts = os.environ.get("TYPST_FONT_PATHS")
-            font_options = {"font_paths": [fonts], "ignore_system_fonts": True} if fonts else {}
+            font_paths = [str(Path(__file__).with_name("fonts").resolve())]
+            if fonts:
+                font_paths.append(fonts)
             typst.compile(str(target), output=str(output), root=str(output.parent),
-                          timestamp=datetime(2000, 1, 1, tzinfo=timezone.utc), **font_options)
+                          timestamp=datetime(2000, 1, 1, tzinfo=timezone.utc),
+                          font_paths=font_paths, ignore_system_fonts=True)
         except Exception as exc:
             output.unlink(missing_ok=True)
             raise ValueError(f"Typst PDF compilation failed: {exc}") from exc

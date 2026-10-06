@@ -101,6 +101,39 @@ def test_pdf_export_keeps_complete_long_title_in_one_typst_heading(source, pando
     assert receipt["output_sha256"] == digest_file(output)
 
 
+@pytest.mark.parametrize("extra_fonts", [False, True])
+def test_pdf_export_preserves_mixed_korean_text_with_bundled_fonts(source, pandoc, monkeypatch, extra_fonts):
+    pytest.importorskip("typst")
+    from pypdf import PdfReader
+
+    if extra_fonts:
+        additional_fonts = source.parent / "runtime-fonts"
+        additional_fonts.mkdir()
+        monkeypatch.setenv("TYPST_FONT_PATHS", str(additional_fonts))
+    else:
+        monkeypatch.delenv("TYPST_FONT_PATHS", raising=False)
+    source.write_text("# 한국어 재생성 규칙\n\n"
+                      "Each seed is initialized. 각 seed에서 초기화한다.\n\n"
+                      "**한국어 글꼴 검증을 진행합니다.**\n", encoding="utf-8")
+    original = source.read_bytes()
+    output = source.with_suffix(".pdf")
+    receipt = conversion.convert(source, output, pandoc=pandoc, metadata={"mainfont": "Libertinus Serif"})
+
+    reader = PdfReader(output, strict=True)
+    text = " ".join(" ".join(page.extract_text().split()) for page in reader.pages)
+    assert "한국어 재생성 규칙" in text
+    assert "각 seed에서 초기화한다." in text
+    assert "한국어 글꼴 검증을 진행합니다." in text
+    assert "Each seed is initialized." in text
+    font_names = {str(font.get_object()["/BaseFont"]) for page in reader.pages
+                  for font in page["/Resources"]["/Font"].get_object().values()}
+    assert any("Pretendard-Regular" in name for name in font_names)
+    assert any("Pretendard-Bold" in name for name in font_names)
+    assert source.read_bytes() == original
+    assert receipt["input_sha256"] == hashlib.sha256(original).hexdigest()
+    assert receipt["output_sha256"] == digest_file(output)
+
+
 @pytest.mark.parametrize("suffix", [".docx", ".tex", ".pdf"])
 def test_pipe_tables_convert_to_native_tables_without_editing_source(source, pandoc, suffix):
     source.write_text("# Controlled results\n\nDescriptive statistics.\n\n"

@@ -1,0 +1,34 @@
+{
+  "repository": "https://github.com/orioncactus/pretendard",
+  "version": "1.3.9",
+  "tag": "v1.3.9",
+  "commit": "5c41199ea0024a9e0b2cb31735265056e5472d76",
+  "license": "SIL Open Font License 1.1",
+  "package": {
+    "name": "pretendard",
+    "version": "1.3.9",
+    "url": "https://registry.npmjs.org/pretendard/-/pretendard-1.3.9.tgz",
+    "integrity": "sha512-PaQAADyLY5v4kYFwkpSJHbSSYIkiriY/1xXw75TKoZ9UQQqeU+tvP05yTdZAWibiIYoo8ZKtRv8PM7w0IaywSw==",
+    "sha256": "0ffc240cee83be02520fb4ac1b2a0a51052b9d13506ade0ba90c591dbbb3bd53"
+  },
+  "files": [
+    {
+      "destination": "Pretendard-Regular.ttf",
+      "sourcePath": "package/dist/public/static/alternative/Pretendard-Regular.ttf",
+      "size": 2725828,
+      "sha256": "6d0af5258997aec7354a6e340fc2325ba321c410ca48b3af858c8c3d6e92a324"
+    },
+    {
+      "destination": "Pretendard-Bold.ttf",
+      "sourcePath": "package/dist/public/static/alternative/Pretendard-Bold.ttf",
+      "size": 2661752,
+      "sha256": "c16b88c670d23e83fa1170c954cbc4822d3b8dad3c3cde15d798a94b43d97985"
+    },
+    {
+      "destination": "LICENSE",
+      "sourcePath": "package/dist/LICENSE.txt",
+      "size": 4419,
+      "sha256": "b04538c9abec39a3db75108cf0af0fd9c77032fe8aa2cf38345b4d250e98e38e"
+    }
+  ]
+}

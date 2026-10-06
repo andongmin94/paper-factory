@@ -20,6 +20,7 @@ research = ["matplotlib>=3.10,<4", "numpy>=2,<3"]
 where = ["src"]
 
 [tool.setuptools.package-data]
+"paper_factory" = ["fonts/*.ttf", "fonts/LICENSE", "fonts/provenance.json"]
 "paper_factory.autonomous" = ["quickjs_worker.mjs"]
 
 [tool.pytest.ini_options]

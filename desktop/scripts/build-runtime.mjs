@@ -393,7 +393,7 @@ axis.plot([0, 1], [0, 1])
 figure.savefig(scratch / 'probe.png')
 pyplot.close(figure)
 source = scratch / 'probe.md'
-source.write_text('# Bundled runtime probe\n\nTrusted runtime diagnostic only.\n\n![Bundled plot](probe.png)\n\n| Fixture | Count |\n| --- | ---: |\n| Probe | 1 |\n', encoding='utf-8')
+source.write_text('# Bundled runtime probe\n\nTrusted runtime diagnostic only.\n\n한국어 글꼴 검증을 진행합니다.\n\n![Bundled plot](probe.png)\n\n| Fixture | Count |\n| --- | ---: |\n| Probe | 1 |\n', encoding='utf-8')
 from paper_factory.conversion import convert
 outputs = {}
 for extension in ('pdf', 'docx', 'tex'):
@@ -405,6 +405,7 @@ from pypdf import PdfReader
 from docx import Document
 pdf = PdfReader(scratch / 'probe.pdf', strict=True)
 assert len(pdf.pages) == 1 and 'Trusted runtime diagnostic only.' in pdf.pages[0].extract_text()
+assert '한국어 글꼴 검증을 진행합니다.' in pdf.pages[0].extract_text()
 document = Document(scratch / 'probe.docx')
 assert len(document.inline_shapes) == 1 and len(document.tables) == 1
 assert any('Trusted runtime diagnostic only.' in p.text for p in document.paragraphs)
