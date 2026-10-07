@@ -582,3 +582,39 @@ Windows 패키지는 같은 설치된 Electron `44.5.1`을 `electronDist`로 지
 | --- | ---: | --- |
 | Paper Factory Setup 0.14.2.exe | 213,095,765 | 94aa2977ed5d6f503080d2e3c260c9f78443097afeaeec709229b0d3f3ba4a70 |
 | win-unpacked/resources/app.asar | 44,735,734 | 68a10d23f66ddb2ab1d0691b653b41e91c3d5fc12957243a78e2912e7223855b |
+
+0.14.2의 실제 보류 원고 보완은 `recovery-runs/cefeabb89d86`에서 앱의 `ResearchController.improveWriting`과 포함된 Windows 엔진으로 수행했다. 기존 Madi 연구 `research-c9268a619211`의 프로토콜·24개 입력 쌍·144개 관측·3개 제어·분석·성공 실행 1회를 보존한 채 네 번째 초안과 별도 원고 심사를 완료했다. 심사는 최적 정렬의 다양성을 확인할 증거가 부족하다고 반려하고 `redesign_study`를 선택했다. 앱은 이전 결과를 탐색적 근거로 가진 후속 연구 `research-fcc241e361d3`를 만들고 새 제안·문헌 수집·연구 심사를 수행했다. 새 제안은 성립하지 않는 양성 제어 예상값과 직접 관련 문헌·기여 부족으로 반려됐고, 다음 계획 응답도 `feasible=false`여서 실험 전에 보류됐다. 이는 보완·재설계 흐름의 실제 동작 확인이며, 최종 논문 품질을 통과한 성공 사례는 아니다.
+
+| 확인 항목 | 실제 결과 |
+| --- | --- |
+| 기존 연구 보존 | 실행 1회 유지. 기존 번호별 원고·심사와 과학 근거의 바이트·해시·크기는 기준 기록과 일치하며 최신 심사 별칭만 네 번째 심사로 이동 |
+| 네 번째 원고 | 기존 수치와 정확 비교군의 무차이를 보고했지만 연구 기여 기준 반려. 새 정렬 관측을 작성하거나 기존 실험을 재실행하지 않음 |
+| 후속 연구 | 최초 재설계 1회. 네이티브 최종 상태는 `proposed/blocked/STUDY_REJECTED`, 후속 계획 실패를 표시한 데스크톱 상태 코드는 `STUDY_INFEASIBLE` |
+| 새 과학 실행·논문 | 후속 실행 0회·원고 0회. 완료 PDF·DOCX·TeX·재현 ZIP 없음, `paperGenerated=false` |
+| 종료 | `held-with-complete-recovery-evidence`, `shutdownConfirmed=true`, 작업 유휴·정리 대기 없음. stop marker는 자연 완료 후 생성되어 이 결과를 취소 검증으로 계산하지 않음 |
+| 별도 평가 도구 실패 | `recovery-runs/e2891489fa87`은 모델 요청·원고 보완·새 실험 전에 launcher가 멈춘 기록. 소유 프로세스만 종료했고 실제 연구 결과로 계산하지 않음 |
+| 평가 기록 | `cefeabb89d86/result.json` SHA256 `737b5b9e8bbace59bd236bd1a094972aed7c792b7241b86e4d31fdb519104a7f`. `before.json`, `baseline.json`, `snapshot.json`과 `verification/actual-improvement-madi-awaited.log`도 함께 보존 |
+
+이 평가에서 후속 제안은 원래 목표가 필수로 정한 세 조건과 두 지표를 다른 조건·지표로 대체했으나 첫 연구 심사는 그 불일치를 지적하지 않았다. 원래 목표는 당시에도 데스크톱의 언어·요청 부록으로 전달됐다. 0.14.3은 네이티브 `study_review_prompt`의 필수 입력으로 원래 목표를 받고, 필수 corpus·조건·지표·seed·표본 규칙·주장 범위를 제안과 명시적으로 대조하도록 보강했다. 누락·대체는 해당 기준을 반려하고, 양성 제어·증인의 예상값도 실제 소스 의미와 독립 oracle에서 유도하여 실행 전에 판단하도록 명시했다. 이 지침 보강을 이미 완료된 심사나 과학 결과의 변경, 실제 제어 실행 증거로 표현하지 않는다.
+
+## 0.14.3 원래 목표와 제어 예상값 심사: 2026-10-07
+
+원래 목표를 명시적으로 검토하는 위 지침과 함께, 보류 원고의 자료를 준비하는 동안에도 작성 단계가 표시되도록 수정했다. 준비 중 취소하면 모델 요청과 실험 실행으로 넘어가지 않는 검사를 추가했다. 승인 기준이나 과학 실행 횟수는 변경하지 않았다.
+
+| 검사 | 결과 |
+| --- | --- |
+| 과학·워크플로 집중 회귀 | 481 통과, 259.41초. 실제 원래 목표 전달과 필수 조건·지표·시드 대조 지침, 독립 제어 기대값 유도 지침 확인 |
+| 데스크톱·포함 SDK | 251 통과 / 48 통과·1 건너뜀 |
+| 숨김 Electron | 13 통과, 약 2.4분, 재시도 없음. 합성 계정·상태 fixture 사용 |
+| Windows 실행 환경 | 고정 wheel 19개, 2,218파일·473,575,052 B. 네이티브 QuickJS와 한국어 PDF·DOCX·TeX 변환 확인 |
+| 실행 환경 inventory | SHA256 `c6eab4135cc0420b415b8ecceaa48e7d33d7786167686a7abad53833e71f00d4` |
+| Windows 패키지 | 2026-10-07 13:40:33.007 KST 정적 전수 검사 통과. ASAR 7,667개 항목·SDK·renderer·Pretendard·엔진 소스·런타임 검사 |
+
+0.14.2 전체 Python 회귀 이후 이번 심사 지침·목표 전달 변경은 관련 두 모듈 전체 481건으로 검사했다. 전체 Python 검사를 이번 버전에 다시 수행한 것으로 계산하지 않는다. 새 설치본의 설치·실제 로그인·복원 흐름은 재검증하지 않았다.
+
+| 파일 | 크기(B) | SHA256 |
+| --- | ---: | --- |
+| Paper Factory Setup 0.14.3.exe | 213,096,334 | 7826dc96a2128f54f3ccaa23d0a3558dbba78ce55d08ede901cc1ec929331906 |
+| win-unpacked/resources/app.asar | 44,735,796 | 653b4e6dff3edf71202d68d3bf2e96af912c201ecac6fc46ca18ff19b7b75626 |
+
+검사 로그는 `verification/python-study-goal-review-fix.log`, `desktop-goal-scope-final.log`, `electron-goal-final.log`, `runtime-goal-final.log`, `package-goal-final.log`, `package-goal-verify-final.log`에 보존했다.

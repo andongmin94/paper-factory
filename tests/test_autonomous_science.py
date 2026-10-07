@@ -875,7 +875,8 @@ def test_model_prompts_explain_existing_protocol_and_generation_boundaries(proto
 
 def test_study_review_uses_inspected_reading_and_can_reject_feasible_trivial_studies(protocol, literature):
     source = "export function transform(value) { return value + 1; }"
-    prompt = science.study_review_prompt(protocol, literature, source)
+    goal = "Study the inspected production transformation within the original comparison and sampling scope."
+    prompt = science.study_review_prompt(protocol, literature, source, goal)
     assert "BEFORE protocol freezing or code generation" in prompt
     assert "beyond ordinary helper tests" in prompt
     assert "metadata and word overlap are insufficient" in prompt
@@ -884,7 +885,27 @@ def test_study_review_uses_inspected_reading_and_can_reject_feasible_trivial_stu
     assert "it is not peer review or a publication guarantee" in prompt
     assert json.dumps(protocol.model_dump(mode="json"), ensure_ascii=False, indent=2) in prompt
     assert json.dumps(literature, ensure_ascii=False, indent=2) in prompt
+    assert json.dumps(goal, ensure_ascii=False) in prompt
     assert prompt.endswith(source)
+
+
+def test_study_review_checks_original_requirements_and_derives_control_expectations(protocol, literature):
+    goal = '필수 corpus="fixed.json"; 조건 production/full_matrix_lcs/linear_space_lcs; 지표 attainable/context; seeds 17/29 유지.\n사용자 효과를 측정한 것처럼 주장하지 말 것.'
+    prompt = science.study_review_prompt(protocol, literature, "export function transform(values) { return values.slice(); }", goal)
+    original, _ = json.JSONDecoder().raw_decode(prompt.split("Original requested research goal:\n", 1)[1])
+    assert original == goal
+    compact = " ".join(prompt.split())
+    assert "ORIGINAL requested research goal" in compact
+    assert "mandatory corpus, condition, metric, seed, sampling rule and claim scope" in compact
+    assert "required comparisons fail comparison" in compact
+    assert "changed required corpus, units or seeds fail sampling" in compact
+    assert "unsupported required measurements or scope fail feasibility" in compact
+    assert "never authorizes silently relaxing the original goal" in compact
+    assert "Independently derive every proposed positive-control and witness expectation" in compact
+    assert "from the inspected production semantics and independent oracle" in compact
+    assert "do not trust an expected value merely because the proposer asserts it" in compact
+    assert "An impossible control or witness fails feasibility before execution" in compact
+    assert "pre-execution reasoning checks, not evidence of completed controls" in compact
 
 
 def test_manuscript_review_routes_evidence_gaps_to_a_new_study_without_lowering_acceptance():
@@ -952,7 +973,7 @@ def test_initial_planning_proposes_searchable_candidate_before_literature_approv
     assert "Missing or irrelevant inspected evidence at that review must still prevent approval" in compact
     assert "After retrieval, the study must stop if no directly relevant inspected literature" in compact
     # A searchable proposal does not relax the later scientific or reading gate.
-    review = " ".join(science.study_review_prompt(protocol, literature, "Inspected source").split())
+    review = " ".join(science.study_review_prompt(protocol, literature, "Inspected source", "Study an unresolved software question.").split())
     assert "metadata and word overlap are insufficient" in review
     assert "If none qualify, reject literature and the study" in review
     assert "All six criteria must pass, issues must be empty" in review

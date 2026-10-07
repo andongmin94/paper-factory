@@ -408,7 +408,7 @@ class WorkflowService:
         elif record.stage == "proposed":
             data["planning_instructions"] = science.planning_prompt(source_context, record.goal)
             data["instructions"] = (science.study_review_prompt(ResearchPlan.model_validate(data["proposal"]),
-                                        data["literature"], source_context) if "literature" in data else
+                                        data["literature"], source_context, record.goal) if "literature" in data else
                                     "Collect the proposal's literature before assessing its research suitability. No protocol is frozen yet.")
         elif record.stage in {"planned", "code_ready"}:
             if record.stage == "code_ready" and record.status == "ready":

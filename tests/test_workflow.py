@@ -314,6 +314,26 @@ def test_proposal_requires_literature_and_suitability_before_protocol_freezes(se
     assert runner.calls == 0
 
 
+def test_proposed_study_review_receives_original_goal_even_when_proposal_changes_required_design(setup):
+    service, runner, research_id = setup
+    goal = ('필수: 고정 corpus="original.json"; 조건 production/full_matrix_lcs/linear_space_lcs; '
+            '지표 partial_attainability/context_bundle_fraction; seeds 17/29를 유지하세요.\n'
+            '실제 사용자 효과를 대신 주장하지 마세요.')
+    created = service.create(str(service._workspace(research_id).path("source")), goal)
+    proposal = protocol()  # Deliberately substitutes conditions, metrics and seeds.
+    service.submit_proposal(created["id"], proposal)
+    state = service.collect_literature(created["id"])
+    assert state["stage"] == "proposed" and state["goal"] == goal
+    original, _ = json.JSONDecoder().raw_decode(state["instructions"].split("Original requested research goal:\n", 1)[1])
+    assert original == goal and original != proposal["question"]
+    assert state["proposal"]["conditions"] == ["production", "ablation"]
+    assert [item["name"] for item in state["proposal"]["metrics"]] == ["error"]
+    assert state["proposal"]["seeds"] == [11, 37]
+    assert "silently relaxing the original goal" in state["instructions"]
+    assert "Independently derive every proposed positive-control" in state["instructions"]
+    assert "plan" not in state["artifacts"] and runner.calls == 0
+
+
 @pytest.mark.parametrize("criterion", STUDY_CRITERIA)
 def test_study_acceptance_cannot_override_a_failed_quality_criterion(setup, criterion):
     service, runner, research_id = setup

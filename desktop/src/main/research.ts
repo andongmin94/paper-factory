@@ -652,6 +652,7 @@ export class ResearchController {
   }
 
   private async reviewed(job: StoredJob, workflow: Workflow, kind: 'code' | 'manuscript', signal: AbortSignal) {
+    await this.phase(job, kind); signal.throwIfAborted();
     const materials = await this.materials(workflow, kind);
     let feedback = kind === 'manuscript' && workflow.manuscript_review?.accepted === false
       ? '\n\nThe retained prior manuscript failed this complete assessment. Address its failed criteria using the unchanged actual evidence. If new measurements are necessary, state that gap honestly; do not invent evidence:\n' + JSON.stringify(workflow.manuscript_review)

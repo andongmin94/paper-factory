@@ -328,6 +328,27 @@ test('a pending follow-up continues its bound redesign without reopening or redr
   } finally { await f.cleanup(); }
 });
 
+test('held-paper material preparation shows authoring and cancellation prevents any model request', async () => {
+  const reading = deferred(), release = deferred(); let delayed = false;
+  const original = held(), retained = structuredClone(original.artifacts);
+  const f = await fixture([], original, { request(method) {
+    if (method === 'workflow.readMaterial' && !delayed) {
+      delayed = true; reading.resolve(); return release.promise;
+    }
+  } });
+  try {
+    await f.controller.initialize(); await f.controller.improveWriting(id, 'writer', 'reviewer'); await reading.promise;
+    const preparing = f.controller.snapshot();
+    assert.equal(preparing.busy, true); assert.equal(preparing.jobs[0].phase, 'manuscript');
+    const cancellation = f.controller.cancel(id);
+    while (!f.calls.some(call => call.method === 'workflow.cancel')) await delay(1);
+    release.resolve(); await cancellation;
+    assert.equal(f.controller.snapshot().jobs[0].pipeline, 'paused'); assert.equal(f.prompts.length, 0);
+    assert.equal(original.execution_attempt, 1); assert.deepEqual(original.artifacts, retained);
+    assert.equal(f.calls.some(call => call.method === 'workflow.startExperiment'), false);
+  } finally { release.resolve(); await f.cleanup(); }
+});
+
 for (const patch of [{ improvement_available: false }, { execution_attempt: 2 }, { terminal_control_failure: true },
   { cleanup_pending: true }, { status: 'failed' }]) {
   test('unsafe held-study improvement stops before any authoring or science: ' + JSON.stringify(patch), async () => {
