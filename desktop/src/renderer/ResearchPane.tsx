@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 
 const phaseLabels: Record<ResearchPhase, string> = {
   idle: "대기", plan: "연구 설계", redesign: "연구 설계 보완", literature: "문헌 수집", "study-review": "연구 적합성 검토", code: "실험 코드 작성",
-  "code-review": "실험 코드 리뷰", experiment: "과학실험", manuscript: "원고 작성",
+  "code-review": "실험 코드 리뷰", experiment: "과학실험", "evidence-selection": "설명 근거 확인", manuscript: "원고 작성",
   "manuscript-review": "원고 품질 검토", export: "결과 파일 생성",
 };
 const pipelineLabels = { idle: "대기", running: "진행 중", paused: "중단됨", failed: "실패", completed: "원고 생성 완료" };

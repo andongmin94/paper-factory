@@ -202,6 +202,101 @@ def prepare(service, research_id):
     service.submit_code(research_id, copy.deepcopy(BUNDLE), REVIEW)
 
 
+def evidence_selection_receipt():
+    prompt = 'Select retained explanatory fixtures. 원래 입력과 실제 생산 응답을 확인하세요.'
+    text = json.dumps({"fixture_labels": ["synthetic-inputs.json"],
+                       "reason": "Retained input annotations explain the original frozen fixture result."},
+                      ensure_ascii=False)
+    return {"id": "12345678-1234-1234-1234-123456789abc", "phase": "evidence-selection",
+            "at": "2026-10-07T00:00:00Z", "model": "gpt-6-astra", "profileId": "owned-test-profile",
+            "prompt": prompt, "promptSha256": hashlib.sha256(prompt.encode()).hexdigest(),
+            "text": text, "textSha256": hashlib.sha256(text.encode()).hexdigest(), "outcome": "completed"}
+
+
+def test_evidence_selection_receipt_is_original_hash_bound_and_append_only(setup):
+    from paper_factory import ipc
+
+    service, runner, research_id = setup
+    initial = service.status(research_id, include_materials=False)
+    completed = evidence_selection_receipt()
+    started = {key: value for key, value in completed.items() if key not in {"text", "textSha256"}}
+    started["outcome"] = "started"
+    retained = {}
+    for value in (started, completed):
+        request = ipc.request(json.dumps({"id": "selection-receipt", "method": "workflow.recordInference",
+                                         "params": {"researchId": research_id, "receipt": value}}).encode())
+        result = service.record_inference(request["params"]["researchId"], request["params"]["receipt"])
+        original = service.artifact_path(research_id, result["artifactId"])
+        assert json.loads(original.read_bytes()) == value
+        assert digest_file(original) == result["sha256"]
+        journal = service.artifact_path(research_id, f'model-journal-{value["id"]}-{value["outcome"]}')
+        assert json.loads(journal.read_bytes()) == {
+            "event": "model-inference", "id": value["id"], "at": value["at"],
+            "phase": "evidence-selection", "outcome": value["outcome"], "receipt_sha256": result["sha256"],
+        }
+        retained[original], retained[journal] = original.read_bytes(), journal.read_bytes()
+        assert service.record_inference(research_id, value) == result
+    for replacement in ({"profileId": "another-owned-profile"}, {"phase": "code-review"},
+                        {"text": "Changed selection", "textSha256": hashlib.sha256(b"Changed selection").hexdigest()}):
+        with pytest.raises(WorkflowError) as conflict:
+            service.record_inference(research_id, {**completed, **replacement})
+        assert conflict.value.code == "INFERENCE_EVIDENCE_CONFLICT"
+    assert all(path.read_bytes() == original for path, original in retained.items())
+    final = service.status(research_id, include_materials=False)
+    assert (final["stage"], final["status"], final["execution_attempt"]) == ("created", "ready", 0)
+    assert all(final["artifacts"][key] == value for key, value in initial["artifacts"].items())
+    assert len(final["artifacts"]) == len(initial["artifacts"]) + 4 and runner.calls == 0
+
+
+@pytest.mark.parametrize("defect", ["prompt_hash", "text_hash", "missing_text_hash", "missing_text",
+                                    "empty_profile", "long_profile", "invalid_phase", "missing_timezone"])
+def test_evidence_selection_receipt_rejects_invalid_binding_without_public_input_leak(setup, defect):
+    from paper_factory import ipc
+
+    service, runner, research_id = setup
+    before = service.status(research_id, include_materials=False)
+    value = evidence_selection_receipt()
+    private_marker = "private-selection-profile-marker"
+    if defect == "prompt_hash":
+        value["prompt"] += private_marker
+    elif defect == "text_hash":
+        value["text"] += private_marker
+    elif defect == "missing_text_hash":
+        value.pop("textSha256")
+    elif defect == "missing_text":
+        value.pop("text")
+    elif defect == "empty_profile":
+        value["profileId"] = ""
+    elif defect == "long_profile":
+        value["profileId"] = private_marker * 8
+    elif defect == "invalid_phase":
+        value["phase"] = private_marker
+    else:
+        value["at"] = "2026-10-07T00:00:00"
+    with pytest.raises(ValueError) as invalid:
+        service.record_inference(research_id, value)
+    public = ipc.public_error(invalid.value)
+    assert public["code"] == "INVALID_ARGUMENT" and private_marker not in public["message"]
+    after = service.status(research_id, include_materials=False)
+    assert after["artifacts"] == before["artifacts"] and after["execution_attempt"] == 0 and runner.calls == 0
+
+
+def test_evidence_selection_journal_tampering_is_detected_by_native_artifact_verification(setup):
+    service, runner, research_id = setup
+    value = evidence_selection_receipt()
+    saved = service.record_inference(research_id, value)
+    receipt_path = service.artifact_path(research_id, saved["artifactId"])
+    original = receipt_path.read_bytes()
+    journal_id = f'model-journal-{value["id"]}-{value["outcome"]}'
+    journal_path = service.artifact_path(research_id, journal_id)
+    journal = json.loads(journal_path.read_bytes())
+    journal["receipt_sha256"] = "0" * 64
+    write_json(journal_path, journal)
+    with pytest.raises(WorkflowError) as changed:
+        service.artifact_path(research_id, journal_id)
+    assert changed.value.code == "ARTIFACT_CHANGED" and receipt_path.read_bytes() == original and runner.calls == 0
+
+
 def test_scientific_inputs_bind_declared_source_and_exact_imported_document_bytes(setup):
     service, runner, research_id = setup
     raw = '\ufeff한글 원문\r\nSecond line.\r\n'.encode('utf-8')

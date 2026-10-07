@@ -1,8 +1,8 @@
 # 독립 앱 검증 기록
 
-갱신일: 2026-10-06 (Asia/Seoul). 현재 앱과 엔진 소스는 `0.13.1`이다. 아래는 `0.13.0` 전환 작업의 시작 commit `ac22fdd95778572968e3227d271a0b9846cd7f8b`부터 보존한 실제 검사 이력이다. 0.13.1의 5단계 개선·새 패키지 검사는 [UI 검증 기록](standalone-ui-provenance.md)에 구분해 기록한다.
+갱신일: 2026-10-07 (Asia/Seoul). 현재 앱과 엔진 소스는 `0.14.6`이다. 최신 Windows 패키지와 실제 앱의 심사·보완·원고 생성 결과는 [0.14.6 기록](#0146-설명-근거의-실제-원문-전달-2026-10-07)에 있다. 아래는 `0.13.0` 전환 작업의 시작 commit `ac22fdd95778572968e3227d271a0b9846cd7f8b`부터 보존한 실제 검사 이력이다. 0.13.1의 5단계 개선·새 패키지 검사는 [UI 검증 기록](standalone-ui-provenance.md)에 구분해 기록한다.
 
-현재 최종 검증 논문은 **3/3편**이다. 서로 다른 공개 저장소에서 실제 앱의 자체 ChatGPT 연결로 단회 실험, 새 원고와 별도 문맥 리뷰를 완료했다. PDF 총29쪽 직접 시각 검수, DOCX 본문, ZIP 전 멤버 CRC·크기·SHA 및 앱의 실제5종 저장을 통과했다. 정상 재시작 뒤 같은 연결의 새 응답과 세 완료 연구 복원을 확인했다. 최종 경로·해시·검증 범위는 마지막 체크포인트에 있으며, 이전0/1/2편 기록은 해당 시점의 이력이다. macOS는 최종 런타임 전수 정적 검사까지 통과했고 native 실행·DMG·설치·CI는 미검증이다.
+0.13.1 당시 실제 연구의 실행·출력 검증은 **3/3편**이었다. 서로 다른 공개 저장소에서 실제 앱의 자체 ChatGPT 연결로 단회 실험, 새 원고와 별도 문맥 리뷰를 완료했다. PDF 총29쪽 직접 시각 검수, DOCX 본문, ZIP 전 멤버 CRC·크기·SHA 및 앱의 실제5종 저장을 통과했다. 정상 재시작 뒤 같은 연결의 새 응답과 세 완료 연구 복원을 확인했다. 이 세 원고는 이후 기여·비교·문헌 부족이 확인되어 현재 품질 기준 통과 근거로 사용하지 않는다. 당시 경로·해시·검증 범위와 이전0/1/2편 기록은 각각 해당 시점의 체크포인트에 보존한다. 당시 macOS 런타임은 전수 정적 검사까지 통과했고 native 실행·DMG·설치·CI는 미검증이었다.
 
 ## 실제로 수행한 검사
 
@@ -677,3 +677,50 @@ Windows 설치 파일은 `electronDist=node_modules/electron/dist`로 설치된 
 실제 0.14.5 작성 재개 `qpos/2dd124a6459a/recovery-runs/f73fa02edb86`는 앱의 `ResearchController.resume`으로 수행했다. 세 원고와 세 별도 심사를 완료했고 모두 기여·문헌 기준을 통과했으나 해석·표현 기준에서 반려됐다. 사전에 정한 최소 witness와 연결 입력·생산 응답·oracle fixture가 이미 보존되어 있지만 모델 자료에는 그 이름·해시·크기만 전달되어 실제 사례를 본문으로 연결하지 못했다. 세 번째 원고의 분석적 예시를 실측 사례로 가장하지 않은 점은 정확하나, 보존된 핵심 설명 자료를 전달하지 않은 제품 문제로 구분한다. 마지막 보완 판단은 `revise_manuscript`, `evidence_gaps=[]`이며 새 실험이 필요하다는 판정은 아니다.
 
 최종 상태는 `analyzed/blocked/MANUSCRIPT_REJECTED`, 과학 실행 1회·제어 3개·정리 대기 없음, 완료 논문 없음이다. 모든 기존 artifact·전체 464개 원본 소스·실행 JSON·목표 불변 검사를 통과했고 정상 종료했다. `result.json` SHA256은 `2cdbf94e5f85536a6050a6028474d1271eda48844f22797a4473cba81928176e`다. `paperGenerated=false`와 최초 평가 기록은 보존한다. 이 결과를 최종 논문 생성 성공으로 계산하지 않는다.
+
+## 0.14.6 설명 근거의 실제 원문 전달: 2026-10-07
+
+원고 작성 전에 `evidence-selection` 요청으로 필요한 설명 사례·반례·입력·생산 응답·oracle 자료를 선정한다. 원래 목표·고정 프로토콜·분석·이전 반려 이유·검증된 전체 fixture 목록을 전달하고, 특정 저장소나 `witness`라는 이름을 제품에 고정하지 않는다. 선택 모델은 기존 자료의 정확한 이름을 최대 6개 반환한다. 과학 실행이나 witness 선택 규칙을 바꿀 권한은 없으며, 빈 목록도 증거가 충분하다는 승인으로 간주하지 않는다.
+
+앱은 전체 관측 artifact와 모든 fixture의 원본 바이트·SHA256을 확인하고, 선택한 원문을 합계 16 KiB 이하의 UTF-8로 정확히 전달한다. BOM·공백·개행·NUL을 보존하며 디코딩과 재인코딩의 바이트 동일성을 확인한다. 중복·없는 이름·잘못된 UTF-8·개수나 크기 초과는 원문 영수증을 남기고 오류 처리한다. 요청 자료를 자동 생략·절삭하지 않는다. 선택은 한 작성 구간에서 한 번이며 같은 원문 packet을 모든 작성·심사 요청과 최대 세 차례 원고 보완에 제공한다. 선택 prompt의 SHA256도 packet에 연결한다. 파일 해시 검증은 바이트 보존 증거이며 과학적 해석의 승인과 구분한다.
+
+관측 projection은 모델 packet에 직접 JSON 객체로 넣어 중복 이스케이프를 제거했다. 처음 준비한 자료와 선택 원문을 포함한 자료 모두 설명문·JSON 포장을 포함하여 500,000자 이하인지 확인한다. 네이티브 과학 지침·분석·스키마가 붙은 전체 모델 prompt의 크기와는 구분한다. 기존 원시 관측 파일·전체 과학 근거·번호별 원고와 심사·성공한 실험 1회를 변경하지 않는다. UI에는 **설명 근거 확인** 단계가 표시되고, 새 단계에도 기존 계정·작업 잠금·취소·변경 불가 영수증 및 저널의 계약을 적용한다.
+
+| 확인 | 결과 |
+| --- | --- |
+| 데스크톱 서비스 | 288 통과. 실제 UTF-8 바이트 보존·원문 선택·동일 작성/심사 packet·한도·취소·손상 차단·실험 재실행 방지 |
+| 포함 SDK | 48 통과·1 건너뜀 |
+| 새 네이티브 영수증 집중 검사 | 10 통과·277 제외, 1.31초. 새 phase·prompt/text SHA·프로필·변경 불가 저널·입력 비노출 오류 확인 |
+| 최종 숨김 Electron | 13 통과, 약 1.2분. line reporter로 종료 코드 0 확인. 합성 계정·상태 fixture이며 실제 연구와 구분 |
+| Windows 실행 환경 | 고정 wheel 19개·2,218파일·473,581,095 B. QuickJS와 한국어 PDF·DOCX·TeX 실제 변환 확인 |
+| 실행 환경 inventory | SHA256 `c863d4acf08143031b3ea55091fcd9067a6c6ce2e2687af23047d6967c605481` |
+| 최종 패키지 전수 검사 | 2026-10-07 14:38:36.309 KST 통과. ASAR 7,667개 항목·SDK import·renderer·Pretendard·전체 런타임·엔진 소스 일치 |
+
+첫 데스크톱 검사는 287건 통과·1건 실패했다. 테스트가 원래 영수증의 재조정 요청을 새 모델 요청으로 잘못 세었으며, 동일 ID·outcome의 전체 객체·정확한 직렬화·보존된 파일 바이트가 같은지 확인하도록 수정한 뒤 전체 288건과 SDK를 통과했다. 네이티브 집중 검사의 첫 실패는 긴 임시 경로에 따른 Windows 경로 길이 문제였고, 짧은 소유 테스트 경로에서 같은 검사를 통과했다. 두 최초 실패 기록도 보존한다. 관련 기록은 `verification/desktop-fixture-selection-final.log`, `desktop-fixture-selection-final-repaired.log`, `native-fixture-selection-focused.log`, `runtime-fixture-selection-final.log`이다. 0.14.5의 세 모듈 전체 580건 이후 네이티브의 이번 변경은 새 영수증 phase이며 위 10건으로 검사했고, 전체 Python suite를 재실행한 것으로 계산하지 않는다.
+
+첫 Electron 검사는 13건이 모두 통과한 뒤 HTML reporter의 잠긴 `index.html`에 대한 `EBUSY`로 종료 코드 1을 반환했다. 제품 코드 변경 없이 line reporter로 13건 전체를 다시 실행하여 정상 종료했다. 최초 로그 `verification/electron-fixture-selection-final.log`와 최종 로그 `electron-fixture-selection-final-repaired.log`를 모두 보존한다. Windows NSIS는 설치된 동일 Electron `44.5.1`의 `electronDist=node_modules/electron/dist`로 생성했다. `package-fixture-selection-final.log`, `package-fixture-selection-verify-final.log`에 생성·검사 기록을 보존했다. 새 설치·OAuth·로그인 복원을 재검증하지 않았으며 설치 파일은 로컬 `desktop/release/`에 있다. GitHub Releases에는 게시하지 않았다.
+
+| 최종 파일 | 크기(B) | SHA256 |
+| --- | ---: | --- |
+| Paper Factory Setup 0.14.6.exe | 213,099,779 | ebcb62d9e6b57986b8021c5407f9bac1cc65b7accf99e9a82bc8fd8197ed3f9f |
+| win-unpacked/resources/app.asar | 44,744,662 | 096e00af03ba84e34b7f094e876e6e7f6ac560bda543dd237cda398988a88de2 |
+
+### 실제 앱 심사 통과와 논문 생성
+
+평가 `qpos/2dd124a6459a/recovery-runs/fad799427fc5`는 실제 `ResearchController.improveWriting`과 `EngineBridge`, 기존 공식 ChatGPT 연결을 사용했다. 작성·심사 모델은 각각 `gpt-6-astra`이며 별도 문맥에서 요청했다. 창을 띄우거나 심사 응답·측정값을 주입하지 않았다. 설명 근거 요청은 실제 모델이 고정된 최소 사례와 연결 입력·생산 응답·oracle·제어를 포함한 6개 원문, 합계 2,566 B를 선정했다. 전체 자료 packet은 482,050자였고 작성·심사에 동일하게 전달됐으며, 선택 prompt SHA256은 실제 영수증에 연결됐다.
+
+네 번째 번호 원고가 이번 작성 구간의 첫 시도에서 네 기준 모두를 통과했다. 실제 최종 심사는 `accepted=true`, `issues=[]`, `remediation=null`이며 네이티브 상태는 `exported/completed`다. 과학 실행은 처음의 1회이고 900개 입력 쌍·10,800개 관측·3개 제어·고정 프로토콜을 유지했다. 전체 464개 원본과 이전 초안·심사·보완 기록의 불변 검사를 통과했으며 `paperGenerated=true`, `shutdownConfirmed=true`로 정상 종료했다. `result.json` SHA256은 `3005028cc3f3cd1ac57f10569ac78a6de1697cff3ada3b8528402c64ba32af0f`다. 0.14.4·0.14.5의 보류 기록은 성공으로 다시 쓰지 않는다.
+
+원고 제목은 **최소 편집 비용의 동등성과 전체 hunk 부분 수락의 비동등성: 반복 단어 문서의 완전 열거 연구**다. 최소 편집 비용과 전체 변경 조각 부분 수락의 결과 집합이 서로 다른 성질임을 유한 공간에서 설명한다. 읽기 전용 독립 내용 감사는 전체 관측·분석·원문 해시, 원고 수치·선정 인용·최소 사례를 대조했고 해당 범위에서 차단 결함을 찾지 않았다. 원고는 평균 결과와 개별 결과 집합의 차이, 두 seed의 중복 없는 분할, 짧은 합성 문서라는 한계를 명시한다. 실제 사용성·일반 문서 빈도·전역 신규성·학술지 채택을 입증하는 결과로 표현하지 않는다. 감사 보고서 `verification/manuscript-2dd-fixture-selection-audit.json` SHA256은 `504c8eb91088b3d84f86cdbe8c89637bfe34a34ea6818263fc38b747248e6de9`다.
+
+| 실제 생성 파일 | 크기(B) | SHA256 |
+| --- | ---: | --- |
+| paper.md | 15,647 | 4d01cb0302606f8c6ca540ecdf182feff8049d5eee5d8a11b79a252d306a28b2 |
+| paper.pdf | 95,467 | 8097ea1a73dd0148b0caf8b8eb08ce7be40170c52f7d92be95454047127815b3 |
+| paper.docx | 18,873 | 8d3f3008f64bd2b63ab7c25e5812dce01a1ce200277cb0c577b3bdf54c0a6937 |
+| paper.tex | 20,232 | 3cdf455ed61be63a414742824c51a9fd096dbc0f121e528237510e167da86fef |
+| reproducibility.zip | 15,322,829 | 883f3c8deb5f9ebb3db0c631a826d986c53a3391fee5e16aace702f4b3b0cf17 |
+
+생성 위치는 해당 연구의 `research/exports/export-attempt-df5b2e3b3d5a/`이며, 검증된 복사본은 로컬 `output/papers/madi-partial-acceptance-20261007/`에 있다. PDF는 A4 4페이지이며 Pretendard Regular·Bold와 Libertinus 수학 폰트를 포함한다. Poppler로 네 페이지 전부를 렌더링해 제목·본문·12행 통계 표·인용·공백을 포함한 실측 사례가 잘리거나 글리프가 빠지지 않음을 시각 확인했다. 그림 없는 연구여서 빈 그림이나 누락 그림은 없다. 원고 본문은 한국어이며 네이티브 출력이 붙이는 일부 영어 캡션·근거 범위·재현 안내는 비차단 편집 개선 사항으로 남았다. 페이지 PNG와 검수 기록은 `verification/final-paper-pages/`, `final-paper-visual-audit.json`에 보존한다.
+
+별도 재현 패키지 감사는 ZIP 608개 항목 중 inventory 606개(압축 전 45,855,354 B)의 전체 크기·SHA256, 원본 464개·라이선스 고지 두 개, 원시 관측·선정 문헌·모든 이전 초안과 심사·모델 영수증·선택 원문·완료 문서를 대조했다. 원시 `observations.json`은 과학 실행의 정확한 원본 바이트이며 분석용 pretty JSON 복사본은 동일 관측값을 가진 별도 고정 파일이다. DOCX·MD·TeX의 필수 절과 두 선정 DOI도 확인했다. 런타임 바이너리는 앱 배포본에 포함되며 ZIP에 포함되지 않는다. 최종 검증 영수증과 저널은 ZIP 생성 뒤에 남는 별도 연구 artifact다. 이 감사는 모델·과학실험·생산 함수·네이티브 DB를 호출하거나 ZIP을 추출하지 않았으며 실제 재현 실험 실행 통과로 계산하지 않는다. 결과 `verification/repro-fixture-selection-audit.json` SHA256은 `9be44d7b96a7997657956b5741878d2c97d6305817b665c73a42d8b77f07c398`이고 감사 코드도 함께 보존했다.

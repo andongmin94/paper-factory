@@ -1,4 +1,4 @@
-export type ResearchPhase = 'idle' | 'plan' | 'redesign' | 'literature' | 'study-review' | 'code' | 'code-review' | 'experiment' | 'manuscript' | 'manuscript-review' | 'export';
+export type ResearchPhase = 'idle' | 'plan' | 'redesign' | 'literature' | 'study-review' | 'code' | 'code-review' | 'experiment' | 'evidence-selection' | 'manuscript' | 'manuscript-review' | 'export';
 export interface SupportingDocument { id: string; name: string; sha256: string; size: number }
 export interface ReviewCriterion { passed: boolean; reason: string }
 export interface StudyReview {
