@@ -5,10 +5,10 @@ import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'no
 
 export type EngineMethod = 'runtime.status' | 'workflow.create' | 'workflow.list' | 'workflow.status' |
   'workflow.readMaterial' | 'workflow.addEvidence' | 'workflow.submitProposal' | 'workflow.submitStudyReview' | 'workflow.submitCode' | 'workflow.collectLiterature' |
-  'workflow.startExperiment' | 'workflow.cancel' | 'workflow.resume' | 'workflow.reviseWriting' | 'workflow.submitManuscript' | 'workflow.recordInference' | 'workflow.export' | 'artifact.resolve' | 'shutdown';
+  'workflow.startExperiment' | 'workflow.cancel' | 'workflow.resume' | 'workflow.reviseWriting' | 'workflow.improveWriting' | 'workflow.redesignStudy' | 'workflow.submitManuscript' | 'workflow.recordInference' | 'workflow.export' | 'artifact.resolve' | 'shutdown';
 const methods = new Set<EngineMethod>(['runtime.status', 'workflow.create', 'workflow.list', 'workflow.status',
   'workflow.readMaterial', 'workflow.addEvidence', 'workflow.submitProposal', 'workflow.submitStudyReview', 'workflow.submitCode', 'workflow.collectLiterature',
-  'workflow.startExperiment', 'workflow.cancel', 'workflow.resume', 'workflow.reviseWriting', 'workflow.submitManuscript', 'workflow.recordInference', 'workflow.export', 'artifact.resolve', 'shutdown']);
+  'workflow.startExperiment', 'workflow.cancel', 'workflow.resume', 'workflow.reviseWriting', 'workflow.improveWriting', 'workflow.redesignStudy', 'workflow.submitManuscript', 'workflow.recordInference', 'workflow.export', 'artifact.resolve', 'shutdown']);
 const MAX_LINE = 16 * 1024 * 1024;
 
 export class EngineError extends Error {

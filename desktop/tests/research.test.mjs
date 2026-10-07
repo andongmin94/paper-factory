@@ -14,6 +14,8 @@ const sourceInventory = texts => Object.entries(texts).map(([name, text]) => ({ 
 const base = () => ({ id, goal: 'A synthetic controller test; no actual research', stage: 'planned', status: 'ready', code: null, message: null,
   terminal_control_failure: false, execution_attempt: 0, proposal_attempt: 1, cleanup_pending: false, resume_kind: 'preparation', artifacts: {}, instructions: 'Frozen test instructions', source_context: 'Synthetic bounded source excerpts only; no real research.',
   study_review: studyAccepted, manuscript_review: null,
+  parent_research_id: null, root_research_id: null, redesign_attempt: 0, followup_research_id: null,
+  improvement_available: false, redesign_pending: false,
   plan: { source_files: ['module.ts'] }, literature: { sources: [] }, supporting_documents: [],
   material_manifest: { source: sourceInventory({ 'module.ts': sourceText }), experiment: [] },
   schemas: { plan: {}, study_review: {}, code: {}, review: {}, manuscript: {}, manuscript_review: {} } });
@@ -25,7 +27,13 @@ const studyAccepted = { accepted: true, issues: [],
 const manuscriptAccepted = { ...accepted,
   ...Object.fromEntries(['contribution', 'literature', 'interpretation', 'presentation'].map(name => [name, criterion])) };
 const manuscriptRejected = issues => ({ ...manuscriptAccepted, accepted: false, issues,
-  contribution: { passed: false, reason: 'Synthetic quality rejection; the candidate has no justified research contribution.' } });
+  contribution: { passed: false, reason: 'Synthetic quality rejection; the candidate has no justified research contribution.' },
+  remediation: { strategy: 'revise_manuscript', reason: 'Explain the supported synthetic finding without adding any new scientific evidence.',
+    actions: [{ criterion: 'contribution', action: 'Explain the already recorded synthetic finding and its scope clearly in the manuscript.' }], evidence_gaps: [] } });
+const redesignRejected = () => ({ ...manuscriptRejected(['Synthetic retained results lack the requested evidence']),
+  remediation: { strategy: 'redesign_study', reason: 'The retained synthetic results cannot establish the proposed scientific contribution.',
+    actions: [{ criterion: 'contribution', action: 'Design a substantively different comparison addressing the missing synthetic evidence.' }],
+    evidence_gaps: ['A credible distinct scientific comparison has not been measured in this synthetic study.'] } });
 const observed = () => ({ ...base(), stage: 'analyzed', execution_attempt: 1, resume_kind: 'authoring',
   artifacts: { observations: { sha256: digest(retainedMaterials.observations), size: Buffer.byteLength(retainedMaterials.observations) }, 'runtime-manifest': {}, 'code-review-2': {}, 'code-review-10': {} },
   material_manifest: { source: sourceInventory({ 'module.ts': sourceText }), experiment: [{ name: 'experiment.mjs' }] } });
@@ -110,11 +118,12 @@ function fakeEngineError(code) {
 async function fixture(responses = [], workflow = base(), transport = {}) {
   const home = await mkdtemp(join(tmpdir(), 'paper-factory-research-test-'));
   const calls = []; const prompts = []; const events = []; const published = []; let responseIndex = 0; let starts = 0;
-  const publicWorkflow = () => {
-    workflow.resume_kind = ['ready', 'cancelled'].includes(workflow.status) && !workflow.cleanup_pending && !workflow.terminal_control_failure && workflow.code !== 'CLEANUP_UNCONFIRMED'
-      ? ['created', 'proposed', 'planned', 'code_ready'].includes(workflow.stage) && workflow.execution_attempt === 0 ? 'preparation'
-        : ['analyzed', 'manuscript'].includes(workflow.stage) && workflow.execution_attempt === 1 ? 'authoring' : null : null;
-    return structuredClone(workflow);
+  const records = new Map([[workflow.id, workflow]]);
+  const publicWorkflow = (record = workflow) => {
+    record.resume_kind = ['ready', 'cancelled'].includes(record.status) && !record.cleanup_pending && !record.terminal_control_failure && record.code !== 'CLEANUP_UNCONFIRMED'
+      ? ['created', 'proposed', 'planned', 'code_ready'].includes(record.stage) && record.execution_attempt === 0 ? 'preparation'
+        : ['analyzed', 'manuscript'].includes(record.stage) && record.execution_attempt === 1 ? 'authoring' : null : null;
+    return structuredClone(record);
   };
   const engine = {
     async start() { events.push('engine.start'); starts++; await transport.start?.(starts); },
@@ -125,7 +134,8 @@ async function fixture(responses = [], workflow = base(), transport = {}) {
       const override = await transport.request?.(method, params);
       if (override !== undefined) return override;
       if (method === 'runtime.status') return { ready: true, versions: { test: 'synthetic' } };
-      if (method === 'workflow.list') return [publicWorkflow()];
+      if (method === 'workflow.list') return [...records.values()].map(record => publicWorkflow(record));
+      if (params.researchId && records.has(params.researchId)) workflow = records.get(params.researchId);
       if (method === 'workflow.create' || method === 'workflow.status') return publicWorkflow();
       if (method === 'workflow.readMaterial') return { text: params.area === 'source'
         ? sourceText : retainedMaterials[params.name], next_offset: null,
@@ -147,6 +157,16 @@ async function fixture(responses = [], workflow = base(), transport = {}) {
       else if (method === 'workflow.collectLiterature') { /* bounded synthetic retrieval, no network */ }
       else if (method === 'workflow.resume') { workflow.status = 'ready'; workflow.code = null; }
       else if (method === 'workflow.reviseWriting') { workflow.stage = 'analyzed'; workflow.status = 'ready'; workflow.code = null; }
+      else if (method === 'workflow.improveWriting') { workflow.status = 'ready'; workflow.code = null; workflow.improvement_available = false; }
+      else if (method === 'workflow.redesignStudy') {
+        const parent = workflow;
+        const childId = `research-${String(records.size).padStart(12, '0')}`;
+        workflow = { ...base(), id: childId, goal: parent.goal, stage: 'created', proposal_attempt: 0, study_review: null,
+          parent_research_id: parent.id, root_research_id: parent.root_research_id ?? parent.id,
+          redesign_attempt: parent.redesign_attempt + 1,
+          prior_study: { parent_id: parent.id, review: parent.manuscript_review, analysis: { scope: 'Synthetic retained negative evidence only' } } };
+        parent.followup_research_id = childId; records.set(childId, workflow);
+      }
       else if (method === 'workflow.submitManuscript') {
         workflow.manuscript_review = params.review;
         workflow.stage = params.review.accepted ? 'manuscript' : 'analyzed';
@@ -174,13 +194,167 @@ async function fixture(responses = [], workflow = base(), transport = {}) {
     },
   };
   const controller = new ResearchController(client, engine, home, snapshot => published.push(snapshot));
-  return { home, controller, calls, prompts, events, published, engine, client, workflow, get starts() { return starts; },
+  return { home, controller, calls, prompts, events, published, engine, client, workflow, records, get starts() { return starts; },
     async cleanup() { await controller.shutdown(); await rm(home, { recursive: true, force: true }); } };
 }
 
 async function settled(controller) {
   for (let i = 0; i < 300; i++) { if (!controller.snapshot().busy) return controller.snapshot(); await delay(5); }
   throw new Error('Synthetic pipeline failed to settle');
+}
+
+test('scientific rejection creates a separate study and reaches export through every fresh gate', async () => {
+  const original = observed(); const frozenArtifacts = structuredClone(original.artifacts);
+  const review = redesignRejected();
+  const f = await fixture([{ sections: [] }, review, { feasible: true, source_files: ['module.ts'] }, studyAccepted,
+    { files: [{ path: 'experiment.mjs', content: 'A_NEW_SYNTHETIC_EXPERIMENT' }] }, accepted,
+    { sections: [] }, manuscriptAccepted], original);
+  try {
+    await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer');
+    const state = await settled(f.controller); const child = state.jobs.find(job => job.parentResearchId === id);
+    assert.equal(child.pipeline, 'completed'); assert.equal(child.redesignAttempt, 1); assert.equal(child.rootResearchId, id);
+    assert.equal(state.jobs.find(job => job.id === id).followupResearchId, child.id);
+    assert.equal(original.status, 'blocked'); assert.equal(original.execution_attempt, 1);
+    assert.deepEqual(original.artifacts, frozenArtifacts); assert.deepEqual(original.manuscript_review, review);
+    assert.deepEqual(f.calls.filter(call => call.method === 'workflow.startExperiment').map(call => call.params.researchId), [child.id]);
+    const childCalls = f.calls.filter(call => call.params.researchId === child.id).map(call => call.method);
+    for (const method of ['workflow.submitProposal', 'workflow.collectLiterature', 'workflow.submitStudyReview', 'workflow.submitCode',
+      'workflow.startExperiment', 'workflow.submitManuscript', 'workflow.export']) assert.ok(childCalls.includes(method));
+    assert.ok(childCalls.indexOf('workflow.submitStudyReview') < childCalls.indexOf('workflow.startExperiment'));
+    assert.match(f.prompts[2].input[0].content, /retained exploratory results, not new observations/);
+    assert.ok(f.prompts[2].input[0].content.includes(review.remediation.evidence_gaps[0]));
+  } finally { await f.cleanup(); }
+});
+
+test('persistent redesign depth bounds scientific attempts and attributes the final failure to the active child', async () => {
+  const nextStudy = () => [{ feasible: true, source_files: ['module.ts'] }, studyAccepted,
+    { files: [{ path: 'experiment.mjs', content: 'SYNTHETIC_FRESH_CODE' }] }, accepted, { sections: [] }, redesignRejected()];
+  const f = await fixture([{ sections: [] }, redesignRejected(), ...nextStudy(), ...nextStudy()], observed());
+  try {
+    await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer');
+    const state = await settled(f.controller); const last = state.jobs.find(job => job.redesignAttempt === 2);
+    assert.equal(state.jobs.length, 3); assert.equal(last.pipeline, 'failed'); assert.equal(last.code, 'STUDY_REDESIGN_LIMIT');
+    assert.equal(f.calls.filter(call => call.method === 'workflow.redesignStudy').length, 2);
+    assert.equal(f.calls.filter(call => call.method === 'workflow.startExperiment').length, 2);
+    for (const record of f.records.values()) assert.equal(record.execution_attempt, 1);
+    for (const previous of state.jobs.filter(job => job.id !== last.id)) {
+      assert.equal(previous.pipeline, 'paused'); assert.equal(previous.code, 'MANUSCRIPT_REJECTED');
+    }
+  } finally { await f.cleanup(); }
+});
+
+test('cancelling a follow-up stops its model request and preserves the rejected parent', async () => {
+  const started = deferred(); const original = observed();
+  const f = await fixture([{ sections: [] }, redesignRejected(), options => {
+    started.resolve(); return new Promise((_resolve, reject) => options.signal.addEventListener('abort',
+      () => reject(fakeEngineError('REQUEST_CANCELLED')), { once: true }));
+  }], original);
+  try {
+    await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer'); await started.promise;
+    const child = f.controller.snapshot().jobs.find(job => job.parentResearchId === id);
+    await f.controller.cancel(child.id);
+    const state = await settled(f.controller);
+    assert.equal(state.jobs.find(job => job.id === child.id).pipeline, 'paused');
+    assert.equal(original.status, 'blocked'); assert.equal(original.code, 'MANUSCRIPT_REJECTED');
+    assert.equal(original.execution_attempt, 1);
+    assert.equal(f.calls.some(call => call.method === 'workflow.startExperiment'), false);
+    assert.ok(f.calls.some(call => call.method === 'workflow.recordInference' && call.params.researchId === child.id &&
+      call.params.receipt.outcome === 'interrupted'));
+  } finally { await f.cleanup(); }
+});
+
+for (const remediation of [undefined, { ...redesignRejected().remediation, evidence_gaps: [] },
+  { ...redesignRejected().remediation, strategy: 'revise_manuscript' },
+  { ...redesignRejected().remediation, actions: [] }]) {
+  test('inconsistent scientific remediation cannot trigger a new study: ' + JSON.stringify(remediation), async () => {
+    const review = { ...redesignRejected(), remediation };
+    const f = await fixture([{ sections: [] }, review], observed());
+    try {
+      await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer');
+      assert.equal((await settled(f.controller)).jobs[0].code, 'REVIEW_INVALID');
+      assert.equal(f.calls.some(call => ['workflow.redesignStudy', 'workflow.submitManuscript', 'workflow.startExperiment'].includes(call.method)), false);
+    } finally { await f.cleanup(); }
+  });
+}
+
+test('an explicit infeasible scientific blocker ends without cosmetic drafting retries', async () => {
+  const review = redesignRejected(); review.remediation.strategy = 'infeasible';
+  const f = await fixture([{ sections: [] }, review], observed());
+  try {
+    await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer');
+    assert.equal((await settled(f.controller)).jobs[0].code, 'MANUSCRIPT_REJECTED');
+    assert.equal(f.prompts.length, 2); assert.equal(f.calls.filter(call => call.method === 'workflow.submitManuscript').length, 1);
+    assert.equal(f.calls.some(call => call.method === 'workflow.redesignStudy'), false);
+  } finally { await f.cleanup(); }
+});
+
+const held = (review = manuscriptRejected(['Retained synthetic assessment needs repair'])) => ({
+  ...observed(), status: 'blocked', code: 'MANUSCRIPT_REJECTED', resume_kind: null,
+  manuscript_review: review, improvement_available: true,
+});
+
+test('explicit held-paper improvement reuses preserved evidence and can proceed to a genuinely new study', async () => {
+  const oldReview = manuscriptRejected(['Synthetic historical quality assessment']); delete oldReview.remediation;
+  const original = held(oldReview), retained = structuredClone(original.artifacts);
+  const f = await fixture([{ sections: [] }, redesignRejected(), { feasible: true, source_files: ['module.ts'] }, studyAccepted,
+    { files: [{ path: 'experiment.mjs', content: 'NEW_SYNTHETIC_SCIENTIFIC_COMPARISON' }] }, accepted,
+    { sections: [] }, manuscriptAccepted], original);
+  try {
+    await f.controller.initialize();
+    assert.equal(f.controller.snapshot().jobs[0].improvementAvailable, true);
+    await f.controller.improveWriting(id, 'writer', 'reviewer');
+    const state = await settled(f.controller), child = state.jobs.find(job => job.parentResearchId === id);
+    assert.equal(child.pipeline, 'completed'); assert.equal(original.execution_attempt, 1);
+    assert.deepEqual(original.artifacts, retained);
+    assert.ok(f.prompts[0].input[0].content.includes(JSON.stringify(oldReview)));
+    assert.deepEqual(f.calls.filter(call => call.method === 'workflow.startExperiment').map(call => call.params.researchId), [child.id]);
+    assert.equal(f.calls.filter(call => call.method === 'workflow.improveWriting').length, 1);
+    assert.equal(state.jobs.find(job => job.id === id).improvementAvailable, false);
+  } finally { await f.cleanup(); }
+});
+
+test('a pending follow-up continues its bound redesign without reopening or redrafting the parent', async () => {
+  const original = { ...held(redesignRejected()), improvement_available: false, redesign_pending: true };
+  const f = await fixture([{ feasible: true, source_files: ['module.ts'] }, studyAccepted,
+    { files: [{ path: 'experiment.mjs', content: 'SYNTHETIC_PENDING_FOLLOWUP' }] }, accepted,
+    { sections: [] }, manuscriptAccepted], original);
+  try {
+    await f.controller.initialize(); await f.controller.improveWriting(id, 'writer', 'reviewer');
+    const state = await settled(f.controller);
+    assert.equal(state.jobs.find(job => job.parentResearchId === id).pipeline, 'completed');
+    assert.equal(f.calls.some(call => call.method === 'workflow.improveWriting'), false);
+    assert.equal(f.calls.some(call => call.method === 'workflow.submitManuscript' && call.params.researchId === id), false);
+    assert.equal(f.calls.filter(call => call.method === 'workflow.redesignStudy').length, 1);
+  } finally { await f.cleanup(); }
+});
+
+for (const patch of [{ improvement_available: false }, { execution_attempt: 2 }, { terminal_control_failure: true },
+  { cleanup_pending: true }, { status: 'failed' }]) {
+  test('unsafe held-study improvement stops before any authoring or science: ' + JSON.stringify(patch), async () => {
+    const f = await fixture([], { ...held(), ...patch });
+    try {
+      await f.controller.initialize();
+      await assert.rejects(f.controller.improveWriting(id, 'writer', 'reviewer'), error =>
+        ['WRITING_IMPROVEMENT_NOT_ALLOWED', 'RESEARCH_BUSY'].includes(error.code));
+      assert.equal(f.prompts.length, 0);
+      assert.equal(f.calls.some(call => ['workflow.improveWriting', 'workflow.redesignStudy', 'workflow.startExperiment'].includes(call.method)), false);
+    } finally { await f.cleanup(); }
+  });
+}
+
+for (const patch of [{ stage: 'planned' }, { execution_attempt: 2 }, { root_research_id: 'research-000000000000' },
+  { artifacts: {} }]) {
+  test('invalid held-study reopening acknowledgment prevents model requests: ' + JSON.stringify(patch), async () => {
+    const original = held();
+    const f = await fixture([], original, { request(method) {
+      if (method === 'workflow.improveWriting') return { ...structuredClone(original), status: 'ready', code: null, ...patch };
+    } });
+    try {
+      await f.controller.initialize();
+      await assert.rejects(f.controller.improveWriting(id, 'writer', 'reviewer'), error => error.code === 'RESEARCH_STATE_INVALID');
+      assert.equal(f.prompts.length, 0); assert.equal(f.calls.some(call => call.method === 'workflow.startExperiment'), false);
+    } finally { await f.cleanup(); }
+  });
 }
 
 const input = { source: 'https://github.com/fixture/repository', goal: 'Inspect a synthetic test fixture only.', model: 'writer', reviewerModel: 'reviewer' };

@@ -161,7 +161,87 @@ def review_payload(kind):
     if kind == "study":
         payload["selected_sources"] = [{"source_id": "source-oracle", "excerpt_index": 0,
                                        "relevance": "This inspected excerpt directly supports the study's independent-oracle design."}]
+    else:
+        payload["remediation"] = None
     return payload
+
+
+def remediation_payload(strategy="revise_manuscript", criteria=("contribution",)):
+    return {
+        "strategy": strategy,
+        "reason": "The retained negative finding supports a useful, carefully bounded contribution.",
+        "actions": [{"criterion": criterion,
+                     "action": "Position the retained negative finding against the directly inspected prior work."}
+                    for criterion in criteria],
+        "evidence_gaps": ["The retained fixtures do not measure the proposed real application outcome."]
+            if strategy == "redesign_study" else [],
+    }
+
+
+@pytest.mark.parametrize("strategy", ["revise_manuscript", "redesign_study", "infeasible"])
+def test_manuscript_rejection_has_bounded_actionable_remediation_for_every_failed_criterion(strategy):
+    payload = review_payload("manuscript")
+    payload["accepted"] = False
+    payload["issues"] = ["The findings need a defensible contribution and an evidence-grounded interpretation."]
+    payload["contribution"]["passed"] = payload["interpretation"]["passed"] = False
+    payload["remediation"] = remediation_payload(strategy, ("contribution", "interpretation"))
+    assert Draft202012Validator(ManuscriptReview.model_json_schema()).is_valid(payload)
+    assessment = ManuscriptReview.model_validate(payload)
+    assert assessment.accepted is False
+    assert assessment.remediation.strategy == strategy
+    assert {action.criterion for action in assessment.remediation.actions} == {"contribution", "interpretation"}
+    payload["remediation"]["actions"].pop()
+    with pytest.raises(ValidationError, match="every failed criterion"):
+        ManuscriptReview.model_validate(payload)
+
+
+def test_manuscript_revision_cannot_claim_missing_evidence_is_a_prose_repair():
+    payload = review_payload("manuscript")
+    payload["accepted"] = False
+    payload["contribution"]["passed"] = False
+    payload["issues"] = ["The claimed application effect was not measured."]
+    payload["remediation"] = remediation_payload("redesign_study")
+    assert ManuscriptReview.model_validate(payload).remediation.evidence_gaps
+    payload["remediation"]["strategy"] = "revise_manuscript"
+    with pytest.raises(ValidationError, match="cannot require missing evidence"):
+        ManuscriptReview.model_validate(payload)
+    payload["remediation"]["strategy"] = "redesign_study"
+    payload["remediation"]["evidence_gaps"] = []
+    with pytest.raises(ValidationError, match="concrete evidence gap"):
+        ManuscriptReview.model_validate(payload)
+
+
+def test_manuscript_acceptance_cannot_include_repairs_and_retained_reviews_remain_readable():
+    payload = review_payload("manuscript")
+    payload["remediation"] = remediation_payload()
+    with pytest.raises(ValidationError, match="cannot require remediation"):
+        ManuscriptReview.model_validate(payload)
+    del payload["remediation"]
+    assert ManuscriptReview.model_validate(payload).remediation is None
+    # Historical review display does not supply a recovery decision. Fresh
+    # rejected submissions enforce that requirement at the workflow boundary.
+    payload["accepted"] = False
+    payload["contribution"]["passed"] = False
+    payload["issues"] = ["The original finding needs additional evidence."]
+    assert ManuscriptReview.model_validate(payload).remediation is None
+
+
+@pytest.mark.parametrize("field,value", [
+    ("strategy", "accept_anyway"), ("reason", " " * 30),
+    ("reason", "x" * 4001), ("actions", []),
+    ("actions", [{"criterion": "unknown", "action": "Address a concrete issue with the existing evidence."}]),
+    ("actions", [{"criterion": "contribution", "action": " " * 30}]),
+    ("evidence_gaps", [" " * 30]), ("evidence_gaps", ["x" * 4001]),
+])
+def test_manuscript_remediation_rejects_unknown_unexplained_or_unbounded_repairs(field, value):
+    payload = review_payload("manuscript")
+    payload["accepted"] = False
+    payload["contribution"]["passed"] = False
+    payload["issues"] = ["The claimed contribution is unsupported."]
+    payload["remediation"] = remediation_payload("redesign_study")
+    payload["remediation"][field] = value
+    with pytest.raises(ValidationError):
+        ManuscriptReview.model_validate(payload)
 
 
 @pytest.mark.parametrize("kind,criterion", [
@@ -805,6 +885,46 @@ def test_study_review_uses_inspected_reading_and_can_reject_feasible_trivial_stu
     assert json.dumps(protocol.model_dump(mode="json"), ensure_ascii=False, indent=2) in prompt
     assert json.dumps(literature, ensure_ascii=False, indent=2) in prompt
     assert prompt.endswith(source)
+
+
+def test_manuscript_review_routes_evidence_gaps_to_a_new_study_without_lowering_acceptance():
+    prompt = " ".join(science.manuscript_review_prompt().split())
+    assert "AFTER verified execution" in prompt
+    for criterion in ("contribution:", "literature:", "interpretation:", "presentation:"):
+        assert criterion in prompt
+    assert "All four criteria must pass and issues must be empty" in prompt
+    assert "remediation=null" in prompt
+    assert "For accepted=false, return concrete issues AND structured remediation" in prompt
+    assert "Address every failed criterion and every material issue" in prompt
+    assert "revise_manuscript: the retained evidence already supports a worthwhile paper" in prompt
+    assert "evidence_gaps must be []" in prompt
+    assert "redesign_study: useful knowledge needs a changed question" in prompt
+    assert "at least one concrete evidence_gap" in prompt
+    assert "never a favorable rerun, reseeding or modification of the completed study" in prompt
+    assert "Earlier observations remain disclosed exploratory context, not confirmation" in prompt
+    assert "infeasible: explain the specific requirement outside the original goal" in prompt
+    assert "Do not promise that a repair will pass, lower criteria, invent observations" in prompt
+    assert "not journal peer review or a publication guarantee" in prompt
+
+
+def test_planner_resolves_rejected_study_gaps_before_an_independent_new_execution():
+    prompt = " ".join(science.planning_prompt("Inspected production source", "Original research goal").split())
+    assert "propose a NEW study that resolves its concrete evidence_gaps" in prompt
+    assert "within the original user's research goal" in prompt
+    assert "Rewording the old contribution, repeating its metric grid or changing seeds" in prompt
+    assert "Earlier observed results are exploratory evidence, not independent confirmation" in prompt
+    assert "freeze the new question, units, comparisons and analysis before its own execution" in prompt
+    assert "negative, null or unfavorable results still answer the question" in prompt
+    assert "do not select fixtures or predicted conclusions to obtain reviewer acceptance" in prompt
+    assert "return feasible=false with the specific blocking requirement" in prompt
+
+
+def test_writer_cannot_replace_missing_measurements_with_stronger_prose(protocol, literature, execution):
+    prompt = " ".join(science.writing_prompt(protocol, {"retained": "analysis"}, literature, execution).split())
+    assert "follow the supplied failed-criterion actions using only retained evidence" in prompt
+    assert "prose cannot replace a missing comparison" in prompt
+    assert "Never invent missing measurements or present a requested future study as completed" in prompt
+    assert "completed protocol and observations stay unchanged" in prompt
 
 
 def test_planner_distinguishes_worthwhile_studies_from_convenient_checker_controls():

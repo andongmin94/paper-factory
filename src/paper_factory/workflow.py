@@ -39,12 +39,17 @@ SCHEMAS = {"plan": ResearchPlan.model_json_schema(), "study_review": StudyReview
            "code": CodeBundle.model_json_schema(), "review": ScientificReview.model_json_schema(),
            "manuscript": ManuscriptDraft.model_json_schema(), "manuscript_review": ManuscriptReview.model_json_schema()}
 READABLE_EVIDENCE = {"proposal", "plan", "study-review", "selected-literature", "observations", "analysis",
-                     "literature", "manuscript", "canonical", "runtime-manifest"}
+                     "literature", "manuscript", "canonical", "runtime-manifest", "prior-study", "redesign-origin"}
+PUBLIC_EXECUTION_FIELDS = ("status", "code", "backend", "simulation", "exit_code", "coverage_mechanism", "coverage_truncated",
+                           "production_calls", "cleanup_confirmed", "duration_seconds", "limits", "source_digest",
+                           "protocol_sha256", "bundle_sha256")
+PRIOR_STUDY_SCOPE = "Exploratory prior-study findings; not observations or approval for this new study"
+INHERITED_DOCUMENT_SCOPE = "Inherited exact bytes and original import receipts; no new inspection or pre-experiment collection attested"
 
 
 def _readable_evidence(key: str) -> bool:
     return key in READABLE_EVIDENCE or re.fullmatch(
-        r"(?:(?:code|manuscript)-review-[1-9][0-9]*|supporting-document-(?:import-)?[a-f0-9]{12}|authoring-revision-[a-f0-9]{12})", key) is not None
+        r"(?:(?:code|manuscript)-review-[1-9][0-9]*|supporting-document-(?:import-)?[a-f0-9]{12}|(?:authoring-revision|writing-improvement)-[a-f0-9]{12})", key) is not None
 
 
 class WorkflowError(ValueError):
@@ -106,6 +111,7 @@ def _verify_artifacts(ws: Workspace, record: Workflow) -> None:
     project.verify_snapshot(ws)
     for key in record.artifacts:
         _artifact(ws, record, key)
+    _verify_lineage(ws, record)
     if "bundle" in record.artifacts:
         metadata = _read(ws, record, "bundle")
         root = _artifact(ws, record, "bundle").parent
@@ -121,6 +127,78 @@ def _verify_artifacts(ws: Workspace, record: Workflow) -> None:
             path = safe_relative(root, item["path"])
             if not path.is_file() or digest_file(path) != item["sha256"] or path.stat().st_size != item["size"]:
                 raise WorkflowError("ARTIFACT_CHANGED", "Frozen experiment source changed")
+
+
+def _verify_lineage(ws: Workspace, record: Workflow) -> None:
+    if record.redesign_attempt == 0:
+        if "redesign-origin" in record.artifacts or "prior-study" in record.artifacts:
+            raise WorkflowError("ARTIFACT_CHANGED", "Original study cannot discard retained redesign lineage")
+        return
+    origin = _read(ws, record, "redesign-origin")
+    summary = _read(ws, record, "prior-study")
+    imported = ws.latest("project", Project)
+    if (origin.get("event") != "study-redesign" or origin.get("child_id") != record.id or
+            origin.get("parent_id") != record.parent_research_id or
+            origin.get("root_id") != record.root_research_id or
+            origin.get("redesign_attempt") != record.redesign_attempt or
+            origin.get("snapshot_digest") != imported.snapshot_digest or
+            origin.get("source_commit") != imported.source_commit or
+            summary.get("parent_id") != record.parent_research_id or
+            summary.get("root_id") != record.root_research_id or
+            summary.get("redesign_attempt") != record.redesign_attempt or
+            summary.get("scope") != PRIOR_STUDY_SCOPE or
+            summary.get("snapshot_digest") != imported.snapshot_digest or
+            summary.get("source_commit") != imported.source_commit or
+            summary.get("supporting_documents") != origin.get("supporting_documents") or
+            summary.get("supporting_document_scope") != INHERITED_DOCUMENT_SCOPE or
+            summary.get("bindings") != origin.get("parent_evidence")):
+        raise WorkflowError("ARTIFACT_CHANGED", "Redesign lineage differs from its immutable scientific origin")
+    for key, expected in origin["parent_evidence"].items():
+        retained = record.artifacts.get("prior-study-" + record.parent_research_id + "-" + key)
+        if retained is None or {"sha256": retained.sha256, "size": retained.size} != expected:
+            raise WorkflowError("ARTIFACT_CHANGED", "Prior-study evidence differs from its redesign origin")
+    prefix = "prior-study-" + record.parent_research_id + "-"
+    reviews = [key for key in origin["parent_evidence"] if re.fullmatch(r"manuscript-review-[1-9][0-9]*", key)]
+    if len(reviews) != 1:
+        raise WorkflowError("ARTIFACT_CHANGED", "Redesign origin must identify one current parent manuscript review")
+    execution = _read(ws, record, prefix + "execution")
+    review = ManuscriptReview.model_validate(_read(ws, record, prefix + reviews[0])["review"])
+    if (summary.get("protocol") != _read(ws, record, prefix + "plan") or
+            summary.get("analysis") != _read(ws, record, prefix + "analysis") or
+            summary.get("execution") != {key: value for key, value in execution.items() if key in PUBLIC_EXECUTION_FIELDS} or
+            summary.get("review") != review.model_dump(mode="json") or
+            review.accepted or review.remediation is None or review.remediation.strategy != "redesign_study"):
+        raise WorkflowError("ARTIFACT_CHANGED", "Prior-study summary differs from its retained scientific evidence")
+    earlier = summary.get("earlier_study")
+    if ((record.redesign_attempt == 1 and earlier is not None) or
+            (record.redesign_attempt == 2 and (not isinstance(earlier, dict) or
+             earlier != _read(ws, record, "prior-study-" + str(earlier.get("parent_id")) + "-summary")))):
+        raise WorkflowError("ARTIFACT_CHANGED", "Earlier negative studies must remain bound to the complete redesign history")
+
+
+def _copy_retained(source: Path, destination: Path, expected: FrozenArtifact, staging_root: Path) -> None:
+    """Publish verified bytes atomically; never overwrite a different retained file."""
+    ensure_unlinked(source)
+    ensure_unlinked(destination)
+    if destination.exists():
+        if (not destination.is_file() or destination.stat().st_size != expected.size or
+                digest_file(destination) != expected.sha256):
+            raise WorkflowError("REDESIGN_EVIDENCE_CONFLICT", "A redesign cannot overwrite different retained bytes")
+        return
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=staging_root, prefix="redesign-copy-", delete=False) as temporary:
+        staging = Path(temporary.name)
+        with source.open("rb") as original:
+            shutil.copyfileobj(original, temporary)
+        temporary.flush()
+        os.fsync(temporary.fileno())
+    try:
+        if staging.stat().st_size != expected.size or digest_file(staging) != expected.sha256:
+            raise WorkflowError("ARTIFACT_CHANGED", "Scientific source changed during verified snapshot reuse")
+        os.replace(staging, destination)
+        destination.chmod(0o444)
+    finally:
+        staging.unlink(missing_ok=True)
 
 
 def _supporting_name(root: Path, name: object) -> str:
@@ -263,6 +341,9 @@ class WorkflowService:
                                        record.code == "CLEANUP_UNCONFIRMED" or
                                        (future is not None and not future.done()))
         data["resume_kind"] = self._resume_kind(record)
+        _verify_lineage(ws, record)
+        data["followup_research_id"], data["redesign_pending"] = self._followup_state(ws, record)
+        data["prior_study"] = _read(ws, record, "prior-study") if "prior-study" in record.artifacts else None
         # Execution exceptions may contain private host paths. Keep diagnostics
         # local; public state describes the actionable failure category.
         if record.status in {"blocked", "failed"}:
@@ -283,6 +364,7 @@ class WorkflowService:
         data["manuscript_review"] = (ManuscriptReview.model_validate(manuscript_review).model_dump(mode="json")
             if manuscript_review and all(name in manuscript_review for name in
                 ("contribution", "literature", "interpretation", "presentation")) else None)
+        data["improvement_available"] = self._improvement_available(ws, record)
         if record.code == "STUDY_REJECTED" and data["study_review"]:
             data["message"] = "연구 적합성 검토에서 보완이 필요합니다. " + _diagnostic("; ".join(data["study_review"]["issues"]))
         if record.code == "MANUSCRIPT_REJECTED" and data["manuscript_review"]:
@@ -307,10 +389,7 @@ class WorkflowService:
                 if key == "execution":
                     if record.code:
                         data["diagnostics"]["runner"] = _diagnostic(value.get("error") or value.get("stderr"))
-                    value = {name: value.get(name) for name in (
-                        "status", "code", "backend", "simulation", "exit_code", "coverage_mechanism", "coverage_truncated",
-                        "production_calls", "cleanup_confirmed", "duration_seconds", "limits", "source_digest",
-                        "protocol_sha256", "bundle_sha256")}
+                    value = {name: value.get(name) for name in PUBLIC_EXECUTION_FIELDS}
                     value["cleanup_reconciled"] = self._confirmed_cleanup(ws, record)
                 data[key] = value
         if "selected-literature" in record.artifacts:
@@ -344,11 +423,22 @@ class WorkflowService:
             else:
                 data["instructions"] = science.writing_prompt(ResearchPlan.model_validate(data["plan"]), data["analysis"],
                                                                data["literature"], data["execution"])
-                data["instructions"] += "\nHave a fresh native host reviewer assess contribution, literature relevance, interpretation and presentation as ManuscriptReview. Reject a trivial contract test framed as an empirical paper even when numerical integrity passes."
+                data["instructions"] += "\n" + science.manuscript_review_prompt()
         elif record.stage == "manuscript":
             data["instructions"] = "Export the validated manuscript to Markdown, PDF, DOCX, standalone TeX and a reproduction archive. Export recomputes raw results and independently reopens the native documents."
         else:
             data["instructions"] = "Verified artifacts are ready for the author's scientific review. Download server-owned artifact IDs; no journal submission or publication approval has occurred."
+        if data["prior_study"] is not None:
+            if record.stage == "created":
+                data["planning_instructions"] = data["instructions"]
+            history = ("\n\nRetained prior-study evidence is exploratory history, not observations from this study. "
+                       "Preserve its negative/null findings and rejection reasons. A redesigned question must address the stated "
+                       "evidence gaps through a substantively different preregistered design, fresh literature and all quality gates. "
+                       "Do not repeat the same design, change seeds or select outcomes to obtain a favorable result. "
+                       "Do not count prior and current observations as independent validation without a justified new sampling design.\n")
+            data["instructions"] += history + json.dumps(data["prior_study"], ensure_ascii=False)
+            if "planning_instructions" in data:
+                data["planning_instructions"] += history
         return data
 
     def _resume_kind(self, record: Workflow) -> str | None:
@@ -1041,6 +1131,227 @@ class WorkflowService:
                 analysis.get("controls") != controls):
             raise WorkflowError("ARTIFACT_CHANGED", "Retained analysis does not bind the frozen raw observations, protocol and controls")
 
+    def _followup_state(self, ws: Workspace, record: Workflow) -> tuple[str | None, bool]:
+        if "redesign-intent" not in record.artifacts:
+            return None, False
+        intent = _read(ws, record, "redesign-intent")
+        if (intent.get("event") != "study-redesign" or intent.get("parent_id") != record.id or
+                intent.get("root_id") != (record.root_research_id or record.id) or
+                intent.get("redesign_attempt") != record.redesign_attempt + 1 or
+                not isinstance(intent.get("child_id"), str) or
+                intent["child_id"] != "research-" + hashlib.sha256(("paper-factory-redesign\0" + record.id).encode()).hexdigest()[:12]):
+            raise WorkflowError("REDESIGN_EVIDENCE_CONFLICT", "Pending follow-up differs from its immutable parent origin")
+        child_root = safe_relative(self.root, intent["child_id"])
+        if (child_root / "records.sqlite3").is_file():
+            child_ws = Workspace(child_root)
+            with child_ws.lock("workflow"):
+                records = child_ws.list("workflow", Workflow)
+                if records:
+                    if (len(records) != 1 or records[0].id != intent["child_id"] or
+                            records[0].parent_research_id != record.id or records[0].root_research_id != intent["root_id"]):
+                        raise WorkflowError("REDESIGN_EVIDENCE_CONFLICT", "Follow-up linkage differs from its recorded origin")
+                    _verify_artifacts(child_ws, records[0])
+                    if _read(child_ws, records[0], "redesign-origin") != intent:
+                        raise WorkflowError("REDESIGN_EVIDENCE_CONFLICT", "Committed follow-up differs from its retained parent intent")
+                    return records[0].id, False
+        future = self._jobs.get(record.id)
+        if (self._closing or self._closed or (future is not None and not future.done()) or
+                record.status != "blocked" or record.stage != "analyzed" or record.code != "MANUSCRIPT_REJECTED" or
+                record.execution_attempt != 1 or record.redesign_attempt >= 2):
+            return None, False
+        try:
+            self._require(ws, record, {"analyzed"})
+            self._require_successful_analysis(ws, record)
+            receipt = _read(ws, record, "manuscript-review")
+            review = ManuscriptReview.model_validate(receipt.get("review", {}))
+            imported = ws.latest("project", Project)
+            if (review.accepted or review.remediation is None or review.remediation.strategy != "redesign_study" or
+                    receipt.get("origin") != "native_host_submission" or
+                    record.artifacts.get("manuscript-review") != record.artifacts.get("manuscript-review-" + str(record.draft_attempt)) or
+                    any(receipt.get(field + "_sha256") != record.artifacts[key].sha256
+                        for field, key in (("protocol", "plan"), ("analysis", "analysis"), ("literature", "literature"),
+                                           ("draft", "draft-" + str(record.draft_attempt)))) or
+                    "manuscript-review-" + str(record.draft_attempt) not in intent["parent_evidence"] or
+                    intent.get("snapshot_digest") != imported.snapshot_digest or
+                    intent.get("source_commit") != imported.source_commit or
+                    intent.get("supporting_documents") != _supporting_documents(ws, record)):
+                return None, False
+            for key, binding in intent["parent_evidence"].items():
+                artifact = record.artifacts[key]
+                if {"sha256": artifact.sha256, "size": artifact.size} != binding:
+                    return None, False
+            return None, True
+        except (ValueError, OSError, KeyError):
+            return None, False
+
+    def _improvement_available(self, ws: Workspace, record: Workflow) -> bool:
+        future = self._jobs.get(record.id)
+        if (self._closing or self._closed or record.status != "blocked" or record.stage != "analyzed" or
+                record.code != "MANUSCRIPT_REJECTED" or record.execution_attempt != 1 or
+                "redesign-intent" in record.artifacts or
+                (future is not None and not future.done())):
+            return False
+        try:
+            self._require(ws, record, {"analyzed"})
+            self._require_successful_analysis(ws, record)
+            receipt = _read(ws, record, "manuscript-review")
+            review = ManuscriptReview.model_validate(receipt.get("review", {}))
+            if (review.accepted or receipt.get("origin") != "native_host_submission" or
+                    record.artifacts.get("manuscript-review") != record.artifacts.get("manuscript-review-" + str(record.draft_attempt)) or
+                    any(receipt.get(field + "_sha256") != record.artifacts[key].sha256
+                    for field, key in (("protocol", "plan"), ("analysis", "analysis"), ("literature", "literature"),
+                                       ("draft", "draft-" + str(record.draft_attempt))))):
+                return False
+            if review.remediation and (review.remediation.strategy == "infeasible" or
+                    (record.redesign_attempt >= 2 and review.remediation.strategy == "redesign_study")):
+                return False
+            return True
+        except (ValueError, OSError, KeyError):
+            return False
+
+    def improve_writing(self, research_id: str) -> dict:
+        """Explicitly reopen a held manuscript without changing its successful study."""
+        with self._operation(research_id) as (ws, record):
+            if not self._improvement_available(ws, record):
+                raise WorkflowError("WRITING_IMPROVEMENT_NOT_ALLOWED", "This held study cannot safely open a fresh manuscript assessment")
+            identifier = uid("writing-improvement")
+            path = ws.path("research/" + identifier + ".json")
+            if path.exists() or identifier in record.artifacts:
+                raise WorkflowError("IMPROVEMENT_EVIDENCE_CONFLICT", "A writing improvement cannot overwrite retained evidence")
+            write_json(path, {"event": "writing-improvement", "at": now(), "previous_workflow": record.model_dump(mode="json"),
+                             "execution_attempt": record.execution_attempt, **{key + "_sha256": record.artifacts[key].sha256
+                                 for key in ("plan", "execution", "observations", "analysis", "manuscript-review")}})
+            _freeze(ws, record, identifier, path)
+            record.status, record.code, record.cancellation_requested = "ready", None, False
+            record.message = "A fresh manuscript assessment may use unchanged retained evidence; no experiment was dispatched."
+            self._save(ws, record)
+            return self._public(ws, record)
+
+    def redesign_study(self, research_id: str) -> dict:
+        """Create one bounded follow-up from a rejected, successfully measured study."""
+        with self._operation(research_id) as (ws, parent):
+            self._require(ws, parent, {"analyzed"})
+            self._require_successful_analysis(ws, parent)
+            if parent.execution_attempt != 1 or parent.status != "blocked" or parent.code != "MANUSCRIPT_REJECTED":
+                raise WorkflowError("STUDY_REDESIGN_NOT_ALLOWED", "Only a rejected manuscript with one verified successful study may be redesigned")
+            if parent.redesign_attempt >= 2:
+                raise WorkflowError("STUDY_REDESIGN_LIMIT", "Automatic improvement is limited to three studies including the original")
+            review_key = "manuscript-review-" + str(parent.draft_attempt)
+            review_receipt = _read(ws, parent, review_key)
+            assessment = ManuscriptReview.model_validate(review_receipt.get("review", {}))
+            if (assessment.accepted or assessment.remediation is None or
+                    assessment.remediation.strategy != "redesign_study"):
+                raise WorkflowError("STUDY_REDESIGN_NOT_ALLOWED", "A retained review must identify substantive evidence gaps requiring a new study")
+            if (review_receipt.get("origin") != "native_host_submission" or any(
+                    review_receipt.get(field + "_sha256") != parent.artifacts[key].sha256
+                    for field, key in (("protocol", "plan"), ("analysis", "analysis"), ("literature", "literature"),
+                                       ("draft", "draft-" + str(parent.draft_attempt)))) or
+                    parent.artifacts.get("manuscript-review") != parent.artifacts[review_key]):
+                raise WorkflowError("ARTIFACT_CHANGED", "Redesign must bind the current draft review to its actual scientific evidence")
+            imported = ws.latest("project", Project)
+            project_file = ws.path("project.json")
+            if Project.model_validate(loads_json(project_file.read_bytes())) != imported:
+                raise WorkflowError("ARTIFACT_CHANGED", "Original project provenance differs from its retained project record")
+            identifier = "research-" + hashlib.sha256(("paper-factory-redesign\0" + parent.id).encode()).hexdigest()[:12]
+            root_id = parent.root_research_id or parent.id
+            bound_keys = ("plan", "execution", "observations", "analysis", "study-review", "selected-literature", "literature", review_key)
+            bindings = {key: {"sha256": parent.artifacts[key].sha256, "size": parent.artifacts[key].size} for key in bound_keys}
+            intent = {"event": "study-redesign", "child_id": identifier, "parent_id": parent.id,
+                      "root_id": root_id, "redesign_attempt": parent.redesign_attempt + 1,
+                      "snapshot_digest": imported.snapshot_digest, "source_commit": imported.source_commit,
+                      "supporting_documents": _supporting_documents(ws, parent),
+                      "parent_evidence": bindings}
+            intent_path = ws.path("research/redesign-intent.json")
+            if "redesign-intent" in parent.artifacts or intent_path.exists():
+                retained = _read(ws, parent, "redesign-intent") if "redesign-intent" in parent.artifacts else loads_json(intent_path.read_bytes())
+                if {key: retained.get(key) for key in intent} != intent:
+                    raise WorkflowError("REDESIGN_EVIDENCE_CONFLICT", "One parent study cannot create a different follow-up or replace its origin")
+                intent = retained
+            else:
+                intent["at"] = now()
+                write_json(intent_path, intent)
+            _freeze(ws, parent, "redesign-intent", intent_path)
+            self._save(ws, parent)
+
+            destination = safe_relative(self.root, identifier)
+            child_ws = Workspace(destination) if (destination / "records.sqlite3").is_file() else Workspace.create(destination)
+            with child_ws.lock("workflow"):
+                existing = child_ws.list("workflow", Workflow)
+            if existing:
+                if len(existing) != 1 or existing[0].id != identifier:
+                    raise WorkflowError("REDESIGN_EVIDENCE_CONFLICT", "The deterministic follow-up identifier already belongs to a different study")
+                with self._operation(identifier) as (child_ws, child):
+                    _verify_artifacts(child_ws, child)
+                    if _read(child_ws, child, "redesign-origin") != intent:
+                        raise WorkflowError("REDESIGN_EVIDENCE_CONFLICT", "Retained follow-up origin differs from its parent intent")
+                    return self._public(child_ws, child, context=True)
+            child = Workflow(id=identifier, project_id=imported.id, goal=parent.goal,
+                             parent_research_id=parent.id, root_research_id=root_id,
+                             redesign_attempt=parent.redesign_attempt + 1)
+            for asset in imported.assets:
+                _copy_retained(safe_relative(ws.path("source"), asset.path), safe_relative(child_ws.path("source"), asset.path),
+                               FrozenArtifact(path=asset.path, sha256=asset.sha256, size=asset.size), child_ws.root)
+            child_ws.save("project", imported)
+            _copy_retained(project_file, child_ws.path("project.json"),
+                           FrozenArtifact(path="project.json", sha256=digest_file(project_file), size=project_file.stat().st_size), child_ws.root)
+            project.verify_snapshot(child_ws)
+            inherited = [key for key in parent.artifacts if key in {"context", "source-collection"} or
+                         re.fullmatch(r"supporting-document-(?:import-)?[a-f0-9]{12}", key)]
+            for key in inherited:
+                original = _artifact(ws, parent, key)
+                target = child_ws.path(parent.artifacts[key].path)
+                _copy_retained(original, target, parent.artifacts[key], child_ws.root)
+                _freeze(child_ws, child, key, target)
+            _supporting_documents(child_ws, child)
+            retained_keys = {"proposal", "plan", "study-review", "selected-literature", "literature", "execution",
+                             "observations", "analysis", "runtime-manifest", "bundle"}
+            for key, frozen in parent.artifacts.items():
+                if key.startswith("prior-study-"):
+                    relative, retained_key = frozen.path, key
+                elif (key in retained_keys or key.startswith("analysis-") or
+                      re.fullmatch(r"(?:draft|manuscript-review|code-review|cleanup)-[1-9][0-9]*", key)):
+                    relative = "research/prior-studies/" + parent.id + "/" + frozen.path
+                    retained_key = "prior-study-" + parent.id + "-" + key
+                else:
+                    continue
+                target = child_ws.path(relative)
+                _copy_retained(_artifact(ws, parent, key), target, frozen, child_ws.root)
+                _freeze(child_ws, child, retained_key, target)
+            if "bundle" in parent.artifacts:
+                bundle_root = _artifact(ws, parent, "bundle").parent
+                metadata = _read(ws, parent, "bundle")
+                for item in metadata["files"]:
+                    original = safe_relative(bundle_root, item["path"])
+                    relative = "research/prior-studies/" + parent.id + "/generated/" + item["path"]
+                    target = child_ws.path(relative)
+                    expected = FrozenArtifact(path=relative, sha256=item["sha256"], size=item["size"])
+                    _copy_retained(original, target, expected, child_ws.root)
+                    _freeze(child_ws, child, "prior-study-" + parent.id + "-generated-" + hashlib.sha256(item["path"].encode()).hexdigest()[:12], target)
+            summary = {"parent_id": parent.id, "root_id": root_id, "redesign_attempt": child.redesign_attempt,
+                       "scope": PRIOR_STUDY_SCOPE,
+                       "source_commit": imported.source_commit, "snapshot_digest": imported.snapshot_digest,
+                       "supporting_documents": intent["supporting_documents"],
+                       "supporting_document_scope": INHERITED_DOCUMENT_SCOPE,
+                       "bindings": bindings, "protocol": _read(ws, parent, "plan"),
+                       "analysis": _read(ws, parent, "analysis"),
+                       "execution": {key: value for key, value in _read(ws, parent, "execution").items() if key in PUBLIC_EXECUTION_FIELDS},
+                       "review": assessment.model_dump(mode="json"),
+                       "earlier_study": _read(ws, parent, "prior-study") if "prior-study" in parent.artifacts else None}
+            summary_path = child_ws.path("research/prior-studies/" + parent.id + "/summary.json")
+            if summary_path.exists() and loads_json(summary_path.read_bytes()) != summary:
+                raise WorkflowError("REDESIGN_EVIDENCE_CONFLICT", "A prior-study summary cannot replace retained findings")
+            if not summary_path.exists():
+                write_json(summary_path, summary)
+            _freeze(child_ws, child, "prior-study", summary_path)
+            _freeze(child_ws, child, "prior-study-" + parent.id + "-summary", summary_path)
+            origin_path = child_ws.path("research/redesign-origin.json")
+            _copy_retained(intent_path, origin_path, parent.artifacts["redesign-intent"], child_ws.root)
+            _freeze(child_ws, child, "redesign-origin", origin_path)
+            _verify_artifacts(ws, parent)
+            _verify_artifacts(child_ws, child)
+            self._save(child_ws, child)
+            return self._public(child_ws, child, context=True)
+
     def revise_writing(self, research_id: str) -> dict:
         """Open a new draft while preserving a completed export and its approval."""
         with self._operation(research_id) as (ws, record):
@@ -1217,6 +1528,8 @@ class WorkflowService:
     def submit_manuscript(self, research_id: str, value: dict, review: dict) -> dict:
         draft = ManuscriptDraft.model_validate(value)
         assessment = ManuscriptReview.model_validate(review)
+        if not assessment.accepted and assessment.remediation is None:
+            raise WorkflowError("REVIEW_REMEDIATION_REQUIRED", "A new rejection must identify evidence-grounded remediation before it can be submitted")
         with self._operation(research_id) as (ws, record):
             self._require(ws, record, {"analyzed"})
             self._require_study_review(ws, record)
@@ -1330,12 +1643,17 @@ class WorkflowService:
             if path.is_file():
                 selection["generated/" + path.relative_to(bundle).as_posix()] = path
         for key in record.artifacts:
+            if key.startswith("prior-study-"):
+                path = _artifact(ws, record, key)
+                selection["prior-studies/" + path.relative_to(ws.path("research/prior-studies")).as_posix()] = path
+            elif key == "redesign-origin":
+                selection["redesign-origin.json"] = _artifact(ws, record, key)
             if key.startswith("export-attempt-"):
                 selection["export-attempts/" + key + ".json"] = _artifact(ws, record, key)
             if key.startswith("workflow-resume-"):
                 path = _artifact(ws, record, key)
                 selection["authoring/" + path.name] = path
-            if re.fullmatch(r"authoring-revision-[a-f0-9]{12}", key):
+            if re.fullmatch(r"(?:authoring-revision|writing-improvement)-[a-f0-9]{12}", key):
                 path = _artifact(ws, record, key)
                 selection["authoring/" + path.name] = path
             if key.startswith("authoring-history-") and not key.endswith("-reproducibility"):
@@ -1394,6 +1712,7 @@ class WorkflowService:
                 "The final verification journal and validation are separate frozen artifacts produced after this archive; they are not archive members.\n"
                 "Reviews are native host submissions; reviewer independence is not attested by this controller.\n"
                 "Explicit authoring revisions retain prior drafts, approvals and exports in authoring/. Revision receipts preserve the full prior frozen artifact inventory. Prior reproduction ZIPs remain separate frozen artifacts and are excluded here to avoid nested archives.\n"
+                "Redesigned studies retain negative/null exploratory history, its raw observations, analysis and review under prior-studies/. These are not current observations or independent validation; redesign-origin.json binds the unchanged source snapshot and parent evidence.\n"
                 "Source license authorization has not been assessed. Author review is required; no submission occurred.\n")
             output.writestr("inventory.json", json.dumps({name: {"sha256": digest_file(path), "size": path.stat().st_size}
                                                           for name, path in selection.items()}, indent=2))

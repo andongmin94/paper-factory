@@ -29,6 +29,9 @@ const approvedManuscriptReview: ManuscriptReview = {
   accepted: true, issues: [], checks: ["UI fixture 승인 상태"], contribution: syntheticQualityCriterion,
   literature: syntheticQualityCriterion, interpretation: syntheticQualityCriterion, presentation: syntheticQualityCriterion,
 };
+function researchFixture(id: string) {
+  return { parentResearchId: null, rootResearchId: id, redesignAttempt: 0, followupResearchId: null, improvementAvailable: false };
+}
 const workspacePanels = { 연결: "connection", "새 연구": "research", 결과: "results" } as const;
 type WorkspaceView = keyof typeof workspacePanels;
 
@@ -155,7 +158,7 @@ test("connection window uses genuine components and exposes only limited, token-
     expect(rendererSurface.process).toBe("undefined");
     expect(rendererSurface.require).toBe("undefined");
     expect(rendererSurface.api).toEqual([
-      "addResearchEvidence", "cancel", "cancelResearch", "checkRuntime", "createResearch", "disconnect", "listPublicRepositories", "onResearchSnapshot", "onSnapshot",
+      "addResearchEvidence", "cancel", "cancelResearch", "checkRuntime", "createResearch", "disconnect", "improveResearchWriting", "listPublicRepositories", "onResearchSnapshot", "onSnapshot",
       "openArtifact", "openUsage", "refreshModels", "researchSnapshot", "resumeResearch", "reviseResearchWriting", "saveArtifact", "selectProfile", "showArtifactFolder", "signIn", "snapshot", "verify",
     ]);
     expect(rendererSurface.csp).toContain("script-src 'self'");
@@ -167,6 +170,10 @@ test("connection window uses genuine components and exposes only limited, token-
         catch { return true; }
       }, request);
       expect(denied).toBe(true);
+      expect(await page.evaluate(async ({ id, model }) => {
+        try { await window.paperFactory.improveResearchWriting(id, model, "fixture-reviewer"); return false; }
+        catch { return true; }
+      }, request)).toBe(true);
     }
     for (const request of [{ id: "invalid", artifactId: "export-pdf" }, { id: "research-abcdef123456", artifactId: "unsupported" }]) {
       expect(await page.evaluate(async ({ id, artifactId }) => {
@@ -416,6 +423,7 @@ test("credit retry is explicit, research draft models persist, and synthetic bus
     // Only this isolated main-process handler returns synthetic state; it makes no engine/model calls.
     const completedResearch: ResearchSnapshot = { ...fixtureResearch, jobs: [{
       id: "research-abcdef123456", source: draftSource, goal: draftGoal, supportingDocuments: [],
+      ...researchFixture("research-abcdef123456"),
       studyReview: approvedStudyReview, manuscriptReview: approvedManuscriptReview,
       model: "fixture-model", reviewerModel: "fixture-model", phase: "idle", pipeline: "completed",
       resumeKind: null,
@@ -430,7 +438,7 @@ test("credit retry is explicit, research draft models persist, and synthetic bus
     }, completedResearch);
     await selectView(page, "결과");
     await expect(page.getByRole("button", { name: "Markdown 저장", exact: true })).toBeVisible();
-    await page.getByText("재개·원고 수정에 사용할 모델", { exact: true }).click();
+    await page.getByText("재개·보완·원고 수정에 사용할 모델", { exact: true }).click();
     await expect(page.getByRole("combobox", { name: "재개 작성 모델", exact: true })).toContainText("Fixture writer");
     await expect(page.getByRole("combobox", { name: "재개 리뷰 모델", exact: true })).toContainText("Fixture reviewer");
     const revision = page.getByRole("button", { name: "원고 수정", exact: true });
@@ -454,6 +462,7 @@ test("credit retry is explicit, research draft models persist, and synthetic bus
       ...fixtureResearch,
       busy: true,
       jobs: [{ id: "synthetic-busy-receipt", source: draftSource, goal: draftGoal, supportingDocuments: [], studyReview: null, manuscriptReview: null,
+        ...researchFixture("synthetic-busy-receipt"),
         model: "fixture-writer", reviewerModel: "fixture-reviewer", phase: "plan", pipeline: "running",
         resumeKind: null,
         stage: "synthetic-ui-fixture", status: "running", code: null, message: busyReceipt,
@@ -809,6 +818,7 @@ print(record.model_dump_json())
         () => window.paperFactory.refreshModels(), () => window.paperFactory.verify("fixture-never-requested"),
         () => window.paperFactory.createResearch({ source: "https://github.com/fixture-owner/never-fetched", goal: "This operation must be rejected before any account or research request.", model: "fixture", reviewerModel: "fixture" }),
         () => window.paperFactory.resumeResearch(id, "fixture", "fixture"), () => window.paperFactory.reviseResearchWriting(id, "fixture", "fixture"),
+        () => window.paperFactory.improveResearchWriting(id, "fixture", "fixture"),
         () => window.paperFactory.saveArtifact(id, "export-pdf"),
       ];
       const failures: string[] = [];
@@ -818,7 +828,7 @@ print(record.model_dump_json())
       }
       return failures;
     }, id);
-    expect(rejected).toHaveLength(9);
+    expect(rejected).toHaveLength(10);
     for (const [index, failure] of rejected.entries()) {
       expect(failure).toContain(index < 5
         ? "결과 파일 저장이 끝난 뒤 계정 작업을 시작하세요."
@@ -901,6 +911,7 @@ test("native artifact chooser cancellation, protected destinations, and portable
     models: [{ slug: "fixture-model", displayName: "Synthetic model" }], busy: null, error: null, verification: null };
   const research: ResearchSnapshot = { runtime: { state: "ready", message: "합성 파일 저장 fixture" }, busy: false,
     cleanupResearchIds: [], error: null, jobs: [{ id, source: "https://github.com/fixture-owner/synthetic-save-study",
+      ...researchFixture(id),
       goal: "네이티브 파일 선택과 합성 바이트 저장만 검증합니다.", model: "fixture-model", reviewerModel: "fixture-model",
       phase: "idle", pipeline: "completed", stage: "exported", status: "completed", resumeKind: null,
       code: null, message: "Synthetic bytes only; no scientific or model execution.", updatedAt: "2026-01-01T00:00:00.000Z",
@@ -1061,7 +1072,7 @@ async function installGateFixture(electronApp: ElectronApplication, connection: 
     };
     for (const channel of ["connection:snapshot", "research:snapshot", "research:cancel", "research:runtime",
       "connection:sign-in", "connection:select-profile", "connection:disconnect", "connection:models", "connection:verify",
-      "research:create", "research:resume", "research:revise-writing", "research:add-evidence"]) ipcMain.removeHandler(channel);
+      "research:create", "research:resume", "research:revise-writing", "research:improve-writing", "research:add-evidence"]) ipcMain.removeHandler(channel);
     ipcMain.handle("connection:snapshot", () => fixture.connection);
     ipcMain.handle("research:snapshot", () => fixture.research);
     ipcMain.handle("research:runtime", () => fixture.research);
@@ -1076,7 +1087,7 @@ async function installGateFixture(electronApp: ElectronApplication, connection: 
       return fixture.research;
     });
     for (const channel of ["connection:sign-in", "connection:select-profile", "connection:disconnect", "connection:models", "connection:verify",
-      "research:create", "research:resume", "research:revise-writing", "research:add-evidence"]) {
+      "research:create", "research:resume", "research:revise-writing", "research:improve-writing", "research:add-evidence"]) {
       ipcMain.handle(channel, () => { fixture.forbiddenCalls.push(channel); throw new Error("A locked fixture action was invoked"); });
     }
     publish();
@@ -1093,6 +1104,7 @@ test("unconfirmed cleanup is retried without login or ready runtime while accoun
   const research: ResearchSnapshot = { runtime: { state: "unavailable", message: "합성 런타임 실패" }, busy: true,
     cleanupResearchIds: [id], error: { code: "CLEANUP_UNCONFIRMED", message: "합성 정리 미확인", action: "retry" },
     jobs: [{ id, source: "https://github.com/fixture-owner/synthetic-study", goal: "합성 정리 복구만 검증합니다.",
+      ...researchFixture(id),
       model: "", reviewerModel: "", phase: "idle", pipeline: "paused", stage: "planned", status: "cancelled",
       resumeKind: null,
       code: "CLEANUP_UNCONFIRMED", message: "합성 작업자는 실행하지 않았습니다.", updatedAt: new Date().toISOString(),
@@ -1199,20 +1211,20 @@ test("resume actions follow authoritative preparation and authoring kinds and ne
   const connection: AppSnapshot = { version: "fixture", session: { connected: true, sharing: true, profileId: "fixture-a" },
     profiles: [{ id: "fixture-a", label: "Synthetic account", connected: true, sharing: true }],
     models: [{ slug: "fixture-model", displayName: "Synthetic model" }], busy: null, error: null, verification: null };
-  const base: Omit<ResearchSnapshot["jobs"][number], "id" | "source" | "resumeKind"> = {
+  const base: Omit<ResearchSnapshot["jobs"][number], "id" | "source" | "resumeKind" | keyof ReturnType<typeof researchFixture>> = {
     goal: "재개 화면과 명시적 클릭만 확인하는 합성 작업입니다.", model: "fixture-model", reviewerModel: "fixture-model",
     phase: "idle", pipeline: "paused", stage: "planned", status: "cancelled", code: "CANCELLED", message: null,
     updatedAt: "2026-01-01T00:00:00.000Z", artifacts: [], supportingDocuments: [], studyReview: null, manuscriptReview: null,
   };
   const research: ResearchSnapshot = { runtime: { state: "ready", message: "합성 재개 fixture" }, busy: false,
     cleanupResearchIds: [], error: null, jobs: [
-      { ...base, id: "research-111111111111", source: "https://github.com/fixture-owner/preparation-study", resumeKind: "preparation" },
-      { ...base, id: "research-222222222222", source: "https://github.com/fixture-owner/authoring-study", stage: "analyzed", resumeKind: "authoring" },
-      { ...base, id: "research-333333333333", source: "https://github.com/fixture-owner/control-failure", pipeline: "failed", stage: "analyzed",
+      { ...base, ...researchFixture("research-111111111111"), id: "research-111111111111", source: "https://github.com/fixture-owner/preparation-study", resumeKind: "preparation" },
+      { ...base, ...researchFixture("research-222222222222"), id: "research-222222222222", source: "https://github.com/fixture-owner/authoring-study", stage: "analyzed", resumeKind: "authoring" },
+      { ...base, ...researchFixture("research-333333333333"), id: "research-333333333333", source: "https://github.com/fixture-owner/control-failure", pipeline: "failed", stage: "analyzed",
         status: "blocked", code: "SCIENTIFIC_CONTROL_FAILED", resumeKind: null },
-      { ...base, id: "research-444444444444", source: "https://github.com/fixture-owner/ambiguous-execution", pipeline: "failed",
+      { ...base, ...researchFixture("research-444444444444"), id: "research-444444444444", source: "https://github.com/fixture-owner/ambiguous-execution", pipeline: "failed",
         status: "failed", code: "RUN_INTERRUPTED", resumeKind: null },
-      { ...base, id: "research-555555555555", source: "https://github.com/fixture-owner/unconfirmed-cleanup",
+      { ...base, ...researchFixture("research-555555555555"), id: "research-555555555555", source: "https://github.com/fixture-owner/unconfirmed-cleanup",
         code: "CLEANUP_UNCONFIRMED", resumeKind: null },
     ] };
   try {
@@ -1275,6 +1287,208 @@ test("resume actions follow authoritative preparation and authoring kinds and ne
   }
 });
 
+test("held manuscript improvement uses selected models and respects authorization and busy locks", async ({}, testInfo) => {
+  const dataDir = await mkdtemp(join(tmpdir(), "paper-factory-electron-"));
+  let electronApp: ElectronApplication | undefined;
+  const id = "research-abcdef123456";
+  const connection: AppSnapshot = { version: "fixture", session: { connected: true, sharing: true, profileId: "fixture-a" },
+    profiles: [{ id: "fixture-a", label: "Synthetic account", connected: true, sharing: true }],
+    models: [{ slug: "fixture-writer", displayName: "Synthetic writer" }, { slug: "fixture-reviewer", displayName: "Synthetic reviewer" }],
+    busy: null, error: null, verification: null };
+  const base: ResearchSnapshot["jobs"][number] = { ...researchFixture(id), id,
+    source: "https://github.com/fixture-owner/improvement-eligible", goal: "보류 원고 보완 요청만 검증하는 합성 UI 연구입니다.",
+    model: "fixture-writer", reviewerModel: "fixture-reviewer", phase: "manuscript-review", pipeline: "paused",
+    stage: "analyzed", status: "blocked", code: "MANUSCRIPT_REJECTED", message: "기존 심사 기록을 보존한 합성 원고입니다.",
+    resumeKind: null, improvementAvailable: true, updatedAt: "2026-01-01T00:00:00.000Z", artifacts: [], supportingDocuments: [],
+    studyReview: approvedStudyReview, manuscriptReview: { ...approvedManuscriptReview, accepted: false,
+      issues: ["합성 검토: 새로운 보완 판단을 요청해야 합니다."],
+      contribution: { passed: false, reason: "합성 보류 판단: 기존 기록에 구조화된 보완 판단이 없습니다." } } };
+  const research: ResearchSnapshot = { runtime: { state: "ready", message: "합성 보류 원고 보완 fixture" }, busy: false,
+    cleanupResearchIds: [], error: null, jobs: [base,
+      { ...base, ...researchFixture("research-111111111111"), id: "research-111111111111", source: "https://github.com/fixture-owner/improvement-unavailable" },
+      { ...base, ...researchFixture("research-222222222222"), id: "research-222222222222", source: "https://github.com/fixture-owner/completed-draft",
+        improvementAvailable: true, pipeline: "completed", stage: "exported", status: "completed", code: null },
+    ] };
+  type ImprovementFixture = { calls: string[][]; release?: () => void };
+  try {
+    electronApp = await launch(dataDir);
+    const page = await electronApp.firstWindow();
+    await expect.poll(async () => (await page.evaluate(() => window.paperFactory.researchSnapshot())).runtime.state).not.toBe("checking");
+    await installGateFixture(electronApp, connection, research);
+    await electronApp.evaluate(({ BrowserWindow, ipcMain }) => {
+      const gate = (globalThis as typeof globalThis & { __paperFactoryGateFixture: GateFixture }).__paperFactoryGateFixture;
+      const improvement: ImprovementFixture = { calls: [] };
+      (globalThis as typeof globalThis & { __paperFactoryImprovementFixture: ImprovementFixture }).__paperFactoryImprovementFixture = improvement;
+      ipcMain.removeHandler("research:improve-writing");
+      ipcMain.handle("research:improve-writing", async (_event, id: string, model: string, reviewerModel: string) => {
+        const job = gate.research.jobs.find(job => job.id === id);
+        if (!job?.improvementAvailable || gate.research.busy || !gate.connection.session.connected || !gate.connection.session.sharing
+            || model !== "fixture-writer" || reviewerModel !== "fixture-reviewer") throw new Error("Unexpected synthetic improvement request");
+        improvement.calls.push([id, model, reviewerModel]);
+        gate.research = { ...gate.research, busy: true, jobs: gate.research.jobs.map(job => job.id === id
+          ? { ...job, improvementAvailable: false, pipeline: "running", phase: "manuscript-review" } : job) };
+        BrowserWindow.getAllWindows()[0]?.webContents.send("research:changed", gate.research);
+        await new Promise<void>(resolve => { improvement.release = resolve; });
+        // The real controller acknowledges the start while its background job
+        // remains busy. A delayed acknowledgement locks all local actions.
+        return gate.research;
+      });
+    });
+    const inspect = () => electronApp!.evaluate(() => ({
+      calls: (globalThis as typeof globalThis & { __paperFactoryImprovementFixture: ImprovementFixture }).__paperFactoryImprovementFixture.calls,
+      forbiddenCalls: (globalThis as typeof globalThis & { __paperFactoryGateFixture: GateFixture }).__paperFactoryGateFixture.forbiddenCalls,
+    }));
+    const changeGate = (sharing: boolean, busy: boolean) => electronApp!.evaluate(({ BrowserWindow }, { sharing, busy }) => {
+      const gate = (globalThis as typeof globalThis & { __paperFactoryGateFixture: GateFixture }).__paperFactoryGateFixture;
+      gate.connection = { ...gate.connection, session: { ...gate.connection.session, sharing } };
+      gate.research = { ...gate.research, busy };
+      BrowserWindow.getAllWindows()[0]?.webContents.send("connection:changed", gate.connection);
+      BrowserWindow.getAllWindows()[0]?.webContents.send("research:changed", gate.research);
+    }, { sharing, busy });
+    await selectView(page, "결과");
+    await page.getByText("재개·보완·원고 수정에 사용할 모델", { exact: true }).click();
+    await page.getByRole("combobox", { name: "재개 리뷰 모델", exact: true }).click();
+    await page.getByRole("option", { name: "Synthetic reviewer", exact: true }).click();
+    const held = page.getByRole("article", { name: "improvement-eligible", exact: true });
+    const improve = held.getByRole("button", { name: "심사·보완 이어가기", exact: true });
+    await expect(improve).toBeEnabled();
+    await expect(held).toContainText("추가 측정이 필요하면 별도 연구를 설계하고 적합성 검토부터 진행합니다.");
+    await expect(page.getByRole("article", { name: "improvement-unavailable", exact: true }).getByRole("button", { name: "심사·보완 이어가기", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("article", { name: "completed-draft", exact: true }).getByRole("button", { name: "심사·보완 이어가기", exact: true })).toHaveCount(0);
+    await changeGate(false, false); await expect(improve).toBeDisabled();
+    await changeGate(true, true); await expect(improve).toBeDisabled();
+    expect((await inspect()).calls).toEqual([]);
+    await changeGate(true, false); await expect(improve).toBeEnabled();
+    await held.evaluate(element => element.scrollIntoView({ block: "start" }));
+    await page.evaluate(() => document.fonts.ready.then(() => undefined));
+    const captureWindow = await electronApp.browserWindow(page);
+    const png = await captureWindow.evaluate(async window => {
+      const image = await window.webContents.capturePage(undefined, { stayHidden: true });
+      if (window.isVisible() || image.isEmpty()) throw new Error("Improvement fixture must remain offscreen.");
+      return image.toPNG().toString("base64");
+    });
+    await writeFile(testInfo.outputPath("held-manuscript-improvement.png"), Buffer.from(png, "base64"));
+    await improve.click();
+    await expect.poll(async () => (await inspect()).calls).toEqual([[id, "fixture-writer", "fixture-reviewer"]]);
+    await expect(improve).toHaveCount(0);
+    await expect(held.getByRole("button", { name: "연구 취소", exact: true })).toBeDisabled();
+    await selectView(page, "연결");
+    await expect(page.getByRole("button", { name: "계정 추가", exact: true })).toBeDisabled();
+    await selectView(page, "새 연구");
+    await expect(page.getByRole("button", { name: "연구 시작", exact: true })).toBeDisabled();
+    expect((await inspect()).forbiddenCalls).toEqual([]);
+    await electronApp.evaluate(() => (globalThis as typeof globalThis & { __paperFactoryImprovementFixture: ImprovementFixture }).__paperFactoryImprovementFixture.release!());
+    await selectView(page, "결과");
+    await expect(held.getByRole("button", { name: "연구 취소", exact: true })).toBeEnabled();
+    expect((await page.evaluate(() => window.paperFactory.researchSnapshot())).busy).toBe(true);
+    await selectView(page, "연결");
+    await expect(page.getByRole("button", { name: "계정 추가", exact: true })).toBeDisabled();
+    await electronApp.evaluate(({ BrowserWindow }, id) => {
+      const gate = (globalThis as typeof globalThis & { __paperFactoryGateFixture: GateFixture }).__paperFactoryGateFixture;
+      gate.research = { ...gate.research, busy: false, jobs: gate.research.jobs.map(job => job.id === id
+        ? { ...job, pipeline: "paused", phase: "idle" } : job) };
+      BrowserWindow.getAllWindows()[0]?.webContents.send("research:changed", gate.research);
+    }, id);
+    await expect.poll(async () => (await page.evaluate(() => window.paperFactory.researchSnapshot())).busy).toBe(false);
+  } finally {
+    if (electronApp) await electronApp.close();
+    await removeOwnedTemp(dataDir);
+  }
+});
+
+test("structured manuscript repairs and follow-up lineage preserve prior results and busy controls", async ({}, testInfo) => {
+  const dataDir = await mkdtemp(join(tmpdir(), "paper-factory-electron-"));
+  let electronApp: ElectronApplication | undefined;
+  const connection: AppSnapshot = { version: "fixture", session: { connected: true, sharing: true, profileId: "fixture-a" },
+    profiles: [{ id: "fixture-a", label: "Synthetic account", connected: true, sharing: true }],
+    models: [{ slug: "fixture-model", displayName: "Synthetic model" }], busy: null, error: null, verification: null };
+  const [rootId, childId, nextId, revisionId, infeasibleId] = ["111", "222", "333", "444", "555"]
+    .map(value => `research-${value.repeat(4)}`);
+  const redesignReview: ManuscriptReview = { ...approvedManuscriptReview, accepted: false,
+    issues: ["합성 검토: 실제 적용 범위를 뒷받침할 근거가 부족합니다."],
+    contribution: { passed: false, reason: "합성 검토: 현재 관측만으로 제안한 적용 효과를 설명할 수 없습니다." },
+    remediation: { strategy: "redesign_study", reason: "합성 보완 판단: 새로운 비교와 관측이 필요한 상황을 표시합니다.",
+      actions: [{ criterion: "contribution", action: "합성 보완 행동: 기존 관측을 보존하고 별도의 비교 설계를 마련합니다." }],
+      evidence_gaps: ["합성 부족 근거: 실제 입력 다양성을 다룬 별도 비교 관측이 필요합니다."] } };
+  const revisionReview: ManuscriptReview = { ...redesignReview,
+    remediation: { strategy: "revise_manuscript", reason: "합성 원고 보완: 이미 확보한 부정적 결과를 정확히 설명해야 합니다.",
+      actions: [{ criterion: "contribution", action: "합성 원고 행동: 보존된 결과의 제한된 기여를 관련 문헌과 연결합니다." }],
+      evidence_gaps: [] } };
+  const infeasibleReview: ManuscriptReview = { ...redesignReview,
+    remediation: { strategy: "infeasible", reason: "합성 추가 근거 판단: 현재 실행 환경에서 필요한 앱 동작을 관측할 수 없습니다.",
+      actions: [{ criterion: "contribution", action: "합성 차단 이유: 지원되는 관측 자료와 연구 요구 사항을 확인해야 합니다." }],
+      evidence_gaps: ["합성 차단 근거: 실제 화면 작업의 독립적인 관측 자료가 없습니다."] } };
+  const base: Omit<ResearchSnapshot["jobs"][number], "id" | "source" | keyof ReturnType<typeof researchFixture>> = {
+    goal: "보완 판단과 연구 연결만 검증하는 합성 UI 연구입니다.", model: "fixture-model", reviewerModel: "fixture-model",
+    phase: "manuscript-review", pipeline: "paused", stage: "analyzed", status: "blocked", code: "MANUSCRIPT_REJECTED",
+    message: null, updatedAt: "2026-01-01T00:00:00.000Z", artifacts: [], supportingDocuments: [],
+    studyReview: approvedStudyReview, manuscriptReview: redesignReview, resumeKind: null,
+  };
+  const research: ResearchSnapshot = { runtime: { state: "ready", message: "합성 연구 보완 fixture" }, busy: true,
+    cleanupResearchIds: [], error: null, jobs: [
+      { ...base, ...researchFixture(rootId), id: rootId, source: "https://github.com/fixture-owner/original-study", followupResearchId: childId },
+      { ...base, ...researchFixture(childId), id: childId, source: "https://github.com/fixture-owner/first-followup",
+        parentResearchId: rootId, rootResearchId: rootId, redesignAttempt: 1, followupResearchId: nextId },
+      { ...base, ...researchFixture(nextId), id: nextId, source: "https://github.com/fixture-owner/next-followup",
+        parentResearchId: childId, rootResearchId: rootId, redesignAttempt: 2, pipeline: "running", phase: "redesign" },
+      { ...base, ...researchFixture(revisionId), id: revisionId, source: "https://github.com/fixture-owner/prose-repair", manuscriptReview: revisionReview },
+      { ...base, ...researchFixture(infeasibleId), id: infeasibleId, source: "https://github.com/fixture-owner/missing-evidence", manuscriptReview: infeasibleReview },
+    ] };
+  try {
+    electronApp = await launch(dataDir);
+    const page = await electronApp.firstWindow();
+    await expect.poll(async () => (await page.evaluate(() => window.paperFactory.researchSnapshot())).runtime.state).not.toBe("checking");
+    await installGateFixture(electronApp, connection, research);
+    await selectView(page, "결과");
+    const original = page.getByRole("article", { name: "original-study", exact: true });
+    await expect(original).toContainText("연구 설계 보완: 0/2회");
+    await expect(original).toContainText("후속 연구에서 설계를 보완하며 이전 실험 결과는 변경하지 않습니다.");
+    await expect(original.getByRole("button")).toHaveCount(0);
+    const repair = original.getByRole("region", { name: "원고 보완 방향", exact: true });
+    await expect(repair).toContainText("보완 방향 · 새 연구 설계");
+    await expect(repair.getByText(redesignReview.remediation!.reason, { exact: true })).toBeVisible();
+    await expect(repair.getByText(redesignReview.remediation!.actions[0].action, { exact: true })).toBeVisible();
+    await expect(repair.getByText(redesignReview.remediation!.evidence_gaps[0], { exact: true })).toBeVisible();
+    await expect(original.getByRole("link", { name: "후속 연구 보기", exact: true })).toHaveAttribute("href", `#${childId}`);
+    await original.getByRole("link", { name: "후속 연구 보기", exact: true }).click();
+    expect(new URL(page.url()).hash).toBe(`#${childId}`);
+    expect(await page.evaluate(() => document.activeElement?.id)).toBe(childId);
+    const child = page.getByRole("article", { name: "first-followup", exact: true });
+    await expect(child).toContainText("연구 설계 보완: 1/2회");
+    await expect(child.getByRole("link", { name: "이전 연구 보기", exact: true })).toHaveAttribute("href", `#${rootId}`);
+    await expect(child.getByRole("link", { name: "후속 연구 보기", exact: true })).toHaveAttribute("href", `#${nextId}`);
+    const next = page.getByRole("article", { name: "next-followup", exact: true });
+    await expect(next).toContainText("연구 설계 보완: 2/2회");
+    await expect(next).toContainText("연구 설계 보완 (redesign)");
+    await expect(next.getByRole("link", { name: "최초 연구 보기", exact: true })).toHaveAttribute("href", `#${rootId}`);
+    await expect(next.getByRole("button", { name: "연구 취소", exact: true })).toBeEnabled();
+    const revision = page.getByRole("article", { name: "prose-repair", exact: true }).getByRole("region", { name: "원고 보완 방향", exact: true });
+    await expect(revision).toContainText("보완 방향 · 원고 보완");
+    await expect(revision.getByText("부족한 근거", { exact: true })).toHaveCount(0);
+    const infeasible = page.getByRole("article", { name: "missing-evidence", exact: true }).getByRole("region", { name: "원고 보완 방향", exact: true });
+    await expect(infeasible).toContainText("보완 방향 · 추가 근거 필요");
+    await expect(infeasible.getByText(infeasibleReview.remediation!.evidence_gaps[0], { exact: true })).toBeVisible();
+    await original.evaluate(element => element.scrollIntoView({ block: "start" }));
+    await page.evaluate(() => document.fonts.ready.then(() => undefined));
+    const captureWindow = await electronApp.browserWindow(page);
+    const png = await captureWindow.evaluate(async window => {
+      const image = await window.webContents.capturePage(undefined, { stayHidden: true });
+      if (window.isVisible() || image.isEmpty()) throw new Error("Follow-up fixture must remain offscreen.");
+      return image.toPNG().toString("base64");
+    });
+    await writeFile(testInfo.outputPath("structured-repair-followup.png"), Buffer.from(png, "base64"));
+    await selectView(page, "새 연구");
+    await expect(page.getByRole("button", { name: "연구 시작", exact: true })).toBeDisabled();
+    await selectView(page, "연결");
+    await expect(page.getByRole("button", { name: "계정 추가", exact: true })).toBeDisabled();
+    expect(await electronApp.evaluate(() =>
+      (globalThis as typeof globalThis & { __paperFactoryGateFixture: GateFixture }).__paperFactoryGateFixture.forbiddenCalls)).toEqual([]);
+  } finally {
+    if (electronApp) await electronApp.close();
+    await removeOwnedTemp(dataDir);
+  }
+});
+
 test("research and manuscript quality rejections show reasons without presenting completion or restart actions", async ({}, testInfo) => {
   const dataDir = await mkdtemp(join(tmpdir(), "paper-factory-electron-"));
   let electronApp: ElectronApplication | undefined;
@@ -1289,7 +1503,7 @@ test("research and manuscript quality rejections show reasons without presenting
   const manuscriptReview = { accepted: false, issues: ["함수 검사 결과의 주장 범위를 줄여야 합니다."], checks: [],
     contribution: passed, literature: passed,
     interpretation: { passed: false, reason: "합성 입력 결과를 실제 앱 전체의 효과로 확대했습니다." }, presentation: passed };
-  const base: Omit<ResearchSnapshot["jobs"][number], "id" | "source"> = {
+  const base: Omit<ResearchSnapshot["jobs"][number], "id" | "source" | keyof ReturnType<typeof researchFixture>> = {
     goal: "검토 반려 이유 표시만 확인하는 합성 연구입니다.", model: "fixture-model", reviewerModel: "fixture-model",
     phase: "study-review", pipeline: "failed", stage: "proposed", status: "blocked", code: "STUDY_REJECTED",
     message: "합성 연구 설계 보류", updatedAt: "2026-01-01T00:00:00.000Z", artifacts: [], supportingDocuments: [],
@@ -1297,22 +1511,22 @@ test("research and manuscript quality rejections show reasons without presenting
   };
   const research: ResearchSnapshot = { runtime: { state: "ready", message: "합성 품질 검토 fixture" }, busy: false,
     cleanupResearchIds: [], error: null, jobs: [
-      { ...base, id: "research-111111111111", source: "https://github.com/fixture-owner/study-rejected",
+      { ...base, ...researchFixture("research-111111111111"), id: "research-111111111111", source: "https://github.com/fixture-owner/study-rejected",
         // Even an inconsistent resume hint must not offer a restart of a final blocked proposal.
         resumeKind: "preparation" },
-      { ...base, id: "research-222222222222", source: "https://github.com/fixture-owner/manuscript-rejected",
+      { ...base, ...researchFixture("research-222222222222"), id: "research-222222222222", source: "https://github.com/fixture-owner/manuscript-rejected",
         phase: "manuscript-review", stage: "manuscript", code: "MANUSCRIPT_REJECTED", message: "합성 원고 보류",
         studyReview: { ...studyReview, accepted: true, issues: [], contribution: passed, comparison: passed }, manuscriptReview },
-      { ...base, id: "research-333333333333", source: "https://github.com/fixture-owner/retained-draft",
+      { ...base, ...researchFixture("research-333333333333"), id: "research-333333333333", source: "https://github.com/fixture-owner/retained-draft",
         phase: "idle", pipeline: "completed", stage: "exported", status: "completed", code: null, message: null,
         studyReview: null, artifacts: [{ id: "export-pdf", sha256: "a".repeat(64), size: 18 }] },
-      { ...base, id: "research-444444444444", source: "https://github.com/fixture-owner/proposal-being-revised",
+      { ...base, ...researchFixture("research-444444444444"), id: "research-444444444444", source: "https://github.com/fixture-owner/proposal-being-revised",
         pipeline: "running", message: "합성 제안 보완 중" },
-      { ...base, id: "research-555555555555", source: "https://github.com/fixture-owner/retained-study-only",
+      { ...base, ...researchFixture("research-555555555555"), id: "research-555555555555", source: "https://github.com/fixture-owner/retained-study-only",
         phase: "idle", pipeline: "completed", stage: "exported", status: "completed", code: null, message: null,
         studyReview: approvedStudyReview, manuscriptReview: null,
         artifacts: [{ id: "export-pdf", sha256: "a".repeat(64), size: 18 }] },
-      { ...base, id: "research-666666666666", source: "https://github.com/fixture-owner/infeasible-study",
+      { ...base, ...researchFixture("research-666666666666"), id: "research-666666666666", source: "https://github.com/fixture-owner/infeasible-study",
         phase: "plan", code: "STUDY_INFEASIBLE", message: "합성 연구 실행 가능성 보류", resumeKind: "preparation" },
     ] };
   try {

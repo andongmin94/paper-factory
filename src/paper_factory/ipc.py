@@ -32,6 +32,8 @@ METHODS = {
     "workflow.submitCode": {"researchId", "value", "review"},
     "workflow.collectLiterature": {"researchId"}, "workflow.startExperiment": {"researchId"},
     "workflow.cancel": {"researchId"}, "workflow.resume": {"researchId"}, "workflow.reviseWriting": {"researchId"},
+    "workflow.redesignStudy": {"researchId"},
+    "workflow.improveWriting": {"researchId"},
     "workflow.submitManuscript": {"researchId", "value", "review"},
     "workflow.export": {"researchId"}, "artifact.resolve": {"researchId", "artifactId"}, "shutdown": set(),
     "workflow.recordInference": {"researchId", "receipt"},
@@ -227,6 +229,8 @@ class Dispatcher:
                      "workflow.startExperiment": self.service.start_experiment,
                      "workflow.resume": self.service.resume,
                      "workflow.reviseWriting": self.service.revise_writing,
+                     "workflow.redesignStudy": self.service.redesign_study,
+                     "workflow.improveWriting": self.service.improve_writing,
                      "workflow.cancel": self.service.cancel, "workflow.export": self.service.export}[method]
         return operation(p["researchId"])
 

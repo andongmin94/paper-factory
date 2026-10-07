@@ -182,6 +182,11 @@ if (!app.requestSingleInstanceLock()) {
       if (args.length !== 3) throw new Error('Invalid research request');
       return research!.reviseWriting(researchId(args[0]), identifier(args[1], 'model'), identifier(args[2], 'model'));
     });
+    handle('research:improve-writing', (...args) => {
+      researchReady();
+      if (args.length !== 3) throw new Error('Invalid research request');
+      return research!.improveWriting(researchId(args[0]), identifier(args[1], 'model'), identifier(args[2], 'model'));
+    });
     handle('research:cancel', (...args) => {
       if (args.length !== 1) throw new Error('Invalid research request');
       return research!.cancel(researchId(args[0]));

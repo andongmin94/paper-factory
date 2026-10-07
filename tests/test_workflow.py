@@ -95,7 +95,7 @@ STUDY_REVIEW = {"accepted": True, "issues": [], **{
         "relevance": "Synthetic passage selection exercises retained literature binding, not research relevance."}]}
 MANUSCRIPT_REVIEW = {**REVIEW, **{
     name: {"passed": True, "reason": "Synthetic positive manuscript decision fixture; no scholarly adequacy is attested."}
-    for name in ("contribution", "literature", "interpretation", "presentation")}}
+    for name in ("contribution", "literature", "interpretation", "presentation")}, "remediation": None}
 BUNDLE = {"runtime": "quickjs", "entrypoint": "experiment.mjs", "files": [
     {"path": "experiment.mjs", "content": "export default function run() { throw new Error('Unexecuted synthetic fixture'); }\n"}],
     "explanation": "Controlled experiment fixture for deterministic workflow orchestration checks."}
@@ -496,6 +496,9 @@ def test_rejected_manuscript_retains_decision_and_draft_without_export_or_new_ex
     rejected_review["contribution"]["passed"] = False
     rejected_review["contribution"]["reason"] = "The draft turns a trivial contract check into a paper without useful new knowledge."
     rejected_review["issues"] = ["The evidence does not justify the manuscript's asserted research contribution."]
+    rejected_review["remediation"] = {"strategy": "revise_manuscript", "reason": "The retained synthetic observations support only a bounded contract statement.",
+                                      "actions": [{"criterion": "contribution", "action": "Remove the unsupported novelty claim and state the synthetic contract scope."}],
+                                      "evidence_gaps": []}
     rejected = service.submit_manuscript(research_id, manuscript(), rejected_review)
     assert rejected["stage"] == "analyzed" and rejected["status"] == "blocked"
     assert rejected["code"] == "MANUSCRIPT_REJECTED" and rejected["manuscript_review"] == rejected_review
@@ -509,6 +512,406 @@ def test_rejected_manuscript_retains_decision_and_draft_without_export_or_new_ex
     assert accepted["draft_attempt"] == 2 and accepted["manuscript_review"]["accepted"] is True
     assert all(service.artifact_path(research_id, key).read_bytes() == content for key, content in frozen.items())
     assert runner.calls == 1
+
+
+def redesign_review(strategy="redesign_study"):
+    review = copy.deepcopy(MANUSCRIPT_REVIEW)
+    review.update(accepted=False, issues=["Synthetic evidence lacks the required independent comparison."])
+    review["contribution"] = {"passed": False, "reason": "Synthetic evidence cannot support the declared scientific contribution."}
+    review["remediation"] = {"strategy": strategy,
+                             "reason": "A new preregistered comparison is required to address the missing independent evidence.",
+                             "actions": [{"criterion": "contribution", "action": "Design an independently justified comparison without changing prior observed results."}],
+                             "evidence_gaps": [] if strategy == "revise_manuscript" else ["The frozen study has no independent validation of its asserted general application."]}
+    return review
+
+
+def reject_for_redesign(service, research_id):
+    prepare(service, research_id)
+    service.start_experiment(research_id)
+    assert finished(service, research_id)["stage"] == "analyzed"
+    return service.submit_manuscript(research_id, manuscript(), redesign_review())
+
+
+def committed_workflows(service):
+    return [record for path in service.root.iterdir() if path.is_dir() and (path / "records.sqlite3").is_file()
+            for record in Workspace(path).list("workflow", Workflow)]
+
+
+def test_study_redesign_reuses_exact_source_provenance_and_supporting_bytes_without_dispatch(setup, monkeypatch):
+    from paper_factory import project as project_module
+    from paper_factory.models import Project
+    service, runner, research_id = setup
+    raw = b"Original imported corpus with CRLF.\r\n"
+    imported_docs = service.add_evidence(research_id, [{"name": "corpus.txt", "contentBase64": base64.b64encode(raw).decode()}])
+    parent_ws = service._workspace(research_id)
+    original_project = parent_ws.latest("project", Project)
+    original_project.source_commit = "a" * 40
+    original_project.source = "https://github.com/example/synthetic"
+    parent_ws.save("project", original_project)
+    write_json(parent_ws.path("project.json"), original_project)
+    parent = parent_ws.get("workflow", research_id, Workflow)
+    collection = parent_ws.path("source-collection.json")
+    write_json(collection, {"commit": original_project.source_commit, "scope": "Synthetic provenance fixture; no network retrieval"})
+    parent.artifacts["source-collection"] = FrozenArtifact(path="source-collection.json", sha256=digest_file(collection), size=collection.stat().st_size)
+    parent_ws.save("workflow", parent)
+    rejected = reject_for_redesign(service, research_id)
+    before = {key: service.artifact_path(research_id, key).read_bytes() for key in rejected["artifacts"]}
+    monkeypatch.setattr(project_module, "ingest", lambda *args: pytest.fail("Redesign downloaded or re-imported moving source"))
+    child = service.redesign_study(research_id)
+    assert child["id"] != research_id and child["parent_research_id"] == research_id
+    assert child["root_research_id"] == research_id and child["redesign_attempt"] == 1
+    assert (child["stage"], child["status"], child["execution_attempt"], child["proposal_attempt"], child["draft_attempt"]) == ("created", "ready", 0, 0, 0)
+    assert child["study_review"] is None and child["manuscript_review"] is None
+    assert not any(key in child["artifacts"] for key in ("plan", "bundle", "observations", "analysis", "literature", "execution"))
+    child_ws = service._workspace(child["id"])
+    assert child_ws.latest("project", Project) == original_project
+    assert child_ws.path("project.json").read_bytes() == parent_ws.path("project.json").read_bytes()
+    assert child_ws.path("source-collection.json").read_bytes() == collection.read_bytes()
+    assert child_ws.path("source/transform.js").read_bytes() == parent_ws.path("source/transform.js").read_bytes()
+    assert child["supporting_documents"] == imported_docs["supporting_documents"]
+    document = child["supporting_documents"][0]
+    assert service.artifact_path(child["id"], document["id"]).read_bytes() == raw
+    assert all(service.artifact_path(research_id, key).read_bytes() == data for key, data in before.items())
+    assert child["prior_study"]["analysis"] == rejected["analysis"]
+    assert child["prior_study"]["review"] == rejected["manuscript_review"]
+    assert child["prior_study"]["execution"]["status"] == "succeeded"
+    assert "exploratory history" in child["instructions"] and "Do not repeat the same design" in child["instructions"]
+    full_history = json.dumps(child["prior_study"], ensure_ascii=False)
+    assert full_history in child["instructions"] and full_history not in child["planning_instructions"]
+    assert "exploratory history" in child["planning_instructions"]
+    assert service.status(research_id)["followup_research_id"] == child["id"]
+    assert runner.calls == 1
+    with pytest.raises(WorkflowError):
+        service.start_experiment(child["id"])
+    assert service.redesign_study(research_id)["id"] == child["id"]
+    assert len(committed_workflows(service)) == 2 and runner.calls == 1
+
+
+def test_study_redesign_lost_reply_reads_active_child_without_duplicate_dispatch(setup):
+    service, runner, research_id = setup
+    reject_for_redesign(service, research_id)
+    child = service.redesign_study(research_id)
+    prepare(service, child["id"])
+    runner.release = threading.Event(); runner.entered.clear()
+    try:
+        started = service.start_experiment(child["id"])
+        assert started["status"] == "running" and runner.entered.wait(2)
+        retained = service.redesign_study(research_id)
+        assert retained["id"] == child["id"] and retained["status"] == "running"
+        assert retained["execution_attempt"] == 1 and runner.calls == 2
+        assert len(committed_workflows(service)) == 2
+    finally:
+        runner.release.set()
+        assert finished(service, child["id"])["stage"] == "analyzed"
+
+
+def test_study_redesign_recovers_same_intent_after_partial_copy_and_restart(setup, monkeypatch):
+    import paper_factory.workflow as workflow_module
+    service, runner, research_id = setup
+    reject_for_redesign(service, research_id)
+    copy_file = workflow_module._copy_retained
+    counter = 0
+    def interrupted_copy(*args):
+        nonlocal counter
+        counter += 1
+        if counter == 3:
+            raise OSError("Synthetic import interruption after a durable parent intent")
+        return copy_file(*args)
+    with monkeypatch.context() as scope:
+        scope.setattr(workflow_module, "_copy_retained", interrupted_copy)
+        with pytest.raises(OSError, match="Synthetic import interruption"):
+            service.redesign_study(research_id)
+    pending = service.status(research_id)
+    intent_id = json.loads(service.artifact_path(research_id, "redesign-intent").read_bytes())["child_id"]
+    assert pending["followup_research_id"] is None and pending["redesign_pending"] is True
+    assert pending["improvement_available"] is False and len(committed_workflows(service)) == 1 and runner.calls == 1
+    with pytest.raises(WorkflowError) as refused:
+        service.improve_writing(research_id)
+    assert refused.value.code == "WRITING_IMPROVEMENT_NOT_ALLOWED"
+    service.close()
+    reopened = WorkflowService(service.home, runner=runner, collector=collect)
+    try:
+        child = reopened.redesign_study(research_id)
+        assert child["id"] == intent_id and child["execution_attempt"] == 0 and runner.calls == 1
+        assert reopened.status(research_id)["followup_research_id"] == intent_id
+        assert reopened.status(research_id)["redesign_pending"] is False
+        assert reopened.redesign_study(research_id)["id"] == intent_id
+        assert len(committed_workflows(reopened)) == 2
+    finally:
+        reopened.close()
+
+
+@pytest.mark.parametrize("failure", ["control", "active", "review-binding"])
+def test_pending_redesign_marker_requires_safe_current_science_and_bound_review(setup, monkeypatch, failure):
+    import paper_factory.workflow as workflow_module
+    service, runner, research_id = setup
+    reject_for_redesign(service, research_id)
+    with monkeypatch.context() as scope:
+        scope.setattr(workflow_module, "_copy_retained", lambda *args: (_ for _ in ()).throw(OSError("Synthetic pending clone")))
+        with pytest.raises(OSError, match="Synthetic pending clone"):
+            service.redesign_study(research_id)
+    ws = service._workspace(research_id)
+    record = ws.get("workflow", research_id, Workflow)
+    if failure == "control":
+        record.terminal_control_failure = True
+    elif failure == "active":
+        record.active_handle = {"kind": "fixture", "pid": 123}
+    else:
+        path = service.artifact_path(research_id, "manuscript-review")
+        receipt = json.loads(path.read_bytes()); receipt["analysis_sha256"] = "0" * 64
+        write_json(path, receipt)
+        record.artifacts["manuscript-review"] = record.artifacts["manuscript-review-1"] = FrozenArtifact(
+            path=record.artifacts["manuscript-review"].path, sha256=digest_file(path), size=path.stat().st_size)
+    ws.save("workflow", record)
+    state = service.status(research_id, include_materials=False)
+    assert state["followup_research_id"] is None and state["redesign_pending"] is False
+    assert state["improvement_available"] is False
+    with pytest.raises((ValueError, WorkflowError)):
+        service.redesign_study(research_id)
+    assert runner.calls == 1 and len(committed_workflows(service)) == 1
+
+
+def test_study_redesign_is_bounded_and_keeps_all_prior_negative_evidence(setup):
+    service, runner, research_id = setup
+    current = research_id
+    chain = []
+    for index in range(3):
+        rejected = reject_for_redesign(service, current)
+        chain.append(current)
+        assert rejected["redesign_attempt"] == index and rejected["execution_attempt"] == 1
+        if index < 2:
+            current = service.redesign_study(current)["id"]
+    assert runner.calls == 3 and len(committed_workflows(service)) == 3
+    with pytest.raises(WorkflowError) as limited:
+        service.redesign_study(current)
+    assert limited.value.code == "STUDY_REDESIGN_LIMIT"
+    final = service.status(current)
+    assert final["root_research_id"] == research_id and final["prior_study"]["earlier_study"]["parent_id"] == research_id
+    for prior_id in chain[:-1]:
+        retained = "prior-study-" + prior_id + "-observations"
+        assert service.artifact_path(current, retained).read_bytes() == service.artifact_path(prior_id, "observations").read_bytes()
+    assert runner.calls == 3
+
+
+def test_study_redesign_archive_keeps_prior_raw_distinct_from_new_observations(setup):
+    service, runner, research_id = setup
+    reject_for_redesign(service, research_id)
+    child = service.redesign_study(research_id)
+    runner.outputs = observations(); runner.outputs["observations"][0]["value"] = 9
+    prepare(service, child["id"]); service.start_experiment(child["id"])
+    assert finished(service, child["id"])["stage"] == "analyzed"
+    service.submit_manuscript(child["id"], manuscript(), MANUSCRIPT_REVIEW)
+    ws = service._workspace(child["id"])
+    record = ws.get("workflow", child["id"], Workflow)
+    root = ws.path("research/exports/synthetic-lineage-archive")
+    root.mkdir(parents=True)
+    # These native-format placeholders test archive membership only, never export quality.
+    for key, name in (("export-md", "paper.md"), ("export-pdf", "paper.pdf"), ("export-docx", "paper.docx"),
+                      ("export-tex", "paper.tex"), ("conversion", "conversion-receipts.json")):
+        path = root / name; path.write_bytes(("Synthetic archive fixture only: " + key).encode())
+        record.artifacts[key] = FrozenArtifact(path=path.relative_to(ws.root).as_posix(), sha256=digest_file(path), size=path.stat().st_size)
+    ws.save("workflow", record)
+    service._bundle(ws, record, root)
+    with zipfile.ZipFile(ws.path(record.artifacts["reproducibility"].path)) as archive:
+        current = archive.read("observations.json")
+        prior_artifact = record.artifacts["prior-study-" + research_id + "-observations"]
+        prior_name = "prior-studies/" + ws.path(prior_artifact.path).relative_to(ws.path("research/prior-studies")).as_posix()
+        prior = archive.read(prior_name)
+        assert current == service.artifact_path(child["id"], "observations").read_bytes()
+        assert prior == service.artifact_path(research_id, "observations").read_bytes() and current != prior
+        assert json.loads(archive.read("redesign-origin.json"))["parent_id"] == research_id
+        assert "not current observations" in archive.read("README.md").decode()
+        inventory = json.loads(archive.read("inventory.json"))
+        for name in ("observations.json", prior_name, "redesign-origin.json"):
+            raw = archive.read(name)
+            assert inventory[name] == {"size": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+        assert archive.testzip() is None and len(archive.namelist()) == len(set(archive.namelist()))
+    assert runner.calls == 2
+
+
+@pytest.mark.parametrize("field", ["protocol", "analysis", "execution", "review", "earlier_study", "source_commit", "snapshot_digest", "supporting_documents", "scope"])
+def test_study_redesign_summary_cannot_forge_or_hide_retained_evidence(setup, field):
+    service, runner, research_id = setup
+    reject_for_redesign(service, research_id)
+    child = service.redesign_study(research_id)
+    ws = service._workspace(child["id"])
+    record = ws.get("workflow", child["id"], Workflow)
+    path = service.artifact_path(child["id"], "prior-study")
+    summary = json.loads(path.read_bytes())
+    summary[field] = {"fabricated": "Synthetic altered prior evidence, not an actual observation"}
+    write_json(path, summary)
+    changed = FrozenArtifact(path=record.artifacts["prior-study"].path, sha256=digest_file(path), size=path.stat().st_size)
+    record.artifacts["prior-study"] = record.artifacts["prior-study-" + research_id + "-summary"] = changed
+    ws.save("workflow", record)
+    with pytest.raises(WorkflowError) as rejected:
+        service.status(child["id"])
+    assert rejected.value.code == "ARTIFACT_CHANGED" and runner.calls == 1
+
+
+@pytest.mark.parametrize("strategy", ["revise_manuscript", "infeasible", None])
+def test_study_redesign_requires_current_explicit_new_evidence_remediation(setup, strategy):
+    service, runner, research_id = setup
+    rejected = reject_for_redesign(service, research_id)
+    ws = service._workspace(research_id)
+    record = ws.get("workflow", research_id, Workflow)
+    artifact = record.artifacts["manuscript-review"]
+    receipt = json.loads(ws.path(artifact.path).read_bytes())
+    receipt["review"]["remediation"] = None if strategy is None else redesign_review(strategy)["remediation"]
+    write_json(ws.path(artifact.path), receipt)
+    updated = FrozenArtifact(path=artifact.path, sha256=digest_file(ws.path(artifact.path)), size=ws.path(artifact.path).stat().st_size)
+    record.artifacts["manuscript-review"] = record.artifacts["manuscript-review-1"] = updated
+    ws.save("workflow", record)
+    assert service.status(research_id)["manuscript_review"]["remediation"] == receipt["review"]["remediation"]
+    with pytest.raises(WorkflowError) as rejected:
+        service.redesign_study(research_id)
+    assert rejected.value.code == "STUDY_REDESIGN_NOT_ALLOWED" and runner.calls == 1
+    assert len(committed_workflows(service)) == 1
+
+
+@pytest.mark.parametrize("failure", ["source", "observations", "review-binding", "control", "cleanup", "execution", "cancelled", "lineage"])
+def test_study_redesign_refuses_tampered_failed_ambiguous_or_cancelled_science(setup, failure):
+    service, runner, research_id = setup
+    reject_for_redesign(service, research_id)
+    ws = service._workspace(research_id)
+    record = ws.get("workflow", research_id, Workflow)
+    if failure in {"source", "observations"}:
+        path = ws.path("source/transform.js") if failure == "source" else service.artifact_path(research_id, "observations")
+        path.chmod(0o600)
+        path.write_bytes(b"Changed retained scientific bytes.")
+    elif failure == "review-binding":
+        path = service.artifact_path(research_id, "manuscript-review")
+        receipt = json.loads(path.read_bytes()); receipt["analysis_sha256"] = "0" * 64
+        write_json(path, receipt)
+        record.artifacts["manuscript-review"] = record.artifacts["manuscript-review-1"] = FrozenArtifact(path=record.artifacts["manuscript-review"].path, sha256=digest_file(path), size=path.stat().st_size)
+    elif failure == "control":
+        record.terminal_control_failure = True
+    elif failure == "cleanup":
+        record.active_handle = {"kind": "fixture", "pid": 123}
+        record.code = "CLEANUP_UNCONFIRMED"
+    elif failure == "execution":
+        record.execution_attempt = 2
+    elif failure == "cancelled":
+        record.cancellation_requested = True
+    elif failure == "lineage":
+        child = service.redesign_study(research_id)
+        current_ws = service._workspace(child["id"])
+        current = current_ws.get("workflow", child["id"], Workflow)
+        altered = current.model_dump(); altered.update(parent_research_id=None, root_research_id=None, redesign_attempt=0)
+        current_ws.save("workflow", Workflow.model_validate(altered))
+        with pytest.raises(WorkflowError, match="discard retained redesign lineage"):
+            service.status(child["id"])
+        assert runner.calls == 1
+        return
+    ws.save("workflow", record)
+    with pytest.raises((ValueError, WorkflowError)):
+        service.redesign_study(research_id)
+    assert len(committed_workflows(service)) == 1 and runner.calls == 1
+
+
+def test_new_rejected_manuscript_requires_actionable_remediation_before_retention(setup):
+    service, runner, research_id = setup
+    prepare(service, research_id); service.start_experiment(research_id)
+    assert finished(service, research_id)["stage"] == "analyzed"
+    review = redesign_review(); review["remediation"] = None
+    with pytest.raises(WorkflowError) as rejected:
+        service.submit_manuscript(research_id, manuscript(), review)
+    assert rejected.value.code == "REVIEW_REMEDIATION_REQUIRED"
+    assert service.status(research_id)["draft_attempt"] == 0 and runner.calls == 1
+
+
+def test_explicit_writing_improvement_reopens_old_rejection_without_touching_frozen_science(setup):
+    service, runner, research_id = setup
+    reject_for_redesign(service, research_id)
+    ws = service._workspace(research_id)
+    record = ws.get("workflow", research_id, Workflow)
+    path = service.artifact_path(research_id, "manuscript-review")
+    receipt = json.loads(path.read_bytes()); receipt["review"]["remediation"] = None
+    write_json(path, receipt)
+    record.artifacts["manuscript-review"] = record.artifacts["manuscript-review-1"] = FrozenArtifact(
+        path=record.artifacts["manuscript-review"].path, sha256=digest_file(path), size=path.stat().st_size)
+    ws.save("workflow", record)
+    held = service.status(research_id)
+    assert held["improvement_available"] is True and held["manuscript_review"]["remediation"] is None
+    before = ws.get("workflow", research_id, Workflow).model_dump(mode="json")
+    frozen = {key: service.artifact_path(research_id, key).read_bytes() for key in held["artifacts"]}
+    reopened = service.improve_writing(research_id)
+    assert (reopened["stage"], reopened["status"], reopened["code"], reopened["execution_attempt"], reopened["draft_attempt"]) == ("analyzed", "ready", None, 1, 1)
+    assert reopened["resume_kind"] == "authoring" and reopened["improvement_available"] is False
+    assert reopened["manuscript_review"]["remediation"] is None
+    identifier = next(key for key in reopened["artifacts"] if key.startswith("writing-improvement-"))
+    evidence = json.loads(service.artifact_path(research_id, identifier).read_bytes())
+    assert evidence["event"] == "writing-improvement" and evidence["previous_workflow"] == before
+    assert evidence["execution_attempt"] == 1
+    for key in ("plan", "execution", "observations", "analysis", "manuscript-review"):
+        assert evidence[key + "_sha256"] == before["artifacts"][key]["sha256"]
+    assert identifier in {item["name"] for item in reopened["material_manifest"]["evidence"]}
+    assert all(service.artifact_path(research_id, key).read_bytes() == raw for key, raw in frozen.items())
+    assert runner.calls == 1
+    with pytest.raises(WorkflowError) as refused:
+        service.improve_writing(research_id)
+    assert refused.value.code == "WRITING_IMPROVEMENT_NOT_ALLOWED"
+    with pytest.raises(WorkflowError) as refused:
+        service.start_experiment(research_id)
+    assert refused.value.code == "EXPERIMENT_ALREADY_DISPATCHED" and runner.calls == 1
+    accepted = service.submit_manuscript(research_id, manuscript(), MANUSCRIPT_REVIEW)
+    assert accepted["stage"] == "manuscript" and accepted["draft_attempt"] == 2 and runner.calls == 1
+
+
+@pytest.mark.parametrize("failure", ["infeasible", "active", "control", "failed", "cancelled", "execution", "source", "binding", "unsuccessful", "cleanup"])
+def test_writing_improvement_availability_refuses_unsafe_or_unsupported_studies(setup, failure):
+    service, runner, research_id = setup
+    reject_for_redesign(service, research_id)
+    ws = service._workspace(research_id)
+    record = ws.get("workflow", research_id, Workflow)
+    if failure in {"infeasible", "binding"}:
+        path = service.artifact_path(research_id, "manuscript-review")
+        receipt = json.loads(path.read_bytes())
+        if failure == "infeasible":
+            receipt["review"]["remediation"] = redesign_review("infeasible")["remediation"]
+        else:
+            receipt["analysis_sha256"] = "0" * 64
+        write_json(path, receipt)
+        record.artifacts["manuscript-review"] = record.artifacts["manuscript-review-1"] = FrozenArtifact(
+            path=record.artifacts["manuscript-review"].path, sha256=digest_file(path), size=path.stat().st_size)
+    elif failure == "active":
+        record.active_handle = {"kind": "fixture", "pid": 123}
+    elif failure == "control":
+        record.terminal_control_failure = True
+    elif failure in {"failed", "cancelled"}:
+        record.status = failure
+    elif failure == "execution":
+        record.execution_attempt = 2
+    elif failure == "source":
+        source = ws.path("source/transform.js"); source.chmod(0o600); source.write_bytes(b"Modified production source.")
+    elif failure in {"unsuccessful", "cleanup"}:
+        path = service.artifact_path(research_id, "execution")
+        receipt = json.loads(path.read_bytes())
+        receipt["status" if failure == "unsuccessful" else "cleanup_confirmed"] = "failed" if failure == "unsuccessful" else False
+        write_json(path, receipt)
+        record.artifacts["execution"] = FrozenArtifact(path=record.artifacts["execution"].path, sha256=digest_file(path), size=path.stat().st_size)
+    ws.save("workflow", record)
+    assert service.status(research_id, include_materials=False)["improvement_available"] is False
+    with pytest.raises(WorkflowError) as refused:
+        service.improve_writing(research_id)
+    assert refused.value.code == "WRITING_IMPROVEMENT_NOT_ALLOWED" and runner.calls == 1
+    assert not any(key.startswith("writing-improvement-") for key in service.status(research_id, include_materials=False)["artifacts"])
+
+
+def test_writing_improvement_is_unavailable_after_committed_followup_and_redesign_budget(setup):
+    service, runner, research_id = setup
+    reject_for_redesign(service, research_id)
+    assert service.status(research_id)["improvement_available"] is True
+    first = service.redesign_study(research_id)
+    assert service.status(research_id)["improvement_available"] is False
+    with pytest.raises(WorkflowError):
+        service.improve_writing(research_id)
+    reject_for_redesign(service, first["id"])
+    second = service.redesign_study(first["id"])
+    reject_for_redesign(service, second["id"])
+    assert service.status(second["id"])["improvement_available"] is False
+    with pytest.raises(WorkflowError):
+        service.improve_writing(second["id"])
+    assert runner.calls == 3
 
 
 @pytest.mark.parametrize("target", ["proposal", "study-review", "literature", "selected-literature"])

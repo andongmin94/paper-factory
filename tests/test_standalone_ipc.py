@@ -120,7 +120,7 @@ def test_request_byte_limit():
         ipc.request(b" " * (ipc.MAX_INPUT_BYTES + 1))
 
 
-@pytest.mark.parametrize("method", ["workflow.resume", "workflow.reviseWriting"])
+@pytest.mark.parametrize("method", ["workflow.resume", "workflow.reviseWriting", "workflow.redesignStudy", "workflow.improveWriting"])
 def test_authoring_ipc_accepts_only_research_id_and_maps_to_explicit_method(method):
     from types import SimpleNamespace
     valid = {"id": "authoring", "method": method, "params": {"researchId": "research-abcdefabcdef"}}
@@ -131,11 +131,13 @@ def test_authoring_ipc_accepts_only_research_id_and_maps_to_explicit_method(meth
     calls = []
     service = SimpleNamespace(resume=lambda identifier: calls.append(("resume", identifier)) or {"status": "ready"},
                               revise_writing=lambda identifier: calls.append(("revise", identifier)) or {"status": "ready"},
+                              redesign_study=lambda identifier: calls.append(("redesign", identifier)) or {"status": "ready"},
+                              improve_writing=lambda identifier: calls.append(("improve", identifier)) or {"status": "ready"},
                               collect_literature=None, start_experiment=None, cancel=None, export=None)
     dispatcher = ipc.Dispatcher(SimpleNamespace(service=service), io.BytesIO())
     try:
         assert dispatcher.execute(valid["method"], valid["params"]) == {"status": "ready"}
-        assert calls == [("resume" if method == "workflow.resume" else "revise", "research-abcdefabcdef")]
+        assert calls == [({"workflow.resume": "resume", "workflow.reviseWriting": "revise", "workflow.redesignStudy": "redesign", "workflow.improveWriting": "improve"}[method], "research-abcdefabcdef")]
     finally:
         dispatcher._pool.shutdown(wait=True)
 

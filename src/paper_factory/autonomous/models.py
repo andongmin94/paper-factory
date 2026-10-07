@@ -146,11 +146,56 @@ class StudyReview(Record):
         return self
 
 
+class ManuscriptRepairAction(Record):
+    criterion: Literal["contribution", "literature", "interpretation", "presentation"]
+    action: str = Field(min_length=24, max_length=4000)
+
+    @field_validator("action")
+    @classmethod
+    def substantive_action(cls, value: str) -> str:
+        value = value.strip()
+        if len(value) < 24:
+            raise ValueError("Manuscript repair actions require substantive text")
+        return value
+
+
+class ManuscriptRemediation(Record):
+    strategy: Literal["revise_manuscript", "redesign_study", "infeasible"]
+    reason: str = Field(min_length=24, max_length=4000)
+    actions: list[ManuscriptRepairAction] = Field(min_length=1, max_length=12)
+    evidence_gaps: list[Annotated[str, Field(min_length=24, max_length=4000)]] = Field(max_length=12)
+
+    @field_validator("reason")
+    @classmethod
+    def substantive_reason(cls, value: str) -> str:
+        value = value.strip()
+        if len(value) < 24:
+            raise ValueError("Manuscript remediation requires a substantive reason")
+        return value
+
+    @field_validator("evidence_gaps")
+    @classmethod
+    def substantive_evidence_gaps(cls, values: list[str]) -> list[str]:
+        values = [value.strip() for value in values]
+        if any(len(value) < 24 for value in values):
+            raise ValueError("Manuscript evidence gaps require substantive text")
+        return values
+
+    @model_validator(mode="after")
+    def evidence_matches_strategy(self):
+        if self.strategy == "revise_manuscript" and self.evidence_gaps:
+            raise ValueError("Manuscript revision cannot require missing evidence")
+        if self.strategy == "redesign_study" and not self.evidence_gaps:
+            raise ValueError("Study redesign requires a concrete evidence gap")
+        return self
+
+
 class ManuscriptReview(ScientificReview):
     contribution: QualityCriterion
     literature: QualityCriterion
     interpretation: QualityCriterion
     presentation: QualityCriterion
+    remediation: ManuscriptRemediation | None = None
 
     @model_validator(mode="after")
     def consistent_decision(self):
@@ -158,6 +203,14 @@ class ManuscriptReview(ScientificReview):
         eligible = all(item.passed for item in criteria) and not self.issues
         if self.accepted != eligible:
             raise ValueError("Manuscript acceptance must agree with all quality criteria and issues")
+        if self.accepted and self.remediation is not None:
+            raise ValueError("Accepted manuscripts cannot require remediation")
+        if self.remediation is not None:
+            failed = {name for name in ("contribution", "literature", "interpretation", "presentation")
+                      if not getattr(self, name).passed}
+            covered = {action.criterion for action in self.remediation.actions}
+            if failed - covered:
+                raise ValueError("Manuscript remediation must address every failed criterion")
         return self
 
 

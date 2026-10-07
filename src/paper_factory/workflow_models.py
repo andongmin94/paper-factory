@@ -42,6 +42,9 @@ class ModelEvidenceReceipt(Record):
 class Workflow(Record):
     id: str = Field(default_factory=lambda: uid("research"))
     project_id: str
+    parent_research_id: str | None = Field(default=None, pattern=r"^research-[a-f0-9]{12}$")
+    root_research_id: str | None = Field(default=None, pattern=r"^research-[a-f0-9]{12}$")
+    redesign_attempt: int = Field(default=0, ge=0, le=2)
     goal: str = Field(min_length=8, max_length=4000)
     status: Literal["ready", "running", "blocked", "failed", "cancelled", "completed"] = "ready"
     stage: Literal["created", "proposed", "planned", "code_ready", "execute", "analyzed", "manuscript", "exported"] = "created"
@@ -58,3 +61,14 @@ class Workflow(Record):
     terminal_control_failure: bool = False
     code: str | None = None
     message: str | None = None
+
+    @model_validator(mode="after")
+    def consistent_lineage(self):
+        if self.redesign_attempt == 0:
+            if self.parent_research_id is not None or self.root_research_id is not None:
+                raise ValueError("An original study cannot claim redesign lineage")
+        elif (self.parent_research_id is None or self.root_research_id is None or
+              self.parent_research_id == self.id or self.root_research_id == self.id or
+              (self.redesign_attempt == 1 and self.parent_research_id != self.root_research_id)):
+            raise ValueError("A redesigned study requires a distinct parent and root")
+        return self

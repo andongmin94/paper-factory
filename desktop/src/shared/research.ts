@@ -1,4 +1,4 @@
-export type ResearchPhase = 'idle' | 'plan' | 'literature' | 'study-review' | 'code' | 'code-review' | 'experiment' | 'manuscript' | 'manuscript-review' | 'export';
+export type ResearchPhase = 'idle' | 'plan' | 'redesign' | 'literature' | 'study-review' | 'code' | 'code-review' | 'experiment' | 'manuscript' | 'manuscript-review' | 'export';
 export interface SupportingDocument { id: string; name: string; sha256: string; size: number }
 export interface ReviewCriterion { passed: boolean; reason: string }
 export interface StudyReview {
@@ -20,6 +20,12 @@ export interface ManuscriptReview {
   literature: ReviewCriterion;
   interpretation: ReviewCriterion;
   presentation: ReviewCriterion;
+  remediation?: {
+    strategy: 'revise_manuscript' | 'redesign_study' | 'infeasible';
+    reason: string;
+    actions: Array<{ criterion: 'contribution' | 'literature' | 'interpretation' | 'presentation'; action: string }>;
+    evidence_gaps: string[];
+  } | null;
 }
 export interface ResearchItem {
   resumeKind: 'preparation' | 'authoring' | null;
@@ -39,6 +45,11 @@ export interface ResearchItem {
   supportingDocuments: SupportingDocument[];
   studyReview: StudyReview | null;
   manuscriptReview: ManuscriptReview | null;
+  parentResearchId: string | null;
+  rootResearchId: string;
+  redesignAttempt: number;
+  followupResearchId: string | null;
+  improvementAvailable: boolean;
 }
 export interface ResearchSnapshot {
   runtime: { state: 'checking' | 'ready' | 'unavailable'; message: string; versions?: Record<string, string> };
@@ -56,6 +67,7 @@ export interface ResearchApi {
   createResearch(input: CreateResearchInput): Promise<ResearchSnapshot>;
   resumeResearch(id: string, model: string, reviewerModel: string): Promise<ResearchSnapshot>;
   reviseResearchWriting(id: string, model: string, reviewerModel: string): Promise<ResearchSnapshot>;
+  improveResearchWriting(id: string, model: string, reviewerModel: string): Promise<ResearchSnapshot>;
   cancelResearch(id: string): Promise<ResearchSnapshot>;
   addResearchEvidence(id: string): Promise<ResearchSnapshot | false>;
   saveArtifact(id: string, artifactId: string): Promise<boolean>;
