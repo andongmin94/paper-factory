@@ -71,22 +71,76 @@ def _attempted_literature_queries(evidence: dict) -> set[str]:
             if search.get("status") in {"succeeded", "failed"} and search.get("attempted") is not False}
 
 
-def _literature_passages(evidence: dict) -> set[str]:
-    """Normalize literal reading content, independently of its bound provenance."""
+def _verified_author_pdf(ws: Workspace, source: dict, candidates: list[dict] | None = None) -> bool:
+    if (source.get("copy_type") != "author_copy" or source.get("publication_version") != "unknown" or
+            not source.get("identity_path") or not source.get("identity_sha256")):
+        return False
+    proof_path = safe_relative(ws.path("research"), source["identity_path"])
+    if digest_file(proof_path) != source["identity_sha256"]:
+        raise WorkflowError("ARTIFACT_CHANGED", "Author PDF identity differs from its retained digest")
+    proof = loads_json(proof_path.read_bytes())
+    try:
+        candidate = literature.normalize_pdf_candidates([proof["candidate"]], [source["doi"]])[0]
+        if (proof["status"] != "verified" or proof["source_id"] != source["id"] or
+                source.get("url") != proof["retrieved_url"] or
+                literature._author_pdf_url(proof["retrieved_url"]) != proof["retrieved_url"] or
+                proof["http_status"] != 200 or proof["content_type"].split(";", 1)[0].strip().lower() not in {"application/pdf", "application/octet-stream"} or
+                (candidates is not None and candidate not in candidates)):
+            raise ValueError("Author PDF proof does not bind its verified source and origin")
+        for field, digest in (("raw_path", "sha256"), ("metadata_path", "metadata_sha256"), ("text_path", "text_sha256")):
+            path = safe_relative(ws.path("research"), source[field])
+            original = safe_relative(proof_path.parent.parent, proof[field])
+            if path != original or source[digest] != proof[digest] or digest_file(path) != source[digest]:
+                raise ValueError("Author PDF proof differs from retained PDF, metadata or text")
+            if field == "raw_path" and not path.read_bytes().startswith(b"%PDF-"):
+                raise ValueError("Author PDF original lacks the retained PDF signature")
+        metadata = loads_json(safe_relative(ws.path("research"), source["metadata_path"]).read_bytes())
+        doi, title, authors, _ = literature._metadata(metadata)
+        if (source.get("doi"), source.get("title"), source.get("authors")) != (doi, title, authors):
+            raise ValueError("Author PDF source differs from exact retained Crossref metadata")
+        if candidate["doi"] != doi or literature._title_key(candidate["title"]) != literature._title_key(title):
+            raise ValueError("Author PDF hint differs from exact metadata")
+        text = safe_relative(ws.path("research"), source["text_path"]).read_bytes().decode("utf-8")
+        if proof["identity"] != literature.author_pdf_identity(text, source):
+            raise ValueError("Author PDF first-page identity does not match retained text")
+    except (KeyError, TypeError, ValueError) as error:
+        raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", str(error)) from None
+    return True
+
+
+def _literature_passages(ws: Workspace, evidence: dict) -> set[str]:
+    """Only retained literal body reading can justify another study decision."""
     passages = set()
     for source in evidence.get("sources", []):
-        if source.get("scope") not in {"abstract", "full_text"}:
+        if source.get("scope") != "full_text" or not source.get("text_path") or not source.get("text_sha256"):
             continue
-        for passage in source.get("excerpts", []):
+        if source.get("copy_type") == "author_copy" and not _verified_author_pdf(ws, source):
+            continue
+        retained = safe_relative(ws.path("research"), source["text_path"])
+        if digest_file(retained) != source["text_sha256"]:
+            raise WorkflowError("ARTIFACT_CHANGED", "Study literature text differs from its retained digest")
+        text = retained.read_bytes().decode("utf-8")
+        body = literature.full_text_body_range(text)
+        if body is None or source.get("body_range") != body:
+            continue
+        ranges = source.get("excerpt_ranges", [])
+        for index, passage in enumerate(source.get("excerpts", [])):
             if not isinstance(passage, str) or len(passage.strip()) < 80:
+                continue
+            location = ranges[index] if isinstance(ranges, list) and index < len(ranges) else {}
+            if not isinstance(location, dict):
+                continue
+            start, end = location.get("start"), location.get("end")
+            if (type(start) is not int or type(end) is not int or
+                    not body["start"] <= start < end <= body["end"] or text[start:end] != passage):
                 continue
             passages.add(" ".join(unicodedata.normalize("NFKC", passage).split()))
     return passages
 
 
-def _has_new_literature(evidence: dict, previous: dict) -> bool:
-    inspected = _literature_passages(previous)
-    return any(not any(passage in known for known in inspected) for passage in _literature_passages(evidence))
+def _has_new_literature(ws: Workspace, evidence: dict, previous: dict) -> bool:
+    inspected = _literature_passages(ws, previous)
+    return any(not any(passage in known for known in inspected) for passage in _literature_passages(ws, evidence))
 
 
 def _require_complete_literature(plan: ResearchPlan, evidence: dict) -> None:
@@ -116,6 +170,41 @@ def _freeze(ws: Workspace, record: Workflow, key: str, path: Path) -> None:
     relative = path.absolute().relative_to(ws.root).as_posix()
     path = ws.path(relative)
     record.artifacts[key] = FrozenArtifact(path=relative, sha256=digest_file(path), size=path.stat().st_size)
+
+
+def _literature_files(root: Path) -> list[Path]:
+    folder = safe_relative(root, "literature")
+    if not folder.exists():
+        return []
+    files = []
+    for item in sorted(folder.rglob("*")):
+        path = safe_relative(root, item.relative_to(root).as_posix())
+        if path.is_dir():
+            continue
+        if not path.is_file() or path.stat().st_nlink != 1:
+            raise ValueError("Literature retrieval artifacts must be ordinary unlinked files")
+        files.append(path)
+    return files
+
+
+def _freeze_literature_files(ws: Workspace, record: Workflow, root: Path, previous: set[str]) -> None:
+    """Retain this call's completed files, even when a candidate was excluded."""
+    for path in _literature_files(root):
+        if path.relative_to(root).as_posix() in previous:
+            continue
+        relative = path.relative_to(ws.root).as_posix()
+        key = "literature-" + digest_file(path) + "-retained-" + hashlib.sha256(relative.encode()).hexdigest()[:12]
+        _freeze_literature_artifact(ws, record, key, path)
+
+
+def _freeze_literature_artifact(ws: Workspace, record: Workflow, key: str, path: Path) -> None:
+    """One raw-file registration; existing scientific/history aliases stay exact."""
+    relative = path.relative_to(ws.root).as_posix()
+    existing = next((name for name, artifact in record.artifacts.items() if artifact.path == relative), None)
+    if existing is not None:
+        _artifact(ws, record, existing)
+        return
+    _freeze(ws, record, key, path)
 
 
 def _artifact(ws: Workspace, record: Workflow, key: str) -> Path:
@@ -486,7 +575,7 @@ class WorkflowService:
                           if (key == "literature" or key.startswith("literature-history-")) and artifact.sha256 == prior_digest), None)
         if prior_key is None:
             raise WorkflowError("ARTIFACT_CHANGED", "The rejected review's literature must remain retained")
-        return _has_new_literature(_read(ws, record, "literature"), _read(ws, record, prior_key))
+        return _has_new_literature(ws, _read(ws, record, "literature"), _read(ws, record, prior_key))
 
     def _study_literature_available(self, ws: Workspace, record: Workflow) -> bool:
         if record.stage != "proposed" or record.execution_attempt or "study-review" not in record.artifacts:
@@ -498,7 +587,7 @@ class WorkflowService:
         if self._study_literature_pending(ws, record):
             return True
         readiness = review.get("publication_readiness") or {}
-        return record.study_literature_attempt < 2 and all(
+        return record.study_literature_attempt < 3 and all(
             review[name]["passed"] for name in ("question", "comparison", "sampling", "feasibility")) and (
                 readiness.get("validation", {}).get("passed") is True) and (
                 not review["contribution"]["passed"] or not review["literature"]["passed"] or
@@ -848,14 +937,18 @@ class WorkflowService:
             self._save(ws, record)
             return self._public(ws, record)
 
-    def collect_study_literature(self, research_id: str, queries: list[str], reason: str) -> dict:
-        """Two targeted evidence attempts per study, without changing its proposal."""
+    def collect_study_literature(self, research_id: str, queries: list[str], reason: str, pdf_candidates: list[dict]) -> dict:
+        """Two searches and one final direct-primary attempt per unchanged study."""
         if (not isinstance(queries, list) or not 1 <= len(queries) <= 4 or
                 any(not isinstance(query, str) or not 8 <= len(query.strip()) <= 500 or
                     not query.isprintable() for query in queries) or
                 len({query.strip() for query in queries}) != len(queries) or
                 not isinstance(reason, str) or not 24 <= len(reason.strip()) <= 2000):
             raise WorkflowError("LITERATURE_QUERIES_INVALID", "Study follow-up requires one to four distinct printable queries and a substantive reason")
+        try:
+            pdf_candidates = literature.normalize_pdf_candidates(pdf_candidates, queries)
+        except ValueError as error:
+            raise WorkflowError("LITERATURE_QUERIES_INVALID", str(error)) from None
         with self._operation(research_id) as (ws, record):
             self._require(ws, record, {"proposed"})
             if record.execution_attempt:
@@ -867,8 +960,11 @@ class WorkflowService:
                 raise WorkflowError("ARTIFACT_CHANGED", "The rejected study review must bind the current proposal")
             if self._study_literature_pending(ws, record):
                 raise WorkflowError("STUDY_REVIEW_REQUIRED", "Review the newly retained passages before collecting again")
-            if record.study_literature_attempt >= 2:
-                raise WorkflowError("STUDY_LITERATURE_LIMIT", "Two targeted literature attempts were exhausted; preserve the unresolved evidence gap")
+            if record.study_literature_attempt >= 3:
+                raise WorkflowError("STUDY_LITERATURE_LIMIT", "The bounded literature attempts were exhausted; preserve the unresolved evidence gap")
+            if record.study_literature_attempt == 2 and (not pdf_candidates or
+                    {literature._query_doi(query) for query in queries} != {candidate["doi"] for candidate in pdf_candidates}):
+                raise WorkflowError("STUDY_LITERATURE_HINT_REQUIRED", "The final attempt permits only verified public-PDF hints and their exact DOI queries")
             if not self._study_literature_available(ws, record):
                 raise WorkflowError("STUDY_LITERATURE_INELIGIBLE", "The rejected design requires scientific revision rather than a literature-only attempt")
             previous = _read(ws, record, "literature")
@@ -880,15 +976,26 @@ class WorkflowService:
                       "proposal_sha256": record.artifacts["proposal"].sha256,
                       "prior_study_review_sha256": record.artifacts["study-review"].sha256,
                       "prior_literature_sha256": record.artifacts["literature"].sha256,
-                      "queries": [query.strip() for query in queries], "reason": reason.strip()}
+                      "queries": [query.strip() for query in queries], "reason": reason.strip(),
+                      "pdf_candidates": pdf_candidates}
             write_json(root / "intent.json", intent)
             _freeze(ws, record, f"study-literature-intent-{number}", root / "intent.json")
             self._save(ws, record)
-            evidence = self.collector(intent["queries"], root, limit=3, cancel=lambda: False)
+            previous_files = {path.relative_to(root).as_posix() for path in _literature_files(root)}
+            try:
+                evidence = self.collector(intent["queries"], root, limit=3, cancel=lambda: False,
+                                          pdf_candidates=pdf_candidates)
+            finally:
+                _freeze_literature_files(ws, record, root, previous_files)
+                self._save(ws, record)
             sources = evidence.get("sources", [])
             if not isinstance(sources, list) or len(sources) > 3:
                 raise WorkflowError("LITERATURE_SOURCE_LIMIT", "Study supplement may retrieve at most three sources")
             science._literature_sources(evidence)
+            if number == 3 and any(source.get("scope") == "full_text" and (
+                    source.get("doi") not in {candidate["doi"] for candidate in pdf_candidates} or
+                    not source.get("identity_path")) for source in sources):
+                raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "The final literature attempt requires identity-bound hinted PDF bodies")
             for source in sources:
                 excerpts = source.get("excerpts", [])
                 if not isinstance(excerpts, list) or len(excerpts) > 12 or any(
@@ -899,10 +1006,11 @@ class WorkflowService:
                 set(intent["queries"]) - _attempted_literature_queries(evidence))
             evidence["quality_status"] = "incomplete" if incomplete else (
                 "full_text_available" if any(source.get("scope") == "full_text" for source in sources) else "no_full_text")
-            for entry in [*evidence.get("searches", []), *sources]:
-                fields = (("raw_path", "sha256"),) if entry not in sources else (
+            for entry in [*evidence.get("searches", []), *sources, *evidence.get("pdf_hint_attempts", [])]:
+                fields = (("raw_path", "sha256"),) if entry in evidence.get("searches", []) else (
                     ("raw_path", "sha256"), ("metadata_path", "metadata_sha256"),
-                    ("text_path", "text_sha256"), ("discovery_path", "discovery_sha256"))
+                    ("text_path", "text_sha256"), ("discovery_path", "discovery_sha256"),
+                    ("identity_path", "identity_sha256"))
                 for field, digest_field in fields:
                     if not entry.get(field):
                         continue
@@ -910,20 +1018,23 @@ class WorkflowService:
                     if digest_file(original) != entry.get(digest_field):
                         raise WorkflowError("ARTIFACT_CHANGED", "Study literature differs from its retrieval digest")
                     entry[field] = original.relative_to(ws.path("research")).as_posix()
-                    prefix = "literature-search-" if entry not in sources else "literature-"
-                    key = prefix + entry[digest_field] + ("-" + field if entry in sources else "")
+                    prefix = "literature-search-" if entry in evidence.get("searches", []) else "literature-"
+                    key = prefix + entry[digest_field] + ("-" + field if entry not in evidence.get("searches", []) else "")
                     relative = original.relative_to(ws.root).as_posix()
                     if key in record.artifacts and record.artifacts[key].path != relative:
                         key += "-" + hashlib.sha256(relative.encode()).hexdigest()[:12]
-                    _freeze(ws, record, key, original)
+                    _freeze_literature_artifact(ws, record, key, original)
             write_json(root / "collection.json", evidence)
             _freeze(ws, record, f"study-literature-collection-{number}", root / "collection.json")
+            for source in sources:
+                if source.get("scope") == "full_text" and (number == 3 or source.get("copy_type") == "author_copy") and not _verified_author_pdf(ws, source, pdf_candidates):
+                    raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Author PDF evidence must bind the reserved hint and verified identity")
             candidates = {source["id"]: source for source in previous.get("sources", [])}
             rank = lambda source: {"full_text": 2, "abstract": 1}.get(source.get("scope"), 0) if source.get("excerpts") else 0
             for source in sources:
                 old = candidates.get(source["id"])
                 if old is None or rank(source) > rank(old) or (
-                        rank(source) == rank(old) == 2 and _has_new_literature({"sources": [source]}, {"sources": [old]})):
+                        rank(source) == rank(old) == 2 and _has_new_literature(ws, {"sources": [source]}, {"sources": [old]})):
                     candidates[source["id"]] = source
             merged = sorted(candidates.values(), key=lambda source: (rank(source), source in sources), reverse=True)[:6]
             original = record.artifacts["literature"]
@@ -1014,8 +1125,9 @@ class WorkflowService:
                 indices = source.get("selected_excerpt_indices", [source["selected_excerpt_index"]])
                 for position, passage in enumerate(source["excerpts"]):
                     location = (source.get("excerpt_ranges") or [{}] * len(source["excerpts"]))[position]
-                    provenance = {key: source.get(key) for key in ("scope", "text_path", "text_sha256", "raw_path", "sha256",
-                                  "metadata_path", "metadata_sha256", "url", "arxiv_id", "body_range")}
+                    provenance = {key: source.get(key) for key in ("id", "doi", "title", "authors", "scope", "text_path", "text_sha256", "raw_path", "sha256",
+                                  "metadata_path", "metadata_sha256", "url", "arxiv_id", "body_range",
+                                  "identity_path", "identity_sha256", "copy_type", "publication_version")}
                     provenance.update(excerpt_index=indices[position], excerpt_range=location)
                     identity = (indices[position], source.get("text_sha256") or source["sha256"],
                                 hashlib.sha256(passage.encode()).hexdigest(), location.get("start"), location.get("end"))
@@ -1062,6 +1174,13 @@ class WorkflowService:
                 source["passage_provenance"][candidate] if source.get("passage_provenance") else source).get("body_range") is not None), candidates[-1])
             passage = source["excerpts"][index]
             provenance = source["passage_provenance"][index] if source.get("passage_provenance") else source
+            if provenance.get("copy_type") == "author_copy":
+                if not _verified_author_pdf(ws, provenance):
+                    raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Closest author-copy evidence lacks verified first-page identity")
+                identity_path = safe_relative(ws.path("research"), provenance["identity_path"]).relative_to(ws.root).as_posix()
+                if not any(key.startswith("literature-") and artifact.path == identity_path and
+                           artifact.sha256 == provenance["identity_sha256"] for key, artifact in record.artifacts.items()):
+                    raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Closest author-copy identity lacks frozen artifact binding")
             text_path, digest = provenance.get("text_path"), provenance.get("text_sha256")
             if not isinstance(text_path, str) or not isinstance(digest, str):
                 raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Closest work lacks retained extracted text")
@@ -1148,7 +1267,13 @@ class WorkflowService:
                 existing_sources = previous.get("sources", [])
                 remaining = max(0, 6 - sum(source.get("scope") in {"abstract", "full_text"} and bool(source.get("excerpts"))
                                          for source in existing_sources))
-                supplement = self.collector(missing, ws.path("research"), limit=remaining, cancel=lambda: False)
+                collection_root = ws.path("research")
+                previous_files = {path.relative_to(collection_root).as_posix() for path in _literature_files(collection_root)}
+                try:
+                    supplement = self.collector(missing, ws.path("research"), limit=remaining, cancel=lambda: False)
+                finally:
+                    _freeze_literature_files(ws, record, collection_root, previous_files)
+                    self._save(ws, record)
                 candidates = list(existing_sources)
                 positions = {source.get("id"): index for index, source in enumerate(candidates)}
                 reading_scopes = {"abstract": 1, "full_text": 2}
@@ -1199,15 +1324,15 @@ class WorkflowService:
                     original = safe_relative(ws.path("research"), search["raw_path"])
                     if digest_file(original) != search.get("sha256"):
                         raise WorkflowError("ARTIFACT_CHANGED", "Literature search differs from its retrieval digest")
-                    _freeze(ws, record, "literature-search-" + search["sha256"], original)
+                    _freeze_literature_artifact(ws, record, "literature-search-" + search["sha256"], original)
             for number, source in enumerate(evidence.get("sources", [])):
                 for field, digest in (("raw_path", "sha256"), ("metadata_path", "metadata_sha256"), ("text_path", "text_sha256"),
-                                      ("discovery_path", "discovery_sha256")):
+                                      ("discovery_path", "discovery_sha256"), ("identity_path", "identity_sha256")):
                     if source.get(field):
                         original = safe_relative(ws.path("research"), source[field])
                         if digest_file(original) != source.get(digest):
                             raise WorkflowError("ARTIFACT_CHANGED", "Literature differs from its retrieval digest")
-                        _freeze(ws, record, "literature-" + source[digest] + "-" + field, original)
+                        _freeze_literature_artifact(ws, record, "literature-" + source[digest] + "-" + field, original)
             self._save(ws, record)
             if evidence.get("cancelled") or not any(source.get("scope") in {"abstract", "full_text"} and source.get("excerpts")
                                                     for source in evidence.get("sources", [])):
@@ -1228,7 +1353,12 @@ class WorkflowService:
             queries = [query.strip() for query in queries]
             root = ws.path("research/authoring-literature/" + uid("collection"))
             root.mkdir(parents=True, exist_ok=False)
-            evidence = self.collector(queries, root, limit=3, cancel=lambda: False)
+            previous_files = {path.relative_to(root).as_posix() for path in _literature_files(root)}
+            try:
+                evidence = self.collector(queries, root, limit=3, cancel=lambda: False)
+            finally:
+                _freeze_literature_files(ws, record, root, previous_files)
+                self._save(ws, record)
             evidence["queries"] = queries
             incomplete = any(evidence.get(flag) for flag in ("cancelled", "timed_out", "rate_limited")) or (
                 set(queries) - _attempted_literature_queries(evidence))
@@ -1244,10 +1374,11 @@ class WorkflowService:
                 if not isinstance(excerpts, list) or len(excerpts) > 12 or any(
                         not isinstance(passage, str) or len(passage) > 1500 for passage in excerpts):
                     raise WorkflowError("LITERATURE_SOURCE_LIMIT", "Authoring passages exceed the bounded collection contract")
-            for entry in [*evidence.get("searches", []), *sources]:
-                fields = (("raw_path", "sha256"),) if entry not in sources else (
+            for entry in [*evidence.get("searches", []), *sources, *evidence.get("pdf_hint_attempts", [])]:
+                fields = (("raw_path", "sha256"),) if entry in evidence.get("searches", []) else (
                     ("raw_path", "sha256"), ("metadata_path", "metadata_sha256"),
-                    ("text_path", "text_sha256"), ("discovery_path", "discovery_sha256"))
+                    ("text_path", "text_sha256"), ("discovery_path", "discovery_sha256"),
+                    ("identity_path", "identity_sha256"))
                 for field, digest_field in fields:
                     if not entry.get(field):
                         continue
@@ -1255,12 +1386,12 @@ class WorkflowService:
                     if digest_file(original) != entry.get(digest_field):
                         raise WorkflowError("ARTIFACT_CHANGED", "Authoring literature differs from its retrieval digest")
                     entry[field] = original.relative_to(ws.path("research")).as_posix()
-                    prefix = "literature-search-" if entry not in sources else "literature-"
-                    key = prefix + entry[digest_field] + ("-" + field if entry in sources else "")
+                    prefix = "literature-search-" if entry in evidence.get("searches", []) else "literature-"
+                    key = prefix + entry[digest_field] + ("-" + field if entry not in evidence.get("searches", []) else "")
                     relative = original.relative_to(ws.root).as_posix()
                     if key in record.artifacts and record.artifacts[key].path != relative:
                         key += "-" + hashlib.sha256(relative.encode()).hexdigest()[:12]
-                    _freeze(ws, record, key, original)
+                    _freeze_literature_artifact(ws, record, key, original)
             path = root / "evidence.json"
             write_json(path, evidence)
             key = "authoring-literature-" + root.name
@@ -2054,7 +2185,7 @@ class WorkflowService:
         if "runtime-manifest" in record.artifacts:
             selection["runtime-manifest.json"] = _artifact(ws, record, "runtime-manifest")
         for key in record.artifacts:
-            if key.startswith("study-literature-") or re.fullmatch(r"study-review-[1-3]-literature-[1-2]", key):
+            if key.startswith("study-literature-") or re.fullmatch(r"study-review-[1-3]-literature-[1-3]", key):
                 selection["research-design/literature/" + key + ".json"] = _artifact(ws, record, key)
             if key.startswith(("authoring-literature", "authoring-selected-literature")):
                 path = _artifact(ws, record, key)

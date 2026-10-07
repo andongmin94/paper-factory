@@ -868,3 +868,32 @@ Windows에서 부모 연구의 원고 보완 문헌을 후속 연구에 복사�
 마지막 보완 planner는 `revise_design`, 빈 queries를 선택했다. 하지만 제안 3회·문헌 보완 2회 한도에 도달해 실행은 보류됐다. 이는 연구 자체가 불가능하다는 판정이 아니다. `paperGenerated=false`, `shutdownConfirmed=true`, 부모 SCI 1회·관측·프로토콜·464개 source 불변, 후속 SCI 0회·proposal 3회·문헌 보완 2회이며 새 plan·실험 코드·분석·완료 원고는 없다. 별도 URL·DOI·원고·승인을 실제 연구에 주입하지 않았다. 최초 `literature-plan` 요청부터 실제 앱이 결정한 경로이며 설치·OAuth 전체 사용 검증과 구분한다.
 
 이 실제 실행은 정확한 보류와 안전한 보완 경로의 확인이며 투고 가능한 원고 생성 성공은 아니다. 새 발췌 판정은 관련 없는 초록도 포함해 불필요한 재심사를 소비할 수 있었고, collector가 선택에서 탈락시킨 후보의 metadata·arXiv negative discovery가 디스크에는 있어도 frozen artifacts와 재현 ZIP에서 빠질 수 있는 문제를 독립 감사가 발견했다. 원래 연구 데이터는 그대로 보존하고 다음 개선 대상으로 기록한다. 보완 횟수를 초기화하거나 같은 성공 과학실험을 반복하지 않는다.
+
+완료 후 읽기 전용 독립 감사에서 31개 invariant를 확인했다. 두 연구의 source 928개 실제 바이트, baseline artifact 415개의 동일 SHA 이력 보존, current frozen artifact 455개 원본 바이트, 새 raw hash 16개, 완료 모델 요청 4개의 prompt·text·journal·native decision 결합이 일치했다. 실제 Greenberg 인용은 563자·offset `[22119,22682)`이며 본문 `[959,24969)` 안이고 SHA256은 `c10bcb16dc2f590a887257b58f183b194722e160fab00d62bddcf0c01f5b9e83`이다. 새 관련 방법 본문 0개·논문 0개·후속 SCI 0회, 원래 부모 관측·프로토콜·SCI 1회 불변과 소유 Electron PID 28964·engine PID 43232 종료를 확인했다. 탈락 후보 6개 path 중 registry에도 SHA가 없는 원자료 5개는 향후 ZIP 누락 위험으로 기록했다. 감사 보고서 `verification/madi-study-followup-01410-independent-audit.json`의 SHA256은 `0e4b0a538a2b9636278fe98cb4046f31979afb586776be8cc5998c3442d32a89`이다. 감사 도구의 첫 경로 해석 실패본도 보존하고 제품 실패와 구분했다.
+
+
+## 0.14.11 직접 공개본 대조와 새 본문·원자료 보존: 2026-10-07
+
+실제 0.14.10 실행에서 무관한 초록 하나가 재심사를 열었고, 선택에서 제외된 후보 원자료가 디스크에만 남아 ZIP에서 누락될 수 있었다. 새 읽기 판정은 이제 보존된 full_text의 SHA·실제 본문 범위·literal offset을 다시 확인한 본문 발췌만 사용한다. 초록·metadata·동일 내용의 별칭/공백/부분 window는 새 본문으로 계산하지 않는다. 이번 수집이 새로 만든 안전한 literature 파일을 finally에서 등록하므로 실패·부분 수집·선택 제외 raw도 보존한다. 과거 orphan을 자동으로 채택하거나 기존 이력을 수정하는 migration은 없다.
+
+기존 보완 JSON에 최대 2개의 pdfCandidates(doi/title/url)를 추가했다. DOI를 실제 검색어에 명시하고 Crossref의 정확 DOI·전체 제목과 대조한 CMU Natural Programming 허용 PDF 경로만 사용할 수 있다. 익명 HTTP 200·PDF 서명·첫 페이지 전체 제목/모든 저자/DOI와 실질 본문을 확인하며 PDF·metadata·추출 텍스트·identity proof의 원래 바이트를 남긴다. 모든 수집 회차에서 proof.candidate는 해당 회차에 예약한 후보와 정확히 같아야 한다. 공개 저자본의 출판 버전은 unknown으로 유지한다. 일반 수집 2회 뒤 한 번의 direct-primary-only 회수를 제공하며 정확 후보 DOI 외의 일반 검색은 금지된다. 기존 횟수 초기화·네 번째 수집·새 과학실험 승인 권한은 없다.
+
+독립 리뷰에서 첫 두 회차의 예약 후보 대조 누락을 발견해 수정했고, 수정 영향 34개가 통과했다. 최초 6개 native 모듈 전체 실행은 516 passed / 1 failed / 459.73초였다. 실패는 새 finally raw 등록과 구조화된 등록이 동일 path/SHA를 두 번 등록한 결함이었다. 일반 _freeze와 필요한 current/history aliases는 유지하고 문헌 원자료만 기존 실제 path·크기·SHA를 검증해 한 번 등록하도록 고쳤다. 원래 실패 검사의 len==1 assertion은 유지했다. 최종 영향 검사 146개(문헌 보완 101·publication 42·initial partial 2·IPC search 1)는 106.99초에 모두 통과했고 독립 리뷰에서도 추가 blocker가 없었다. 각 검사 그룹은 겹치므로 합산하지 않는다. 최초 실패 로그도 보존했다. 최종 source/log 결합 기록 native-study-literature-01411-verification.json은 5,252 B, SHA256 0ffb7bc22ae3f664a9d041f5e60c670657c4aa86dbb1a94ca26333658c66e60c다. 최종 workflow.py SHA256은 19e2e2edd69d5b74aad6c508f38da0ce29bcf315d20e4f850cbc1206c30cfc2c다.
+
+문헌 관련 전체 검사는 270 passed / 3 Windows symlink skipped다. 데스크톱 전체는 314 passed, 포함 SDK는 48 passed / 1 Windows 권한 검사 skipped이며 마지막 controller fixture 교정 후 251개가 다시 통과했다. controller는 전체 데스크톱에 포함된다. 새 의존성은 추가하지 않았다.
+
+포함 Python에서 별도 공개본 positive control을 수행했다. Supporting Selective Undo in a Code Editor의 정확 DOI·Crossref 서지·공개 author PDF를 대조했고 11쪽/68,941자 추출 텍스트와 본문 [1469,62375), literal 위치와 모든 hash를 확인했다. 이는 연구에 주입한 문헌이 아니라 별도 수집 검사다. receipt는 bundled-author-copy-control-01411/probe-7b5de596a0ea/receipt.json, 19,682 B, SHA256 adb8e5e22be64459796ae3ce149b2fcb043b5305f20d0af69098cad071ce5b3f다. 실제 연구 1,557개 파일과 당시 runtime 전수 바이트는 모두 그대로였다. 이후 원자료 중복 등록 수정이 반영된 최종 runtime을 다시 생성하고 EngineBridge ready/기존 보류 연구 준비 재개 상태를 확인했다.
+
+최종 Windows runtime은 Python 3.14.8·Node 24.21.0·QuickJS 실제 host 검사를 통과했다. inventory는 2,218개·473,669,484 B, SHA256 ceb15d7088b21afe34ffe341c328cdf8134fb9ad14d313c4f6f9858c0e798532다. builder receipt는 standalone-runtime-builder/build-win32-x64-321ac9c7-b639-494d-b61d-ddfde2c1a902/build-receipt.json이다. 첫 package 명령은 Electron archive directory rename EPERM으로 실패한 로그를 남겼다. 기존 설치된 동일 Electron 44.5.1 dist를 사용해 새 출력 폴더 windows-release-01411-registration-final에 NSIS를 만들었고, 기존 0.14.10 전체 payload를 preserved-windows-release-01410에 보존한 뒤 desktop/release로 복사했다. 원래 출력과 최종 복사본 모두 ASAR 7,667항목·SDK import·renderer·Pretendard·현재 engine source와 runtime 전수 대조를 통과했다. 최종 검증 시각은 08:58:27.624 UTC / 17:58:27.624 KST이며 receipt SHA256은 d8a2ed239f512277e444aae143487506d760080cd32591b9de40e89c56fdb170다. 새 설치·OAuth·로그인 복원·macOS 실행은 미검증이고 GitHub Releases에는 게시하지 않았다.
+
+| 최종 배포 파일 | 크기(B) | SHA256 |
+| --- | ---: | --- |
+| Paper Factory Setup 0.14.11.exe | 213,121,536 | f57bb43b7287c792398adc19968b76ff5e9060c7ae485227f786d42e4a9ed26d |
+| win-unpacked/resources/app.asar | 44,765,212 | fff5ea1f3858559d906b587c6c905b785a240232547b229f8eacb1bb24af7a99 |
+
+실제 재개 전 첫 harness 실행 1fbe93cafec4는 문헌 fingerprint 전사 오타(65자)를 감지하고 PREPARATION_UNSAFE로 종료했다. 모델 요청·문헌 수집·SCI 전에 중단됐으며 shutdownConfirmed=true다. 이전 0.14.10 완료 snapshot과 실제 46,776 B 원문 packet의 SHA256 40727f053fa9a2cd88aabeb8c23c706a6a67eabdb5869de81212765d86eeb610을 대조해 오타 하나만 고쳤다. 실패 harness·launch·result·교정 영수증을 그대로 남겼다. 독립 리뷰는 실제 artifact 455개·source 928개·기존 model receipt·SCI/카운터/goal 불변과 교정된 harness bytes를 확인했다. 이는 평가 스크립트 오류이며 제품이나 과학 근거 손상이 아니다. 교정 후 앱 연구는 b16e9de4a381에서 재개했고 결과는 완료 후 별도로 기록한다.
+
+
+교정 후 실제 b16e9de4a381 실행은 09:01 UTC에 완료됐으나 paperGenerated=false / shutdownConfirmed=true다. 모델 literature-plan b0b1e2b7-6648-4874-a98e-c8beb35569ec는 revise_design, 빈 queries/pdfCandidates를 반환했다. 관련 방법 본문 부족을 인정하면서 지원 경로의 정확한 공개 PDF URL을 모르므로 파일명을 추측하지 않았다. 마지막 direct-only 수집도 요청하지 않았고 문헌 attempt는 2, proposal은 3, 후속 SCI는 0을 유지했다. 새 원문·study review·plan·실험 코드·분석·완료 원고는 없다. 기존 제안·문헌·거절 심사·부모 SCI1/관측/프로토콜과 source를 보존했다. 준비 재개가 native 상태를 ready로 바꿨으며 controller는 설계 한도에서 STUDY_REJECTED로 보류했으므로 이를 native blocked가 그대로라는 주장으로 표현하지 않는다. 이 실행은 최종 PDF 회수의 성공이나 투고 준비도 통과가 아니다. 남은 제품 결손은 모델의 파일명 기억에 의존하지 않고 공식 공개 목록에서 PDF 주소를 발견하는 기능이다.
+
+완료 후 독립 감사는 29개 invariant를 모두 확인했다. 실제 source 928개·기존 frozen artifact 455개·현재 artifact 460개의 path/크기/SHA가 맞고, 새 5개는 준비 재개 영수증과 단일 literature-plan 요청/응답 기록이다. 실제 모델의 revise_design/빈 queries/빈 후보, attempt2/pending false/후속 SCI0, 새 수집·본문·review·원고 없음, 부모 SCI1과 원본 관측·프로토콜·역사 보존, 소유 PID 46988/30360 종료 및 harness 오타 하나만 교정한 사실을 대조했다. 보고서는 verification/madi-study-followup-01411-independent-audit.json, 349720 B, SHA256 2c76da0bce167045e055886ca262fb55e3933673026445304cad05c16876e5f9다. 감사 스크립트의 최초 dict/list 가정 오류도 initial.py/initial-failure.json으로 보존했으며 제품 실패와 구분한다. 이 29개 통과는 보존·실행 경계 검증이고 투고 가능한 논문이 나왔다는 증거가 아니다.

@@ -2848,8 +2848,10 @@ def test_partial_literature_completes_missing_query_without_changing_retained_by
     assert history["sha256"] == original_digest
     assert service.artifact_path(research_id, history["artifact_id"]) == original
     assert result["artifacts"][history["artifact_id"]]["sha256"] == original_digest
-    search_key = "literature-search-" + result["literature"]["searches"][1]["sha256"]
-    assert search_key in result["artifacts"]
+    search = result["literature"]["searches"][1]
+    bindings = [key for key, artifact in result["artifacts"].items() if artifact["sha256"] == search["sha256"] and
+                service.artifact_path(research_id, key).relative_to(service.root / research_id).as_posix() == "research/" + search["raw_path"]]
+    assert len(bindings) == 1
     service.collect_literature(research_id)
     assert len(calls) == 2 and runner.calls == 0
     assert current.read_bytes() == service.artifact_path(research_id, "literature").read_bytes()

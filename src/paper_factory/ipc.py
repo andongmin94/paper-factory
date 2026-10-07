@@ -32,7 +32,7 @@ METHODS = {
     "workflow.submitCode": {"researchId", "value", "review"},
     "workflow.collectLiterature": {"researchId"}, "workflow.startExperiment": {"researchId"},
     "workflow.collectAuthoringLiterature": {"researchId", "queries"},
-    "workflow.collectStudyLiterature": {"researchId", "queries", "reason"},
+    "workflow.collectStudyLiterature": {"researchId", "queries", "reason", "pdfCandidates"},
     "workflow.selectAuthoringLiterature": {"researchId", "selectedSources"},
     "workflow.cancel": {"researchId"}, "workflow.resume": {"researchId"}, "workflow.reviseWriting": {"researchId"},
     "workflow.redesignStudy": {"researchId"},
@@ -222,7 +222,7 @@ class Dispatcher:
         if method == "workflow.collectAuthoringLiterature":
             return self.service.collect_authoring_literature(p["researchId"], p["queries"])
         if method == "workflow.collectStudyLiterature":
-            return self.service.collect_study_literature(p["researchId"], p["queries"], p["reason"])
+            return self.service.collect_study_literature(p["researchId"], p["queries"], p["reason"], p["pdfCandidates"])
         if method == "workflow.selectAuthoringLiterature":
             return self.service.select_authoring_literature(p["researchId"], p["selectedSources"])
         if method == "workflow.submitCode":

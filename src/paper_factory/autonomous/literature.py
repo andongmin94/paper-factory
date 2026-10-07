@@ -25,7 +25,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Callable
+from typing import Callable, TypedDict
 from urllib.parse import quote, urljoin, urlsplit
 from urllib.request import getproxies_environment, proxy_bypass_environment
 from uuid import uuid4
@@ -41,6 +41,7 @@ CROSSREF = "https://api.crossref.org"
 ARXIV = "https://export.arxiv.org/api/query"
 # Fixed provider boundaries prevent a metadata link from requesting local services.
 PDF_HOSTS = frozenset({"arxiv.org", "export.arxiv.org", "joss.theoj.org"})
+AUTHOR_PDF_HOST = "www.cs.cmu.edu"
 MAX_JSON_BYTES = 2 * 1024 * 1024
 MAX_PDF_BYTES = 8 * 1024 * 1024
 MAX_PDF_PAGES = 40
@@ -114,12 +115,33 @@ def _check_cancel(cancel: Callable[[], bool] | None) -> None:
         raise _Cancelled
 
 
-def _checked_url(url: str, *, pdf: bool = False) -> str:
+def _author_pdf_url(url: str) -> str:
+    """Pure validation for the audited institution's public author-paper directory."""
+    if not isinstance(url, str) or len(url) > 2048 or any(ord(c) < 32 or ord(c) == 127 for c in url):
+        raise ValueError("Invalid author PDF URL")
+    parts = urlsplit(url)
+    try:
+        port = parts.port
+    except ValueError as error:
+        raise ValueError("Invalid author PDF URL port") from error
+    if (parts.scheme != "https" or parts.hostname != AUTHOR_PDF_HOST or parts.username is not None
+            or parts.password is not None or port not in (None, 443) or parts.query or parts.fragment
+            or not re.fullmatch(r"/~NatProg/papers/[A-Za-z0-9][A-Za-z0-9_.-]{0,179}\.pdf", parts.path)):
+        raise ValueError("Author PDF URL is outside the audited public-paper boundary")
+    return "https://" + AUTHOR_PDF_HOST + parts.path
+
+
+def _checked_url(url: str, *, pdf: bool = False, author_pdf: bool = False) -> str:
     """Reject untrusted authorities before DNS or HTTP and private DNS answers."""
     if not isinstance(url, str) or len(url) > 2048 or any(ord(c) < 32 for c in url):
         raise ValueError("Invalid literature URL")
     parts = urlsplit(url)
-    hosts = PDF_HOSTS if pdf else frozenset({"api.crossref.org", "export.arxiv.org"})
+    if author_pdf:
+        if not pdf:
+            raise ValueError("Author-paper requests must be bounded PDF requests")
+        url = _author_pdf_url(url)
+        parts = urlsplit(url)
+    hosts = frozenset({AUTHOR_PDF_HOST}) if author_pdf else PDF_HOSTS if pdf else frozenset({"api.crossref.org", "export.arxiv.org"})
     try:
         port = parts.port
     except ValueError as error:
@@ -131,7 +153,9 @@ def _checked_url(url: str, *, pdf: bool = False) -> str:
         raise ValueError("Literature URL is outside the allowed provider boundary")
     if parts.query and pdf:
         raise ValueError("Open-access PDF URLs cannot contain credentials or query parameters")
-    if pdf:
+    if author_pdf:
+        pass  # The hint-only directory boundary was already checked above.
+    elif pdf:
         if parts.hostname in {"arxiv.org", "export.arxiv.org"}:
             if not re.fullmatch(r"/pdf/(?:\d{4}\.\d{4,5}|[a-z-]+/\d{7})(?:v\d+)?(?:\.pdf)?", parts.path):
                 raise ValueError("Only an arXiv paper PDF endpoint is allowed")
@@ -149,7 +173,7 @@ def _checked_url(url: str, *, pdf: bool = False) -> str:
         # This exception applies only to the fixed provider allowlist above,
         # never to arbitrary publisher hosts, addresses, or redirects.
         proxies = getproxies_environment()
-        if proxies.get("https") and not proxy_bypass_environment(parts.hostname, proxies):
+        if not author_pdf and proxies.get("https") and not proxy_bypass_environment(parts.hostname, proxies):
             return url
         raise ValueError("Literature provider DNS lookup failed") from error
     if not addresses or any(not ipaddress.ip_address(record[4][0]).is_global for record in addresses):
@@ -160,19 +184,23 @@ def _checked_url(url: str, *, pdf: bool = False) -> str:
 def _fetch(
     client: httpx.Client, url: str, *, budget: _CollectionBudget, pdf: bool = False,
     params: dict[str, object] | None = None, cancel: Callable[[], bool] | None = None,
+    author_pdf: bool = False, retain_response: Callable[[bytes, str, str, int], None] | None = None,
 ) -> tuple[bytes, str, str]:
     """Stream into a hard bound; validate every redirect before requesting it."""
     maximum = MAX_PDF_BYTES if pdf else MAX_JSON_BYTES
     redirect, retried = 0, False
     while True:
         _check_cancel(cancel)
-        _checked_url(url, pdf=pdf)
+        url = _checked_url(url, pdf=pdf, author_pdf=author_pdf)
         timeout = budget.request_timeout(pdf=pdf, arxiv=not pdf and urlsplit(url).hostname == "export.arxiv.org", cancel=cancel)
         budget.requests += 1
         with client.stream("GET", url, params=params, follow_redirects=False, timeout=timeout) as response:
             budget.wait(0, cancel)
-            if response.url.scheme != "https" or response.url.host not in (PDF_HOSTS if pdf else {"api.crossref.org", "export.arxiv.org"}):
+            hosts = {AUTHOR_PDF_HOST} if author_pdf else PDF_HOSTS if pdf else {"api.crossref.org", "export.arxiv.org"}
+            if response.url.scheme != "https" or response.url.host not in hosts:
                 raise ValueError("Literature response escaped its allowed provider boundary")
+            if author_pdf:
+                _author_pdf_url(str(response.url))
             if response.status_code in (301, 302, 303, 307, 308):
                 location = response.headers.get("location")
                 if not pdf or not location or redirect == 3:
@@ -189,7 +217,8 @@ def _fetch(
                     budget.retries += 1
                     retried = True
                     continue
-            response.raise_for_status()
+            if retain_response is None:
+                response.raise_for_status()
             length = response.headers.get("content-length")
             if length and (not length.isdecimal() or int(length) > maximum):
                 raise ValueError("Literature response exceeds its size limit")
@@ -199,7 +228,11 @@ def _fetch(
                 content.extend(chunk)
                 if len(content) > maximum:
                     raise ValueError("Literature response exceeds its size limit")
-            return bytes(content), str(response.url), response.headers.get("content-type", "").lower()
+            raw, retrieved_url, content_type = bytes(content), str(response.url), response.headers.get("content-type", "").lower()
+            if retain_response is not None:
+                retain_response(raw, retrieved_url, content_type, response.status_code)
+                response.raise_for_status()
+            return raw, retrieved_url, content_type
 
 
 def _prepare_root(root: Path) -> Path:
@@ -687,6 +720,148 @@ def _query_doi(query: str) -> str | None:
     return _doi(match.group(1)) if match is not None else None
 
 
+class PdfCandidate(TypedDict):
+    doi: str
+    title: str
+    url: str
+
+
+def normalize_pdf_candidates(value: object, queries: list[str]) -> list[PdfCandidate]:
+    """Validate untrusted model hints before reserving an intent or doing I/O."""
+    if not isinstance(value, list) or len(value) > 2:
+        raise ValueError("Provide at most two public PDF candidates")
+    explicit_dois = {_query_doi(query.strip()) for query in queries if isinstance(query, str)}
+    candidates: list[PdfCandidate] = []
+    for item in value:
+        if (not isinstance(item, dict) or set(item) != {"doi", "title", "url"}
+                or any(not isinstance(item[key], str) for key in ("doi", "title", "url"))):
+            raise ValueError("Public PDF candidates require only doi, title and url strings")
+        if any(ord(c) < 32 or ord(c) == 127 for key in ("doi", "title", "url") for c in item[key]):
+            raise ValueError("Public PDF candidate fields cannot contain control characters")
+        title = item["title"].strip()
+        if not title or len(title) > 500 or not _title_key(title):
+            raise ValueError("Public PDF candidate title must contain 1 to 500 printable characters")
+        doi = _doi(item["doi"])
+        if len(doi) > 500 or doi not in explicit_dois:
+            raise ValueError("Public PDF candidate DOI must be explicitly requested in the literature queries")
+        candidate: PdfCandidate = {"doi": doi, "title": title, "url": _author_pdf_url(item["url"])}
+        if candidate in candidates:
+            raise ValueError("Public PDF candidates cannot repeat the same hint")
+        candidates.append(candidate)
+    return candidates
+
+
+def author_pdf_identity(text: str, source: dict) -> dict:
+    """Recomputable literal identity; neither a model flag nor substring matching."""
+    if (not isinstance(source, dict) or not isinstance(source.get("doi"), str)
+            or not isinstance(source.get("title"), str) or not 1 <= len(source["title"]) <= 500
+            or not isinstance(source.get("authors"), list) or not 1 <= len(source["authors"]) <= 50
+            or any(not isinstance(author, str) or not 1 <= len(author) <= 500 for author in source["authors"])):
+        raise ValueError("Author PDF identity requires bounded exact bibliographic fields")
+    if _doi(source["doi"]) != source["doi"]:
+        raise ValueError("Author PDF identity requires a canonical DOI")
+    author_keys = [_title_key(author) for author in source["authors"]]
+    if not _title_key(source["title"]) or any(not key for key in author_keys) or len(set(author_keys)) != len(author_keys):
+        raise ValueError("Author PDF identity requires distinct nonempty bibliographic names")
+    if not isinstance(text, str) or len(text) > MAX_TEXT_CHARS + 1000 or not text.startswith("[Page 1]\n"):
+        raise ValueError("Author PDF extraction has no first-page boundary")
+    following = re.search(r"(?m)^\[Page 2\]\n", text)
+    end = following.start() if following else len(text)
+    first = text[:end]
+    abstract = re.search(r"(?mi)^[ \t]*abstract(?:[ \t]*$|[ \t]*[—–:.-])", first)
+    if abstract is None or abstract.start() > 8_000:
+        raise ValueError("Author PDF has no bounded first-page front matter")
+    lines = [(match.group(), match.start(), match.end()) for match in re.finditer(r"[^\r\n]+", first[:abstract.start()])
+             if match.group().strip() and match.group().strip() != "[Page 1]"]
+    author_ranges = []
+    author_indices = []
+    for author in source["authors"]:
+        matches = [(index, line) for index, line in enumerate(lines) if _title_key(line[0]) == _title_key(author)]
+        if len(matches) != 1:
+            raise ValueError("Author PDF front-matter authors differ from Crossref")
+        index, line = matches[0]
+        author_indices.append(index)
+        author_ranges.append({"author": author, "start": line[1], "end": line[2]})
+    first_author = min(author_indices)
+    # Consume the complete initial block up to the first exact author name:
+    # accepting an expected-title prefix would hide a wrapped conflicting subtitle.
+    if not 1 <= first_author <= 3 or _title_key(" ".join(line[0] for line in lines[:first_author])) != _title_key(source["title"]):
+        raise ValueError("Author PDF initial whole title differs from Crossref")
+    title_range = {"start": lines[0][1], "end": lines[first_author - 1][2]}
+    doi_ranges = []
+    for match in re.finditer(r"(?i)(?<![\w.])10\.\d{4,9}/[^\s<>\"()]+", first):
+        literal = match.group().rstrip(",;.")
+        if _doi(literal) != source["doi"]:
+            raise ValueError("Author PDF first page prints a conflicting DOI")
+        doi_ranges.append({"start": match.start(), "end": match.start() + len(literal)})
+    if not doi_ranges:
+        raise ValueError("Author PDF first page does not print the exact Crossref DOI")
+    body = full_text_body_range(text)
+    if body is None or len(text[body["start"]:body["end"]].strip()) < 200:
+        raise ValueError("Author PDF has no bounded substantive body beyond its front matter")
+    return {"first_page_range": {"start": 0, "end": end}, "front_matter_end": abstract.start(),
+            "title_range": title_range, "author_ranges": author_ranges, "doi_ranges": doi_ranges}
+
+
+def _retain_full_text(source: dict, root: Path, text: str, url: str, raw_path: str, raw_digest: str) -> None:
+    text_path, text_digest = _save(root, source["id"] + "-text", "txt", text.encode())
+    excerpts, ranges = _full_text_excerpts(text, source["queries"])
+    source.update({"scope": "full_text", "url": url, "raw_path": raw_path,
+                   "sha256": raw_digest, "excerpts": excerpts, "excerpt_ranges": ranges,
+                   "body_range": full_text_body_range(text), "text_chars": len(text),
+                   "reading_scope": "Only the located literal excerpts were inspected; the complete extracted text is retained separately",
+                   "text_path": text_path, "text_sha256": text_digest})
+
+
+def _promote_hinted_pdf(client: httpx.Client, source: dict, hints: list[PdfCandidate], root: Path, *,
+                        budget: _CollectionBudget, cancel: Callable[[], bool] | None,
+                        warnings: list[str], attempts: list[dict]) -> None:
+    for hint in hints:
+        attempt = {"source_id": source["id"], "candidate": hint, "status": "rejected",
+                   "metadata_path": source["metadata_path"], "metadata_sha256": source["metadata_sha256"]}
+        attempts.append(attempt)
+
+        def retain(raw: bytes, url: str, content_type: str, status: int) -> None:
+            path, digest = _save(root, source["id"] + "-hint-response", "pdf" if raw.startswith(b"%PDF-") else "bin", raw)
+            attempt.update(raw_path=path, sha256=digest, retrieved_url=url, content_type=content_type, http_status=status)
+
+        try:
+            budget.wait(0, cancel)
+            if _title_key(hint["title"]) != _title_key(source["title"]) or hint["doi"] != source.get("doi"):
+                raise ValueError("Public PDF hint identity differs from exact Crossref metadata")
+            raw, url, content_type = _fetch(client, hint["url"], pdf=True, author_pdf=True,
+                                           retain_response=retain, cancel=cancel, budget=budget)
+            if attempt["http_status"] != 200:
+                raise ValueError("Author-paper provider did not return a complete HTTP 200 response")
+            if content_type.split(";", 1)[0].strip() not in {"application/pdf", "application/octet-stream"}:
+                raise ValueError("Author-paper provider did not return PDF content")
+            if budget.deadline - time.monotonic() < 18:
+                raise _DeadlineExceeded
+            text = _pdf_text(raw)
+            # Keep completed extraction even when identity or cancellation fails.
+            text_path, text_digest = _save(root, source["id"] + "-text", "txt", text.encode())
+            attempt.update(text_path=text_path, text_sha256=text_digest)
+            budget.wait(0, cancel)
+            attempt["identity"] = author_pdf_identity(text, source)
+            _retain_full_text(source, root, text, url, attempt["raw_path"], attempt["sha256"])
+            source.update(copy_type="author_copy", publication_version="unknown")
+            attempt["status"] = "verified"
+        except (_Cancelled, _DeadlineExceeded, _RateLimited) as error:
+            attempt.update(status="interrupted", error=type(error).__name__)
+            raise
+        except (ValueError, OSError, httpx.HTTPError) as error:
+            attempt["error"] = type(error).__name__
+            attempt["note"] = str(error)[:300] if isinstance(error, ValueError) else "Public PDF retrieval or extraction failed"
+            warnings.append(f"Public PDF hint unavailable for {source['id']} ({type(error).__name__}); reading scope was not upgraded")
+        finally:
+            path, digest = _save(root, source["id"] + "-hint-identity", "json", json.dumps(attempt, ensure_ascii=False, sort_keys=True).encode())
+            attempt.update(identity_path=path, identity_sha256=digest)
+            if attempt["status"] == "verified":
+                source.update(identity_path=path, identity_sha256=digest)
+        if attempt["status"] == "verified":
+            break
+
+
 def _is_arxiv_query(query: str) -> bool:
     return bool(re.match(r"arxiv\s*:", query, re.I) or re.search(r"10\.48550/arxiv\.", query, re.I))
 
@@ -715,13 +890,7 @@ def _promote_full_text(client: httpx.Client, source: dict, pdf_urls: list[str], 
             full_text = _pdf_text(raw_pdf)
             budget.wait(0, cancel)
             raw_path, raw_digest = _save(root, source["id"] + "-fulltext", "pdf", raw_pdf)
-            text_path, text_digest = _save(root, source["id"] + "-text", "txt", full_text.encode())
-            excerpts, ranges = _full_text_excerpts(full_text, source["queries"])
-            source.update({"scope": "full_text", "url": retrieved_url, "raw_path": raw_path,
-                           "sha256": raw_digest, "excerpts": excerpts, "excerpt_ranges": ranges,
-                           "body_range": full_text_body_range(full_text), "text_chars": len(full_text),
-                           "reading_scope": "Only the located literal excerpts were inspected; the complete extracted text is retained separately",
-                           "text_path": text_path, "text_sha256": text_digest})
+            _retain_full_text(source, root, full_text, retrieved_url, raw_path, raw_digest)
             break
         except (ValueError, OSError, httpx.HTTPError) as error:
             warnings.append(f"Open-access text unavailable for {source['id']} ({type(error).__name__}); reading scope was not upgraded")
@@ -730,6 +899,7 @@ def _promote_full_text(client: httpx.Client, source: dict, pdf_urls: list[str], 
 def collect(
     queries: list[str], root: Path, *, limit: int = 6,
     cancel: Callable[[], bool] | None = None,
+    pdf_candidates: list[PdfCandidate] | None = None,
 ) -> dict:
     """Collect actual fetched evidence; no network failure becomes a fake source.
 
@@ -740,6 +910,8 @@ def collect(
     lookups bind the actual preprint version and precede bibliographic candidates.
     Other DOIs use an exact Crossref lookup;
     bibliographic searches do not exclude records without Crossref abstracts.
+    Explicit DOI-bound author PDF hints precede generic candidates and use their
+    strict identity route exclusively, retaining completed rejected responses.
     Cancellation and the shared 90-second deadline preserve partial evidence,
     with distinct ``cancelled`` and ``timed_out`` flags. A provider cooldown
     beyond the remaining wait budget sets ``rate_limited``. Query provenance is not relevance.
@@ -751,12 +923,15 @@ def collect(
     if any(not isinstance(query, str) or not query.strip() or len(query) > 500 or any(ord(c) < 32 for c in query) for query in queries):
         raise ValueError("Literature queries must contain 1 to 500 printable characters")
     queries = list(dict.fromkeys(query.strip() for query in queries))
+    hints = normalize_pdf_candidates([] if pdf_candidates is None else pdf_candidates, queries)
     root = _prepare_root(root)
     result: dict = {"sources": [], "searches": [
         {"query": query, "provider": "arXiv" if _is_arxiv_query(query) else "Crossref",
          "status": "not_attempted", "attempted": False, "resolved_ids": []}
         for query in sorted(queries, key=lambda query: not _is_arxiv_query(query))], "warnings": []}
     seen: set[str] = set()
+    if hints:
+        result["pdf_hint_attempts"] = []
     candidates: list[list[str]] = []
     candidate_queries: dict[str, list[dict]] = {}
     exact_metadata: dict[str, tuple[bytes, str]] = {}
@@ -863,7 +1038,9 @@ def collect(
                     except ValueError as error:
                         result["warnings"].append(f"Crossref candidate verification failed ({type(error).__name__}); candidate was omitted")
 
-            candidates.sort(key=lambda batch: not batch or batch[0] not in arxiv_metadata)
+            hint_dois = {hint["doi"] for hint in hints}
+            candidates.sort(key=lambda batch: (not batch or batch[0] not in hint_dois,
+                                                not batch or batch[0] not in arxiv_metadata))
             for rank in range(limit):
                 if sum(source["scope"] != "metadata_only" for source in result["sources"]) >= limit:
                     break
@@ -905,6 +1082,13 @@ def collect(
                                         "metadata_path": metadata_path, "metadata_sha256": metadata_digest,
                                         "queries": [search["query"] for search in candidate_queries[candidate]]})
                         try:
+                            source_hints = [hint for hint in hints if hint["doi"] == candidate]
+                            if source_hints:
+                                _promote_hinted_pdf(client, source, source_hints, root, budget=budget, cancel=cancel,
+                                                    warnings=result["warnings"], attempts=result["pdf_hint_attempts"])
+                                # A hinted DOI has one strict route, even when it
+                                # fails: it cannot become another generic search.
+                                continue
                             if (document is not None and document["message"].get("type") in {"journal-article", "proceedings-article", "posted-content"}
                                     and not any(urlsplit(url).scheme == "https" and urlsplit(url).hostname in PDF_HOSTS
                                                 for url in pdf_urls)):

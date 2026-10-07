@@ -530,7 +530,7 @@ async function fixture(responses = [], workflow = base(), transport = {}) {
   const records = new Map([[workflow.id, workflow]]);
   const publicWorkflow = (record = workflow) => {
     const rejectedPreparation = record.stage === 'proposed' && record.study_review?.accepted === false &&
-      (record.study_literature_pending || (record.study_literature_attempt < 2 &&
+      (record.study_literature_pending || (record.study_literature_attempt < 3 &&
         ['question', 'comparison', 'sampling', 'feasibility'].every(key => record.study_review[key].passed) &&
         record.study_review.publication_readiness?.validation.passed)) && record.code === 'STUDY_REJECTED';
     record.resume_kind = (['ready', 'cancelled'].includes(record.status) || (record.status === 'blocked' && rejectedPreparation)) && !record.cleanup_pending && !record.terminal_control_failure && record.code !== 'CLEANUP_UNCONFIRMED'
@@ -615,7 +615,7 @@ async function fixture(responses = [], workflow = base(), transport = {}) {
       if (options.input[0].content.startsWith('Plan remediation for a rejected study before execution.')) {
         studyRemediationPrompts.push(options);
         const result = transport.studyRemediation ? await transport.studyRemediation(options)
-          : { action: 'revise_design', queries: [], reason: 'Synthetic scientific design revision required; this fixture does not attest literature availability.' };
+          : { action: 'revise_design', queries: [], pdfCandidates: [], reason: 'Synthetic scientific design revision required; this fixture does not attest literature availability.' };
         if (result instanceof Error) throw result;
         return { text: typeof result === 'string' ? result : JSON.stringify(result) };
       }
@@ -866,7 +866,7 @@ test('proposal, inspected literature and fresh suitability acceptance precede an
 
 test('a literature deficit collects refined evidence and receives fresh approval before code or science', async () => {
   const missing = { sources: [], searches: [{ query: 'synthetic broad query', status: 'failed', error: 'HTTPStatusError', http_status: 503 }] };
-  const inspected = { sources: [{ id: 'synthetic-source', scope: 'abstract', excerpts: ['Synthetic directly relevant evidence for orchestration only.'] }] };
+  const inspected = { sources: [{ id: 'synthetic-source', scope: 'full_text', excerpts: ['Synthetic directly relevant body evidence for orchestration only.'] }] };
   const rejected = { ...studyAccepted, accepted: false, selected_sources: [], issues: ['Missing relevant inspected evidence'],
     contribution: { passed: false, reason: 'Synthetic contribution cannot be positioned without relevant evidence.' },
     literature: { passed: false, reason: 'Synthetic query failed; no relevant excerpts were inspected.' } };
@@ -875,7 +875,7 @@ test('a literature deficit collects refined evidence and receives fresh approval
   let collections = 0;
   const f = await fixture([initial, rejected, studyAccepted, { files: [] }, accepted,
     { sections: [] }, manuscriptAccepted], workflow, {
-    studyRemediation: () => ({ action: 'retrieve_literature', queries: ['synthetic exact method title'],
+    studyRemediation: () => ({ action: 'retrieve_literature', queries: ['synthetic exact method title'], pdfCandidates: [],
       reason: 'Synthetic missing methods require an actual bounded collection without changing this proposal.' }),
     request(method) {
       if (['workflow.collectLiterature', 'workflow.collectStudyLiterature'].includes(method)) {
@@ -904,7 +904,7 @@ test('a literature deficit collects refined evidence and receives fresh approval
 const evidenceDeficitReview = () => ({ ...studyAccepted, accepted: false, issues: ['Synthetic nearest-method body evidence missing'],
   contribution: { passed: false, reason: 'Synthetic contribution requires genuine directly related body evidence before any approval.' },
   publication_readiness: { ...publicationReadiness, novelty: { passed: false, reason: 'Synthetic absent method evidence cannot establish novelty.' } } });
-const retrievalRemediation = () => ({ action: 'retrieve_literature', queries: ['Synthetic closest method title'],
+const retrievalRemediation = () => ({ action: 'retrieve_literature', queries: ['Synthetic closest method title'], pdfCandidates: [],
   reason: 'Collect a genuinely missing method passage without replacing the retained scientific proposal.' });
 
 test('a previously rejected third proposal resumes bounded literature collection and fresh review without re-proposing', async () => {
@@ -930,9 +930,9 @@ test('a previously rejected third proposal resumes bounded literature collection
   } finally { await f.cleanup(); }
 });
 
-test('an already pending literal supplement is reviewed once without another collection or proposal', async () => {
+test('an already pending body supplement at the final attempt is reviewed once without another collection or proposal', async () => {
   const workflow = { ...base(), stage: 'proposed', status: 'cancelled', code: 'CANCELLED', proposal_attempt: 3,
-    study_literature_attempt: 2, study_literature_pending: true, proposal: { source_files: ['module.ts'] },
+    study_literature_attempt: 3, study_literature_pending: true, proposal: { source_files: ['module.ts'] },
     study_review: evidenceDeficitReview() };
   const f = await fixture([studyAccepted, { files: [] }, accepted, { sections: [] }, manuscriptAccepted], workflow);
   try {
@@ -967,6 +967,11 @@ for (const invalid of [
   { ...retrievalRemediation(), queries: ['Same synthetic query', ' Same synthetic query '] },
   { ...retrievalRemediation(), queries: ['Synthetic\nquery with a control character'] },
   { ...retrievalRemediation(), action: 'approve' },
+  { ...retrievalRemediation(), pdfCandidates: [{ doi: '10.1234/synthetic', title: 'Synthetic method' }] },
+  { ...retrievalRemediation(), pdfCandidates: [{ doi: '10.1234/synthetic', title: 'Synthetic method', url: 'https://www.cs.cmu.edu/~NatProg/papers/synthetic.pdf', approval: true }] },
+  { ...retrievalRemediation(), pdfCandidates: Array.from({ length: 3 }, (_, index) => ({ doi: '10.1234/synthetic', title: 'Synthetic method', url: 'https://www.cs.cmu.edu/~NatProg/papers/synthetic-' + index + '.pdf' })) },
+  { ...retrievalRemediation(), pdfCandidates: [{ doi: '10.1234/synthetic', title: 'Synthetic method', url: 'https://www.cs.cmu.edu/\nsynthetic.pdf' }] },
+  { ...retrievalRemediation(), action: 'revise_design', queries: [], pdfCandidates: [{ doi: '10.1234/synthetic', title: 'Synthetic method', url: 'https://www.cs.cmu.edu/~NatProg/papers/synthetic.pdf' }] },
 ]) {
   test('invalid study remediation cannot collect, replace the proposal or authorize science: ' + JSON.stringify(invalid), async () => {
     const workflow = { ...base(), stage: 'created', proposal_attempt: 0, study_review: null };
@@ -982,6 +987,86 @@ for (const invalid of [
     } finally { await f.cleanup(); }
   });
 }
+
+test('study PDF hints remain model receipts and untrusted engine inputs before independent approval', async () => {
+  const pdfCandidates = [{ doi: '10.1234/synthetic', title: 'Synthetic Primary Method',
+    url: 'https://www.cs.cmu.edu/~NatProg/papers/synthetic.pdf' }];
+  const workflow = { ...base(), stage: 'proposed', status: 'blocked', code: 'STUDY_REJECTED',
+    proposal_attempt: 3, proposal: { source_files: ['module.ts'] }, plan: null, study_review: evidenceDeficitReview() };
+  const f = await fixture([studyAccepted, { files: [] }, accepted, { sections: [] }, manuscriptAccepted], workflow, {
+    studyRemediation: () => ({ ...retrievalRemediation(), queries: ['10.1234/synthetic'], pdfCandidates }),
+  });
+  try {
+    await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer');
+    assert.equal((await settled(f.controller)).jobs[0].pipeline, 'completed');
+    const retrieval = f.calls.find(call => call.method === 'workflow.collectStudyLiterature');
+    assert.deepEqual(retrieval.params.pdfCandidates, pdfCandidates);
+    assert.deepEqual(retrieval.params.queries, ['10.1234/synthetic']);
+    const receipt = f.calls.find(call => call.method === 'workflow.recordInference' &&
+      call.params.receipt.phase === 'literature-plan' && call.params.receipt.outcome === 'completed');
+    assert.deepEqual(JSON.parse(receipt.params.receipt.text).pdfCandidates, pdfCandidates);
+    assert.ok(f.calls.indexOf(receipt) < f.calls.indexOf(retrieval));
+    const methods = f.calls.map(call => call.method);
+    assert.ok(methods.indexOf('workflow.submitStudyReview') < methods.indexOf('workflow.startExperiment'));
+    assert.match(f.studyRemediationPrompts[0].input[0].content, /untrusted retrieval hint/);
+    assert.match(f.studyRemediationPrompts[0].input[0].content, /Never construct or guess/);
+  } finally { await f.cleanup(); }
+});
+
+test('native rejection of a PDF hint stops before science and preserves the completed planner receipt', async () => {
+  const pdfCandidates = [{ doi: '10.1234/synthetic', title: 'Synthetic Primary Method', url: 'https://www.cs.cmu.edu/~NatProg/papers/synthetic.pdf' }];
+  const workflow = { ...base(), stage: 'proposed', status: 'blocked', code: 'STUDY_REJECTED',
+    proposal_attempt: 3, proposal: { source_files: ['module.ts'] }, plan: null, study_review: evidenceDeficitReview() };
+  const f = await fixture([], workflow, {
+    studyRemediation: () => ({ ...retrievalRemediation(), queries: ['10.1234/synthetic'], pdfCandidates }),
+    request(method) { if (method === 'workflow.collectStudyLiterature') throw fakeEngineError('LITERATURE_QUERIES_INVALID'); },
+  });
+  try {
+    await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer');
+    assert.equal((await settled(f.controller)).jobs[0].code, 'LITERATURE_QUERIES_INVALID');
+    assert.equal(f.calls.filter(call => call.method === 'workflow.collectStudyLiterature').length, 1);
+    assert.equal(f.calls.some(call => ['workflow.submitStudyReview', 'workflow.startExperiment'].includes(call.method)), false);
+    const receipt = f.calls.find(call => call.method === 'workflow.recordInference' &&
+      call.params.receipt.phase === 'literature-plan' && call.params.receipt.outcome === 'completed');
+    assert.deepEqual(JSON.parse(receipt.params.receipt.text).pdfCandidates, pdfCandidates);
+  } finally { await f.cleanup(); }
+});
+
+test('the final direct-PDF attempt follows two retained collections without resetting science or proposal budgets', async () => {
+  const pdfCandidates = [{ doi: '10.1234/synthetic', title: 'Synthetic Primary Method', url: 'https://www.cs.cmu.edu/~NatProg/papers/synthetic.pdf' }];
+  const proposal = { source_files: ['module.ts'] };
+  const workflow = { ...base(), stage: 'proposed', status: 'blocked', code: 'STUDY_REJECTED',
+    study_literature_attempt: 2, proposal_attempt: 3, proposal, plan: null, study_review: evidenceDeficitReview() };
+  const f = await fixture([studyAccepted, { files: [] }, accepted, { sections: [] }, manuscriptAccepted], workflow, {
+    studyRemediation: () => ({ ...retrievalRemediation(), queries: ['10.1234/synthetic'], pdfCandidates }),
+  });
+  try {
+    await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer');
+    assert.equal((await settled(f.controller)).jobs[0].pipeline, 'completed');
+    assert.equal(workflow.study_literature_attempt, 3); assert.equal(workflow.proposal_attempt, 3);
+    assert.deepEqual(workflow.plan, proposal);
+    assert.equal(f.calls.filter(call => call.method === 'workflow.collectStudyLiterature').length, 1);
+    assert.equal(f.calls.filter(call => call.method === 'workflow.submitProposal').length, 0);
+    assert.equal(f.calls.filter(call => call.method === 'workflow.startExperiment').length, 1);
+    const prompt = f.studyRemediationPrompts[0].input[0].content;
+    assert.match(prompt, /0 general literature collections/);
+    assert.match(prompt, /final attempt requires valid nonempty pdfCandidates/);
+    assert.match(prompt, /never resets past attempts/);
+  } finally { await f.cleanup(); }
+});
+
+test('a third generic search cannot consume the final direct-PDF attempt or ask for approval', async () => {
+  const workflow = { ...base(), stage: 'proposed', status: 'blocked', code: 'STUDY_REJECTED',
+    study_literature_attempt: 2, proposal_attempt: 3, proposal: { source_files: ['module.ts'] }, plan: null, study_review: evidenceDeficitReview() };
+  const f = await fixture([], workflow, { studyRemediation: retrievalRemediation });
+  try {
+    await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer');
+    assert.equal((await settled(f.controller)).jobs[0].code, 'STUDY_REJECTED');
+    assert.equal(workflow.study_literature_attempt, 2);
+    assert.equal(f.calls.some(call => ['workflow.collectStudyLiterature', 'workflow.submitStudyReview', 'workflow.startExperiment'].includes(call.method)), false);
+    assert.equal(f.calls.filter(call => call.method === 'workflow.recordInference' && call.params.receipt.phase === 'literature-plan' && call.params.receipt.outcome === 'completed').length, 1);
+  } finally { await f.cleanup(); }
+});
 
 for (const defect of ['concat without merging', 'rounded expected JSON instead of a parser', 'history-dropping copy instead of project restoration', 'missing inspected literature after bounded query refinement']) {
   test('synthetic rejection for ' + defect + ' stops after three proposals and preserves all review receipts', async () => {

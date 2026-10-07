@@ -30,6 +30,15 @@ type Receipt = { id: string; phase: ResearchPhase; at: string; model: string; pr
   text?: string; textSha256?: string; code?: string };
 
 const sha = (value: string) => createHash('sha256').update(value).digest('hex');
+type PdfCandidate = { doi: string; title: string; url: string };
+function isPdfCandidate(value: unknown): value is PdfCandidate {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  return Object.keys(candidate).sort().join(',') === 'doi,title,url' &&
+    Object.entries({ doi: [1, 500], title: [1, 500], url: [1, 2048] }).every(([key, [min, max]]) =>
+      typeof candidate[key] === 'string' && candidate[key].trim().length >= min &&
+      candidate[key].trim().length <= max && !/[\u0000-\u001f\u007f]/.test(candidate[key]));
+}
 function canSupplementStudy(review: StudyReview | null) {
   return review?.accepted === false && review.question.passed && review.comparison.passed &&
     review.sampling.passed && review.feasibility.passed && review.publication_readiness?.validation.passed &&
@@ -318,7 +327,7 @@ export class ResearchController {
     job.improvementAvailable = workflow.improvement_available === true || (workflow.redesign_pending === true && canRedesign(workflow));
     if (workflow.cleanup_pending || workflow.code === 'CLEANUP_UNCONFIRMED') job.cleanupRequired = true;
     const studyFollowup = workflow.stage === 'proposed' && workflow.study_review?.accepted === false &&
-      (workflow.study_literature_pending === true || (canSupplementStudy(workflow.study_review) && workflow.study_literature_attempt < 2));
+      (workflow.study_literature_pending === true || (canSupplementStudy(workflow.study_review) && workflow.study_literature_attempt < 3));
     const preparation = workflow.resume_kind === 'preparation' && workflow.execution_attempt === 0 &&
       ['created', 'proposed', 'planned', 'code_ready'].includes(workflow.stage) && !job.experimentDispatched &&
       (!(workflow.stage === 'proposed' && workflow.study_review) || studyFollowup);
@@ -873,27 +882,42 @@ export class ResearchController {
       'Return action=retrieve_literature only when additional inspected methods/results could establish the position of this unchanged, executable design. ' +
       'Use 1 to 4 distinct exact known DOIs, complete paper titles or concise method queries, each 8 to 500 printable characters. ' +
       'Known arxiv:<identifier> or 10.48550/arXiv.<identifier> queries bind an actual preprint version. Never invent identifiers, unseen findings or novelty. ' +
+      'Return pdfCandidates=[] unless you already know a public primary-author PDF URL for an explicitly requested DOI. ' +
+      'At most two candidates may each contain exactly doi, title and url. The title must be the complete exact Crossref title. ' +
+      'The supported author-copy path is https://www.cs.cmu.edu/~NatProg/papers/<known-filename>.pdf. Other hosts or author directories, HTML, credentials, queries and redirects to other hosts are unsupported. ' +
+      'Never construct or guess a filename or URL. Each candidate is an untrusted retrieval hint, not reading evidence or publication authority. ' +
+      'The engine independently checks the exact DOI record, whole title, authors and first-page DOI before retaining body evidence; author-copy version remains unknown. ' +
       'Avoid repeated successful queries that already supplied the required passages; account for every retained search outcome and reading scope. ' +
       'A failed search does not establish absence of prior work. No new protocol, observation or scientific execution is authorized. ' +
-      'Return action=revise_design with queries=[] when the question, contribution, comparator, sampling or validation needs substantive redesign. ' +
+      'Return action=revise_design with queries=[] and pdfCandidates=[] when the question, contribution, comparator, sampling or validation needs substantive redesign. ' +
       'Do not merely reword the same proposal or change its queries/seeds to seek acceptance. ' +
-      'Return action=infeasible with queries=[] only for a concrete blocker and no feasible research route within the goal and supported runtime. ' +
-      `The whole study has ${Math.max(0, 2 - workflow.study_literature_attempt)} literature collections and ${Math.max(0, 3 - workflow.proposal_attempt)} proposal revisions remaining. ` +
+      'Return action=infeasible with queries=[] and pdfCandidates=[] only for a concrete blocker and no feasible research route within the goal and supported runtime. ' +
+      `The whole study has ${Math.max(0, 2 - workflow.study_literature_attempt)} general literature collections and ${Math.max(0, 3 - workflow.proposal_attempt)} proposal revisions remaining. ` +
+      `There is ${workflow.study_literature_attempt < 3 ? 'one' : 'no'} final direct-primary-PDF attempt after the first two collections. ` +
+      'This final attempt requires valid nonempty pdfCandidates and queries containing exactly their DOI identifiers; generic title/method searches are forbidden. ' +
+      'It shares the same time/source/PDF bounds, never resets past attempts and cannot authorize science or approval. ' +
+      'Do not request it if you do not already know a defensible primary-author URL. ' +
       'If no defensible unused literature route remains, explain the gap without promising approval. ' +
-      'Write reason in the language of the original goal. Return only JSON with exactly action, queries and reason (24 to 2000 characters).\n' +
+      'Write reason in the language of the original goal. Return only JSON with exactly action, queries, pdfCandidates and reason (24 to 2000 characters).\n' +
       JSON.stringify({ goal: workflow.goal, proposal: workflow.proposal, review: workflow.study_review, literature: workflow.literature });
     const result = await this.generate(job, 'literature-plan', prompt, signal);
-    if (Object.keys(result).sort().join(',') !== 'action,queries,reason' ||
+    if (Object.keys(result).sort().join(',') !== 'action,pdfCandidates,queries,reason' ||
         !['retrieve_literature', 'revise_design', 'infeasible'].includes(result.action as string) ||
         !Array.isArray(result.queries) || result.queries.length > 4 ||
         result.queries.some(query => typeof query !== 'string' || query.trim().length < 8 || query.trim().length > 500 || /[\u0000-\u001f\u007f]/.test(query)) ||
         new Set(result.queries.map(query => (query as string).trim())).size !== result.queries.length ||
+        !Array.isArray(result.pdfCandidates) || result.pdfCandidates.length > 2 ||
+        !result.pdfCandidates.every(isPdfCandidate) ||
+        new Set(result.pdfCandidates.map(candidate => candidate.url.trim())).size !== result.pdfCandidates.length ||
+        (result.action !== 'retrieve_literature' && result.pdfCandidates.length > 0) ||
         typeof result.reason !== 'string' || result.reason.trim().length < 24 || result.reason.trim().length > 2000 ||
         (result.action === 'retrieve_literature') !== (result.queries.length > 0)) {
       throw new EngineError('MATERIAL_INVALID', '연구 보완 계획에 구체적인 행동·검색어·이유가 없습니다. 원문은 보존했습니다.');
     }
     return { action: result.action as 'retrieve_literature' | 'revise_design' | 'infeasible',
-      queries: result.queries.map(query => (query as string).trim()), reason: result.reason.trim() };
+      queries: result.queries.map(query => (query as string).trim()),
+      pdfCandidates: result.pdfCandidates.map(candidate => ({ doi: candidate.doi.trim(), title: candidate.title.trim(), url: candidate.url.trim() })),
+      reason: result.reason.trim() };
   }
 
   private async design(job: StoredJob, workflow: Workflow, signal: AbortSignal) {
@@ -906,13 +930,15 @@ export class ResearchController {
           const remediation = await this.studyRemediation(job, workflow, signal);
           if (remediation.action === 'infeasible') throw new EngineError('STUDY_INFEASIBLE', remediation.reason);
           if (remediation.action === 'retrieve_literature') {
-            if (workflow.study_literature_attempt >= 2) throw new EngineError('STUDY_REJECTED',
-              '두 차례의 문헌 보완으로도 필요한 본문 근거를 확보하지 못했습니다. ' + remediation.reason);
+            if (workflow.study_literature_attempt >= 3) throw new EngineError('STUDY_REJECTED',
+              '일반 문헌 보완과 마지막 직접 원문 회수로도 필요한 본문 근거를 확보하지 못했습니다. ' + remediation.reason);
+            if (workflow.study_literature_attempt === 2 && !remediation.pdfCandidates.length) throw new EngineError('STUDY_REJECTED',
+              '일반 문헌 보완을 마쳤지만 마지막 회수에 필요한 직접 원문 후보가 없습니다. ' + remediation.reason);
             await this.phase(job, 'literature'); signal.throwIfAborted();
             workflow = await this.engine.request<Workflow>('workflow.collectStudyLiterature',
-              { researchId: job.id, queries: remediation.queries, reason: remediation.reason }, 130_000);
+              { researchId: job.id, queries: remediation.queries, pdfCandidates: remediation.pdfCandidates, reason: remediation.reason }, 130_000);
             this.update(job, workflow); await this.save(); signal.throwIfAborted();
-            // The engine permits re-review only for genuinely added literal evidence.
+            // The engine permits re-review only for genuinely added body passages.
             if (!workflow.study_literature_pending) continue;
           } else feedback = '\n\nA substantive design revision is required:\n' + remediation.reason;
         }

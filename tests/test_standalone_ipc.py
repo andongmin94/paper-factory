@@ -694,8 +694,11 @@ def test_literature_search_original_reply_is_frozen(runtime, tmp_path, monkeypat
         return evidence
     monkeypatch.setattr(standalone_runtime.literature, "collect", collector)
     state = runtime.service.collect_literature(research_id)
-    search_key = "literature-search-" + state["literature"]["searches"][0]["sha256"]
-    assert search_key in state["artifacts"]
+    search = state["literature"]["searches"][0]
+    bindings = [key for key, artifact in state["artifacts"].items() if artifact["sha256"] == search["sha256"] and
+                runtime.service.artifact_path(research_id, key).relative_to(runtime.service.root / research_id).as_posix() == "research/" + search["raw_path"]]
+    assert len(bindings) == 1
+    search_key = bindings[0]
     original = runtime.service.artifact_path(research_id, search_key)
     original.write_text("changed search reply", encoding="utf-8")
     with pytest.raises(WorkflowError, match="changed"):
