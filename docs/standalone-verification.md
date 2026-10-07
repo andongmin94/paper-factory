@@ -776,3 +776,34 @@ Windows에서 부모 연구의 원고 보완 문헌을 후속 연구에 복사�
 원래 성공한 과학실험은 1회이며 기존 원본·관측·원고·심사 이력을 보존했다. 이전 0.14.6 완료 원고를 새 성공으로 세지 않으며, 후속 연구와 최종 승인·내보내기 결과는 실제 실행 종료 후 별도로 갱신한다. 현재 진행 로그는 `.paper-factory/submission-quality-20261007/verification/madi-resume-live.log`다.
 
 별도 읽기 전용 학술 감사도 이번 원고를 투고 준비 완료로 인정하지 않았다. 실제 원고·선정 본문·검색 및 모델 영수증을 대조했으며, 비용·집합 비동등성의 좁은 검증은 유효하지만 직접 관련 연구 대비 지식 증가와 독립 편집 목표에 대한 중요성은 부족하다고 판단했다. 감사 보고서 `verification/manuscript-0147-submission-readiness-independent-audit.json` SHA256은 `9de7bce7b7961fcecd8d2c886f92fc451b4f98c41177ac884969e0ee78f71a80`이다. 이 감사는 모델·과학실험을 실행하거나 원고와 심사 상태를 수정하지 않았다.
+
+## 0.14.8 직접 arXiv 회수와 PDF 후 재실행: 2026-10-07
+
+직접 관련 preprint의 `10.48550/arXiv.…` DOI를 Crossref에 조회하면 등록이 없어 404가 발생하고 원문을 얻지 못했다. 이제 알려진 `arxiv:<identifier>`와 arXiv DOI는 arXiv의 정확한 `id_list` 조회를 사용한다. 유일한 Atom 항목의 식별자·실제 버전·제목·저자·날짜를 확인하고 원래 XML, PDF, 추출 텍스트와 해시를 보존한다. 요청한 버전과 다른 응답이나 모호한 항목은 거부하며, 선택적 journal DOI는 확인한 출판본으로 승격하지 않는다. 기존 90초 예산·요청 간격·PDF 크기·페이지·추출 자원 제한을 유지한다. PDF 본문이 첫 번째 `1/I Background` 또는 `Background and Terminologies` 절로 시작하는 형식도 인증할 수 있으며, 초록이나 번호 없는 배경 언급은 본문 경계로 취급하지 않는다.
+
+실제 공개 원문 탐색에서 A Categorical Theory of Patches와 Greenberg의 LCS preprint를 직접 회수했다. 이 별도 회수 probe는 문헌 수집 기능 검사이며 앱의 실제 선정·신규성 판단이나 과학실험 성공이 아니다. 포함 Python 3.14.8의 최종 probe는 `1311.3903v1` PDF SHA256 `16eb2292b36b14fc93eeff86fe3ee7c8c6bbec5ca7e50b35f3a50de4fa479ef1`, 추출 텍스트 SHA256 `121dc38ed0932513c7bcf17646dd465b02bb120a69fc084d8530ed64ba733f79`와 실제 발췌 12개를 검증했다. 해당 텍스트는 63,683자, 본문 범위는 `[1510,35840)`다. 개발 Python의 추출 텍스트와 한 글자 차이가 있으므로 다른 런타임의 텍스트 SHA를 대신 사용하지 않는다.
+
+첫 포함 런타임 probe 뒤 실제 재개가 `RUNTIME_CHANGED`로 실패했다. PDF child가 `-I`로 시작하면서 stdlib 캐시를 다시 기록한 것이 원인이었다. worker에 `-B`를 추가하고 런타임을 새로 구성했다. 실제 임시 모듈을 import하는 회귀 검사에서는 생산 worker의 PDF 추출·import가 완료돼도 `.pyc`가 생성되지 않으며, `-B`를 제거한 대조군에서는 생성됨을 확인했다. 최종 실제 PDF 회수 전후 inventory 2,218개와 전체 실제 파일 2,219개의 목록·크기·SHA가 동일했고, 이어 직접 EngineBridge 재시작과 기존 workflow 조회가 성공했다. 과학실험이나 모델 요청은 하지 않았다.
+
+| 최종 0.14.8 검사 | 결과와 범위 |
+| --- | --- |
+| 문헌 관련 3모듈 | 180 통과·3 Windows symlink 권한 건너뜀, 32.78초. 직접 identity·엄격한 본문 경계·실제 PDF child·기존 회수 경로 |
+| 과학 계획 | 221 통과, 9.34초. 계획 검색어 계약과 기존 과학 검사 |
+| arXiv 네이티브 연결 | 7 통과. DOI 없는 서로 다른 버전의 연구·원고 선정, 본문 인용, 원래 XML/PDF/text 경로·해시와 ZIP 보존; 합성 계약 검사 |
+| 데스크톱·SDK | 데스크톱 297 통과, SDK 48 통과·1 건너뜀. query 안내 변경 후 전체 검사. 숨김 Electron의 기존 13 통과는 0.14.7 UI 검사 이력 |
+| 실제 포함 PDF probe | 모든 원문·발췌 해시와 런타임 파일 불변, 원문 회수 뒤 엔진 재시작 성공 |
+| 최종 패키지 정적 검사 | 07:18:14.513 UTC / 16:18:14.513 KST. ASAR 7,667 항목·SDK import·renderer·Pretendard·엔진 소스와 런타임 전수 확인 |
+
+겹치는 검사 그룹은 합산하지 않는다. 문헌 로그는 `.paper-factory/arxiv-primary-design-20261007/tests-all-three-final.log`, 나머지는 `.paper-factory/submission-quality-20261007/verification/`의 `arxiv-science-final-repaired.log`, `arxiv-native-integration-final.log`, `arxiv-desktop-sdk-final.log`, `arxiv-bundled-no-bytecode.log`, `arxiv-engine-restart-after-pdf.log`, `arxiv-package-default-release-verification.log`다. 최초 과학 검사 두 건은 변경된 안내 문장의 이전 표현을 단정해 실패했으며 의미 단위 assertion으로 고친 뒤 전체 통과했다. 실패 로그도 보존한다.
+
+최초 runtime build의 QuickJS staging rename과 기존 `release/win-unpacked`의 두 packaging rename에서 Windows `EPERM`이 발생했다. runtime은 새 시도로 성공했으며 package는 새 출력 폴더에서 구성·검증 후 `desktop/release/`로 복사해 다시 전수 검증했다. verifier는 선택한 출력 폴더도 검증할 수 있다. 캐시가 변경된 첫 설치본·ASAR·inventory binding은 `verification/invalid-cache-payload-0148/`에 보존하고 최종 배포 파일과 구분한다. 첫 실제 준비 재개 `recovery-runs/9360e61dd78f`는 런타임 검사에서 끝났으며 모델·과학실험은 실행하지 않았다.
+
+| 최종 배포 파일 | 크기(B) | SHA256 |
+| --- | ---: | --- |
+| Paper Factory Setup 0.14.8.exe | 213,029,550 | 48f20ec7dd49777774b140cef1a179ca580e82e61515d6b0cab884bd0d7d096b |
+| win-unpacked/resources/app.asar | 44,757,936 | c924c2c413402e545c3789c38be60a137cecb1e82368cae3ddc3703a7b261575 |
+| runtime-inventory.json | 391,991 | 436e03d03b7a513d0dc21820a5e09ed13932f76ba7c27452b4522bef76760eea |
+
+기존 공식 연결을 사용한 실제 재개 `recovery-runs/c2e0bf4b49c7`에서 후속 연구 `research-20a75869ebbb`의 두 번째 설계 심사를 완료했다. `accepted=false`, 신규성 실패, 중요성과 검증 계획은 잠정 통과다. 사전 지정한 목표의 도달성, 모든 최적 정렬에서의 가능성, 하나의 review가 목표를 함께 제공할 가능성을 구분하는 설계는 유용하지만 최근접 복수 대응·선택적 적용 문헌 본문을 확보하지 못했다. 검사한 Git 본문만으로 신규성을 선언하거나 metadata-only·무관한 초록을 본문 근거로 계산하지 않았다. 별도 읽기 전용 감사도 이 반려를 타당하게 평가했다. 보고서 `verification/child-study-review2-independent-audit.json`은 12,811 B, SHA256 `ada57476b4bcf942b95649069a360555d32c90cc17574b767810b9e0eec869ba`이며 세 실제 인용문과 원문 범위·모델 영수증·설계 결합을 확인했다.
+
+앱은 같은 과학 설계를 유지한 세 번째 계획을 생성했다. 이 계획은 직접 arXiv 식별자를 제안하지 않았으므로 별도 probe의 성공을 실제 앱의 arXiv 문헌 선정으로 표현하지 않는다. 원문 발췌가 절 제목을 단어 prefix로 오인하고 같은 종류의 첫 절에 치우치는 일반 문제를 발견해 세 번째 문헌 수집 중 협력 중단했다. `shutdownConfirmed=true`, 새 과학실험·완료 원고는 없다. 원래 부모 SCI 1회와 900개 입력 쌍·10,800개 관측, 후속 설계·반려·모델 이력은 보존하며 다음 개선에서 같은 성공 실험을 반복하지 않는다. 0.14.8 구현·설계 검토·파일 검증을 투고 가능한 원고 생성 성공으로 계산하지 않는다. 새 설치·OAuth·로그인 복원은 여전히 미검증이며 GitHub Releases에는 게시하지 않았다.

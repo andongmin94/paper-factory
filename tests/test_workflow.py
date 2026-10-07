@@ -149,6 +149,45 @@ def collect(queries, root, *, limit, cancel):
                           "resolved_ids": [source["id"]]} for query in queries]}
 
 
+def collect_arxiv_preprint(queries, root, *, limit, cancel, arxiv_id="1311.3903v1"):
+    """Synthetic collector output: identity/byte plumbing, not actual literature."""
+    evidence = collect(queries, root, limit=limit, cancel=cancel)
+    source = evidence["sources"][0]
+    source_id = "source-" + hashlib.sha256(("arxiv:" + arxiv_id).encode()).hexdigest()[:20]
+    metadata_bytes = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<feed xmlns="http://www.w3.org/2005/Atom"><entry>'
+        f'<id>http://arxiv.org/abs/{arxiv_id}</id>'
+        '<title>Synthetic exact-version preprint retention fixture</title>'
+        '<author><name>Fixture Author</name></author>'
+        '<published>2013-11-15T00:00:00Z</published>'
+        '<updated>2014-02-15T00:00:00Z</updated>'
+        '<summary>Synthetic identity fixture with no scholarly assessment.</summary>'
+        '</entry></feed>\n').encode("utf-8")
+    pdf_bytes = b"%PDF-1.4\n% Synthetic retention fixture, not an actual publication: " + arxiv_id.encode() + b"\n"
+    text_bytes = (SYNTHETIC_PREFIX + SYNTHETIC_PASSAGE + SYNTHETIC_SUFFIX).encode("utf-8")
+    files = {}
+    for kind, suffix, content in (("metadata", "xml", metadata_bytes), ("pdf", "pdf", pdf_bytes),
+                                 ("text", "txt", text_bytes), ("search", "xml", metadata_bytes)):
+        digest = hashlib.sha256(content).hexdigest()
+        relative = f"literature/{source_id}-{kind}-{digest[:16]}.{suffix}"
+        path = root / relative
+        path.write_bytes(content)
+        files[kind] = (relative, digest)
+    source.update(id=source_id, provider="arXiv", publication_type="preprint", arxiv_id=arxiv_id,
+        url="https://arxiv.org/pdf/" + arxiv_id, title="Synthetic exact-version preprint retention fixture",
+        year=2013, published="2013-11-15T00:00:00Z", updated="2014-02-15T00:00:00Z",
+        metadata_path=files["metadata"][0], metadata_sha256=files["metadata"][1],
+        raw_path=files["pdf"][0], sha256=files["pdf"][1],
+        text_path=files["text"][0], text_sha256=files["text"][1], text_chars=len(text_bytes.decode()),
+        reading_scope="Synthetic exact-version full-text passages; no real scholarly value is assessed.")
+    evidence["searches"] = [{"query": query, "provider": "arXiv", "lookup": "arxiv_id",
+        "requested_arxiv_id": arxiv_id, "status": "succeeded", "attempted": True,
+        "raw_path": files["search"][0], "sha256": files["search"][1], "resolved_ids": [source_id]}
+        for query in queries]
+    return evidence
+
+
 class FixtureRunner:
     def __init__(self):
         self.outputs = observations()

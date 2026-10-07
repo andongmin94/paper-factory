@@ -8,10 +8,11 @@ import asar from '@electron/asar';
 import { verifyRuntime } from '../dist/engine.js';
 
 // This command reads package contents. It never starts Electron or authenticates.
-const release = resolve('release');
+assert(process.argv.length <= 3, 'Expected one optional package output directory');
+const release = resolve(process.argv[2] ?? 'release');
 const candidates = (await readdir(release, { recursive: true }))
   .filter((name) => basename(name) === 'app.asar').map((name) => join(release, name));
-assert.equal(candidates.length, 1, 'Expected exactly one app package in release/');
+assert.equal(candidates.length, 1, 'Expected exactly one app package in the output directory');
 const archive = candidates[0];
 const extract = (name) => asar.extractFile(archive, name.replaceAll('/', sep));
 const files = asar.listPackage(archive).map((name) => name.replaceAll('\\', '/').replace(/^\//, ''));

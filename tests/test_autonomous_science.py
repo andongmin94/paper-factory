@@ -1018,7 +1018,8 @@ def test_reviewed_planning_repairs_search_gaps_with_bounded_provisional_candidat
     assert "a feasible provisional candidate with refined, concrete literature_queries" in compact
     assert "an exact DOI only when genuinely known" in compact
     assert "an exact relevant title when known" in compact
-    assert "short method-specific queries; refine terms to exclude observed irrelevant topics" in compact
+    assert "short method-specific queries" in compact
+    assert "exclude observed irrelevant topics" in compact
     assert "A failed search is not evidence that relevant literature is absent" in compact
     assert "Do not invent a DOI, reading, novelty or approval" in compact
     assert "repeat the same unsuccessful queries unchanged" in compact

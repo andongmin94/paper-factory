@@ -1,8 +1,9 @@
 """Bounded literature retrieval with an explicit distinction between metadata and reading.
 
-Only Crossref records, Crossref-provided abstracts, arXiv discovery metadata,
-and allowlisted public PDFs are fetched. Bibliographic candidates resolve by DOI before
-they become sources. The collector does not infer a finding from a title or DOI.
+Only Crossref records, Crossref-provided abstracts, identity-bound arXiv metadata,
+and allowlisted public PDFs are fetched. Bibliographic candidates resolve by DOI;
+explicit arXiv identifiers resolve to a fixed preprint version before reading.
+The collector does not infer a finding from a title or identifier.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ import sysconfig
 import time
 import unicodedata
 import xml.etree.ElementTree as ET
+from datetime import datetime
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Callable
@@ -45,6 +47,8 @@ MAX_PDF_PAGES = 40
 MAX_TEXT_CHARS = 200_000
 MAX_EXCERPTS = 12
 MAX_EXCERPT_CHARS = 1_500
+ARXIV_ID = r"(?:\d{2}(?:0[1-9]|1[0-2])\.\d{4,5}|[a-z-]+/\d{2}(?:0[1-9]|1[0-2])\d{3})(?:v[1-9]\d*)?"
+ATOM = "{http://www.w3.org/2005/Atom}"
 
 
 class _Cancelled(Exception):
@@ -311,22 +315,25 @@ def full_text_body_range(text: str) -> dict[str, int] | None:
     """
     numbering = r"(?:(?:\d+(?:\.\d+)*|[IVX]+)\.?[ \t]+|(?:\d+|[IVX]+)\.?[ \t]*\n[ \t]*)?"
     introduction = re.search(r"(?mi)^[ \t]*" + numbering + r"(?:introduction|서론)[ \t]*$", text)
-    if introduction is None:
+    first_section = r"(?:(?:1|I)\.?[ \t]+|(?:1|I)\.?[ \t]*\n[ \t]*)"
+    background = re.search(r"(?mi)^[ \t]*" + first_section + r"background(?: and terminologies)?[ \t]*$", text)
+    openings = [match for match in (introduction, background) if match is not None]
+    if not openings:
         return None
+    opening = min(openings, key=lambda match: match.start())
     references = re.search(r"(?mi)^[ \t]*" + numbering + r"(?:references(?: and notes)?|bibliography|literature cited|참고문헌)[ \t]*$",
-                           text[introduction.end():])
+                           text[opening.end():])
     if references is None:
         return None
-    end = introduction.end() + references.start()
-    return {"start": introduction.end(), "end": end}
+    end = opening.end() + references.start()
+    return {"start": opening.end(), "end": end}
 
 
 def _title_key(title: str) -> str:
     return " ".join(re.findall(r"\w+", unicodedata.normalize("NFKC", title).casefold()))
 
 
-def _arxiv_match(content: bytes, doi: str, title: str) -> tuple[str, str] | None:
-    """A similar title is discovery, never identity: require the exact journal DOI."""
+def _arxiv_entries(content: bytes) -> list[ET.Element]:
     try:
         decoded = content.decode("utf-8-sig")
     except UnicodeDecodeError as error:
@@ -337,14 +344,19 @@ def _arxiv_match(content: bytes, doi: str, title: str) -> tuple[str, str] | None
         feed = ET.fromstring(decoded)
     except ET.ParseError as error:
         raise ValueError("arXiv discovery returned invalid XML") from error
-    atom, arxiv = "{http://www.w3.org/2005/Atom}", "{http://arxiv.org/schemas/atom}"
-    if feed.tag != atom + "feed":
+    if feed.tag != ATOM + "feed":
         raise ValueError("arXiv discovery did not return an Atom feed")
-    entries = feed.findall(atom + "entry")
+    entries = feed.findall(ATOM + "entry")
     if len(entries) > 3:
         raise ValueError("arXiv discovery exceeds its candidate limit")
+    return entries
+
+
+def _arxiv_match(content: bytes, doi: str, title: str) -> tuple[str, str] | None:
+    """A similar title is discovery, never identity: require the exact journal DOI."""
+    atom, arxiv = ATOM, "{http://arxiv.org/schemas/atom}"
     matches = []
-    for entry in entries:
+    for entry in _arxiv_entries(content):
         if any(len(entry.findall(field)) != 1 for field in (arxiv + "doi", atom + "title", atom + "id")):
             continue
         returned_doi, returned_title = entry.findtext(arxiv + "doi"), entry.findtext(atom + "title")
@@ -364,6 +376,54 @@ def _arxiv_match(content: bytes, doi: str, title: str) -> tuple[str, str] | None
     if len(set(matches)) != 1:
         return None
     return matches[0]
+
+
+def _arxiv_metadata(content: bytes, requested: str) -> dict:
+    """Bind one explicit lookup to its actual version, without a publication claim."""
+    entries = _arxiv_entries(content)
+    if len(entries) != 1:
+        raise ValueError("An explicit arXiv lookup requires one unambiguous entry")
+    entry, values = entries[0], {}
+    for field in ("id", "title", "published", "updated"):
+        elements = entry.findall(ATOM + field)
+        if len(elements) != 1 or len(elements[0]) or not elements[0].text or not elements[0].text.strip():
+            raise ValueError("arXiv entry has missing or duplicate identity metadata")
+        values[field] = elements[0].text.strip()
+    match = re.fullmatch(r"https?://arxiv\.org/abs/(" + ARXIV_ID + r")", values["id"])
+    if match is None or not re.search(r"v[1-9]\d*$", match.group(1)):
+        raise ValueError("arXiv entry has no canonical versioned identifier")
+    identifier = match.group(1)
+    if (identifier if re.search(r"v[1-9]\d*$", requested) else re.sub(r"v[1-9]\d*$", "", identifier)) != requested:
+        raise ValueError("arXiv resolved a different identifier or version")
+    title = " ".join(values["title"].split())
+    if len(title) > 4000:
+        raise ValueError("arXiv title exceeds its metadata limit")
+    dates = {}
+    for field in ("published", "updated"):
+        value = values[field]
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2})", value):
+            raise ValueError("arXiv entry has an invalid publication date")
+        dates[field] = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if dates["updated"] < dates["published"]:
+        raise ValueError("arXiv version predates its first publication")
+    author_records = entry.findall(ATOM + "author")
+    if not 1 <= len(author_records) <= 100:
+        raise ValueError("arXiv entry requires bounded author metadata")
+    authors = []
+    for author in author_records:
+        names = author.findall(ATOM + "name")
+        if len(names) != 1 or len(names[0]) or not names[0].text or not names[0].text.strip() or len(names[0].text) > 1000:
+            raise ValueError("arXiv author metadata is missing or ambiguous")
+        authors.append(" ".join(names[0].text.split()))
+    summaries = entry.findall(ATOM + "summary")
+    if len(summaries) > 1:
+        raise ValueError("arXiv entry has duplicate abstracts")
+    summary = (summaries[0].text or "") if summaries else ""
+    # Optional journal DOI and journal_ref remain in the original XML. They do
+    # not turn this inspected preprint into a verified journal publication.
+    return {"arxiv_id": identifier, "title": title, "authors": authors,
+            "year": dates["published"].year, "published": values["published"], "updated": values["updated"],
+            "provider": "arXiv", "publication_type": "preprint", "abstract": _abstract(summary)}
 
 
 def _arxiv_pdf(client: httpx.Client, source: dict, root: Path, *, budget: _CollectionBudget,
@@ -494,7 +554,7 @@ except Exception:
         # Start the native interpreter directly and add our installed packages above.
         interpreter = str(Path(sys.base_prefix) / "python.exe") if os.name == "nt" else sys.executable
         process = subprocess.Popen(
-            [interpreter, "-I", "-c", worker], stdin=subprocess.PIPE,
+            [interpreter, "-I", "-B", "-c", worker], stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             env={"PYTHONIOENCODING": "utf-8"}, **options,
         )
@@ -546,10 +606,6 @@ def _pdf_links(message: dict) -> list[str]:
     doi = message.get("DOI", "")
     if isinstance(doi, str) and re.fullmatch(r"10\.21105/joss\.\d{5}", doi.lower()):
         links.append(f"https://joss.theoj.org/papers/{doi.lower()}.pdf")
-    # arXiv DOIs have a fixed paper identifier; no guessed DOI or bibliography.
-    if isinstance(doi, str) and re.fullmatch(r"10\.48550/arxiv\.\d{4}\.\d{4,5}(?:v\d+)?", doi.lower()):
-        identifier = doi.lower().split("arxiv.", 1)[1]
-        links.append(f"https://arxiv.org/pdf/{identifier}")
     return list(dict.fromkeys(links))[:2]
 
 
@@ -561,6 +617,46 @@ def _query_doi(query: str) -> str | None:
     return _doi(match.group(1)) if match is not None else None
 
 
+def _is_arxiv_query(query: str) -> bool:
+    return bool(re.match(r"arxiv\s*:", query, re.I) or re.search(r"10\.48550/arxiv\.", query, re.I))
+
+
+def _query_arxiv(query: str) -> str:
+    match = re.fullmatch(r"arxiv\s*:\s*(\S+)", query, re.I)
+    doi = _query_doi(query) if match is None else None
+    identifier = match.group(1).lower() if match else (doi.removeprefix("10.48550/arxiv.") if doi else "")
+    if len(identifier) > 100 or not re.fullmatch(ARXIV_ID, identifier):
+        raise ValueError("Expected an explicit arXiv identifier or arXiv DOI")
+    return identifier
+
+
+def _promote_full_text(client: httpx.Client, source: dict, pdf_urls: list[str], root: Path,
+                       *, budget: _CollectionBudget, cancel: Callable[[], bool] | None, warnings: list[str]) -> None:
+    """Use the same bounded PDF reading and evidence retention for every source."""
+    for pdf_url in pdf_urls:
+        budget.wait(0, cancel)
+        try:
+            raw_pdf, retrieved_url, content_type = _fetch(client, pdf_url, pdf=True, cancel=cancel, budget=budget)
+            if "pdf" not in content_type and content_type != "application/octet-stream":
+                raise ValueError("Open-access provider did not return a PDF content type")
+            # Reserve bounded extraction and owned-child cleanup before dispatch.
+            if budget.deadline - time.monotonic() < 18:
+                raise _DeadlineExceeded
+            full_text = _pdf_text(raw_pdf)
+            budget.wait(0, cancel)
+            raw_path, raw_digest = _save(root, source["id"] + "-fulltext", "pdf", raw_pdf)
+            text_path, text_digest = _save(root, source["id"] + "-text", "txt", full_text.encode())
+            excerpts, ranges = _full_text_excerpts(full_text, source["queries"])
+            source.update({"scope": "full_text", "url": retrieved_url, "raw_path": raw_path,
+                           "sha256": raw_digest, "excerpts": excerpts, "excerpt_ranges": ranges,
+                           "body_range": full_text_body_range(full_text), "text_chars": len(full_text),
+                           "reading_scope": "Only the located literal excerpts were inspected; the complete extracted text is retained separately",
+                           "text_path": text_path, "text_sha256": text_digest})
+            break
+        except (ValueError, OSError, httpx.HTTPError) as error:
+            warnings.append(f"Open-access text unavailable for {source['id']} ({type(error).__name__}); reading scope was not upgraded")
+
+
 def collect(
     queries: list[str], root: Path, *, limit: int = 6,
     cancel: Callable[[], bool] | None = None,
@@ -570,7 +666,8 @@ def collect(
     ``raw_path`` is relative to ``root`` and points to the artifact supporting
     the declared reading scope. Metadata remains separately recorded when an
     allowed full text is fetched. All queries are attempted before candidates
-    are resolved in round-robin order. Explicit DOIs use an exact lookup;
+    are resolved in round-robin order. Explicit arXiv lookups precede Crossref
+    searches and bind the actual preprint version. Other DOIs use an exact lookup;
     bibliographic searches do not exclude records without Crossref abstracts.
     Cancellation and the shared 90-second deadline preserve partial evidence,
     with distinct ``cancelled`` and ``timed_out`` flags. A provider cooldown
@@ -585,12 +682,15 @@ def collect(
     queries = list(dict.fromkeys(query.strip() for query in queries))
     root = _prepare_root(root)
     result: dict = {"sources": [], "searches": [
-        {"query": query, "provider": "Crossref", "status": "not_attempted", "attempted": False, "resolved_ids": []}
-        for query in queries], "warnings": []}
+        {"query": query, "provider": "arXiv" if _is_arxiv_query(query) else "Crossref",
+         "status": "not_attempted", "attempted": False, "resolved_ids": []}
+        for query in sorted(queries, key=lambda query: not _is_arxiv_query(query))], "warnings": []}
     seen: set[str] = set()
     candidates: list[list[str]] = []
     candidate_queries: dict[str, list[dict]] = {}
     exact_metadata: dict[str, tuple[bytes, str]] = {}
+    arxiv_metadata: dict[str, tuple[bytes, str, dict]] = {}
+    exact_arxiv: dict[str, tuple[bytes, str, dict]] = {}
     budget = _CollectionBudget()
     try:
         with httpx.Client(timeout=httpx.Timeout(15.0, connect=5.0), follow_redirects=False,
@@ -603,6 +703,28 @@ def collect(
                 candidates.append(query_candidates)
                 initial_requests = budget.requests
                 try:
+                    if search["provider"] == "arXiv":
+                        identifier = _query_arxiv(query)
+                        search.update(lookup="arxiv_id", requested_arxiv_id=identifier)
+                        if identifier in exact_arxiv:
+                            content, url, details = exact_arxiv[identifier]
+                        else:
+                            content, url, content_type = _fetch(client, ARXIV, budget=budget, cancel=cancel,
+                                params={"id_list": identifier, "max_results": 1})
+                            if content_type.split(";", 1)[0].strip() not in {"application/atom+xml", "application/xml", "text/xml"}:
+                                raise ValueError("arXiv lookup did not return XML content")
+                            details = None
+                        path, digest = _save(root, "search-" + hashlib.sha256(query.encode()).hexdigest()[:16], "xml", content)
+                        search.update(url=url, raw_path=path, sha256=digest)
+                        details = details or _arxiv_metadata(content, identifier)
+                        exact_arxiv[identifier] = (content, url, details)
+                        key = "arxiv:" + details["arxiv_id"]
+                        arxiv_metadata.setdefault(key, (content, url, details))
+                        if limit:
+                            query_candidates.append(key)
+                            candidate_queries.setdefault(key, []).append(search)
+                        search["status"] = "succeeded"
+                        continue
                     exact_doi = _query_doi(query)
                     search["lookup"] = "doi" if exact_doi else "bibliographic"
                     if exact_doi:
@@ -638,7 +760,7 @@ def collect(
                     search["error"] = type(error).__name__
                     if isinstance(error, httpx.HTTPStatusError):
                         search["http_status"] = error.response.status_code
-                    result["warnings"].append(f"Crossref search failed ({type(error).__name__}); no results were inferred")
+                    result["warnings"].append(f"{search['provider']} search failed ({type(error).__name__}); no results were inferred")
                     continue
                 for item in items[:limit]:
                     try:
@@ -661,31 +783,39 @@ def collect(
                         continue
                     if sum(source["scope"] != "metadata_only" for source in result["sources"]) >= limit:
                         break
-                    doi = query_candidates[rank]
+                    candidate = query_candidates[rank]
                     try:
-                        if doi in seen:
+                        if candidate in seen:
                             continue
-                        if doi in exact_metadata:
-                            metadata, metadata_url = exact_metadata[doi]
+                        source_id = "source-" + hashlib.sha256(candidate.encode()).hexdigest()[:20]
+                        if candidate in arxiv_metadata:
+                            metadata, metadata_url, details = arxiv_metadata[candidate]
+                            metadata_path, metadata_digest = _save(root, source_id + "-metadata", "xml", metadata)
+                            abstract = details["abstract"]
+                            source = {key: value for key, value in details.items() if key != "abstract"}
+                            document = None
+                            pdf_urls = ["https://arxiv.org/pdf/" + source["arxiv_id"]]
                         else:
-                            metadata, metadata_url, _ = _fetch(client, CROSSREF + "/works/" + quote(doi, safe=""), cancel=cancel, budget=budget)
-                        document = json.loads(metadata)
-                        resolved_doi, title, authors, year = _metadata(document)
-                        if resolved_doi != doi:
-                            raise ValueError("Crossref resolved a different DOI")
-                        source_id = "source-" + hashlib.sha256(doi.encode()).hexdigest()[:20]
-                        metadata_path, metadata_digest = _save(root, source_id + "-metadata", "json", metadata)
-                        abstract = _abstract(document["message"].get("abstract"))
-                        source: dict = {"id": source_id, "doi": doi, "title": title, "authors": authors,
-                                        "year": year, "url": metadata_url,
+                            if candidate in exact_metadata:
+                                metadata, metadata_url = exact_metadata[candidate]
+                            else:
+                                metadata, metadata_url, _ = _fetch(client, CROSSREF + "/works/" + quote(candidate, safe=""), cancel=cancel, budget=budget)
+                            document = json.loads(metadata)
+                            resolved_doi, title, authors, year = _metadata(document)
+                            if resolved_doi != candidate:
+                                raise ValueError("Crossref resolved a different DOI")
+                            metadata_path, metadata_digest = _save(root, source_id + "-metadata", "json", metadata)
+                            abstract = _abstract(document["message"].get("abstract"))
+                            source = {"doi": candidate, "title": title, "authors": authors, "year": year}
+                            pdf_urls = _pdf_links(document["message"])
+                        source.update({"id": source_id, "url": metadata_url,
                                         "scope": "abstract" if abstract else "metadata_only",
                                         "excerpts": _excerpts(abstract) if abstract else [],
                                         "raw_path": metadata_path, "sha256": metadata_digest,
                                         "metadata_path": metadata_path, "metadata_sha256": metadata_digest,
-                                        "queries": [search["query"] for search in candidate_queries[doi]]}
+                                        "queries": [search["query"] for search in candidate_queries[candidate]]})
                         try:
-                            pdf_urls = _pdf_links(document["message"])
-                            if (document["message"].get("type") in {"journal-article", "proceedings-article", "posted-content"}
+                            if (document is not None and document["message"].get("type") in {"journal-article", "proceedings-article", "posted-content"}
                                     and not any(urlsplit(url).scheme == "https" and urlsplit(url).hostname in PDF_HOSTS
                                                 for url in pdf_urls)):
                                 try:
@@ -696,31 +826,9 @@ def collect(
                                         pdf_urls = [arxiv_pdf]
                                 except (ValueError, OSError, httpx.HTTPError) as error:
                                     result["warnings"].append(f"arXiv identity-bound discovery unavailable for {source_id} ({type(error).__name__}); reading scope was not upgraded")
-                            for pdf_url in pdf_urls:
-                                budget.wait(0, cancel)
-                                try:
-                                    raw_pdf, retrieved_url, content_type = _fetch(client, pdf_url, pdf=True, cancel=cancel, budget=budget)
-                                    if "pdf" not in content_type and content_type != "application/octet-stream":
-                                        raise ValueError("Open-access provider did not return a PDF content type")
-                                    # Reserve bounded extraction and owned-child cleanup before dispatch.
-                                    if budget.deadline - time.monotonic() < 18:
-                                        raise _DeadlineExceeded
-                                    full_text = _pdf_text(raw_pdf)
-                                    budget.wait(0, cancel)
-                                    raw_path, raw_digest = _save(root, source_id + "-fulltext", "pdf", raw_pdf)
-                                    text_path, text_digest = _save(root, source_id + "-text", "txt", full_text.encode())
-                                    excerpts, ranges = _full_text_excerpts(full_text, source["queries"])
-                                    source.update({"scope": "full_text", "url": retrieved_url, "raw_path": raw_path,
-                                                   "sha256": raw_digest, "excerpts": excerpts, "excerpt_ranges": ranges,
-                                                   "body_range": full_text_body_range(full_text),
-                                                   "text_chars": len(full_text),
-                                                   "reading_scope": "Only the located literal excerpts were inspected; the complete extracted text is retained separately",
-                                                   "text_path": text_path, "text_sha256": text_digest})
-                                    break
-                                except (ValueError, OSError, httpx.HTTPError) as error:
-                                    result["warnings"].append(f"Open-access text unavailable for {source_id} ({type(error).__name__}); reading scope was not upgraded")
+                            _promote_full_text(client, source, pdf_urls, root, budget=budget, cancel=cancel, warnings=result["warnings"])
                         finally:
-                            seen.add(doi)
+                            seen.add(candidate)
                             if len(result["sources"]) < limit:
                                 result["sources"].append(source)
                             elif source["scope"] != "metadata_only":
@@ -728,10 +836,10 @@ def collect(
                                                 if existing["scope"] == "metadata_only"), None)
                                 if replace is not None:
                                     result["sources"][replace] = source
-                            for search in candidate_queries[doi]:
+                            for search in candidate_queries[candidate]:
                                 search["resolved_ids"].append(source_id)
                     except (ValueError, OSError, httpx.HTTPError) as error:
-                        result["warnings"].append(f"Crossref candidate verification failed ({type(error).__name__}); candidate was omitted")
+                        result["warnings"].append(f"Literature candidate verification failed ({type(error).__name__}); candidate was omitted")
             budget.wait(0, cancel)
     except (ValueError, OSError, httpx.HTTPError) as error:
         for search in result["searches"]:

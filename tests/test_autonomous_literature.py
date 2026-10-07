@@ -572,6 +572,35 @@ def test_real_pdf_extracts_literal_text_in_bounded_child(controlled_pdf):
     assert text.startswith("[Page 1]") and sentence.strip() in text
 
 
+@pytest.mark.parametrize("disable_protection", [False, True], ids=["production-worker", "bytecode-control"])
+def test_real_pdf_child_import_does_not_mutate_bytecode(controlled_pdf, tmp_path, monkeypatch, disable_protection):
+    # Import a fresh writable module in the real isolated child. This tests the
+    # filesystem consequence, including a control that demonstrates Python
+    # would write bytecode here without the worker's protection.
+    module = tmp_path / "pdf_bytecode_probe.py"
+    module.write_text("with open(__file__ + '.imported', 'w') as marker:\n    marker.write('worker import executed')\n", encoding="utf-8")
+    original = subprocess.Popen
+    processes = []
+
+    def instrumented_child(command, **options):
+        command = list(command)
+        if disable_protection:
+            command = [argument for argument in command if argument != "-B"]
+        script = command.index("-c") + 1
+        command[script] = (f"import sys\nsys.path.insert(0, {str(tmp_path)!r})\nimport pdf_bytecode_probe\n" + command[script])
+        process = original(command, **options)
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(literature.subprocess, "Popen", instrumented_child)
+    content, sentence = controlled_pdf
+    text = literature._pdf_text(content)
+    assert sentence.strip() in text
+    assert (tmp_path / "pdf_bytecode_probe.py.imported").read_text() == "worker import executed"
+    assert bool(list(tmp_path.rglob("*.pyc"))) is disable_protection
+    assert len(processes) == 1 and processes[0].poll() is not None
+
+
 def test_pdf_size_is_rejected_before_child_start(monkeypatch):
     monkeypatch.setattr(literature.subprocess, "Popen", lambda *args, **kwargs: pytest.fail("Oversize PDF started a child"))
     with pytest.raises(ValueError, match="size limit"):

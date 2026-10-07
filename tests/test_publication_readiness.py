@@ -16,7 +16,7 @@ from paper_factory.workflow import WorkflowError
 from paper_factory.workspace import digest_file, write_json
 from test_workflow import (MANUSCRIPT_REVIEW, STUDY_REVIEW, SYNTHETIC_ABSTRACT, SYNTHETIC_BODY_START,
                            SYNTHETIC_PASSAGE, SYNTHETIC_PREFIX, SYNTHETIC_SUFFIX, collect, finished,
-                           manuscript, prepare, protocol, setup)
+                           collect_arxiv_preprint, manuscript, prepare, protocol, setup)
 
 
 def measured(setup):
@@ -348,6 +348,106 @@ def test_authoring_collection_selection_and_export_preserve_the_original_study(s
         assert "literature/fixture-source.txt" in archive.namelist()
         assert any(name.startswith("authoring-literature/") and name.endswith("fixture-source.txt") for name in archive.namelist())
     assert runner.calls == 1 and all(service.artifact_path(research_id, key).read_bytes() == value for key, value in before.items())
+
+
+def test_doi_free_versioned_arxiv_preprint_review_and_zip_preserve_xml_pdf_and_text(setup, pandoc, monkeypatch):
+    service, runner, research_id = setup
+    service.collector = collect_arxiv_preprint
+    plan = protocol()
+    plan["literature_queries"] = ["arXiv:1311.3903v1"]
+    service.submit_proposal(research_id, plan)
+    state = service.collect_literature(research_id)
+    first = copy.deepcopy(state["literature"]["sources"][0])
+    assert "doi" not in first and first["arxiv_id"] == "1311.3903v1"
+    study = copy.deepcopy(STUDY_REVIEW)
+    study["selected_sources"][0]["source_id"] = first["id"]
+    study["publication_readiness"]["closest_work"][0]["source_id"] = first["id"]
+    service.submit_study_review(research_id, study)
+    from test_workflow import BUNDLE, REVIEW
+    service.submit_code(research_id, BUNDLE, REVIEW)
+    service.start_experiment(research_id)
+    assert finished(service, research_id)["stage"] == "analyzed"
+    before = {key: service.artifact_path(research_id, key).read_bytes() for key in service.status(research_id)["artifacts"]}
+    service.collector = lambda *args, **kwargs: collect_arxiv_preprint(*args, **kwargs, arxiv_id="1311.3903v2")
+    state = service.collect_authoring_literature(research_id, ["10.48550/arXiv.1311.3903v2"])
+    second = copy.deepcopy(state["authoring_literature"]["sources"][0])
+    assert "doi" not in second and second["arxiv_id"] == "1311.3903v2" and second["id"] != first["id"]
+    selected = [{**STUDY_REVIEW["selected_sources"][0], "source_id": second["id"]}]
+    state = service.select_authoring_literature(research_id, selected)
+    assert {source["id"] for source in state["literature"]["sources"]} == {first["id"], second["id"]}
+    review, draft = copy.deepcopy(MANUSCRIPT_REVIEW), manuscript()
+    review["publication_readiness"]["closest_work"][0]["source_id"] = second["id"]
+    for section in draft["sections"]:
+        section["text"] = section["text"].replace("{{citation:fixture-oracle}}", "{{citation:" + first["id"] + "}}")
+    next(section for section in draft["sections"] if section["heading"] == "Related Work")["text"] += " {{citation:" + second["id"] + "}}"
+    assert service.submit_manuscript(research_id, draft, review)["stage"] == "manuscript"
+    receipt = json.loads(service.artifact_path(research_id, "manuscript-review").read_bytes())
+    assert receipt["review"]["publication_readiness"]["closest_work"][0]["source_id"] == second["id"]
+    expected = {}
+    for source in (first, second):
+        for field, hash_field in (("metadata_path", "metadata_sha256"), ("raw_path", "sha256"), ("text_path", "text_sha256")):
+            bindings = [key for key, artifact in service.status(research_id)["artifacts"].items()
+                        if artifact["sha256"] == source[hash_field] and
+                        service.artifact_path(research_id, key).relative_to(service.root / research_id).as_posix() == "research/" + source[field]]
+            assert len(bindings) == 1
+            content = service.artifact_path(research_id, bindings[0]).read_bytes()
+            assert hashlib.sha256(content).hexdigest() == source[hash_field]
+            expected[source[field]] = content
+        assert expected[source["metadata_path"]].startswith(b"<?xml")
+        assert source["arxiv_id"].encode() in expected[source["metadata_path"]]
+        assert expected[source["raw_path"]].startswith(b"%PDF")
+    # Equal extracted text from different versions still needs both exact paths.
+    assert first["text_sha256"] == second["text_sha256"] and first["text_path"] != second["text_path"]
+    monkeypatch.setenv("PYPANDOC_PANDOC", pandoc)
+    assert service.export(research_id)["stage"] == "exported"
+    canonical = service.artifact_path(research_id, "manuscript").read_text(encoding="utf-8")
+    assert "1311.3903v1" in canonical and "1311.3903v2" in canonical
+    with zipfile.ZipFile(service.artifact_path(research_id, "reproducibility")) as archive:
+        inventory = json.loads(archive.read("inventory.json"))
+        for path, content in expected.items():
+            assert archive.read(path) == content
+            assert inventory[path]["sha256"] == hashlib.sha256(content).hexdigest()
+            assert inventory[path]["size"] == len(content)
+        for key in ("authoring-literature", "authoring-selected-literature"):
+            assert receipt[key.replace("-", "_") + "_sha256"] == service.status(research_id)["artifacts"][key]["sha256"]
+    assert runner.calls == 1 and all(service.artifact_path(research_id, key).read_bytes() == content for key, content in before.items())
+
+
+def test_arxiv_request_aliases_retain_one_version_and_cannot_select_another_identity(setup):
+    service, runner, research_id = measured(setup)
+    original = {key: service.artifact_path(research_id, key).read_bytes() for key in ("plan", "observations", "analysis", "execution", "selected-literature")}
+    service.collector = collect_arxiv_preprint
+    queries = ["arXiv:1311.3903v1", "10.48550/arXiv.1311.3903v1"]
+    state = service.collect_authoring_literature(research_id, [queries[0]])
+    source = state["authoring_literature"]["sources"][0]
+    expected_id = "source-" + hashlib.sha256(b"arxiv:1311.3903v1").hexdigest()[:20]
+    assert source["id"] == expected_id and "doi" not in source
+    first_index = service.artifact_path(research_id, "authoring-literature")
+    first_index_bytes = first_index.read_bytes()
+    service.select_authoring_literature(research_id, [{**STUDY_REVIEW["selected_sources"][0], "source_id": expected_id}])
+    retained = {key: service.artifact_path(research_id, key).read_bytes() for key in service.status(research_id)["artifacts"]
+                if key not in {"authoring-literature", "authoring-selected-literature"}}
+    state = service.collect_authoring_literature(research_id, [queries[1]])
+    repeated = state["authoring_literature"]["sources"][0]
+    assert repeated["id"] == expected_id and repeated["arxiv_id"] == source["arxiv_id"]
+    assert repeated["metadata_sha256"] == source["metadata_sha256"]
+    assert repeated["metadata_path"] != source["metadata_path"]
+    assert state["authoring_selection"] is None
+    assert state["authoring_literature"]["searches"][0]["query"] == queries[1]
+    assert all(search["resolved_ids"] == [expected_id] for search in state["authoring_literature"]["searches"])
+    state = service.select_authoring_literature(research_id, [{**STUDY_REVIEW["selected_sources"][0], "source_id": expected_id}])
+    assert {source["id"] for source in state["literature"]["sources"]} == {"fixture-oracle", expected_id}
+    assert first_index.read_bytes() == first_index_bytes
+    assert all(service.artifact_path(research_id, key).read_bytes() == content for key, content in retained.items())
+    for identity in ("arxiv:1311.3903v2", "10.48550/arxiv.1311.3903v1"):
+        other_id = "source-" + hashlib.sha256(identity.encode()).hexdigest()[:20]
+        assert other_id != expected_id
+        invalid = copy.deepcopy(MANUSCRIPT_REVIEW)
+        invalid["publication_readiness"]["closest_work"][0]["source_id"] = other_id
+        with pytest.raises(WorkflowError) as rejected:
+            service.submit_manuscript(research_id, manuscript(), invalid)
+        assert rejected.value.code == "PUBLICATION_EVIDENCE_INVALID"
+    assert runner.calls == 1 and all(service.artifact_path(research_id, key).read_bytes() == content for key, content in original.items())
 
 
 def test_unselected_authoring_source_cannot_approve_closest_work_and_new_collections_retain_history(setup):

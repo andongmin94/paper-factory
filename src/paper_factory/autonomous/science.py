@@ -185,7 +185,10 @@ original goal still support the question and design, use the remaining bounded
 controller proposal attempts to submit a feasible provisional candidate with
 refined, concrete literature_queries. Address the review's missing evidence:
 use an exact DOI only when genuinely known, an exact relevant title when known,
-or short method-specific queries; refine terms to exclude observed irrelevant
+or an explicit arXiv identifier (arxiv:<identifier> or 10.48550/arXiv.<identifier>)
+when genuinely known. Explicit arXiv lookups retrieve a fixed preprint version
+without requiring Crossref registration; a preprint is not a verified journal
+publication. Otherwise use short method-specific queries; exclude observed irrelevant
 topics. A failed search is not evidence that relevant literature is absent.
 Do not invent a DOI, reading, novelty or approval, repeat the same unsuccessful
 queries unchanged, or require the controller to exceed its proposal-attempt limit.

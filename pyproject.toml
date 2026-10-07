@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "paper-factory"
-version = "0.14.7"
+version = "0.14.8"
 description = "Standalone local research engine with bounded QuickJS experiments and verified manuscript exports"
 readme = "README.md"
 requires-python = ">=3.11"
