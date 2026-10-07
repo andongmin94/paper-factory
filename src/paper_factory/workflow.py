@@ -23,7 +23,7 @@ import zipfile
 from . import conversion, project
 from .author import load_author
 from .autonomous import literature, science
-from .autonomous.models import CodeBundle, FrozenArtifact, ManuscriptDraft, ResearchPlan, ScientificReview
+from .autonomous.models import CodeBundle, FrozenArtifact, ManuscriptDraft, ManuscriptReview, ResearchPlan, ScientificReview, StudyReview
 from .models import Project, now, uid
 from .workflow_models import ModelEvidenceReceipt, Workflow
 from .workspace import Workspace, digest_file, ensure_unlinked, loads_json, safe_relative, write_json
@@ -35,14 +35,16 @@ MAX_SUPPORTING_BYTES = 256 * 1024
 CANCEL_CLEANUP_SECONDS = 30
 CANCEL_STOP_SECONDS = 10  # Owned job stop and process wait each allow five seconds.
 SHUTDOWN_CLEANUP_SECONDS = 30
-SCHEMAS = {"plan": ResearchPlan.model_json_schema(), "code": CodeBundle.model_json_schema(),
-           "review": ScientificReview.model_json_schema(), "manuscript": ManuscriptDraft.model_json_schema()}
-READABLE_EVIDENCE = {"plan", "observations", "analysis", "literature", "manuscript", "canonical", "runtime-manifest"}
+SCHEMAS = {"plan": ResearchPlan.model_json_schema(), "study_review": StudyReview.model_json_schema(),
+           "code": CodeBundle.model_json_schema(), "review": ScientificReview.model_json_schema(),
+           "manuscript": ManuscriptDraft.model_json_schema(), "manuscript_review": ManuscriptReview.model_json_schema()}
+READABLE_EVIDENCE = {"proposal", "plan", "study-review", "selected-literature", "observations", "analysis",
+                     "literature", "manuscript", "canonical", "runtime-manifest"}
 
 
 def _readable_evidence(key: str) -> bool:
     return key in READABLE_EVIDENCE or re.fullmatch(
-        r"(?:code-review-[1-9][0-9]*|supporting-document-(?:import-)?[a-f0-9]{12}|authoring-revision-[a-f0-9]{12})", key) is not None
+        r"(?:(?:code|manuscript)-review-[1-9][0-9]*|supporting-document-(?:import-)?[a-f0-9]{12}|authoring-revision-[a-f0-9]{12})", key) is not None
 
 
 class WorkflowError(ValueError):
@@ -51,11 +53,24 @@ class WorkflowError(ValueError):
         self.code = code
 
 
-def _accepted(value: dict) -> ScientificReview:
-    review = ScientificReview.model_validate(value)
+def _accepted(value: dict, model=ScientificReview) -> ScientificReview:
+    review = model.model_validate(value)
     if not review.accepted or review.issues:
         raise WorkflowError("REVIEW_REJECTED", "; ".join(review.issues) or "Native host review did not accept this submission")
     return review
+
+
+def _attempted_literature_queries(evidence: dict) -> set[str]:
+    return {search.get("query") for search in evidence.get("searches", [])
+            if search.get("status") in {"succeeded", "failed"} and search.get("attempted") is not False}
+
+
+def _require_complete_literature(plan: ResearchPlan, evidence: dict) -> None:
+    if evidence.get("cancelled"):
+        raise WorkflowError("LITERATURE_EVIDENCE_INSUFFICIENT", "Complete the cancelled literature collection before study approval")
+    queries = {query.strip() for query in plan.literature_queries}
+    if queries - _attempted_literature_queries(evidence):
+        raise WorkflowError("LITERATURE_QUERIES_INCOMPLETE", "Some proposed literature queries were not attempted; study approval requires complete retrieval attempts")
 
 
 def _diagnostic(value: object, limit: int = 1800) -> str:
@@ -235,6 +250,15 @@ class WorkflowService:
         data["artifacts"] = {key: {"id": key, "sha256": item.sha256, "size": item.size}
                              for key, item in record.artifacts.items()}
         data["supporting_documents"] = _supporting_documents(ws, record)
+        data["study_review"] = _read(ws, record, "study-review")["review"] if "study-review" in record.artifacts else None
+        manuscript_review = _read(ws, record, "manuscript-review")["review"] if "manuscript-review" in record.artifacts else None
+        data["manuscript_review"] = (ManuscriptReview.model_validate(manuscript_review).model_dump(mode="json")
+            if manuscript_review and all(name in manuscript_review for name in
+                ("contribution", "literature", "interpretation", "presentation")) else None)
+        if record.code == "STUDY_REJECTED" and data["study_review"]:
+            data["message"] = "연구 적합성 검토에서 보완이 필요합니다. " + _diagnostic("; ".join(data["study_review"]["issues"]))
+        if record.code == "MANUSCRIPT_REJECTED" and data["manuscript_review"]:
+            data["message"] = "원고 품질 검토에서 보완이 필요합니다. " + _diagnostic("; ".join(data["manuscript_review"]["issues"]))
         if not include_materials:
             return data
         data["material_manifest"] = {
@@ -249,7 +273,7 @@ class WorkflowService:
         data["review_provenance"] = "Reviews are native host submissions; the controller does not attest reviewer independence."
         if context:
             data["source_context"] = _artifact(ws, record, "context").read_text(encoding="utf-8")
-        for key in ("plan", "literature", "analysis", "execution"):
+        for key in ("proposal", "plan", "literature", "analysis", "execution"):
             if key in record.artifacts:
                 value = _read(ws, record, key)
                 if key == "execution":
@@ -261,6 +285,8 @@ class WorkflowService:
                         "protocol_sha256", "bundle_sha256")}
                     value["cleanup_reconciled"] = self._confirmed_cleanup(ws, record)
                 data[key] = value
+        if "selected-literature" in record.artifacts:
+            data["literature"] = _read(ws, record, "selected-literature")
         source_context = _artifact(ws, record, "context").read_text(encoding="utf-8")
         if record.code == "CLEANUP_UNCONFIRMED":
             data["instructions"] = "Owned worker cleanup is unconfirmed. Do not submit code or start another experiment. Restore the bundled runtime and restart the app so owned cleanup can be reconciled."
@@ -272,6 +298,11 @@ class WorkflowService:
             data["instructions"] = "A scientific execution was already dispatched. Preserve its retained diagnostics and evidence; do not replace its code or rerun this study."
         elif record.stage == "created":
             data["instructions"] = science.planning_prompt(source_context, record.goal)
+        elif record.stage == "proposed":
+            data["planning_instructions"] = science.planning_prompt(source_context, record.goal)
+            data["instructions"] = (science.study_review_prompt(ResearchPlan.model_validate(data["proposal"]),
+                                        data["literature"], source_context) if "literature" in data else
+                                    "Collect the proposal's literature before assessing its research suitability. No protocol is frozen yet.")
         elif record.stage in {"planned", "code_ready"}:
             if record.stage == "code_ready" and record.status == "ready":
                 data["instructions"] = "The reviewed code bundle is frozen. Start the isolated experiment, then read status until analysis is ready."
@@ -285,7 +316,7 @@ class WorkflowService:
             else:
                 data["instructions"] = science.writing_prompt(ResearchPlan.model_validate(data["plan"]), data["analysis"],
                                                                data["literature"], data["execution"])
-                data["instructions"] += "\nHave a fresh native host reviewer inspect the manuscript's interpretation against the retained evidence before submitting its ScientificReview. Numerical integrity is not scientific peer review."
+                data["instructions"] += "\nHave a fresh native host reviewer assess contribution, literature relevance, interpretation and presentation as ManuscriptReview. Reject a trivial contract test framed as an empirical paper even when numerical integrity passes."
         elif record.stage == "manuscript":
             data["instructions"] = "Export the validated manuscript to Markdown, PDF, DOCX, standalone TeX and a reproduction archive. Export recomputes raw results and independently reopens the native documents."
         else:
@@ -298,7 +329,9 @@ class WorkflowService:
                 record.active_handle or record.code == "CLEANUP_UNCONFIRMED" or record.terminal_control_failure or
                 (future is not None and not future.done())):
             return None
-        if record.execution_attempt == 0 and record.stage in {"created", "planned", "code_ready"}:
+        if record.stage == "proposed" and "study-review" in record.artifacts:
+            return None
+        if record.execution_attempt == 0 and record.stage in {"created", "proposed", "planned", "code_ready"}:
             if future is not None or any(key in {"execution", "observations", "analysis", "runtime-manifest"} or
                                          key.startswith(("execution-", "observations-", "analysis-", "cleanup-"))
                                          for key in record.artifacts):
@@ -428,7 +461,7 @@ class WorkflowService:
         with self._operation(research_id) as (ws, record):
             if record.status not in {"ready", "cancelled"}:
                 raise WorkflowError("INVALID_STATE", "Supporting documents cannot be imported into this research status")
-            self._require(ws, record, {"created", "planned", "analyzed"}, allow_cancelled=True)
+            self._require(ws, record, {"created", "proposed", "planned", "analyzed"}, allow_cancelled=True)
             if record.stage == "analyzed":
                 self._require_successful_analysis(ws, record)
             existing = _supporting_documents(ws, record)
@@ -527,10 +560,14 @@ class WorkflowService:
                     "total_chars": total_chars, "next_offset": end if end < total_chars else None,
                     "sha256": actual_digest, "text": "".join(fragments), "is_untrusted_data": True}
 
-    def submit_plan(self, research_id: str, value: dict) -> dict:
+    def submit_proposal(self, research_id: str, value: dict) -> dict:
         plan = ResearchPlan.model_validate(value)
         with self._operation(research_id) as (ws, record):
-            self._require(ws, record, {"created"})
+            self._require(ws, record, {"created", "proposed"})
+            if record.execution_attempt or record.proposal_attempt >= 3:
+                raise WorkflowError("PROPOSAL_LIMIT", "Research proposals are limited to three before any execution")
+            if record.stage == "proposed" and record.code != "STUDY_REJECTED":
+                raise WorkflowError("INVALID_STATE", "Assess the retained proposal before replacing it")
             science.validate_plan(plan, ws.path("source"))
             if any(not safe_relative(ws.path("source"), path).is_file() for path in plan.source_files):
                 raise WorkflowError("PLAN_SOURCE_MISSING", "Protocol refers to absent source files")
@@ -542,45 +579,149 @@ class WorkflowService:
                 raise WorkflowError("RUNTIME_DEPENDENCY_UNAVAILABLE", "Unprovisioned dependencies: " + ", ".join(sorted(missing)))
             plan.parameters["execution_instrumentation"] = "Controller-held QuickJS production-call gate; timings include guest and bridge overhead"
             limitation = "Production-call instrumentation affects execution overhead; measurements cannot establish uninstrumented production performance."
-            if len(plan.limitations) == 12:
-                plan.limitations[-1] += " " + limitation
-            else:
-                plan.limitations.append(limitation)
-            path = ws.path("research/protocol.json")
+            if not any(limitation in text for text in plan.limitations):
+                if len(plan.limitations) == 12:
+                    plan.limitations[-1] += " " + limitation
+                else:
+                    plan.limitations.append(limitation)
+            if "proposal" in record.artifacts and _read(ws, record, "proposal") == plan.model_dump(mode="json"):
+                raise WorkflowError("PROPOSAL_UNCHANGED", "A rejected proposal must be substantively revised before a new review")
+            if "literature" in record.artifacts:
+                previous = record.artifacts.pop("literature")
+                record.artifacts["literature-history-" + previous.sha256] = previous
+            record.artifacts.pop("study-review", None)
+            record.proposal_attempt += 1
+            path = ws.path(f"research/proposals/attempt-{record.proposal_attempt}/proposal.json")
             write_json(path, plan)
-            _freeze(ws, record, "plan", path)
-            record.stage = "planned"
+            _freeze(ws, record, "proposal", path)
+            _freeze(ws, record, f"proposal-{record.proposal_attempt}", path)
+            record.stage, record.status, record.code, record.message = "proposed", "ready", None, None
             self._save(ws, record)
             return self._public(ws, record)
 
+    def submit_study_review(self, research_id: str, value: dict) -> dict:
+        """Freeze a protocol only after a literature-grounded suitability decision."""
+        review = StudyReview.model_validate(value)
+        with self._operation(research_id) as (ws, record):
+            self._require(ws, record, {"proposed"})
+            if record.execution_attempt:
+                raise WorkflowError("EXPERIMENT_ALREADY_DISPATCHED", "Research design cannot change after execution")
+            key = f"study-review-{record.proposal_attempt}"
+            if key in record.artifacts:
+                raise WorkflowError("REVIEW_EVIDENCE_CONFLICT", "Each proposal's study decision is append-only")
+            evidence = _read(ws, record, "literature")
+            if review.accepted:
+                _require_complete_literature(ResearchPlan.model_validate(_read(ws, record, "proposal")), evidence)
+            selected = self._selected_literature(evidence, review)
+            root = _artifact(ws, record, "proposal").parent
+            receipt = {"origin": "native_host_submission", "review": review.model_dump(mode="json"),
+                       "proposal_sha256": record.artifacts["proposal"].sha256,
+                       "literature_sha256": record.artifacts["literature"].sha256}
+            if review.accepted:
+                plan = ResearchPlan.model_validate(_read(ws, record, "proposal"))
+                path = ws.path("research/protocol.json")
+                write_json(path, plan)
+                _freeze(ws, record, "plan", path)
+                write_json(root / "selected-literature.json", selected)
+                _freeze(ws, record, "selected-literature", root / "selected-literature.json")
+                receipt.update({"protocol_sha256": record.artifacts["plan"].sha256,
+                                "selected_literature_sha256": record.artifacts["selected-literature"].sha256})
+                record.stage, record.status, record.code, record.message = "planned", "ready", None, None
+            else:
+                record.status, record.code = "blocked", "STUDY_REJECTED"
+                record.message = "; ".join(review.issues)
+            write_json(root / "study-review.json", receipt)
+            _freeze(ws, record, key, root / "study-review.json")
+            _freeze(ws, record, "study-review", root / "study-review.json")
+            self._save(ws, record)
+            return self._public(ws, record)
+
+    @staticmethod
+    def _selected_literature(evidence: dict, review: StudyReview) -> dict:
+        sources = science._literature_sources(evidence)
+        selected = []
+        for selection in review.selected_sources:
+            source = sources.get(selection.source_id)
+            if source is None:
+                raise WorkflowError("LITERATURE_SELECTION_INVALID", "Selected source was not retrieved")
+            try:
+                science._citation_evidence(source)
+            except ValueError as error:
+                raise WorkflowError("LITERATURE_SELECTION_INVALID", str(error)) from None
+            if selection.excerpt_index >= len(source["excerpts"]) or not source["excerpts"][selection.excerpt_index].strip():
+                raise WorkflowError("LITERATURE_SELECTION_INVALID", "Selected excerpt was not inspected")
+            if any(item["id"] == source["id"] for item in selected):
+                raise WorkflowError("LITERATURE_SELECTION_INVALID", "Select one grounded excerpt per source")
+            grounded = {**source, "excerpts": [source["excerpts"][selection.excerpt_index]],
+                        "relevance": selection.relevance, "selected_excerpt_index": selection.excerpt_index}
+            try:
+                science._citation_evidence(grounded)
+            except ValueError as error:
+                raise WorkflowError("LITERATURE_SELECTION_INVALID", str(error)) from None
+            selected.append(grounded)
+        return {"sources": selected, "selection": review.model_dump(mode="json")["selected_sources"],
+                "scope": "Only sources explicitly selected by the study suitability review may ground the manuscript"}
+
+    def _require_study_review(self, ws: Workspace, record: Workflow) -> None:
+        if "study-review" not in record.artifacts or "selected-literature" not in record.artifacts:
+            raise WorkflowError("STUDY_REVIEW_REQUIRED", "An approved literature-grounded study review is required before execution or authoring")
+        receipt = _read(ws, record, "study-review")
+        review = StudyReview.model_validate(receipt.get("review", {}))
+        if not review.accepted:
+            raise WorkflowError("STUDY_REJECTED", "The retained research design was not accepted")
+        evidence = _read(ws, record, "literature")
+        if (receipt.get("origin") != "native_host_submission" or
+                receipt.get("proposal_sha256") != record.artifacts["proposal"].sha256 or
+                receipt.get("protocol_sha256") != record.artifacts["plan"].sha256 or
+                receipt.get("literature_sha256") != record.artifacts["literature"].sha256 or
+                receipt.get("selected_literature_sha256") != record.artifacts["selected-literature"].sha256 or
+                _read(ws, record, "selected-literature") != self._selected_literature(evidence, review)):
+            raise WorkflowError("ARTIFACT_CHANGED", "Study approval does not bind the retained protocol and selected literature")
+        _require_complete_literature(ResearchPlan.model_validate(_read(ws, record, "plan")), evidence)
+
     def collect_literature(self, research_id: str) -> dict:
         with self._operation(research_id) as (ws, record):
-            self._require(ws, record, {"planned", "code_ready", "analyzed"})
-            plan = ResearchPlan.model_validate(_read(ws, record, "plan"))
+            self._require(ws, record, {"proposed", "planned", "code_ready", "analyzed"})
+            plan = ResearchPlan.model_validate(_read(ws, record, "proposal" if record.stage == "proposed" else "plan"))
             previous = _read(ws, record, "literature") if "literature" in record.artifacts else {}
             queries = list(dict.fromkeys(query.strip() for query in plan.literature_queries))
 
-            def attempted_queries(value):
-                return {search.get("query") for search in value.get("searches", [])
-                        if search.get("status") in {"succeeded", "failed"} and search.get("attempted") is not False}
-
-            missing = [query for query in queries if query not in attempted_queries(previous)]
+            # Cancellation can occur during DOI resolution after every search
+            # was attempted. A fresh collection must complete before approval;
+            # the partial receipt is retained as history rather than cleared.
+            missing = queries if previous.get("cancelled") else [
+                query for query in queries if query not in _attempted_literature_queries(previous)]
             evidence = previous
             if missing:
                 existing_sources = previous.get("sources", [])
-                remaining = max(0, 6 - len(existing_sources))
+                remaining = max(0, 6 - sum(source.get("scope") in {"abstract", "full_text"} and bool(source.get("excerpts"))
+                                         for source in existing_sources))
                 supplement = self.collector(missing, ws.path("research"), limit=remaining, cancel=lambda: False)
-                seen = {source.get("id") for source in existing_sources}
+                candidates = list(existing_sources)
+                positions = {source.get("id"): index for index, source in enumerate(candidates)}
+                reading_scopes = {"abstract": 1, "full_text": 2}
                 additions = []
                 for source in supplement.get("sources", []):
-                    if source.get("id") not in seen:
-                        seen.add(source.get("id"))
+                    identifier = source.get("id")
+                    if identifier not in positions:
+                        positions[identifier] = len(candidates)
+                        candidates.append(source)
                         additions.append(source)
+                    else:
+                        index = positions[identifier]
+                        existing = candidates[index]
+                        scope = reading_scopes.get(source.get("scope"), 0) if source.get("excerpts") else 0
+                        prior_scope = reading_scopes.get(existing.get("scope"), 0) if existing.get("excerpts") else 0
+                        if scope > prior_scope:
+                            science._citation_evidence(source)
+                            candidates[index] = source
                 if len(additions) > remaining:
                     raise WorkflowError("LITERATURE_SOURCE_LIMIT", "Literature supplement exceeds the remaining source budget")
+                inspected = [source for source in candidates if source.get("scope") in {"abstract", "full_text"} and source.get("excerpts")]
+                metadata = [source for source in candidates if source not in inspected]
                 evidence = {**previous, **{key: value for key, value in supplement.items()
                                            if key not in {"sources", "searches", "warnings", "history"}},
-                            "sources": existing_sources + additions,
+                            "sources": (inspected + metadata)[:6],
                             "searches": previous.get("searches", []) + supplement.get("searches", []),
                             "warnings": previous.get("warnings", []) + supplement.get("warnings", []),
                             "cancelled": supplement.get("cancelled", False)}
@@ -593,6 +734,8 @@ class WorkflowService:
                     path = ws.path(f"research/literature-evidence-{uid('revision')}.json")
                 else:
                     path = ws.path("research/literature-evidence.json")
+                    if path.exists():
+                        path = ws.path(f"research/literature-evidence-{uid('revision')}.json")
                 if path.exists():
                     raise WorkflowError("LITERATURE_EVIDENCE_CONFLICT", "A literature evidence revision cannot overwrite retained bytes")
                 write_json(path, evidence)
@@ -602,20 +745,19 @@ class WorkflowService:
                     original = safe_relative(ws.path("research"), search["raw_path"])
                     if digest_file(original) != search.get("sha256"):
                         raise WorkflowError("ARTIFACT_CHANGED", "Literature search differs from its retrieval digest")
-                    _freeze(ws, record, f"literature-search-{number}", original)
+                    _freeze(ws, record, "literature-search-" + search["sha256"], original)
             for number, source in enumerate(evidence.get("sources", [])):
                 for field, digest in (("raw_path", "sha256"), ("metadata_path", "metadata_sha256"), ("text_path", "text_sha256")):
                     if source.get(field):
                         original = safe_relative(ws.path("research"), source[field])
                         if digest_file(original) != source.get(digest):
                             raise WorkflowError("ARTIFACT_CHANGED", "Literature differs from its retrieval digest")
-                        _freeze(ws, record, f"literature-{number}-{field}", original)
+                        _freeze(ws, record, "literature-" + source[digest] + "-" + field, original)
             self._save(ws, record)
             if evidence.get("cancelled") or not any(source.get("scope") in {"abstract", "full_text"} and source.get("excerpts")
                                                     for source in evidence.get("sources", [])):
                 raise WorkflowError("LITERATURE_EVIDENCE_INSUFFICIENT", "Metadata alone cannot support Related Work; retrieval evidence is retained")
-            if set(queries) - attempted_queries(evidence):
-                raise WorkflowError("LITERATURE_QUERIES_INCOMPLETE", "Some frozen literature queries were not attempted; partial evidence is retained")
+            _require_complete_literature(plan, evidence)
             return self._public(ws, record)
 
     def record_inference(self, research_id: str, value: dict) -> dict:
@@ -655,6 +797,7 @@ class WorkflowService:
             if record.execution_attempt > 0:
                 raise WorkflowError("EXPERIMENT_ALREADY_DISPATCHED", "A scientific execution was already dispatched; retained evidence cannot be replaced or rerun")
             self._require(ws, record, {"planned", "code_ready"})
+            self._require_study_review(ws, record)
             plan = ResearchPlan.model_validate(_read(ws, record, "plan"))
             if bundle.runtime != plan.runtime:
                 raise ValueError("Experiment runtime differs from frozen protocol")
@@ -701,6 +844,7 @@ class WorkflowService:
             if record.execution_attempt > 0:
                 raise WorkflowError("EXPERIMENT_ALREADY_DISPATCHED", "A scientific execution was already dispatched; retained evidence cannot be replaced or rerun")
             self._require(ws, record, {"code_ready"})
+            self._require_study_review(ws, record)
             if not self.runner.status().get("ready"):
                 raise WorkflowError("ISOLATION_UNAVAILABLE", "The isolated research worker is unavailable")
             lease = ws.lock("execution")
@@ -800,7 +944,7 @@ class WorkflowService:
             future = self._jobs.get(research_id)
             if future is not None and not future.done():
                 raise WorkflowError("CLEANUP_UNCONFIRMED", "Owned worker completion must be confirmed before resuming")
-            self._require(ws, record, {"created", "planned", "code_ready", "analyzed", "manuscript"}, allow_cancelled=True)
+            self._require(ws, record, {"created", "proposed", "planned", "code_ready", "analyzed", "manuscript"}, allow_cancelled=True)
             kind = self._resume_kind(record)
             if kind is None:
                 raise WorkflowError("INVALID_STATE", "Only unexecuted preparation or verified authoring may resume")
@@ -812,6 +956,9 @@ class WorkflowService:
                     raise WorkflowError("EXPERIMENT_ALREADY_DISPATCHED", "Preparation cannot resume over retained execution files")
                 if record.stage in {"planned", "code_ready"}:
                     ResearchPlan.model_validate(_read(ws, record, "plan"))
+                    self._require_study_review(ws, record)
+                elif record.stage == "proposed":
+                    ResearchPlan.model_validate(_read(ws, record, "proposal"))
                 if record.stage == "code_ready":
                     metadata = _read(ws, record, "bundle")
                     review = _read(ws, record, f"code-review-{record.code_attempt}")
@@ -840,6 +987,7 @@ class WorkflowService:
             return self._public(ws, record)
 
     def _require_successful_analysis(self, ws: Workspace, record: Workflow) -> None:
+        self._require_study_review(ws, record)
         execution = _read(ws, record, "execution")
         if execution.get("status") != "succeeded":
             raise WorkflowError("EXPERIMENT_FAILED", "Authoring requires a retained successful execution")
@@ -887,7 +1035,7 @@ class WorkflowService:
                     any(row.get("research_id") != record.id for row in rows)):
                 raise WorkflowError("REVISION_UNVERIFIED", "Revision requires a completed hash-bound export verification journal")
             review = _read(ws, record, "manuscript-review")
-            _accepted(review.get("review", {}))
+            _accepted(review.get("review", {}), ManuscriptReview)
             if (review.get("origin") != "native_host_submission" or any(
                     review.get(field + "_sha256") != record.artifacts[key].sha256
                     for field, key in (("manuscript", "manuscript"), ("protocol", "plan"),
@@ -1039,9 +1187,10 @@ class WorkflowService:
 
     def submit_manuscript(self, research_id: str, value: dict, review: dict) -> dict:
         draft = ManuscriptDraft.model_validate(value)
-        accepted = _accepted(review)
+        assessment = ManuscriptReview.model_validate(review)
         with self._operation(research_id) as (ws, record):
             self._require(ws, record, {"analyzed"})
+            self._require_study_review(ws, record)
             plan = ResearchPlan.model_validate(_read(ws, record, "plan"))
             record.draft_attempt += 1
             root = ws.path(f"research/drafts/attempt-{record.draft_attempt}")
@@ -1051,24 +1200,36 @@ class WorkflowService:
             write_json(root / "draft.json", draft)
             _freeze(ws, record, f"draft-{record.draft_attempt}", root / "draft.json")
             self._save(ws, record)
+            review_receipt = {"origin": "native_host_submission", "review": assessment.model_dump(mode="json"),
+                             "draft_sha256": record.artifacts[f"draft-{record.draft_attempt}"].sha256,
+                             "protocol_sha256": record.artifacts["plan"].sha256,
+                             "analysis_sha256": record.artifacts["analysis"].sha256,
+                             "literature_sha256": record.artifacts["literature"].sha256}
+            if not assessment.accepted:
+                write_json(root / "review.json", review_receipt)
+                _freeze(ws, record, f"manuscript-review-{record.draft_attempt}", root / "review.json")
+                _freeze(ws, record, "manuscript-review", root / "review.json")
+                record.status, record.code, record.message = "blocked", "MANUSCRIPT_REJECTED", "; ".join(assessment.issues)
+                self._save(ws, record)
+                return self._public(ws, record)
             rendered = science.validate_and_render(draft.model_dump(mode="json"), plan, _read(ws, record, "analysis"),
-                                                  _read(ws, record, "literature"), root,
+                                                  _read(ws, record, "selected-literature"), root,
                                                   author=load_author().model_dump(exclude_defaults=True))
             markdown = Path(rendered["markdown_path"])
             _append_figures(ws, record, markdown)
             _freeze(ws, record, "manuscript", markdown)
             _freeze(ws, record, "canonical", Path(rendered["canonical_path"]))
-            write_json(root / "review.json", {"origin": "native_host_submission", "review": accepted.model_dump(mode="json"),
-                       "manuscript_sha256": record.artifacts["manuscript"].sha256, "protocol_sha256": record.artifacts["plan"].sha256,
-                       "analysis_sha256": record.artifacts["analysis"].sha256, "literature_sha256": record.artifacts["literature"].sha256})
+            write_json(root / "review.json", {**review_receipt, "manuscript_sha256": record.artifacts["manuscript"].sha256})
             _freeze(ws, record, "manuscript-review", root / "review.json")
-            record.stage = "manuscript"
+            _freeze(ws, record, f"manuscript-review-{record.draft_attempt}", root / "review.json")
+            record.stage, record.status, record.code, record.message = "manuscript", "ready", None, None
             self._save(ws, record)
             return self._public(ws, record)
 
     def export(self, research_id: str) -> dict:
         with self._operation(research_id) as (ws, record):
             self._require(ws, record, {"manuscript", "exported"})
+            self._require_study_review(ws, record)
             if record.stage == "exported":
                 root = ws.path("research/exports/" + uid("verification-attempt"))
                 root.mkdir(parents=True, exist_ok=False)
@@ -1098,8 +1259,7 @@ class WorkflowService:
             receipts, outputs = {}, {}
             for format in ("pdf", "docx", "tex"):
                 output = root / ("paper." + format)
-                receipts[format] = conversion.convert(markdown, output, pandoc=os.environ.get("PYPANDOC_PANDOC") or None,
-                                                       metadata={"mainfont": "Libertinus Serif"} if format == "pdf" else None)
+                receipts[format] = conversion.convert(markdown, output, pandoc=os.environ.get("PYPANDOC_PANDOC") or None)
                 _freeze(ws, record, "export-" + format, output)
                 outputs[format] = output
             write_json(root / "conversion-receipts.json", receipts)
@@ -1119,11 +1279,17 @@ class WorkflowService:
         selection = {name: _artifact(ws, record, key) for name, key in {
             "protocol.json": "plan", "observations.json": "observations", "execution.json": "execution",
             "analysis.json": "analysis", "literature-evidence.json": "literature", "canonical.json": "canonical",
+            "study-review.json": "study-review", "selected-literature.json": "selected-literature",
             "paper.md": "export-md", "paper.pdf": "export-pdf", "paper.docx": "export-docx", "paper.tex": "export-tex",
             "conversion-receipts.json": "conversion", "manuscript-review.json": "manuscript-review"}.items()}
         if "runtime-manifest" in record.artifacts:
             selection["runtime-manifest.json"] = _artifact(ws, record, "runtime-manifest")
         for key in record.artifacts:
+            if re.fullmatch(r"(?:proposal|study-review)-[1-3]", key):
+                path = _artifact(ws, record, key)
+                selection["research-design/" + key + ".json"] = path
+            if re.fullmatch(r"manuscript-review-[1-9][0-9]*", key):
+                selection["authoring/retained/" + key + ".json"] = _artifact(ws, record, key)
             if key.startswith("export-figure-"):
                 path = _artifact(ws, record, key)
                 selection[path.name] = path
@@ -1232,7 +1398,7 @@ class WorkflowService:
             canonical = _read(ws, record, "canonical")
             with tempfile.TemporaryDirectory(prefix="paperfactory-manuscript-") as directory:
                 rendered = science.validate_and_render({"title": canonical["title"], "sections": canonical["sections"]}, plan, analysis,
-                    _read(ws, record, "literature"), Path(directory), author=canonical.get("author"))
+                    _read(ws, record, "selected-literature"), Path(directory), author=canonical.get("author"))
                 _append_figures(ws, record, Path(rendered["markdown_path"]))
                 if digest_file(Path(rendered["markdown_path"])) != record.artifacts["manuscript"].sha256:
                     raise ValueError("Manuscript differs from independent evidence rendering")
@@ -1250,7 +1416,9 @@ class WorkflowService:
             from docx import Document
 
             word = Document(_artifact(ws, record, "export-docx"))
-            if len(" ".join(paragraph.text for paragraph in word.paragraphs).split()) < 1000:
+            word_text = "\n".join(paragraph.text for paragraph in word.paragraphs)
+            if (len(re.findall(r"\b[\w'-]+\b", word_text)) < 300 or canonical["title"] not in word_text or
+                    any(section["heading"] not in word_text for section in canonical["sections"])):
                 raise ValueError("Native Word manuscript is incomplete")
 
             phase("tex-conversion")

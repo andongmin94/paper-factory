@@ -28,7 +28,7 @@ jobs:
           node-version: '24'
           package-manager-cache: false
       - name: Install project and actual document converters
-        run: python -m pip install -e ".[dev,pdf,research]"
+        run: python -m pip install -e ".[dev,pdf]"
       - name: Check engine dependencies
         run: |
           python -m pip check

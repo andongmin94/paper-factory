@@ -167,25 +167,24 @@ def test_pipe_tables_convert_to_native_tables_without_editing_source(source, pan
     assert conversion.verify_receipts(source, {suffix[1:]: output}, receipts) == []
 
 
-def test_trusted_statistics_renderer_separates_tables_before_pandoc_parsing(pandoc):
+def test_trusted_statistics_renderer_emits_one_native_pandoc_table(pandoc):
     from paper_factory.autonomous import science
     summaries = [{"metric": "accuracy", "condition": "production", "unit": "fraction",
-                  "count": 12, "mean": 1, "median": 1, "stdev": 0, "min": 1, "max": 1}]
+                  "count": 12, "mean": 1, "median": 1, "stdev": 0, "min": 1, "max": 1},
+                 {"metric": "accuracy", "condition": "ablation", "unit": "fraction",
+                  "count": 12, "mean": 0, "median": 0, "stdev": 0, "min": 0, "max": 0}]
     paired = [{"metric": "accuracy", "condition": "ablation", "baseline": "production",
                "count": 12, "mean": -1, "median": -1, "stdev": 0, "min": -1, "max": -1}]
     text = science._tables({"summaries": summaries, "paired_deltas": paired})
     parsed = subprocess.run([pandoc, "--from=markdown-smart-raw_tex-raw_html", "--to=json"],
                             input=text, text=True, capture_output=True, encoding="utf-8", check=True)
     blocks = json.loads(parsed.stdout)["blocks"]
-    assert sum(block["t"] == "Table" for block in blocks) == 2
-    for index, block in enumerate(blocks):
-        if block["t"] == "Table":
-            assert blocks[index - 1]["t"] == "Header"
-            assert blocks[index - 1]["c"][0] == 3
+    assert [block["t"] for block in blocks] == ["Para", "Table", "Para"]
+    assert len(blocks[1]["c"][2]) == 5
 
 
 @pytest.mark.parametrize("condition_count", [2, 8])
-def test_statistics_export_keeps_long_metric_names_outside_narrow_numeric_tables(source, pandoc, condition_count):
+def test_statistics_export_preserves_long_metric_labels_and_values_in_compact_table(source, pandoc, condition_count):
     from docx import Document
     from paper_factory.autonomous import science
 
@@ -195,18 +194,23 @@ def test_statistics_export_keeps_long_metric_names_outside_narrow_numeric_tables
     paired = [{"metric": summaries[0]["metric"], "condition": "condition_1", "baseline": "condition_0",
                "count": 36, "mean": -114053.8611, "median": -65711, "stdev": 284346.453, "min": -1769431, "max": -39989}]
     source.write_text("# Controlled statistics\n\n" + science._tables({"summaries": summaries, "paired_deltas": paired}), encoding="utf-8")
+    original = source.read_bytes()
     output = source.with_suffix(".docx")
-    conversion.convert(source, output, pandoc=pandoc)
+    receipt = conversion.convert(source, output, pandoc=pandoc)
     document = Document(output)
-    assert len(document.tables) == condition_count // 2 + 1
-    assert all(len(table.columns) <= 3 for table in document.tables)
-    assert summaries[0]["metric"] in " ".join(paragraph.text for paragraph in document.paragraphs)
-    captions = [paragraph for paragraph in document.paragraphs if paragraph.text.startswith("Metric:")]
-    assert len(captions) == 2 and all(paragraph.style.name == "Heading 3" for paragraph in captions)
-    assert all(paragraph.style.paragraph_format.keep_with_next for paragraph in captions)
-    for table in document.tables[:-1]:
-        assert [cell.text for cell in table.rows[2].cells] == ["Mean", "115465.25", "115465.25"]
-    assert [cell.text for cell in document.tables[-1].rows[2].cells] == ["Mean delta", "-114053.8611"]
+    assert len(document.tables) == 1
+    table = document.tables[0]
+    assert len(table.columns) == 5 and len(table.rows) == condition_count + 1
+    assert [cell.text for cell in table.rows[0].cells] == [
+        "Metric (unit)", "Condition", "N", "Mean (SD)", "Paired mean difference"]
+    for index, row in enumerate(table.rows[1:]):
+        assert [cell.text for cell in row.cells] == [
+            "canonicalization_invariance_with_long_identifiers (nanoseconds)", f"condition_{index}", "36",
+            "1.155e+05 (2.843e+05)", "-1.141e+05" if index == 1 else "—"]
+    assert "full precision" in " ".join(paragraph.text for paragraph in document.paragraphs)
+    assert source.read_bytes() == original
+    assert receipt["input_sha256"] == hashlib.sha256(original).hexdigest()
+    assert receipt["output_sha256"] == digest_file(output)
 
 
 def test_missing_converter_cannot_leave_a_stale_successful_artifact(source, monkeypatch):

@@ -4,10 +4,10 @@ import { readFile, mkdir, stat, realpath } from 'node:fs/promises';
 import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 export type EngineMethod = 'runtime.status' | 'workflow.create' | 'workflow.list' | 'workflow.status' |
-  'workflow.readMaterial' | 'workflow.addEvidence' | 'workflow.submitPlan' | 'workflow.submitCode' | 'workflow.collectLiterature' |
+  'workflow.readMaterial' | 'workflow.addEvidence' | 'workflow.submitProposal' | 'workflow.submitStudyReview' | 'workflow.submitCode' | 'workflow.collectLiterature' |
   'workflow.startExperiment' | 'workflow.cancel' | 'workflow.resume' | 'workflow.reviseWriting' | 'workflow.submitManuscript' | 'workflow.recordInference' | 'workflow.export' | 'artifact.resolve' | 'shutdown';
 const methods = new Set<EngineMethod>(['runtime.status', 'workflow.create', 'workflow.list', 'workflow.status',
-  'workflow.readMaterial', 'workflow.addEvidence', 'workflow.submitPlan', 'workflow.submitCode', 'workflow.collectLiterature',
+  'workflow.readMaterial', 'workflow.addEvidence', 'workflow.submitProposal', 'workflow.submitStudyReview', 'workflow.submitCode', 'workflow.collectLiterature',
   'workflow.startExperiment', 'workflow.cancel', 'workflow.resume', 'workflow.reviseWriting', 'workflow.submitManuscript', 'workflow.recordInference', 'workflow.export', 'artifact.resolve', 'shutdown']);
 const MAX_LINE = 16 * 1024 * 1024;
 
@@ -97,13 +97,12 @@ export class EngineBridge {
       const fonts = await checkedRuntimePath(this.runtimeRoot, inventory.paths.fonts);
       const home = resolve(this.home);
       await mkdir(join(home, 'temp'), { recursive: true });
-      await mkdir(join(home, 'matplotlib'), { recursive: true });
       // Explicit allowlist: account credentials, API keys, PYTHONPATH and ambient PATH never enter Python.
       const env: Record<string, string> = {
         PATH: [dirname(python), dirname(node), dirname(pandoc)].join(delimiter),
         HOME: home, USERPROFILE: home, APPDATA: home, LOCALAPPDATA: home,
         TEMP: join(home, 'temp'), TMP: join(home, 'temp'), TMPDIR: join(home, 'temp'),
-        MPLCONFIGDIR: join(home, 'matplotlib'), TYPST_FONT_PATHS: fonts, PYPANDOC_PANDOC: pandoc,
+        TYPST_FONT_PATHS: fonts, PYPANDOC_PANDOC: pandoc,
         PYTHONUTF8: '1', PYTHONDONTWRITEBYTECODE: '1',
         ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
         ...(process.env.WINDIR ? { WINDIR: process.env.WINDIR } : {}),

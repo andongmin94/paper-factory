@@ -11,7 +11,10 @@ import pytest
 from jsonschema import Draft202012Validator
 from pydantic import ValidationError
 
-from paper_factory.autonomous.models import CodeBundle, ResearchPlan
+from paper_factory.autonomous.models import (
+    CodeBundle, LiteratureSelection, ManuscriptReview, QualityCriterion,
+    ResearchPlan, ScientificReview, StudyReview,
+)
 from paper_factory.autonomous import science
 from paper_factory.project import inventory
 
@@ -22,6 +25,10 @@ def protocol():
         feasible=True, reason="Production behavior can be tested with independent fixtures.",
         title="Controlled comparison of production transformation contracts",
         question="How does production transformation preserve protected input values?",
+        research_gap="Existing methods do not characterize protected-value violations under the proposed workload families.",
+        expected_contribution="Identify the conditions that cause protection failures and their relationship to the studied mechanism.",
+        comparison_rationale="A targeted ablation isolates the protection mechanism without asserting competitive performance.",
+        sampling_rationale="Seeded workload families cover the specified structural variations; conclusions remain within this generated domain.",
         runtime="quickjs", source_files=["transform.js"],
         conditions=["production", "ablation"],
         metrics=[{"name": "error", "unit": "events", "description": "Number of independently detected contract violations."}],
@@ -131,6 +138,93 @@ def test_units_per_seed_contract_is_required_and_explains_total_units(protocol):
     assert {error["type"] for error in raised.value.errors()} == {"missing", "extra_forbidden"}
 
 
+@pytest.mark.parametrize("field", [
+    "research_gap", "expected_contribution", "comparison_rationale", "sampling_rationale",
+])
+def test_research_proposals_require_explicit_value_and_design_rationales(protocol, field):
+    proposal = protocol.model_dump(mode="json")
+    del proposal[field]
+    assert not Draft202012Validator(ResearchPlan.model_json_schema()).is_valid(proposal)
+    with pytest.raises(ValidationError, match=field):
+        ResearchPlan.model_validate(proposal)
+    proposal[field] = " " * 30
+    with pytest.raises(ValidationError, match="substantive text"):
+        ResearchPlan.model_validate(proposal)
+
+
+def review_payload(kind):
+    criterion = {"passed": True, "reason": "The supplied evidence supports this criterion within the declared study scope."}
+    names = ("question", "contribution", "literature", "comparison", "sampling", "feasibility") if kind == "study" else (
+        "contribution", "literature", "interpretation", "presentation",
+    )
+    payload = {"accepted": True, "issues": [], **{name: criterion.copy() for name in names}}
+    if kind == "study":
+        payload["selected_sources"] = [{"source_id": "source-oracle", "excerpt_index": 0,
+                                       "relevance": "This inspected excerpt directly supports the study's independent-oracle design."}]
+    return payload
+
+
+@pytest.mark.parametrize("kind,criterion", [
+    *(('study', name) for name in ("question", "contribution", "literature", "comparison", "sampling", "feasibility")),
+    *(('manuscript', name) for name in ("contribution", "literature", "interpretation", "presentation")),
+])
+def test_any_failed_quality_criterion_prevents_acceptance(kind, criterion):
+    model = StudyReview if kind == "study" else ManuscriptReview
+    payload = review_payload(kind)
+    payload[criterion]["passed"] = False
+    payload[criterion]["reason"] = "Evidence is insufficient for this criterion; the proposed claim requires another design."
+    with pytest.raises(ValidationError, match="acceptance must agree"):
+        model.model_validate(payload)
+    payload["accepted"] = False
+    payload["issues"] = ["The study cannot support the proposed claim."]
+    assert model.model_validate(payload).accepted is False
+
+
+@pytest.mark.parametrize("kind", ["study", "manuscript"])
+def test_quality_reviews_cannot_accept_open_issues_or_unexplained_rejection(kind):
+    model = StudyReview if kind == "study" else ManuscriptReview
+    payload = review_payload(kind)
+    assert model.model_validate(payload).accepted is True
+    payload["issues"] = ["A material scientific issue remains unresolved."]
+    with pytest.raises(ValidationError, match="acceptance must agree"):
+        model.model_validate(payload)
+    payload = review_payload(kind)
+    payload["accepted"] = False
+    with pytest.raises(ValidationError, match="acceptance must agree"):
+        model.model_validate(payload)
+
+
+@pytest.mark.parametrize("second_excerpt_index", [0, 1])
+def test_study_review_requires_selected_reading_for_acceptance_and_one_excerpt_per_source(second_excerpt_index):
+    payload = review_payload("study")
+    payload["selected_sources"] = []
+    with pytest.raises(ValidationError, match="acceptance must agree"):
+        StudyReview.model_validate(payload)
+    payload["accepted"] = False
+    payload["literature"]["passed"] = False
+    payload["issues"] = ["No directly relevant inspected source supports positioning this question."]
+    assert StudyReview.model_validate(payload).selected_sources == []
+    payload = review_payload("study")
+    payload["selected_sources"].append({**payload["selected_sources"][0], "excerpt_index": second_excerpt_index})
+    with pytest.raises(ValidationError, match="one relevant excerpt per distinct source"):
+        StudyReview.model_validate(payload)
+
+
+@pytest.mark.parametrize("reason", ["Looks good", " " * 30])
+def test_quality_decisions_require_substantive_explanations(reason):
+    with pytest.raises(ValidationError):
+        QualityCriterion(passed=True, reason=reason)
+    with pytest.raises(ValidationError):
+        LiteratureSelection(source_id="source-oracle", excerpt_index=0, relevance=reason)
+
+
+def test_code_review_remains_distinct_from_study_and_manuscript_quality_review():
+    legacy_code_review = ScientificReview(accepted=True, issues=[], checks=["The declared production gate is used."])
+    assert legacy_code_review.accepted is True
+    with pytest.raises(ValidationError):
+        ManuscriptReview.model_validate(legacy_code_review.model_dump())
+
+
 @pytest.fixture
 def observations():
     rows = []
@@ -231,34 +325,17 @@ def test_standalone_analysis_rejects_ambiguous_json_before_writing_results(tmp_p
     assert not (tmp_path / "analysis-reproduced.json").exists()
 
 
-def test_saved_figure_includes_long_axis_label_outside_original_canvas(tmp_path, monkeypatch):
-    matplotlib = pytest.importorskip("matplotlib")
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    from matplotlib.backends.backend_agg import FigureCanvasAgg
-
-    captured = {}
-    subplots = plt.subplots
-
-    def capture_figure(*args, **kwargs):
-        figure, axes = subplots(*args, **kwargs)
-        captured.update(figure=figure, axes=axes)
-        return figure, axes
-
-    monkeypatch.setattr(plt, "subplots", capture_figure)
-    analysis = {"summaries": [{"metric": "selected_bonus_rate", "condition": "production", "mean": 1,
-                               "unit": "synthetic percentage points over all controlled fixture conditions"}]}
-    science._figures(analysis, tmp_path)
-    figure, axes = captured["figure"], captured["axes"]
-    canvas = FigureCanvasAgg(figure)
-    canvas.draw()
-    renderer = canvas.get_renderer()
-    label_bbox = axes.yaxis.label.get_window_extent(renderer)
-    assert label_bbox.y0 < figure.bbox.y0 or label_bbox.y1 > figure.bbox.y1
-    required_bbox = figure.get_tightbbox(renderer)
-    image = plt.imread(tmp_path / "figure-1.png")
-    assert image.shape[0] >= required_bbox.height * 160 - 1
-    assert image.shape[1] >= required_bbox.width * 160 - 1
+def test_results_use_one_compact_table_without_repeated_mean_figures(tmp_path, protocol, observations):
+    analysis = science.analyze(observations, protocol, tmp_path)
+    table = (tmp_path / "tables.md").read_text(encoding="utf-8")
+    assert table.count("| Metric (unit) |") == 1
+    assert "| error (events) | production | 6 | 0 (0) | — |" in table
+    assert "| error (events) | ablation | 6 | 2 (0.8944) | 2 |" in table
+    assert "Sample SD" not in table and "### Metric" not in table
+    assert "full precision" in table
+    assert not list(tmp_path.glob("figure-*.png"))
+    assert analysis["summaries"][1]["stdev"] == pytest.approx((4 / 5) ** 0.5)
+    assert str(analysis["summaries"][1]["stdev"]) not in table
 
 
 def test_analysis_preserves_embedded_fixture_bytes_without_extracting_labels(tmp_path, protocol, observations):
@@ -394,7 +471,7 @@ def test_manuscript_resolves_only_verified_references_and_injects_author_last(tm
     analysis = science.analyze(observations, protocol, tmp_path / "analysis")
     draft = valid_draft()
     written = science.validate_and_render(draft, protocol, analysis, literature, tmp_path / "paper", author={"display_name": "Local Author", "email": "local@example.org"})
-    markdown = Path(written["markdown_path"]).read_text()
+    markdown = Path(written["markdown_path"]).read_text(encoding="utf-8")
     assert "{{" not in markdown
     assert "paired mean difference was 2 events" in markdown
     assert "Local Author" in markdown
@@ -605,8 +682,30 @@ def test_short_or_incomplete_papers_are_not_complete(tmp_path, protocol, observa
     draft["sections"] = draft["sections"][:-1]
     for section in draft["sections"]:
         section["text"] = section["text"][-150:]
-    with pytest.raises(ValueError, match="Missing required|1200"):
+    with pytest.raises(ValueError, match="Missing required|300"):
         science.validate_and_render(draft, protocol, analysis, literature, tmp_path / "paper")
+
+
+def test_concise_substantive_manuscript_does_not_require_length_padding(tmp_path, protocol, observations, literature):
+    analysis = science.analyze(observations, protocol, tmp_path / "analysis")
+    draft = valid_draft()
+    for section in draft["sections"]:
+        # Keep the first substantive paragraph and the section-specific evidence.
+        repeated_end = section["text"].index("The controlled study", 1)
+        paragraph_length = repeated_end
+        section["text"] = section["text"][:paragraph_length] + section["text"][paragraph_length * 2:]
+    rendered = science.validate_and_render(draft, protocol, analysis, literature, tmp_path / "paper")
+    assert 300 <= rendered["word_count"] < 1200
+
+
+def test_dummy_manuscript_is_rejected_without_arbitrary_long_length_target(tmp_path, protocol, observations, literature):
+    analysis = science.analyze(observations, protocol, tmp_path / "analysis")
+    draft = valid_draft()
+    for section in draft["sections"]:
+        section["text"] = "This section is a short dummy without substantive evidence."
+    with pytest.raises(ValueError, match="at least 300 substantive prose words"):
+        science.validate_and_render(draft, protocol, analysis, literature, tmp_path / "paper")
+    assert not (tmp_path / "paper" / "manuscript.md").exists()
 
 
 def test_context_excludes_named_and_inline_secrets_and_bounds_code(tmp_path):
@@ -692,6 +791,44 @@ def test_model_prompts_explain_existing_protocol_and_generation_boundaries(proto
         assert "Node built-ins" in prompt
         assert "Python, Node or QuickJS" not in prompt
         assert "controller-verified Node runtime supports its syntax" not in prompt
+
+
+def test_study_review_uses_inspected_reading_and_can_reject_feasible_trivial_studies(protocol, literature):
+    source = "export function transform(value) { return value + 1; }"
+    prompt = science.study_review_prompt(protocol, literature, source)
+    assert "BEFORE protocol freezing or code generation" in prompt
+    assert "beyond ordinary helper tests" in prompt
+    assert "metadata and word overlap are insufficient" in prompt
+    assert "zero-based excerpt_index" in prompt
+    assert "If none qualify, reject literature and the study" in prompt
+    assert "it is not peer review or a publication guarantee" in prompt
+    assert json.dumps(protocol.model_dump(mode="json"), ensure_ascii=False, indent=2) in prompt
+    assert json.dumps(literature, ensure_ascii=False, indent=2) in prompt
+    assert prompt.endswith(source)
+
+
+def test_planner_distinguishes_worthwhile_studies_from_convenient_checker_controls():
+    prompt = science.planning_prompt("An inspected short helper", "Write a paper from this repository")
+    for field in ("research_gap", "expected_contribution", "comparison_rationale", "sampling_rationale"):
+        assert field in prompt
+    assert "Do not convert an unworthy repository into a paper" in prompt
+    assert "a negative control, not" in prompt
+    assert "credible alternatives for superiority" in prompt
+    assert "seed offsets do not create independent real-world observations" in prompt
+    assert "must stop if no directly relevant inspected" in prompt
+
+
+def test_writer_receives_selected_evidence_without_length_or_audit_padding(protocol, literature, execution):
+    prompt = science.writing_prompt(protocol, {"trusted": "analysis"}, literature, execution)
+    assert "Selected directly relevant literature evidence:" in prompt
+    assert "Use one consistent prose" in prompt
+    assert "Keep hashes, gate receipts" in prompt
+    assert "State each relevant limitation once" in prompt
+    assert "the trusted renderer supplies one concise result table" in prompt
+    assert "twelve hundred" not in prompt and "eighteen hundred" not in prompt
+    assert prompt.endswith(json.dumps(literature, ensure_ascii=False, indent=2))
+    with pytest.raises(ValueError, match="directly relevant selected literature"):
+        science.writing_prompt(protocol, {}, {"sources": []}, execution)
 
 
 @pytest.mark.parametrize("role", ["generation", "review"])
@@ -837,7 +974,7 @@ def test_instrumented_experiments_require_methods_disclosure(tmp_path, protocol,
         "Instrumented measurements do not establish uninstrumented performance."
     )
     rendered = science.validate_and_render(draft, protocol, analysis, literature, tmp_path / "paper")
-    assert protocol.parameters["execution_instrumentation"] in Path(rendered["markdown_path"]).read_text()
+    assert protocol.parameters["execution_instrumentation"] in Path(rendered["markdown_path"]).read_text(encoding="utf-8")
 
 
 def test_requested_production_module_survives_large_framework_context(tmp_path):

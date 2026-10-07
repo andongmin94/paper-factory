@@ -28,7 +28,8 @@ METHODS = {
     "workflow.status": {"researchId", "includeMaterials"},
     "workflow.readMaterial": {"researchId", "area", "name", "offset", "limit"},
     "workflow.addEvidence": {"researchId", "files"},
-    "workflow.submitPlan": {"researchId", "value"}, "workflow.submitCode": {"researchId", "value", "review"},
+    "workflow.submitProposal": {"researchId", "value"}, "workflow.submitStudyReview": {"researchId", "review"},
+    "workflow.submitCode": {"researchId", "value", "review"},
     "workflow.collectLiterature": {"researchId"}, "workflow.startExperiment": {"researchId"},
     "workflow.cancel": {"researchId"}, "workflow.resume": {"researchId"}, "workflow.reviseWriting": {"researchId"},
     "workflow.submitManuscript": {"researchId", "value", "review"},
@@ -201,10 +202,12 @@ class Dispatcher:
             return self.service.read_material(p["researchId"], p["area"], p["name"], offset=p.get("offset", 0), limit=p.get("limit", 16000))
         if method == "workflow.addEvidence":
             return self.service.add_evidence(p["researchId"], p["files"])
-        if method == "workflow.submitPlan":
+        if method == "workflow.submitProposal":
             if not isinstance(p["value"], dict) or p["value"].get("runtime") != "quickjs":
                 raise ValueError("Standalone research supports QuickJS only")
-            return self.service.submit_plan(p["researchId"], p["value"])
+            return self.service.submit_proposal(p["researchId"], p["value"])
+        if method == "workflow.submitStudyReview":
+            return self.service.submit_study_review(p["researchId"], p["review"])
         if method == "workflow.submitCode":
             if not isinstance(p["value"], dict) or p["value"].get("runtime") != "quickjs":
                 raise ValueError("Standalone research supports QuickJS only")

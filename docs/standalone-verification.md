@@ -448,3 +448,42 @@ Saved Markdown/TeX의 상대 그림 참조를 위해 **04:11:24.408784 KST**에 
 같은 감사에서 현재 Source12 두 소스, 설치 EXE/ASAR, 포함 런타임4,463개 파일과 엔진22개를 전수 대조했다. **04:24:54.513 KST**의 별도 순수 파일 검사는 패키지 설정의 정확한6개 dist 파일(main/preload/LICENSE/renderer HTML/JS/CSS)과 설치 ASAR, runtime binding이 일치함을 확인했다. 실제 workflow·모델·IPC·엔진 실행·UI 입력·원본 writes 없이 자체 proof만 기록했다. 증거는 `.paper-factory/standalone-verification/final-restart-integrity-audit-b8af9974-a782-40af-93e0-2d2feaf1a4e0/`의 `readonly-restart-integrity-receipt.json` SHA256 `f065ede8172ef92474c18ad707446a7e2cf462269c1ac0262926f4986aa00935`, `asar-dist-binding-receipt.json` `2482fa45c32ff6c06ad3dddab0de454f2fc4c7de5401be173da77d03102fe477`이다. 실제 저장본15개와 기존 ZIP 그림3개의 전수 해시·CRC·inventory도 독립 재확인했다. 로컬 Windows cache 디렉터리는 내용·원본을 변경하지 않고 `.gitignore`에서 제외했다.
 
 **04:27:32.663325 KST**에 끝낸 통합 읽기 전용 검사 `final-readonly-integrity-summary.json` SHA256은 `6e32eb49c807e449c3521008cb5bca3894a3a0608690dd1f262885e30507720b`다. 세 저장 ZIP의 총913멤버/907개 inventory row, 현재 Markdown/TeX6개 상대 그림 참조, DOCX3개 embedded PNG가 실제 ZIP/frozen 그림과 같음을 확인했다. 별도 saved child receipt SHA256은 `91ad2fd216f2e2cc5e58c7fdf8bb397395cf813436d1adb7e5ab2066eae2fe32`다. 예전 실패 원고를 보존한 `superseded-reference-formatting/paper.md`의 하위 폴더에는 그림을 추가하지 않았으며 이를 현재 전달본으로 계산하지 않는다. 현재 전달 파일의 blocker는 없다.
+
+## 0.14.0 연구 품질 설계와 최종 검증: 2026-10-07
+
+0.14.0은 실험 전에 연구 질문·기여·문헌·비교 대상·표본·실행 가능성을 검토하고, 원고 작성 후 기여·문헌 사용·해석·내용과 분량을 별도로 검토한다. 기준 미충족은 **연구 보류** 또는 **원고 보류**로 표시하며 반려된 원고를 완료 파일로 내보내지 않는다. 앞부분의 구버전 3/3 기록은 당시 파일 생성과 재현 자료의 기술적 검증 이력이며 현재 학술 품질 기준의 통과를 뜻하지 않는다. 기존 원본은 변경하지 않았다.
+
+실제 리뷰 모델로 기존 ARTEX·Premiere·Frontron 설계의 첫 StudyReview를 각각 수행했다. 세 건 모두 반려되어 executionAttempt=0을 유지했다. 음성 평가 harness는 첫 검토가 네이티브 엔진에 보존된 직후 의도적으로 중단했으며 계획 보완·코드·실험·원고 요청은 수행하지 않았다. 따라서 해당 세 설계의 반려를 확인하며 controller의 전체 재시도 흐름이나 일반적인 분류 정확도를 입증하지 않는다. 원래 설계·근거의 해시와 완료 모델 receipt를 대조했다.
+
+별도의 실제 Premiere 알고리즘 후보 research-fea847f32ddc는 confidence 우선 선택과 독립 한계 커버리지 탐욕·작은 문제의 정확 부분집합 비교를 제안했다. 함수 수준 실험은 기술적으로 가능했으나 확보된 문헌으로 추가 연구 기여를 정당화하지 못해 proposed/blocked, STUDY_INFEASIBLE로 종료했다. executionAttempt=0이며 새 원고나 결과 파일은 생성하지 않았다. 현재 버전에서 학술 품질을 통과한 새 논문은 검증하지 못했다.
+
+최종 소스와 포함된 Windows 런타임으로 아래 회귀 검사를 완료했다. Electron은 fresh 임시 앱 데이터와 hidden/offscreen 창에서 실제 main/preload/IPC를 사용했으며 사용자 인증 자료를 읽지 않았다. 마지막 전체 11건은 재시도 없이 통과했고 소유 테스트 프로세스는 종료했다.
+
+| 검사 | 결과 | 최종 로그 SHA256 |
+| --- | --- | --- |
+| Python | 967 통과·7 건너뜀, 316.37초 | 40117c0d0e51da89f1cfefe0b0d6e69757cda2058aba96f73ed71661f80b8328 |
+| 데스크톱 | 223 통과 | 26afa027d51b2d382d28f76c2433286f2666ed61577677f43c71697b497c6309 |
+| 공식 SDK | 48 통과·1 Windows 건너뜀 | 위 데스크톱 통합 로그 |
+| Electron | 11 통과, 약 1.1분 | 292eb0d510bdb362a3e6ae2d03d4496d747e3df00c250647e51922cbfcfe2252 |
+
+Python 건너뜀은 Windows symlink 권한 5건과 macOS 네이티브 guardian/EOF 2건이다. PDF 변환·표 레이아웃 부분 검사는 위 Python 범위에 포함된 26건이다. 긴 metric/unit/condition의 2·8조건과 N=36·10000, 완전한 수치·문자열 보존, PDF 셀 경계 및 DOCX 원문 값을 검증했다. 시각 검수는 합성 PDF 8개·9페이지를 전량 확인했고 표 겹침·잘림이나 Pretendard 한국어 regular/bold 글리프 손실이 없었다. 간결한 네이티브 원고는 2페이지다. 이 검수는 문서 변환의 가독성과 내용 보존 근거이며 학술 기여나 실제 모델의 원고 승인 근거가 아니다.
+
+별도의 fresh 네이티브 실행 환경 smoke는 전체 런타임 2,218개 파일의 SHA256, 19개 배포 의존성과 제거한 플로팅 모듈 11개의 부재를 확인했다. QuickJS IPC 준비·정리, 빈 초기 workflow 목록, shutdown closed/exit0 및 포함된 인터프리터의 한국어 PDF·DOCX·TeX 변환을 확인했다. PDF에는 Pretendard Regular/Bold가 포함됐다. 해당 smoke의 모델 호출·과학실험 dispatch·설치 실행은 모두 0회다.
+
+Windows NSIS 0.14.0 패키지 검증은 **2026-10-07 09:36:18.981 KST**에 exit0으로 완료했다. 앱 소스·SDK import·renderer·Pretendard·포함 엔진 소스 및 런타임 2,218개 파일의 전체 해시가 일치했다. 이 결과는 정적 패키지 검증이며 최종 배포본을 새로 설치해 GUI·OAuth·인증 복원까지 확인한 결과는 아니다. macOS 네이티브 실행·설치도 새로 주장하지 않는다. 이 작업에서 GitHub Releases에 설치 파일을 게시하지 않았다.
+
+| 로컬 패키지 | bytes | SHA256 |
+| --- | ---: | --- |
+| desktop/release/Paper Factory Setup 0.14.0.exe | 213,000,730 | 9bce300bb549f04cb6c8d10be0304033daf550f042aea82791c7c06275049b7f |
+| desktop/release/win-unpacked/resources/app.asar | 44,715,779 | 54c52da7652725268c0797f47eb89e3be4c64b8540a02e8a16daf1acf070d178 |
+
+원시 평가·로그·QA 자료는 ignored .paper-factory/ 아래 보존하며 인증 자료와 모델 원문은 커밋하지 않는다. 검증 기록의 SHA256은 다음과 같다.
+
+| 기록 | SHA256 |
+| --- | --- |
+| quality-evaluation-20261007/negative/results.json | 426b7f91ec0a76bf804565e1fef4b6788146379ca84470e9ec67b36d590ed4e3 |
+| quality-evaluation-20261007/positive/result.json | 9b9583e081f90d386bf3c0daae9abae88373d89c730154cffacb1f4f46a02b86 |
+| quality-evaluation-20261007/trimmed-native-smoke-73c02c53711e/receipt.json | 9b358f72d11b89d952f27c7f4a2ee82abe6292ac5686ebc87c412c2729048555 |
+| 런타임 inventory | 40e38987753987aa1353651a81655b218ff281acfd4edc7df11aa4b1a8bf284b |
+| pdf-quality-20261007/qa-summary.json | 21781476b60953ffd5d983e8fd3e239eb404d2edc53b30f6c781b5489e1bda04 |
+| quality-verification-20261007/package-final-verification.log | 06a3262091db3b7b5c2d4dda34fb94c2cd6b0a13650a75736a5260290bf0b2b4 |

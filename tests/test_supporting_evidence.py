@@ -17,7 +17,7 @@ from paper_factory.workflow import WorkflowError
 from paper_factory.workflow_models import Workflow
 from paper_factory.workspace import Workspace, digest_file, write_json
 
-from test_workflow import protocol, retained_authoring_fixture, setup
+from test_workflow import approve_study, retained_authoring_fixture, setup
 
 
 FILE_LIMIT = 128 * 1024
@@ -68,7 +68,7 @@ def freeze_json(ws, record, key, value):
 def test_import_preserves_allowed_workflow_and_all_prior_artifacts(setup, monkeypatch, stage, status):
     service, runner, research_id = setup
     if stage == "planned":
-        service.submit_plan(research_id, protocol())
+        approve_study(service, research_id)
     elif stage == "analyzed":
         retained_authoring_fixture(service, research_id)
     ws = workspace(service, research_id)

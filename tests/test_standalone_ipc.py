@@ -29,7 +29,7 @@ from paper_factory.workspace import digest_file, file_lock, loads_json, write_js
 def isolated_runtime_environment(monkeypatch):
     # StandaloneRuntime owns a process in production. Preserve the test host's
     # environment when several isolated controllers share pytest's process.
-    for name in ("PF_NODE_BIN", "PYPANDOC_PANDOC", "MPLCONFIGDIR", "TYPST_FONT_PATHS"):
+    for name in ("PF_NODE_BIN", "PYPANDOC_PANDOC", "TYPST_FONT_PATHS"):
         monkeypatch.setenv(name, os.environ.get(name, ""))
 
 
@@ -54,7 +54,7 @@ def runtime_files(tmp_path_factory):
 
 @pytest.fixture
 def runtime(tmp_path, runtime_files, pandoc, monkeypatch):
-    for name in ("PF_NODE_BIN", "PYPANDOC_PANDOC", "MPLCONFIGDIR", "TYPST_FONT_PATHS"):
+    for name in ("PF_NODE_BIN", "PYPANDOC_PANDOC", "TYPST_FONT_PATHS"):
         monkeypatch.delenv(name, raising=False)
     engine = StandaloneRuntime(tmp_path / "home", *runtime_files, Path(pandoc).resolve())
     yield engine
@@ -85,6 +85,10 @@ def create_local(engine, tmp_path):
 def protocol():
     return {"feasible": True, "reason": "A public transformation supports independently annotated fixture checks.",
             "title": "Controlled production transformation fixture validation", "question": "How does the transformation preserve annotated fixture values?",
+            "research_gap": "Synthetic IPC fixture; no actual gap in research literature is established.",
+            "expected_contribution": "Synthetic positive proposal for IPC tests, not an academically useful study.",
+            "comparison_rationale": "The removed increment is a fixture comparator for controller validation only.",
+            "sampling_rationale": "The fixed arithmetic grid validates orchestration rather than representative sampling.",
             "runtime": "quickjs", "source_files": ["source.js"], "production_entrypoint": "source.js:calculate",
             "dependencies": [], "conditions": ["production", "ablation"],
             "metrics": [{"name": "error", "unit": "events", "description": "Independent expected value mismatches."}],
@@ -136,6 +140,41 @@ def test_authoring_ipc_accepts_only_research_id_and_maps_to_explicit_method(meth
         dispatcher._pool.shutdown(wait=True)
 
 
+@pytest.mark.parametrize("method,field", [("workflow.submitProposal", "value"), ("workflow.submitStudyReview", "review")])
+def test_study_ipc_routes_bounded_objects_to_explicit_new_methods(method, field):
+    from test_workflow import STUDY_REVIEW
+
+    value = protocol() if field == "value" else STUDY_REVIEW
+    params = {"researchId": "research-abcdefabcdef", field: value}
+    valid = {"id": "study", "method": method, "params": params}
+    assert ipc.request(json.dumps(valid).encode()) == valid
+    for bad in ({"researchId": params["researchId"]}, {**params, "force": True},
+                {**params, "researchId": "../private"}, {**params, field: []}):
+        with pytest.raises(ValueError):
+            ipc.request(json.dumps({**valid, "params": bad}).encode())
+    calls = []
+    service = SimpleNamespace(
+        submit_proposal=lambda identifier, item: calls.append(("proposal", identifier, item)) or {"stage": "proposed"},
+        submit_study_review=lambda identifier, item: calls.append(("study", identifier, item)) or {"stage": "planned"})
+    dispatcher = ipc.Dispatcher(SimpleNamespace(service=service), io.BytesIO())
+    try:
+        result = dispatcher.execute(method, params)
+        assert result == {"stage": "proposed" if field == "value" else "planned"}
+        assert calls == [("proposal" if field == "value" else "study", params["researchId"], value)]
+        if field == "value":
+            with pytest.raises(ValueError, match="QuickJS"):
+                dispatcher.execute(method, {**params, "value": {**value, "runtime": "node"}})
+            assert len(calls) == 1
+    finally:
+        dispatcher._pool.shutdown(wait=True)
+
+
+def test_removed_submit_plan_ipc_cannot_bypass_suitability_gate():
+    with pytest.raises(WorkflowError) as rejected:
+        frame("old-plan", "workflow.submitPlan", researchId="research-abcdefabcdef", value=protocol())
+    assert rejected.value.code == "METHOD_NOT_ALLOWED"
+
+
 def test_public_validation_feedback_has_locations_without_input_or_private_paths():
     secret = "C:/private/repository/private-source.js"
     try:
@@ -181,19 +220,23 @@ def test_actual_quickjs_status_and_restart_restore(runtime, runtime_files, pando
     assert snapshot["ready"] and snapshot["backend"] == "quickjs-wasm"
     research_id = create_local(runtime, tmp_path)
     saved = runtime.service.status(research_id, include_materials=False)
+    # A prior owned cache is ordinary retained data; restarting never deletes it.
+    retained_cache = runtime.home / "matplotlib" / "retained-cache.json"
+    retained_cache.parent.mkdir()
+    retained_cache.write_bytes(b'{"retained":true}')
     runtime.close()
     restored = StandaloneRuntime(runtime.home, *runtime_files, Path(pandoc).resolve())
     try:
         assert restored.service.status(research_id, include_materials=False) == saved
         assert restored.runner.status()["ready"]
+        assert retained_cache.read_bytes() == b'{"retained":true}'
     finally:
         restored.close()
 
 
 def test_main_precreated_empty_directories_can_be_owned(tmp_path, runtime_files, pandoc):
     home = tmp_path / "seeded-home"
-    for name in ("temp", "matplotlib"):
-        (home / name).mkdir(parents=True)
+    (home / "temp").mkdir(parents=True)
     engine = StandaloneRuntime(home, *runtime_files, Path(pandoc).resolve())
     try:
         assert loads_json((home / "owner.json").read_bytes()) == OWNER
@@ -201,7 +244,16 @@ def test_main_precreated_empty_directories_can_be_owned(tmp_path, runtime_files,
         engine.close()
 
 
-def test_native_plotting_precedes_runner_and_recovery_after_owned_environment(tmp_path, monkeypatch):
+def test_unmarked_plotting_directory_is_not_adopted(tmp_path, runtime_files, pandoc):
+    home = tmp_path / "unmarked-home"
+    directory = home / "matplotlib"
+    directory.mkdir(parents=True)
+    with pytest.raises(ValueError, match="ownership"):
+        StandaloneRuntime(home, *runtime_files, Path(pandoc).resolve())
+    assert directory.is_dir() and not (home / "owner.json").exists()
+
+
+def test_runner_and_recovery_follow_owned_environment_without_plotting(tmp_path, monkeypatch):
     events = []
     home = tmp_path / "owned-home"
     resources = tmp_path / "resources"
@@ -213,29 +265,21 @@ def test_native_plotting_precedes_runner_and_recovery_after_owned_environment(tm
     node.write_bytes(b"test executable placeholder; never executed")
     pandoc.write_bytes(b"test executable placeholder; never executed")
     monkeypatch.setenv("TYPST_FONT_PATHS", str(fonts))
-    monkeypatch.setenv("MPLCONFIGDIR", str(home / "matplotlib"))
-    import matplotlib
-    original_import, original_use = builtins.__import__, matplotlib.use
+    original_import = builtins.__import__
 
     def observe_import(name, globals=None, locals=None, fromlist=(), level=0):
-        result = original_import(name, globals, locals, fromlist, level)
-        if globals and globals.get("__name__") == standalone_runtime.__name__ and name in {"matplotlib", "matplotlib.pyplot"}:
-            assert threading.current_thread() is threading.main_thread()
-            assert loads_json((home / "owner.json").read_bytes()) == OWNER
-            assert os.environ["MPLCONFIGDIR"] == str(home / "matplotlib")
-            assert os.environ["PYPANDOC_PANDOC"] == str(pandoc)
-            assert os.environ["PF_NODE_BIN"] == str(node)
-            assert os.environ["TYPST_FONT_PATHS"] == str(fonts)
-            events.append(name)
-        return result
-
-    def observe_backend(backend):
-        events.append("backend:" + backend)
-        return original_use(backend)
+        if name == "numpy" or name.startswith("numpy.") or name == "matplotlib" or name.startswith("matplotlib."):
+            raise ImportError("Plotting libraries are not available in this runtime")
+        return original_import(name, globals, locals, fromlist, level)
 
     class Controller:
         def __init__(self, *args, **kwargs):
-            assert events == ["matplotlib", "backend:Agg", "matplotlib.pyplot"]
+            assert threading.current_thread() is threading.main_thread()
+            assert loads_json((home / "owner.json").read_bytes()) == OWNER
+            assert os.environ["PYPANDOC_PANDOC"] == str(pandoc)
+            assert os.environ["PF_NODE_BIN"] == str(node)
+            assert os.environ["TYPST_FONT_PATHS"] == str(fonts)
+            assert not events
             events.append("runner")
 
         def close(self, *, deadline=None):
@@ -243,22 +287,21 @@ def test_native_plotting_precedes_runner_and_recovery_after_owned_environment(tm
 
     class Service:
         def __init__(self, *args, **kwargs):
-            assert events == ["matplotlib", "backend:Agg", "matplotlib.pyplot", "runner"]
+            assert events == ["runner"]
             events.append("service-recovery")
 
         def close(self, *, deadline=None):
             pass
 
     monkeypatch.setattr(builtins, "__import__", observe_import)
-    monkeypatch.setattr(matplotlib, "use", observe_backend)
     monkeypatch.setattr(standalone_runtime, "QuickJSRunner", Controller)
     monkeypatch.setattr(standalone_runtime, "WorkflowService", Service)
     engine = StandaloneRuntime(home, quickjs, node, pandoc)
     engine.close()
-    assert events == ["matplotlib", "backend:Agg", "matplotlib.pyplot", "runner", "service-recovery"]
+    assert events == ["runner", "service-recovery"]
 
 
-def test_native_plotting_failure_stops_recovery_and_releases_home_lease(tmp_path, monkeypatch):
+def test_runner_initialization_failure_stops_recovery_and_releases_home_lease(tmp_path, monkeypatch):
     home = tmp_path / "owned-home"
     resources = tmp_path / "resources"
     quickjs = resources / "quickjs-runtime"
@@ -267,19 +310,13 @@ def test_native_plotting_failure_stops_recovery_and_releases_home_lease(tmp_path
     node.write_bytes(b"test executable placeholder; never executed")
     pandoc.write_bytes(b"test executable placeholder; never executed")
     monkeypatch.delenv("TYPST_FONT_PATHS", raising=False)
-    monkeypatch.setenv("MPLCONFIGDIR", str(home / "matplotlib"))
-    original_import = builtins.__import__
+    def unavailable_runner(*args, **kwargs):
+        raise RuntimeError("Synthetic unavailable QuickJS runtime")
 
-    def unavailable_plotting(name, globals=None, locals=None, fromlist=(), level=0):
-        if globals and globals.get("__name__") == standalone_runtime.__name__ and name == "matplotlib.pyplot":
-            raise ImportError("Synthetic unavailable native plotting")
-        return original_import(name, globals, locals, fromlist, level)
-
-    monkeypatch.setattr(builtins, "__import__", unavailable_plotting)
-    monkeypatch.setattr(standalone_runtime, "QuickJSRunner", lambda *a, **kw: pytest.fail("Runner started after native initialization failed"))
+    monkeypatch.setattr(standalone_runtime, "QuickJSRunner", unavailable_runner)
     monkeypatch.setattr(standalone_runtime, "WorkflowService", lambda *a, **kw: pytest.fail("Recovery started after native initialization failed"))
     for _ in range(2):
-        with pytest.raises(ImportError, match="Synthetic unavailable native plotting"):
+        with pytest.raises(RuntimeError, match="Synthetic unavailable QuickJS runtime"):
             StandaloneRuntime(home, quickjs, node, pandoc)
     assert loads_json((home / "owner.json").read_bytes()) == OWNER
 
@@ -430,7 +467,7 @@ def test_ipc_real_process_has_json_stdout_and_explicit_shutdown(tmp_path, runtim
 
 def test_cancel_interrupts_blocked_collection_before_serial_cancel(runtime, tmp_path, monkeypatch):
     research_id = create_local(runtime, tmp_path)
-    runtime.service.submit_plan(research_id, protocol())
+    runtime.service.submit_proposal(research_id, protocol())
     entered = threading.Event()
     cancelled = threading.Event()
     def blocked_collector(queries, root, *, limit, cancel):
@@ -458,7 +495,6 @@ def test_cancel_interrupts_blocked_collection_before_serial_cancel(runtime, tmp_
 def synthetic_cancel_engine(tmp_path, monkeypatch):
     from test_workflow import FixtureRunner, collect, prepare
     from paper_factory.workflow import WorkflowService
-    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
     source = tmp_path / "synthetic-source"
     source.mkdir()
     (source / "transform.js").write_text("export function transform(values) { return values.slice(); }\n", encoding="utf-8")
@@ -644,7 +680,7 @@ def test_cancellation_ack_failure_and_retry_preserve_engine_evidence(synthetic_c
 def test_literature_search_original_reply_is_frozen(runtime, tmp_path, monkeypatch):
     from test_workflow import collect
     research_id = create_local(runtime, tmp_path)
-    runtime.service.submit_plan(research_id, protocol())
+    runtime.service.submit_proposal(research_id, protocol())
     def collector(queries, root, **options):
         evidence = collect(queries, root, **options)
         search = Path(root) / "literature/search-fixture.json"
@@ -654,11 +690,12 @@ def test_literature_search_original_reply_is_frozen(runtime, tmp_path, monkeypat
         return evidence
     monkeypatch.setattr(standalone_runtime.literature, "collect", collector)
     state = runtime.service.collect_literature(research_id)
-    assert "literature-search-0" in state["artifacts"]
-    original = runtime.service.artifact_path(research_id, "literature-search-0")
+    search_key = "literature-search-" + state["literature"]["searches"][0]["sha256"]
+    assert search_key in state["artifacts"]
+    original = runtime.service.artifact_path(research_id, search_key)
     original.write_text("changed search reply", encoding="utf-8")
     with pytest.raises(WorkflowError, match="changed"):
-        runtime.service.artifact_path(research_id, "literature-search-0")
+        runtime.service.artifact_path(research_id, search_key)
 
 
 def test_inference_receipts_are_hash_bound_append_only_and_export_selected(runtime, tmp_path):
@@ -683,13 +720,14 @@ def test_inference_receipts_are_hash_bound_append_only_and_export_selected(runti
 
 def test_actual_guest_analysis_and_exports_include_model_receipts(runtime, tmp_path, monkeypatch):
     """Synthetic protocol evidence; validates real guest/analysis/converters, not a study."""
-    from test_workflow import collect, manuscript, REVIEW
+    from test_workflow import collect, manuscript, REVIEW, STUDY_REVIEW, MANUSCRIPT_REVIEW
     research_id = create_local(runtime, tmp_path)
-    runtime.service.submit_plan(research_id, protocol())
+    runtime.service.submit_proposal(research_id, protocol())
     runtime.service.record_inference(research_id, receipt("started"))
     runtime.service.record_inference(research_id, receipt())
     monkeypatch.setattr(standalone_runtime.literature, "collect", collect)
     runtime.service.collect_literature(research_id)
+    runtime.service.submit_study_review(research_id, STUDY_REVIEW)
     code = """export default function run() {
       const observations=[], inputs=[];
       for(const seed of [11,37]) for(let i=0;i<3;i++) {
@@ -718,9 +756,7 @@ def test_actual_guest_analysis_and_exports_include_model_receipts(runtime, tmp_p
     assert state["analysis"]["results"]["error.paired_2_minus_1.mean"]["value"] == 1
     draft = manuscript()
     draft["title"] = protocol()["title"]
-    runtime.service.submit_manuscript(research_id, draft, REVIEW)
-    import matplotlib
-    monkeypatch.setenv("TYPST_FONT_PATHS", str(Path(matplotlib.get_data_path()) / "fonts/ttf"))
+    runtime.service.submit_manuscript(research_id, draft, MANUSCRIPT_REVIEW)
     exported = runtime.service.export(research_id)
     assert exported["status"] == "completed"
     with zipfile.ZipFile(runtime.service.artifact_path(research_id, "reproducibility")) as archive:

@@ -2,7 +2,7 @@
 
 from typing import Annotated, Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from ..models import Record
 
@@ -18,6 +18,10 @@ class ResearchPlan(Record):
     reason: str = Field(min_length=8, max_length=4000)
     title: str = Field(min_length=8, max_length=300)
     question: str = Field(min_length=12, max_length=2000)
+    research_gap: str = Field(min_length=24, max_length=4000)
+    expected_contribution: str = Field(min_length=24, max_length=4000)
+    comparison_rationale: str = Field(min_length=24, max_length=4000)
+    sampling_rationale: str = Field(min_length=24, max_length=4000)
     runtime: Literal["quickjs"]
     source_files: list[str] = Field(min_length=1, max_length=20)
     production_entrypoint: str = Field(default="", max_length=300)
@@ -37,6 +41,14 @@ class ResearchPlan(Record):
     analysis_method: str = Field(min_length=12, max_length=2000)
     limitations: list[str] = Field(min_length=2, max_length=12)
     literature_queries: list[str] = Field(min_length=1, max_length=8)
+
+    @field_validator("research_gap", "expected_contribution", "comparison_rationale", "sampling_rationale")
+    @classmethod
+    def substantive_rationale(cls, value: str) -> str:
+        value = value.strip()
+        if len(value) < 24:
+            raise ValueError("Research value and design rationales require substantive text")
+        return value
 
     @model_validator(mode="after")
     def distinct_protocol(self):
@@ -81,6 +93,72 @@ class ScientificReview(Record):
     accepted: bool
     issues: list[str] = Field(default_factory=list, max_length=20)
     checks: list[str] = Field(default_factory=list, max_length=20)
+
+
+class QualityCriterion(Record):
+    passed: bool
+    reason: str = Field(min_length=24, max_length=4000)
+
+    @field_validator("reason")
+    @classmethod
+    def substantive_reason(cls, value: str) -> str:
+        value = value.strip()
+        if len(value) < 24:
+            raise ValueError("Quality criteria require a substantive reason")
+        return value
+
+
+class LiteratureSelection(Record):
+    source_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.-]+$")
+    excerpt_index: int = Field(ge=0)
+    relevance: str = Field(min_length=24, max_length=4000)
+
+    @field_validator("relevance")
+    @classmethod
+    def substantive_relevance(cls, value: str) -> str:
+        value = value.strip()
+        if len(value) < 24:
+            raise ValueError("Selected literature requires a substantive relevance explanation")
+        return value
+
+
+class StudyReview(Record):
+    accepted: bool
+    issues: list[str] = Field(default_factory=list, max_length=20)
+    question: QualityCriterion
+    contribution: QualityCriterion
+    literature: QualityCriterion
+    comparison: QualityCriterion
+    sampling: QualityCriterion
+    feasibility: QualityCriterion
+    selected_sources: list[LiteratureSelection] = Field(max_length=12)
+
+    @model_validator(mode="after")
+    def consistent_decision(self):
+        criteria = (self.question, self.contribution, self.literature,
+                    self.comparison, self.sampling, self.feasibility)
+        eligible = all(item.passed for item in criteria) and not self.issues and bool(self.selected_sources)
+        if self.accepted != eligible:
+            raise ValueError("Study acceptance must agree with all criteria, issues and selected literature")
+        selected = [item.source_id for item in self.selected_sources]
+        if len(selected) != len(set(selected)):
+            raise ValueError("Select one relevant excerpt per distinct source")
+        return self
+
+
+class ManuscriptReview(ScientificReview):
+    contribution: QualityCriterion
+    literature: QualityCriterion
+    interpretation: QualityCriterion
+    presentation: QualityCriterion
+
+    @model_validator(mode="after")
+    def consistent_decision(self):
+        criteria = (self.contribution, self.literature, self.interpretation, self.presentation)
+        eligible = all(item.passed for item in criteria) and not self.issues
+        if self.accepted != eligible:
+            raise ValueError("Manuscript acceptance must agree with all quality criteria and issues")
+        return self
 
 
 class FrozenArtifact(Record):

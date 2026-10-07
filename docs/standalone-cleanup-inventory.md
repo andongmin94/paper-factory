@@ -1,5 +1,11 @@
 # 독립 앱 전환 후 최소 정리 목록
 
+## 자동 그림 제거에 따른 의존성 정리 — 2026-10-07
+
+`0.14.0`에서 자동 평균 막대 그림을 제거한 뒤 남아 있던 Matplotlib 초기화·캐시 환경과 빌드용 그림 probe를 제거했다. PDF·DOCX·TeX 변환과 QuickJS probe는 유지하고, 런타임 글꼴은 기존 `paper_factory/fonts/`의 Pretendard 원본·라이선스·provenance에서 공급한다.
+
+남은 platform wheel의 활성 의존성을 확인해 Matplotlib·NumPy와 이 그래프에만 필요한 contourpy, cycler, fonttools, kiwisolver, Pillow, pyparsing, python-dateutil, six, packaging을 배포 catalog에서 제외했다. catalog에는 세 profile, 19개 pin과 25개 wheel artifact가 남는다. `packaging`은 catalog 생성 도구에 필요하므로 개발 의존성으로 유지한다. 원래 논문·그림·리뷰 기록과 소유권이 확인된 사용자 데이터·캐시는 이 변경에서 삭제하거나 옮기지 않는다.
+
 ## 정리 구현 완료 — 2026-10-05
 
 아래 초기 목록을 실제로 적용했다. 엔진과 pyproject 버전은 `0.13.0`이다. IPC의 정적 import closure 20개와 별도 실행 macOS guardian 1개, QuickJS worker 1개만 런타임 소스로 남겼다. CLI·Cloud·플러그인 진입점·옛 투고·Docker/WindowsRunner/AppContainer 경로와 직접 대응 스크립트·테스트·plugin CI를 제거했다. `runner_common.py`는 QuickJS가 실제 사용하는 한도·원본 file tree·관측값·production receipt 검사만 담당한다. Windows Job Object/creation identity와 macOS guardian, 과학적 제어·복구·분석·실제 변환은 유지했다.

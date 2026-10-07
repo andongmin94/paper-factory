@@ -54,7 +54,7 @@ class StandaloneRuntime:
             if self.home.exists() and not marker.is_file():
                 for child in self.home.iterdir():
                     ensure_unlinked(child)
-                    if child.name not in {"temp", "matplotlib"} or not child.is_dir() or any(child.iterdir()):
+                    if child.name != "temp" or not child.is_dir() or any(child.iterdir()):
                         raise ValueError("Existing engine data has no standalone ownership record")
             self.home.mkdir(parents=True, exist_ok=True, mode=0o700)
             self._stack.enter_context(file_lock(self.home / "engine.lock"))
@@ -68,18 +68,12 @@ class StandaloneRuntime:
             # paths; neither path is discovered through the host environment.
             os.environ["PF_NODE_BIN"] = str(self.node)
             os.environ["PYPANDOC_PANDOC"] = str(self.pandoc)
-            os.environ["MPLCONFIGDIR"] = str(self.home / "matplotlib")
             fonts = os.environ.get("TYPST_FONT_PATHS")
             if fonts:
                 font_root = absolute_path(fonts)
                 if not font_root.is_dir():
                     raise ValueError("Bundled fonts directory is missing")
                 os.environ["TYPST_FONT_PATHS"] = str(font_root)
-            # Prepare native plotting on the IPC main thread before its stdin
-            # loop can block while an experiment worker imports NumPy.
-            import matplotlib
-            matplotlib.use("Agg")
-            import matplotlib.pyplot
             self.runner = QuickJSRunner(self.runtime_root, supervisor_root=self.home / "supervisor", host_profile="private")
             self.service = WorkflowService(self.home, runner=self.runner, collector=self._collect)
         except Exception:

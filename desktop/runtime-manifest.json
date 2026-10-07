@@ -5,7 +5,7 @@
   "pythonVersion": "3.14.8",
   "hostDependencies": {
     "path": "runtime-inputs/host-dependencies.json",
-    "sha256": "b4946640e64ed58d26878f6a0272f9e01aa9802be5fb6b8e1c75e0e9adcdfb62"
+    "sha256": "99041a54eff30af4d8b9a78b34d3dadc35b888a73cf94a79afd6c381014d2ca6"
   },
   "quickjs": {
     "archive": "runtime-inputs/assets/quickjs-runtime.zip",
@@ -231,7 +231,7 @@
       "source_commit": "5e46737f6480fc315ebfea83866910cbfcc772f0"
     }
   ],
-  "fontSource": "matplotlib/mpl-data/fonts/ttf",
+  "fontSource": "paper_factory/fonts",
   "sourceReferences": [
     "https://github.com/astral-sh/python-build-standalone/tree/5e46737f6480fc315ebfea83866910cbfcc772f0",
     "https://gregoryszorc.com/docs/python-build-standalone/main/running.html"

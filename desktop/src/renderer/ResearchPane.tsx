@@ -1,22 +1,45 @@
 import { useEffect, useState } from "react";
 import { Download, ExternalLink, LoaderCircle } from "lucide-react";
 import type { AppSnapshot } from "../shared/contracts";
-import type { PublicRepository, ResearchPhase, ResearchSnapshot } from "../shared/research";
+import type { PublicRepository, ResearchPhase, ResearchSnapshot, ReviewCriterion } from "../shared/research";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
 
 const phaseLabels: Record<ResearchPhase, string> = {
-  idle: "대기", plan: "연구 계획", literature: "문헌 수집", code: "실험 코드 작성",
+  idle: "대기", plan: "연구 설계", literature: "문헌 수집", "study-review": "연구 적합성 검토", code: "실험 코드 작성",
   "code-review": "실험 코드 리뷰", experiment: "과학실험", manuscript: "원고 작성",
-  "manuscript-review": "원고 리뷰", export: "결과 파일 생성",
+  "manuscript-review": "원고 품질 검토", export: "결과 파일 생성",
 };
-const pipelineLabels = { idle: "대기", running: "진행 중", paused: "중단됨", failed: "실패", completed: "완료" };
+const pipelineLabels = { idle: "대기", running: "진행 중", paused: "중단됨", failed: "실패", completed: "원고 생성 완료" };
+const studyHoldCodes = ["STUDY_REJECTED", "STUDY_INFEASIBLE"];
 const outputLabels: Record<string, string> = {
   "export-pdf": "PDF", "export-docx": "Word", "export-md": "Markdown",
   "export-tex": "LaTeX", reproducibility: "재현 패키지 ZIP",
 };
+
+function QualityReview({ title, review, criteria, selectedSources }: {
+  title: string; review: { accepted: boolean; issues: string[] };
+  criteria: Array<{ label: string; judgment: ReviewCriterion }>; selectedSources?: number;
+}) {
+  return (
+    <details className="rounded-base border-2 border-border p-3 text-sm" open={!review.accepted}>
+      <summary className="font-semibold">{title} · {review.accepted ? "통과" : "보완 필요"}</summary>
+      <dl className="mt-3 space-y-3">
+        {criteria.map(({ label, judgment }) => <div key={label}>
+          <dt className="font-semibold">{label} · {judgment.passed ? "충족" : "미충족"}</dt>
+          <dd className="detail-note mt-1 whitespace-pre-wrap">{judgment.reason}</dd>
+        </div>)}
+      </dl>
+      {selectedSources !== undefined && <p className="detail-note mt-3">선정한 문헌 근거 {selectedSources}개</p>}
+      {review.issues.length > 0 && <div className="mt-3">
+        <p className="font-semibold">보완할 내용</p>
+        <ul className="mt-1 list-disc space-y-1 pl-5">{review.issues.map((issue, index) => <li key={index}>{issue}</li>)}</ul>
+      </div>}
+    </details>
+  );
+}
 
 function ModelPicker({ id, label, models, value, onChange, disabled }: {
   id: string; label: string; models: AppSnapshot["models"]; value: string;
@@ -132,7 +155,7 @@ export function ResearchPane({ connection, connectionBusy, onBusyChange, view, o
           <span className="workspace-section-tag">GITHUB / RESEARCH</span>
         </div>
         <CardDescription>
-          공개 GitHub 저장소를 바탕으로 계획·실험·리뷰·원고 작성과 결과 파일 생성을 진행합니다.
+          공개 GitHub 저장소에서 연구를 설계하고, 문헌과 연구 적합성을 검토한 뒤 실험과 원고 작성을 진행합니다.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-5">
@@ -197,6 +220,7 @@ export function ResearchPane({ connection, connectionBusy, onBusyChange, view, o
             <textarea id="research-goal" required minLength={8} maxLength={4000} rows={4} value={goal}
               onChange={(event) => setGoal(event.target.value)} disabled={locked} style={{ font: "inherit" }}
               className="w-full resize-y rounded-base border-2 border-border bg-secondary-background px-3 py-2 text-sm disabled:opacity-50" />
+            <p className="detail-note">어떤 문제를 밝히고 싶은지, 비교할 방법과 실제 사용 상황을 적어 주세요. 단순 동작 확인만으로 연구 기여가 부족하면 실험 전에 보류됩니다.</p>
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <ModelPicker id="writer-model" label="작성 모델 (writer)" models={connection.models}
@@ -219,7 +243,7 @@ export function ResearchPane({ connection, connectionBusy, onBusyChange, view, o
       <CardHeader>
         <div className="section-heading"><CardTitle role="heading" aria-level={2} className="text-xl">연구 결과</CardTitle>
           <Badge variant="neutral">{snapshot ? `${snapshot.jobs.length}개 연구` : "상태 확인 중"}</Badge></div>
-        <CardDescription>저장된 연구의 실제 단계와 생성된 결과 파일을 확인합니다.</CardDescription>
+        <CardDescription>보존된 연구 설계·원고의 검토 판단과 결과 파일을 확인합니다. 원고 생성 완료는 초안 파일이 준비되었다는 뜻입니다.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-5">
         {feedback}
@@ -245,7 +269,7 @@ export function ResearchPane({ connection, connectionBusy, onBusyChange, view, o
               <article key={job.id} className="space-y-3 rounded-base border-2 border-border bg-secondary-background p-4" aria-labelledby={`${job.id}-label`}>
                 <div className="section-heading">
                   <h3 id={`${job.id}-label`} className="font-semibold break-words">{job.source.split("/").filter(Boolean).at(-1) || job.id}</h3>
-                  <Badge variant={job.pipeline === "completed" ? "default" : "neutral"}>{pipelineLabels[job.pipeline]}</Badge>
+                  <Badge variant={job.pipeline === "completed" ? "default" : "neutral"}>{job.pipeline !== "running" && studyHoldCodes.includes(job.code ?? "") ? "연구 보류" : job.pipeline !== "running" && job.code === "MANUSCRIPT_REJECTED" ? "원고 보류" : pipelineLabels[job.pipeline]}</Badge>
                 </div>
                 <p className="detail-note break-all">{job.source}</p>
                 <details className="detail-note"><summary>연구 목표</summary><p className="mt-2 whitespace-pre-wrap">{job.goal}</p></details>
@@ -256,7 +280,26 @@ export function ResearchPane({ connection, connectionBusy, onBusyChange, view, o
                   <div><dt className="inline font-semibold">연구 ID: </dt><dd className="inline">{job.id}</dd></div>
                 </dl>
                 {job.message && <p className="detail-note">{job.message}</p>}
-                {job.code && <p className="detail-note">오류 코드: {job.code}</p>}
+                {job.code && <p className="detail-note">상태 코드: {job.code}</p>}
+                {job.studyReview && <QualityReview title="연구 적합성 검토" review={job.studyReview}
+                  selectedSources={job.studyReview.selected_sources.length} criteria={[
+                    { label: "연구 질문", judgment: job.studyReview.question },
+                    { label: "새로운 기여", judgment: job.studyReview.contribution },
+                    { label: "관련 문헌", judgment: job.studyReview.literature },
+                    { label: "비교 대상", judgment: job.studyReview.comparison },
+                    { label: "표본과 실험 설계", judgment: job.studyReview.sampling },
+                    { label: "실행 가능성과 주장 범위", judgment: job.studyReview.feasibility },
+                  ]} />}
+                {job.manuscriptReview && <QualityReview title="원고 품질 검토" review={job.manuscriptReview} criteria={[
+                  { label: "연구 기여", judgment: job.manuscriptReview.contribution },
+                  { label: "문헌 사용", judgment: job.manuscriptReview.literature },
+                  { label: "결과 해석", judgment: job.manuscriptReview.interpretation },
+                  { label: "내용과 분량", judgment: job.manuscriptReview.presentation },
+                ]} />}
+                {job.pipeline === "completed" && !job.studyReview && <p className="detail-note">이 결과에는 현재 기준의 연구 적합성 검토 기록이 없습니다.</p>}
+                {job.pipeline === "completed" && !job.manuscriptReview && <p className="detail-note">이 결과에는 현재 기준의 원고 품질 검토 기록이 없습니다.</p>}
+                {studyHoldCodes.includes(job.code ?? "") && job.pipeline !== "running" && <p className="detail-note" role="status">현재 실행 환경과 확보한 근거로 연구 기준을 충족하는 설계를 마련하지 못해 실험과 원고 생성을 진행하지 않았습니다. 검토 이유를 참고해 목표와 비교 방법을 바꾼 새 연구를 시작하세요.</p>}
+                {job.code === "MANUSCRIPT_REJECTED" && job.pipeline !== "running" && <p className="detail-note" role="status">원고가 품질 검토를 통과하지 못해 결과 파일을 생성하지 않았습니다. 보존된 실험 결과와 검토 이유를 확인하세요.</p>}
                 {snapshot.cleanupResearchIds.includes(job.id) && job.pipeline !== "running" && (
                   <p className="detail-note" role="status">실험 종료와 기록 보존을 확인해야 새 연구와 계정 변경을 할 수 있습니다. 로그인 없이 정리 확인을 다시 시도할 수 있습니다.</p>
                 )}
@@ -271,19 +314,19 @@ export function ResearchPane({ connection, connectionBusy, onBusyChange, view, o
                       {pending === "cancel" ? "정리 확인 중…" : "정리 다시 확인"}
                     </Button>
                   )}
-                  {["idle", "paused", "failed"].includes(job.pipeline) && job.resumeKind && !snapshot.cleanupResearchIds.includes(job.id) && (
+                  {["idle", "paused", "failed"].includes(job.pipeline) && job.status !== "blocked" && !studyHoldCodes.includes(job.code ?? "") && job.resumeKind && !snapshot.cleanupResearchIds.includes(job.id) && (
                     <Button variant="outline" disabled={!canRun}
                       onClick={() => void runAction("resume", () => window.paperFactory.resumeResearch(job.id, model, reviewerModel))}>
                       {job.resumeKind === "preparation" ? "연구 준비 재개" : "원고 작성 재개"}
                     </Button>
                   )}
-                  {["idle", "paused", "failed"].includes(job.pipeline) && ["created", "planned", "analyzed"].includes(job.stage) &&
+                  {["idle", "paused", "failed"].includes(job.pipeline) && ["created", "proposed", "planned", "analyzed"].includes(job.stage) &&
                     ["ready", "cancelled"].includes(job.status) && (
                     <Button variant="outline" disabled={locked}
                       onClick={() => void runAction("evidence", () => window.paperFactory.addResearchEvidence(job.id))}>추가 근거 선택</Button>
                   )}
                 </div>
-                {(["created", "planned", "analyzed"].includes(job.stage) || job.supportingDocuments.length > 0) && (
+                {(["created", "proposed", "planned", "analyzed"].includes(job.stage) || job.supportingDocuments.length > 0) && (
                   <div className="space-y-2">
                     <p className="detail-note">원문 문서(.md·.txt·.json, 영문 파일명)를 다음 작성·검토 요청과 재현 ZIP에 포함합니다. 각 128 KiB, 연구당 최대 8개·256 KiB입니다. 측정·고정 계획·리뷰 승인을 변경하지 않으며, 가져온 시각은 문서 안의 사전 활동 주장을 증명하지 않습니다.</p>
                     <details className="detail-note"><summary>첨부 근거 {job.supportingDocuments.length}개</summary>
@@ -296,16 +339,17 @@ export function ResearchPane({ connection, connectionBusy, onBusyChange, view, o
                 {job.pipeline === "completed" && job.artifacts.some((artifact) => outputLabels[artifact.id]) && (
                   <div className="space-y-3 border-t-2 border-border pt-3">
                     <h4 className="font-semibold">생성된 결과 파일</h4>
+                    <p className="detail-note">완료 상태와 모델의 검토 통과는 학술지 심사나 채택을 의미하지 않습니다. 제출 전 원문 문헌·실험 설계·연구 기여를 직접 확인해 주세요.</p>
                     <div className="action-row">
                       <Button variant="outline" size="sm" disabled={locked}
                         onClick={() => void runAction("folder", () => window.paperFactory.showArtifactFolder(job.id,
                           job.artifacts.find(artifact => outputLabels[artifact.id])!.id))}>결과 폴더 열기</Button>
-                      {job.stage === "exported" && job.status === "completed" && (
+                      {job.stage === "exported" && job.status === "completed" && job.studyReview?.accepted && job.manuscriptReview?.accepted && (
                         <Button variant="outline" size="sm" disabled={!canRun}
                           onClick={() => void runAction("revise", () => window.paperFactory.reviseResearchWriting(job.id, model, reviewerModel))}>원고 수정</Button>
                       )}
                     </div>
-                    <p className="detail-note">원고 수정은 보존된 실험 결과로 새 원고와 리뷰를 작성합니다. 이전 결과 파일과 실험 기록은 보존됩니다.</p>
+                    {job.studyReview?.accepted && job.manuscriptReview?.accepted && <p className="detail-note">원고 수정은 보존된 실험 결과로 새 원고와 리뷰를 작성합니다. 이전 결과 파일과 실험 기록은 보존됩니다.</p>}
                     {job.artifacts.filter((artifact) => outputLabels[artifact.id]).map((artifact) => (
                       <div key={artifact.id} className="space-y-2">
                         <p className="text-sm">{outputLabels[artifact.id]} · {artifact.size.toLocaleString("ko-KR")} 바이트</p>

@@ -1,8 +1,8 @@
 """Bounded literature retrieval with an explicit distinction between metadata and reading.
 
 Only Crossref records, Crossref-provided abstracts, and allowlisted open-access
-PDFs are fetched. Search results are resolved again by DOI before they become
-sources. The collector does not infer a finding from a title or DOI.
+PDFs are fetched. Bibliographic search candidates are resolved by DOI before
+they become sources. The collector does not infer a finding from a title or DOI.
 """
 
 from __future__ import annotations
@@ -348,6 +348,14 @@ def _pdf_links(message: dict) -> list[str]:
     return list(dict.fromkeys(links))[:2]
 
 
+def _query_doi(query: str) -> str | None:
+    """Recognize an explicitly requested DOI without guessing one from a title."""
+    match = re.fullmatch(r"(?:https?://(?:dx\.)?doi\.org/|doi:\s*)?(10\.\d{4,9}/\S+)", query, re.I)
+    if match is None:
+        match = re.search(r"(?:\bdoi:\s*|https?://(?:dx\.)?doi\.org/)(10\.\d{4,9}/\S+)", query, re.I)
+    return _doi(match.group(1)) if match is not None else None
+
+
 def collect(
     queries: list[str], root: Path, *, limit: int = 6,
     cancel: Callable[[], bool] | None = None,
@@ -356,7 +364,10 @@ def collect(
 
     ``raw_path`` is relative to ``root`` and points to the artifact supporting
     the declared reading scope. Metadata remains separately recorded when an
-    allowed full text is fetched. ``cancelled`` preserves partial evidence.
+    allowed full text is fetched. All queries are attempted before candidates
+    are resolved in round-robin order. Explicit DOIs use an exact lookup;
+    bibliographic searches do not exclude records without Crossref abstracts.
+    ``cancelled`` preserves partial evidence. Query provenance is not relevance.
     """
     if isinstance(limit, bool) or not isinstance(limit, int) or not 0 <= limit <= 12:
         raise ValueError("Literature source limit must be between 0 and 12")
@@ -370,6 +381,9 @@ def collect(
         {"query": query, "provider": "Crossref", "status": "not_attempted", "attempted": False, "resolved_ids": []}
         for query in queries], "warnings": []}
     seen: set[str] = set()
+    candidates: list[list[str]] = []
+    candidate_queries: dict[str, list[dict]] = {}
+    exact_metadata: dict[str, tuple[bytes, str]] = {}
     try:
         with httpx.Client(timeout=httpx.Timeout(15.0, connect=5.0), follow_redirects=False,
                           headers={"User-Agent": "PaperFactory/0.6 (bounded literature collector)"}) as client:
@@ -377,34 +391,67 @@ def collect(
                 _check_cancel(cancel)
                 query = search["query"]
                 search.update(status="failed", attempted=True)
+                query_candidates: list[str] = []
+                candidates.append(query_candidates)
                 try:
-                    content, url, _ = _fetch(client, CROSSREF + "/works", params={"query.bibliographic": query, "rows": max(1, limit),
-                                                                                 "filter": "has-abstract:true"}, cancel=cancel)
+                    exact_doi = _query_doi(query)
+                    search["lookup"] = "doi" if exact_doi else "bibliographic"
+                    if exact_doi:
+                        search["requested_doi"] = exact_doi
+                        if exact_doi not in exact_metadata:
+                            content, url, _ = _fetch(client, CROSSREF + "/works/" + quote(exact_doi, safe=""), cancel=cancel)
+                        else:
+                            content, url = exact_metadata[exact_doi]
+                    else:
+                        content, url, _ = _fetch(client, CROSSREF + "/works", params={"query.bibliographic": query, "rows": max(1, limit)}, cancel=cancel)
                     path, digest = _save(root, "search-" + hashlib.sha256(query.encode()).hexdigest()[:16], "json", content)
                     search.update({"url": url, "raw_path": path, "sha256": digest})
                     data = json.loads(content)
-                    message = data.get("message") if isinstance(data, dict) and data.get("status") == "ok" else None
-                    items = message.get("items") if isinstance(message, dict) else None
-                    if not isinstance(items, list):
-                        raise ValueError("Crossref search did not return a result list")
+                    if exact_doi:
+                        resolved_doi, _, _, _ = _metadata(data)
+                        if resolved_doi != exact_doi:
+                            raise ValueError("Crossref resolved a different DOI")
+                        exact_metadata[exact_doi] = (content, url)
+                        items = [{"DOI": exact_doi}]
+                    else:
+                        message = data.get("message") if isinstance(data, dict) and data.get("status") == "ok" else None
+                        items = message.get("items") if isinstance(message, dict) else None
+                        if not isinstance(items, list):
+                            raise ValueError("Crossref search did not return a result list")
                     search["status"] = "succeeded"
                 except (ValueError, OSError, httpx.HTTPError) as error:
                     search["error"] = type(error).__name__
                     result["warnings"].append(f"Crossref search failed ({type(error).__name__}); no results were inferred")
                     continue
-                # A search filter does not establish reading scope: resolve each DOI again.
                 for item in items[:limit]:
-                    _check_cancel(cancel)
-                    if sum(source["scope"] != "metadata_only" for source in result["sources"]) >= limit:
-                        break
                     try:
                         candidate_doi = item.get("DOI") if isinstance(item, dict) else None
                         if not isinstance(candidate_doi, str):
                             raise ValueError("Crossref candidate has no DOI identifier")
                         doi = _doi(candidate_doi)
+                        if doi not in query_candidates:
+                            query_candidates.append(doi)
+                            candidate_queries.setdefault(doi, []).append(search)
+                    except ValueError as error:
+                        result["warnings"].append(f"Crossref candidate verification failed ({type(error).__name__}); candidate was omitted")
+
+            for rank in range(limit):
+                if sum(source["scope"] != "metadata_only" for source in result["sources"]) >= limit:
+                    break
+                for query_candidates in candidates:
+                    _check_cancel(cancel)
+                    if rank >= len(query_candidates):
+                        continue
+                    if sum(source["scope"] != "metadata_only" for source in result["sources"]) >= limit:
+                        break
+                    doi = query_candidates[rank]
+                    try:
                         if doi in seen:
                             continue
-                        metadata, metadata_url, _ = _fetch(client, CROSSREF + "/works/" + quote(doi, safe=""), cancel=cancel)
+                        if doi in exact_metadata:
+                            metadata, metadata_url = exact_metadata[doi]
+                        else:
+                            metadata, metadata_url, _ = _fetch(client, CROSSREF + "/works/" + quote(doi, safe=""), cancel=cancel)
                         document = json.loads(metadata)
                         resolved_doi, title, authors, year = _metadata(document)
                         if resolved_doi != doi:
@@ -417,7 +464,8 @@ def collect(
                                         "scope": "abstract" if abstract else "metadata_only",
                                         "excerpts": _excerpts(abstract) if abstract else [],
                                         "raw_path": metadata_path, "sha256": metadata_digest,
-                                        "metadata_path": metadata_path, "metadata_sha256": metadata_digest}
+                                        "metadata_path": metadata_path, "metadata_sha256": metadata_digest,
+                                        "queries": [search["query"] for search in candidate_queries[doi]]}
                         for pdf_url in _pdf_links(document["message"]):
                             _check_cancel(cancel)
                             try:
@@ -441,7 +489,8 @@ def collect(
                                             if existing["scope"] == "metadata_only"), None)
                             if replace is not None:
                                 result["sources"][replace] = source
-                        search["resolved_ids"].append(source_id)
+                        for search in candidate_queries[doi]:
+                            search["resolved_ids"].append(source_id)
                     except (ValueError, OSError, httpx.HTTPError) as error:
                         result["warnings"].append(f"Crossref candidate verification failed ({type(error).__name__}); candidate was omitted")
     except (ValueError, OSError, httpx.HTTPError) as error:

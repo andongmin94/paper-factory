@@ -1,5 +1,26 @@
-export type ResearchPhase = 'idle' | 'plan' | 'literature' | 'code' | 'code-review' | 'experiment' | 'manuscript' | 'manuscript-review' | 'export';
+export type ResearchPhase = 'idle' | 'plan' | 'literature' | 'study-review' | 'code' | 'code-review' | 'experiment' | 'manuscript' | 'manuscript-review' | 'export';
 export interface SupportingDocument { id: string; name: string; sha256: string; size: number }
+export interface ReviewCriterion { passed: boolean; reason: string }
+export interface StudyReview {
+  accepted: boolean;
+  issues: string[];
+  question: ReviewCriterion;
+  contribution: ReviewCriterion;
+  literature: ReviewCriterion;
+  comparison: ReviewCriterion;
+  sampling: ReviewCriterion;
+  feasibility: ReviewCriterion;
+  selected_sources: Array<{ source_id: string; excerpt_index: number; relevance: string }>;
+}
+export interface ManuscriptReview {
+  accepted: boolean;
+  issues: string[];
+  checks: string[];
+  contribution: ReviewCriterion;
+  literature: ReviewCriterion;
+  interpretation: ReviewCriterion;
+  presentation: ReviewCriterion;
+}
 export interface ResearchItem {
   resumeKind: 'preparation' | 'authoring' | null;
   id: string;
@@ -16,6 +37,8 @@ export interface ResearchItem {
   updatedAt: string;
   artifacts: Array<{ id: string; sha256: string; size: number }>;
   supportingDocuments: SupportingDocument[];
+  studyReview: StudyReview | null;
+  manuscriptReview: ManuscriptReview | null;
 }
 export interface ResearchSnapshot {
   runtime: { state: 'checking' | 'ready' | 'unavailable'; message: string; versions?: Record<string, string> };

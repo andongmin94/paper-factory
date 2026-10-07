@@ -145,6 +145,16 @@ def convert(markdown: Path, output: Path, *, pandoc: str | None = None, bibliogr
             settings = '\nset page(numbering: "1")\n' if page_numbers else '\nset page(numbering: none)\n'
             if line_numbers:
                 settings += 'set par.line(numbering: "1", numbering-scope: "document")\n'
+            # Scope wrapping to table cells; retain every printed identifier character.
+            # Typst table.cell show rules and grapheme clusters keep content out of
+            # neighboring columns without rewriting the retained Markdown or data.
+            settings += r'''
+show table.cell: cell => {
+  set text(size: 9pt, hyphenate: false)
+  show regex("[A-Za-z0-9_]{20,}"): word => text(word.text.clusters().join("\u{200b}"))
+  cell
+}
+'''
             # Native rules apply to the complete generated document.
             target.write_text('#show: body => {\n' + settings + 'body\n}\n' + typst_source, encoding="utf-8")
             # Pandoc generates the source; Typst's sandbox root is this directory.

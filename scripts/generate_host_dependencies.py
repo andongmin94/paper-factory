@@ -19,10 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PINS = {
     "pydantic": "2.13.5", "pydantic-core": "2.46.5", "annotated-types": "0.8.0",
     "typing-inspection": "0.4.4", "typing-extensions": "4.16.0",
-    "numpy": "2.5.3", "matplotlib": "3.11.2", "contourpy": "1.4.0",
-    "cycler": "0.12.1", "fonttools": "4.66.1", "kiwisolver": "1.5.1",
-    "packaging": "26.3", "pillow": "12.3.0", "pyparsing": "3.3.3",
-    "python-dateutil": "2.9.0.post0", "six": "1.17.0", "pypdf": "6.19.0",
+    "pypdf": "6.19.0",
     "python-docx": "1.2.0", "lxml": "6.1.3", "typst": "0.15.0",
     "pypandoc-binary": "1.17", "httpx": "0.28.1", "httpcore": "1.0.9",
     "anyio": "4.15.1", "certifi": "2026.7.22", "h11": "0.16.0",

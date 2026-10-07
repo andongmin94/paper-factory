@@ -367,11 +367,11 @@ if (isNative) {
   const probeDirectory = join(attempt, 'probe');
   await mkdir(probeDirectory);
   const probeEnvironment = { ...environment, PATH: '', PF_NODE_BIN: join(staging, profile.paths.node), PYPANDOC_PANDOC: join(staging, profile.paths.pandoc),
-    MPLCONFIGDIR: join(probeDirectory, 'matplotlib'), TYPST_FONT_PATHS: join(staging, 'fonts'), TEMP: probeDirectory, TMP: probeDirectory, TMPDIR: probeDirectory };
+    TYPST_FONT_PATHS: join(staging, 'fonts'), TEMP: probeDirectory, TMP: probeDirectory, TMPDIR: probeDirectory };
   const probeScript = join(attempt, 'probe.py');
   await writeFile(probeScript, String.raw`
 import hashlib, importlib, importlib.metadata, importlib.util, json, pathlib, sys
-modules = ['ssl', 'sqlite3', 'lzma', 'pydantic', 'pydantic_core', 'httpx', 'bs4', 'numpy', 'matplotlib', 'PIL', 'pypdf', 'docx', 'lxml', 'typst', 'paper_factory.workflow', 'paper_factory.ipc']
+modules = ['ssl', 'sqlite3', 'lzma', 'pydantic', 'pydantic_core', 'httpx', 'bs4', 'pypdf', 'docx', 'lxml', 'typst', 'paper_factory.workflow', 'paper_factory.ipc']
 root, scratch = map(pathlib.Path, sys.argv[1:3])
 for module in modules:
     imported = importlib.import_module(module)
@@ -385,15 +385,8 @@ from paper_factory.autonomous.quickjs_runner import QuickJSRunner
 runner = QuickJSRunner(root / 'quickjs-runtime', supervisor_root=scratch / 'quickjs-supervisor')
 runtime = runner.status()
 assert runtime['ready'] and runtime['backend'] == 'quickjs-wasm' and runtime['runtimes'] == ['quickjs'] and runtime['cleanup_confirmed'], runtime
-import matplotlib
-matplotlib.use('Agg')
-from matplotlib import pyplot
-figure, axis = pyplot.subplots(figsize=(3, 2))
-axis.plot([0, 1], [0, 1])
-figure.savefig(scratch / 'probe.png')
-pyplot.close(figure)
 source = scratch / 'probe.md'
-source.write_text('# Bundled runtime probe\n\nTrusted runtime diagnostic only.\n\n한국어 글꼴 검증을 진행합니다.\n\n![Bundled plot](probe.png)\n\n| Fixture | Count |\n| --- | ---: |\n| Probe | 1 |\n', encoding='utf-8')
+source.write_text('# Bundled runtime probe\n\nTrusted runtime diagnostic only.\n\n한국어 글꼴 검증을 진행합니다.\n\n| Fixture | Count |\n| --- | ---: |\n| Probe | 1 |\n', encoding='utf-8')
 from paper_factory.conversion import convert
 outputs = {}
 for extension in ('pdf', 'docx', 'tex'):
@@ -407,7 +400,7 @@ pdf = PdfReader(scratch / 'probe.pdf', strict=True)
 assert len(pdf.pages) == 1 and 'Trusted runtime diagnostic only.' in pdf.pages[0].extract_text()
 assert '한국어 글꼴 검증을 진행합니다.' in pdf.pages[0].extract_text()
 document = Document(scratch / 'probe.docx')
-assert len(document.inline_shapes) == 1 and len(document.tables) == 1
+assert not document.inline_shapes and len(document.tables) == 1
 assert any('Trusted runtime diagnostic only.' in p.text for p in document.paragraphs)
 assert 'Trusted runtime diagnostic only.' in (scratch / 'probe.tex').read_text(encoding='utf-8')
 print(json.dumps({'actualHostTested': True, 'python': sys.version.split()[0], 'isolated': bool(sys.flags.isolated), 'pipExcluded': True, 'imports': modules, 'quickjs': runtime, 'converters': outputs, 'pdfPages': len(pdf.pages), 'researchPaper': False, 'distributions': {d.metadata['Name']: d.version for d in importlib.metadata.distributions()}}))

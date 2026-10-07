@@ -13,7 +13,7 @@ from .models import Record, now, uid
 class ModelEvidenceReceipt(Record):
     """Main-process SDK evidence; no credentials or execution authority."""
     id: str = Field(pattern=r"^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$")
-    phase: Literal["plan", "code", "code-review", "manuscript", "manuscript-review"]
+    phase: Literal["plan", "study-review", "code", "code-review", "manuscript", "manuscript-review"]
     at: str = Field(max_length=40)
     model: str = Field(min_length=1, max_length=100)
     profileId: str = Field(min_length=1, max_length=128)
@@ -44,10 +44,11 @@ class Workflow(Record):
     project_id: str
     goal: str = Field(min_length=8, max_length=4000)
     status: Literal["ready", "running", "blocked", "failed", "cancelled", "completed"] = "ready"
-    stage: Literal["created", "planned", "code_ready", "execute", "analyzed", "manuscript", "exported"] = "created"
+    stage: Literal["created", "proposed", "planned", "code_ready", "execute", "analyzed", "manuscript", "exported"] = "created"
     created_at: str = Field(default_factory=now)
     updated_at: str = Field(default_factory=now)
     experiment_timeout_seconds: int = Field(default=300, ge=1, le=300)
+    proposal_attempt: int = Field(default=0, ge=0, le=3)
     code_attempt: int = Field(default=0, ge=0)
     execution_attempt: int = Field(default=0, ge=0)
     draft_attempt: int = Field(default=0, ge=0)

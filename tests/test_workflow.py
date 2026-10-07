@@ -1,4 +1,4 @@
-"""Native host submissions with synthetic runners; no inference or network."""
+"""Synthetic orchestration contracts; positive review fixtures prove no research value."""
 
 import base64
 import copy
@@ -27,6 +27,10 @@ def protocol():
         "feasible": True, "reason": "A production callable supports controlled synthetic contract checks.",
         "title": "Controlled transformation contract study for native workflow validation",
         "question": "How does the selected production transformation preserve protected fixture values?",
+        "research_gap": "Synthetic orchestration fixture; it does not establish a gap in actual literature.",
+        "expected_contribution": "Synthetic positive proposal for workflow tests, with no claim of academic contribution.",
+        "comparison_rationale": "The comparator exercises paired fixture plumbing and is not a research baseline.",
+        "sampling_rationale": "The fixed annotations exercise grid validation rather than representative sampling.",
         "runtime": "quickjs", "source_files": ["transform.js"], "production_entrypoint": "transform.js:transform",
         "dependencies": [], "conditions": ["production", "ablation"],
         "metrics": [{"name": "error", "unit": "events", "description": "Independently detected transformation contract violations."}],
@@ -83,6 +87,15 @@ def manuscript():
 
 
 REVIEW = {"accepted": True, "issues": [], "checks": ["Synthetic native host review fixture"]}
+STUDY_CRITERIA = ("question", "contribution", "literature", "comparison", "sampling", "feasibility")
+STUDY_REVIEW = {"accepted": True, "issues": [], **{
+    name: {"passed": True, "reason": "Synthetic positive decision fixture for orchestration; not an academic assessment."}
+    for name in STUDY_CRITERIA}, "selected_sources": [{
+        "source_id": "fixture-oracle", "excerpt_index": 0,
+        "relevance": "Synthetic passage selection exercises retained literature binding, not research relevance."}]}
+MANUSCRIPT_REVIEW = {**REVIEW, **{
+    name: {"passed": True, "reason": "Synthetic positive manuscript decision fixture; no scholarly adequacy is attested."}
+    for name in ("contribution", "literature", "interpretation", "presentation")}}
 BUNDLE = {"runtime": "quickjs", "entrypoint": "experiment.mjs", "files": [
     {"path": "experiment.mjs", "content": "export default function run() { throw new Error('Unexecuted synthetic fixture'); }\n"}],
     "explanation": "Controlled experiment fixture for deterministic workflow orchestration checks."}
@@ -158,8 +171,7 @@ def test_controller_requires_explicit_owned_home_and_runner(tmp_path):
 
 
 @pytest.fixture
-def setup(tmp_path, monkeypatch):
-    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
+def setup(tmp_path):
     source = tmp_path / "input"
     source.mkdir()
     (source / "transform.js").write_text("export function transform(values) { return values.slice(); }\n", encoding="utf-8")
@@ -176,9 +188,15 @@ def setup(tmp_path, monkeypatch):
         pass
 
 
-def prepare(service, research_id):
-    service.submit_plan(research_id, protocol())
+def approve_study(service, research_id):
+    """Simulate an accepted model decision; the fixture is not meaningful research."""
+    service.submit_proposal(research_id, protocol())
     service.collect_literature(research_id)
+    return service.submit_study_review(research_id, copy.deepcopy(STUDY_REVIEW))
+
+
+def prepare(service, research_id):
+    approve_study(service, research_id)
     service.submit_code(research_id, copy.deepcopy(BUNDLE), REVIEW)
 
 
@@ -212,7 +230,7 @@ def finished(service, research_id):
 
 def test_native_submissions_analyze_actual_runner_artifacts(setup):
     service, runner, research_id = setup
-    assert set(service.status(research_id)["schemas"]) == {"plan", "code", "review", "manuscript"}
+    assert set(service.status(research_id)["schemas"]) == {"plan", "code", "review", "manuscript", "study_review", "manuscript_review"}
     prepare(service, research_id)
     started = service.start_experiment(research_id)
     assert started["status"] == "running" and "active_handle" not in started
@@ -220,11 +238,256 @@ def test_native_submissions_analyze_actual_runner_artifacts(setup):
     assert result["stage"] == "analyzed" and result["status"] == "ready"
     assert result["analysis"]["results"]["error.condition_1.mean"]["value"] == 0
     assert runner.calls == 1
-    result = service.submit_manuscript(research_id, manuscript(), REVIEW)
+    result = service.submit_manuscript(research_id, manuscript(), MANUSCRIPT_REVIEW)
     assert result["stage"] == "manuscript"
     review = json.loads(service.artifact_path(research_id, "manuscript-review").read_text())
     assert review["origin"] == "native_host_submission"
     assert review["analysis_sha256"] == result["artifacts"]["analysis"]["sha256"]
+
+
+def test_proposal_requires_literature_and_suitability_before_protocol_freezes(setup):
+    service, runner, research_id = setup
+    proposed = service.submit_proposal(research_id, protocol())
+    assert proposed["stage"] == "proposed" and proposed["proposal_attempt"] == 1
+    assert "proposal" in proposed["artifacts"] and "plan" not in proposed["artifacts"]
+    assert "plan" not in proposed and runner.calls == 0
+    with pytest.raises(WorkflowError):
+        service.submit_study_review(research_id, STUDY_REVIEW)
+    with pytest.raises(WorkflowError):
+        service.submit_code(research_id, BUNDLE, REVIEW)
+    service.collect_literature(research_id)
+    accepted = service.submit_study_review(research_id, STUDY_REVIEW)
+    assert accepted["stage"] == "planned" and accepted["status"] == "ready"
+    assert {"proposal", "proposal-1", "plan", "study-review", "study-review-1", "selected-literature"} <= set(accepted["artifacts"])
+    assert service.artifact_path(research_id, "proposal").read_bytes() == service.artifact_path(research_id, "plan").read_bytes()
+    approval = json.loads(service.artifact_path(research_id, "study-review").read_bytes())
+    for field, key in (("proposal_sha256", "proposal"), ("protocol_sha256", "plan"),
+                       ("literature_sha256", "literature"), ("selected_literature_sha256", "selected-literature")):
+        assert approval[field] == accepted["artifacts"][key]["sha256"]
+    assert runner.calls == 0
+
+
+@pytest.mark.parametrize("criterion", STUDY_CRITERIA)
+def test_study_acceptance_cannot_override_a_failed_quality_criterion(setup, criterion):
+    service, runner, research_id = setup
+    service.submit_proposal(research_id, protocol())
+    service.collect_literature(research_id)
+    contradictory = copy.deepcopy(STUDY_REVIEW)
+    contradictory[criterion]["passed"] = False
+    with pytest.raises(ValueError, match="acceptance"):
+        service.submit_study_review(research_id, contradictory)
+    state = service.status(research_id)
+    assert state["stage"] == "proposed" and "plan" not in state["artifacts"]
+    assert "study-review" not in state["artifacts"] and runner.calls == 0
+
+
+def rejected_study_review():
+    review = copy.deepcopy(STUDY_REVIEW)
+    review["accepted"] = False
+    review["contribution"]["passed"] = False
+    review["contribution"]["reason"] = "This is a trivial contract check with no justified contribution beyond existing behavior."
+    review["issues"] = ["A routine regression fixture does not establish a worthwhile academic contribution."]
+    review["selected_sources"] = []
+    return review
+
+
+def test_weak_study_is_blocked_before_code_measurement_and_export_and_cannot_resume(setup):
+    service, runner, research_id = setup
+    service.submit_proposal(research_id, protocol())
+    service.collect_literature(research_id)
+    rejected = service.submit_study_review(research_id, rejected_study_review())
+    assert rejected["status"] == "blocked" and rejected["code"] == "STUDY_REJECTED"
+    assert rejected["stage"] == "proposed" and rejected["resume_kind"] is None
+    assert "plan" not in rejected["artifacts"]
+    assert not {"bundle", "observations", "analysis", "manuscript", "export-pdf"} & set(rejected["artifacts"])
+    for operation in (lambda: service.submit_code(research_id, BUNDLE, REVIEW),
+                      lambda: service.start_experiment(research_id), lambda: service.export(research_id),
+                      lambda: service.resume(research_id)):
+        with pytest.raises(WorkflowError):
+            operation()
+    assert runner.calls == 0
+    receipt = json.loads(service.artifact_path(research_id, "study-review-1").read_bytes())
+    assert receipt["review"] == rejected_study_review()
+    cancelled = service.cancel(research_id)
+    assert cancelled["resume_kind"] is None
+    with pytest.raises(WorkflowError):
+        service.resume(research_id)
+    assert runner.calls == 0
+
+
+def test_rejected_proposals_can_be_improved_at_most_three_times_without_erasing_history(setup):
+    service, runner, research_id = setup
+    preserved = {}
+    for attempt in range(1, 4):
+        proposal = protocol()
+        proposal["expected_contribution"] += f" Synthetic revision label {attempt}."
+        state = service.submit_proposal(research_id, proposal)
+        assert state["proposal_attempt"] == attempt and state["status"] == "ready"
+        service.collect_literature(research_id)
+        service.submit_study_review(research_id, rejected_study_review())
+        for key in (f"proposal-{attempt}", f"study-review-{attempt}"):
+            preserved[key] = service.artifact_path(research_id, key).read_bytes()
+        assert all(service.artifact_path(research_id, key).read_bytes() == data for key, data in preserved.items())
+    with pytest.raises(WorkflowError) as blocked:
+        service.submit_proposal(research_id, protocol())
+    assert blocked.value.code == "PROPOSAL_LIMIT"
+    state = service.status(research_id)
+    assert state["proposal_attempt"] == 3 and state["code"] == "STUDY_REJECTED"
+    assert all(service.artifact_path(research_id, key).read_bytes() == data for key, data in preserved.items())
+    assert "plan" not in state["artifacts"] and runner.calls == 0
+
+
+def test_rejected_normalized_proposal_cannot_repeat_or_duplicate_instrumentation(setup):
+    service, runner, research_id = setup
+    service.submit_proposal(research_id, protocol())
+    normalized = json.loads(service.artifact_path(research_id, "proposal").read_bytes())
+    instrumentation = "Production-call instrumentation affects execution overhead; measurements cannot establish uninstrumented production performance."
+    assert sum(text.count(instrumentation) for text in normalized["limitations"]) == 1
+    service.collect_literature(research_id)
+    service.submit_study_review(research_id, rejected_study_review())
+    frozen = {key: service.artifact_path(research_id, key).read_bytes()
+              for key in ("proposal-1", "study-review-1", "literature")}
+    for unchanged in (copy.deepcopy(normalized), protocol()):
+        with pytest.raises(WorkflowError) as rejected:
+            service.submit_proposal(research_id, unchanged)
+        assert rejected.value.code == "PROPOSAL_UNCHANGED"
+        assert service.status(research_id)["proposal_attempt"] == 1
+        assert all(service.artifact_path(research_id, key).read_bytes() == content for key, content in frozen.items())
+    revised = copy.deepcopy(normalized)
+    revised["expected_contribution"] += " A revised synthetic design must distinguish annotated migration cases."
+    proposed = service.submit_proposal(research_id, revised)
+    assert proposed["proposal_attempt"] == 2 and proposed["stage"] == "proposed"
+    assert sum(text.count(instrumentation) for text in proposed["proposal"]["limitations"]) == 1
+    assert all(service.artifact_path(research_id, key).read_bytes() == content
+               for key, content in frozen.items() if key != "literature")
+    assert runner.calls == 0
+
+
+@pytest.mark.parametrize("defect", ["unknown", "metadata", "out_of_bounds"])
+def test_suitability_selection_must_bind_a_retrieved_readable_source_excerpt(setup, defect):
+    service, runner, research_id = setup
+    service.submit_proposal(research_id, protocol())
+    if defect == "metadata":
+        def metadata_collector(*args, **kwargs):
+            evidence = collect(*args, **kwargs)
+            evidence["sources"][0].update(scope="metadata_only", excerpts=[])
+            return evidence
+        service.collector = metadata_collector
+        with pytest.raises(WorkflowError, match="Metadata"):
+            service.collect_literature(research_id)
+    else:
+        service.collect_literature(research_id)
+    review = copy.deepcopy(STUDY_REVIEW)
+    if defect == "unknown":
+        review["selected_sources"][0]["source_id"] = "not-retrieved"
+    elif defect == "out_of_bounds":
+        review["selected_sources"][0]["excerpt_index"] = 1
+    with pytest.raises(WorkflowError) as rejected:
+        service.submit_study_review(research_id, review)
+    assert rejected.value.code == "LITERATURE_SELECTION_INVALID"
+    assert "plan" not in service.status(research_id)["artifacts"] and runner.calls == 0
+
+
+def test_only_selected_literature_is_available_to_writer_and_citation_validation(setup):
+    service, runner, research_id = setup
+    def two_sources(*args, **kwargs):
+        evidence = collect(*args, **kwargs)
+        first, second = evidence["sources"][0]["excerpts"][0].split(". ", 1)
+        evidence["sources"][0]["excerpts"] = [first + ".", second]
+        evidence["sources"].append({**evidence["sources"][0], "id": "unselected-source",
+                                   "title": "Unrelated source that was retrieved but not selected"})
+        return evidence
+    service.collector = two_sources
+    service.submit_proposal(research_id, protocol())
+    service.collect_literature(research_id)
+    raw_path = service.artifact_path(research_id, "literature")
+    raw_bytes = raw_path.read_bytes()
+    review = copy.deepcopy(STUDY_REVIEW)
+    review["selected_sources"][0]["excerpt_index"] = 1
+    service.submit_study_review(research_id, review)
+    service.submit_code(research_id, BUNDLE, REVIEW)
+    state = service.status(research_id)
+    assert [source["id"] for source in state["literature"]["sources"]] == ["fixture-oracle"]
+    raw = json.loads(raw_bytes)
+    assert raw_path.read_bytes() == raw_bytes
+    assert {source["id"] for source in raw["sources"]} == {"fixture-oracle", "unselected-source"}
+    selected_source = state["literature"]["sources"][0]
+    assert selected_source["excerpts"] == [raw["sources"][0]["excerpts"][1]]
+    assert selected_source["selected_excerpt_index"] == 1
+    service.start_experiment(research_id)
+    analyzed = finished(service, research_id)
+    assert "unselected-source" not in analyzed["instructions"]
+    assert raw["sources"][0]["excerpts"][0] not in analyzed["instructions"]
+    bad = manuscript()
+    related = next(section for section in bad["sections"] if section["heading"] == "Related Work")
+    related["text"] = related["text"].replace("{{citation:fixture-oracle}}", "{{citation:unselected-source}}")
+    with pytest.raises(ValueError, match="unknown citation"):
+        service.submit_manuscript(research_id, bad, MANUSCRIPT_REVIEW)
+    assert service.status(research_id)["stage"] == "analyzed" and runner.calls == 1
+
+
+@pytest.mark.parametrize("criterion", ["contribution", "literature", "interpretation", "presentation"])
+def test_manuscript_acceptance_requires_all_quality_criteria(setup, criterion):
+    service, runner, research_id = setup
+    prepare(service, research_id)
+    service.start_experiment(research_id)
+    assert finished(service, research_id)["stage"] == "analyzed"
+    review = copy.deepcopy(MANUSCRIPT_REVIEW)
+    review[criterion]["passed"] = False
+    with pytest.raises(ValueError, match="acceptance"):
+        service.submit_manuscript(research_id, manuscript(), review)
+    assert "manuscript" not in service.status(research_id)["artifacts"] and runner.calls == 1
+
+
+def test_rejected_manuscript_retains_decision_and_draft_without_export_or_new_experiment(setup):
+    service, runner, research_id = setup
+    prepare(service, research_id)
+    service.start_experiment(research_id)
+    assert finished(service, research_id)["stage"] == "analyzed"
+    rejected_review = copy.deepcopy(MANUSCRIPT_REVIEW)
+    rejected_review["accepted"] = False
+    rejected_review["contribution"]["passed"] = False
+    rejected_review["contribution"]["reason"] = "The draft turns a trivial contract check into a paper without useful new knowledge."
+    rejected_review["issues"] = ["The evidence does not justify the manuscript's asserted research contribution."]
+    rejected = service.submit_manuscript(research_id, manuscript(), rejected_review)
+    assert rejected["stage"] == "analyzed" and rejected["status"] == "blocked"
+    assert rejected["code"] == "MANUSCRIPT_REJECTED" and rejected["manuscript_review"] == rejected_review
+    assert "manuscript" not in rejected["artifacts"] and "export-pdf" not in rejected["artifacts"]
+    frozen = {key: service.artifact_path(research_id, key).read_bytes()
+              for key in ("draft-1", "manuscript-review-1", "observations", "analysis")}
+    with pytest.raises(WorkflowError):
+        service.export(research_id)
+    accepted = service.submit_manuscript(research_id, manuscript(), MANUSCRIPT_REVIEW)
+    assert accepted["stage"] == "manuscript" and accepted["status"] == "ready" and accepted["code"] is None
+    assert accepted["draft_attempt"] == 2 and accepted["manuscript_review"]["accepted"] is True
+    assert all(service.artifact_path(research_id, key).read_bytes() == content for key, content in frozen.items())
+    assert runner.calls == 1
+
+
+@pytest.mark.parametrize("target", ["proposal", "study-review", "literature", "selected-literature"])
+def test_study_binding_cannot_be_bypassed_by_rehashing_a_changed_artifact(setup, target):
+    service, runner, research_id = setup
+    prepare(service, research_id)
+    ws = Workspace(service.root / research_id)
+    record = ws.get("workflow", research_id, Workflow)
+    artifact = record.artifacts[target]
+    path = ws.path(artifact.path)
+    content = json.loads(path.read_bytes())
+    if target == "proposal":
+        content["expected_contribution"] += " Altered after research review."
+    elif target == "study-review":
+        content["literature_sha256"] = "0" * 64
+    else:
+        content["sources"][0]["title"] += " Altered after research review."
+    write_json(path, content)
+    changed = FrozenArtifact(path=artifact.path, sha256=digest_file(path), size=path.stat().st_size)
+    for key, existing in list(record.artifacts.items()):
+        if existing.path == artifact.path:
+            record.artifacts[key] = changed
+    ws.save("workflow", record)
+    with pytest.raises(WorkflowError) as rejected:
+        service.start_experiment(research_id)
+    assert rejected.value.code == "ARTIFACT_CHANGED" and runner.calls == 0
 
 
 def test_successful_evidence_cannot_be_rerun_or_replanned(setup):
@@ -237,14 +500,14 @@ def test_successful_evidence_cannot_be_rerun_or_replanned(setup):
             operation()
         assert rejected.value.code == "EXPERIMENT_ALREADY_DISPATCHED"
     with pytest.raises(WorkflowError, match="stage"):
-        service.submit_plan(research_id, protocol())
+        approve_study(service, research_id)
     assert runner.calls == 1
 
 
 @pytest.mark.parametrize("field", ["accepted", "issues"])
 def test_native_review_rejection_prevents_dispatch(setup, field):
     service, runner, research_id = setup
-    service.submit_plan(research_id, protocol())
+    approve_study(service, research_id)
     review = copy.deepcopy(REVIEW)
     review[field] = False if field == "accepted" else ["Independent oracle defect"]
     with pytest.raises(WorkflowError, match="defect|accept"):
@@ -252,7 +515,7 @@ def test_native_review_rejection_prevents_dispatch(setup, field):
     assert runner.calls == 0 and service.status(research_id)["stage"] == "planned"
 
 
-@pytest.mark.parametrize("target", ["plan", "bundle", "source", "generated", "extra"])
+@pytest.mark.parametrize("target", ["proposal", "plan", "study-review", "selected-literature", "literature", "bundle", "source", "generated", "extra"])
 def test_frozen_artifacts_cannot_change_before_execution(setup, target):
     service, runner, research_id = setup
     prepare(service, research_id)
@@ -312,7 +575,7 @@ def test_runner_evidence_must_satisfy_production_and_observation_contracts(setup
 
 def test_code_validation_repairs_remain_available_before_first_dispatch(setup):
     service, runner, research_id = setup
-    service.submit_plan(research_id, protocol())
+    approve_study(service, research_id)
     forged = copy.deepcopy(BUNDLE)
     forged["observations"] = observations()
     with pytest.raises(ValueError):
@@ -345,7 +608,7 @@ def test_code_validation_repairs_remain_available_before_first_dispatch(setup):
 @pytest.mark.parametrize("entrypoint", ["experiment.py", "experiment.ts", "experiment.json"])
 def test_code_bundle_cannot_execute_native_or_non_module_files(setup, entrypoint):
     service, runner, research_id = setup
-    service.submit_plan(research_id, protocol())
+    approve_study(service, research_id)
     forged = copy.deepcopy(BUNDLE)
     forged["files"][0]["path"] = forged["entrypoint"] = entrypoint
     with pytest.raises(ValueError):
@@ -672,12 +935,14 @@ def retained_authoring_fixture(service, research_id):
     return ws
 
 
-@pytest.mark.parametrize("stage", ["created", "planned", "code_ready"])
+@pytest.mark.parametrize("stage", ["created", "proposed", "planned", "code_ready"])
 @pytest.mark.parametrize("previous_status", ["ready", "cancelled"])
 def test_preparation_resume_preserves_verified_inputs_and_never_dispatches(setup, stage, previous_status, monkeypatch):
     service, runner, research_id = setup
-    if stage == "planned":
-        service.submit_plan(research_id, protocol())
+    if stage == "proposed":
+        service.submit_proposal(research_id, protocol())
+    elif stage == "planned":
+        approve_study(service, research_id)
     elif stage == "code_ready":
         prepare(service, research_id)
     state = service.cancel(research_id) if previous_status == "cancelled" else service.status(research_id)
@@ -1018,7 +1283,18 @@ def test_native_export_reopens_files_and_recomputes_observations(setup, pandoc):
     prepare(service, research_id)
     service.start_experiment(research_id)
     assert finished(service, research_id)["stage"] == "analyzed"
-    service.submit_manuscript(research_id, manuscript(), REVIEW)
+    # An explicit image fixture tests companion export without automatic graphs.
+    ws = Workspace(service.root / research_id)
+    record = ws.get("workflow", research_id, Workflow)
+    image = ws.path("research/analysis-fixture/figure-1.png")
+    image.parent.mkdir(parents=True)
+    image.write_bytes(base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAADAAAAAgCAIAAADbtmxLAAAAOElEQVR4nO3OoQEAIAzAsP3/NPiZSBDNBZnz"
+        "mXkd2ApJISkkhaSQFJJCUkgKSSEpJIWkkBSSQnIBd/rvALsGC8oAAAAASUVORK5CYII="))
+    record.artifacts["analysis-figure-1.png"] = FrozenArtifact(
+        path=image.relative_to(ws.root).as_posix(), sha256=digest_file(image), size=image.stat().st_size)
+    ws.save("workflow", record)
+    service.submit_manuscript(research_id, manuscript(), MANUSCRIPT_REVIEW)
     with pytest.MonkeyPatch.context() as monkeypatch:
         monkeypatch.setenv("PYPANDOC_PANDOC", pandoc)
         result = service.export(research_id)
@@ -1054,6 +1330,95 @@ def test_native_export_reopens_files_and_recomputes_observations(setup, pandoc):
     assert runner.calls == 1
 
 
+def test_concise_manuscript_exports_real_native_documents_and_archive(setup, pandoc):
+    from docx import Document
+    from pypdf import PdfReader
+
+    service, runner, research_id = setup
+    prepare(service, research_id)
+    service.start_experiment(research_id)
+    assert finished(service, research_id)["stage"] == "analyzed"
+    prose = {
+        "Abstract": (
+            "This synthetic fixture verifies that concise evidence linked manuscripts survive native document conversion. "
+            "The paired mean error difference is {{result:error.paired_2_minus_1.mean}} events. "
+            "Measurements originate from an orchestration test runner, so the comparison validates artifact plumbing rather than scientific contribution or production correctness."),
+        "Introduction": (
+            "A document pipeline should preserve the content of an appropriately short manuscript without requiring repetition. "
+            "This fixture addresses a conversion regression in which accepted prose could later fail a stricter document length check. "
+            "The generated files provide concrete evidence of consistent handling across export formats."),
+        "Related Work": (
+            "The inspected synthetic passage describes expected outcomes defined independently of the implementation "
+            "and warns that controlled annotations cannot establish population failure rates {{citation:fixture-oracle}}. "
+            "It supplies a fixture citation for reference binding. "
+            "It is not a published source and cannot establish an academic research gap."),
+        "Research Questions": (
+            "The fixture asks whether concise structured prose retains its declared results, required sections, and inspected reference "
+            "when rendered into native documents. "
+            "It also checks whether conversion receipts and archive membership preserve the same manuscript bytes. "
+            "These are bounded engineering checks rather than claims about a population."),
+        "Method": (
+            "The test controller freezes source and protocol records before accepting simulated runner observations. "
+            "Trusted analysis computes descriptive summaries from those records. "
+            "The manuscript inserts numerical placeholders instead of copied quantities and selects an inspected fixture excerpt. "
+            "Native converters then produce documents that the controller independently reopens."),
+        "Experimental Setup": (
+            "The protocol specifies {{parameter:units_per_seed}} units for each seed and retains the complete condition grid. "
+            "Its instrumentation setting is {{parameter:setting.execution_instrumentation}}. "
+            "The synthetic runner supplies explicit positive and intentional fault controls. "
+            "Neither its replayed measurements nor bridge overhead justify claims about uninstrumented production performance."),
+        "Results": (
+            "The production mean error is {{result:error.condition_1.mean}} events, and the ablation mean error is "
+            "{{result:error.condition_2.mean}} events. "
+            "The paired mean difference is {{result:error.paired_2_minus_1.mean}} events. "
+            "These values describe the retained synthetic matrix. "
+            "Their agreement across prose and trusted tables tests numerical reference preservation."),
+        "Discussion": (
+            "A concise document can explain the fixture purpose and report its actual summaries without repeating generic text. "
+            "Successful conversion means that native output preserves the supplied structure and evidence references. "
+            "It does not promote a routine testing fixture into academically useful research or establish novelty."),
+        "Threats to Validity": (
+            "The test runner supplies simulated outputs and invocation records rather than observing an application workload. "
+            "The annotations and protocol are deliberately narrow. "
+            "Consequently this fixture cannot demonstrate independent sampling, realistic failure prevalence, or general software correctness. "
+            "Converter success also cannot substitute for scientific manuscript assessment."),
+        "Limitations": (
+            "The manuscript exercises native conversion and archive integrity using a small controlled fixture. "
+            "It contains no runtime benchmark, human study, or external research evaluation. "
+            "Its positive model review is a test double. "
+            "The retained source and observations support orchestration checks and must not be described as publication evidence."),
+        "Conclusion": (
+            "The concise fixture links declared summaries to retained observations while preserving its scientific limitations. "
+            "Its native documents and archive test the expected export path without adding prose solely to satisfy a larger length threshold. "
+            "Research quality remains a separate question that this regression fixture does not answer."),
+    }
+    draft = {"title": "Concise synthetic manuscript for native conversion regression",
+             "sections": [{"heading": heading, "text": prose[heading]} for heading in science.REQUIRED_SECTIONS]}
+    count = sum(len(re.findall(r"\b[\w'-]+\b", science.PLACEHOLDER.sub("evidence", section["text"])))
+                for section in draft["sections"])
+    assert 300 <= count <= 700 and len(draft["sections"]) == 11
+    service.submit_manuscript(research_id, draft, MANUSCRIPT_REVIEW)
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setenv("PYPANDOC_PANDOC", pandoc)
+        exported = service.export(research_id)
+    assert exported["stage"] == "exported" and exported["status"] == "completed"
+    markdown = service.artifact_path(research_id, "export-md").read_text(encoding="utf-8")
+    assert draft["title"] in markdown and "{{result:" not in markdown
+    word = Document(service.artifact_path(research_id, "export-docx"))
+    word_text = "\n".join(paragraph.text for paragraph in word.paragraphs)
+    assert 300 <= len(re.findall(r"\b[\w'-]+\b", word_text)) < 1000
+    assert draft["title"] in word_text and all(heading in word_text for heading in science.REQUIRED_SECTIONS)
+    pdf = PdfReader(service.artifact_path(research_id, "export-pdf"))
+    assert pdf.pages and any(page.extract_text() for page in pdf.pages)
+    tex = service.artifact_path(research_id, "export-tex").read_text(encoding="utf-8")
+    assert "\\begin{document}" in tex and "\\end{document}" in tex
+    with zipfile.ZipFile(service.artifact_path(research_id, "reproducibility")) as archive:
+        assert archive.testzip() is None
+        assert {"paper.md", "paper.pdf", "paper.docx", "paper.tex"} <= set(archive.namelist())
+        assert archive.read("paper.md") == service.artifact_path(research_id, "export-md").read_bytes()
+    assert runner.calls == 1
+
+
 VERIFICATION_PHASES = ["artifact-source-validation", "trusted-analysis", "manuscript-rendering",
                        "pdf", "docx", "tex-conversion", "zip", "complete"]
 
@@ -1070,7 +1435,7 @@ def synthetic_verification_export(setup, monkeypatch):
 
     service, runner, research_id = setup
     ws = retained_authoring_fixture(service, research_id)
-    service.submit_manuscript(research_id, manuscript(), REVIEW)
+    service.submit_manuscript(research_id, manuscript(), MANUSCRIPT_REVIEW)
 
     def no_analysis_rendering(*args, **kwargs):
         pytest.fail("Export verification must recompute values without analysis files or figures")
@@ -1082,12 +1447,14 @@ def synthetic_verification_export(setup, monkeypatch):
         return {"input_sha256": digest_file(markdown), "output_sha256": digest_file(output)}
 
     monkeypatch.setattr(science, "analyze", no_analysis_rendering)
-    monkeypatch.setattr(science, "_figures", no_analysis_rendering)
     monkeypatch.setattr(conversion, "convert", fixture_conversion)
     monkeypatch.setattr(pypdf, "PdfReader", lambda *args, **kwargs: SimpleNamespace(
         is_encrypted=False, pages=[SimpleNamespace(extract_text=lambda: "Synthetic readable PDF fixture.")]))
-    monkeypatch.setattr(docx, "Document", lambda *args, **kwargs: SimpleNamespace(
-        paragraphs=[SimpleNamespace(text="synthetic document fixture " * 400)]))
+    def fixture_word_document(path, *args, **kwargs):
+        markdown = Path(path).with_suffix(".md").read_text(encoding="utf-8")
+        return SimpleNamespace(paragraphs=[SimpleNamespace(text=markdown)])
+
+    monkeypatch.setattr(docx, "Document", fixture_word_document)
     return service, runner, research_id, ws
 
 
@@ -1148,6 +1515,36 @@ def test_verification_recomputes_equal_values_without_rendering_analysis_and_fsy
     assert validation["passed"] is True and validation["final_verification_in_archive"] is False
     assert result["stage"] == "exported" and result["status"] == "completed"
     assert result["execution_attempt"] == 1 and runner.calls == 0
+
+
+@pytest.mark.parametrize("defect", ["too_short", "missing_title", "missing_heading"])
+def test_word_verification_requires_content_title_and_each_canonical_heading(setup, monkeypatch, defect):
+    import docx
+
+    service, runner, research_id, ws = synthetic_verification_export(setup, monkeypatch)
+    canonical = json.loads(service.artifact_path(research_id, "canonical").read_bytes())
+    paragraphs = [] if defect == "missing_title" else [canonical["title"]]
+    for section in canonical["sections"]:
+        if not (defect == "missing_heading" and section["heading"] == "Threats to Validity"):
+            paragraphs.append(section["heading"])
+        if defect != "too_short":
+            paragraphs.append(section["text"])
+    word_count = len(re.findall(r"\b[\w'-]+\b", "\n".join(paragraphs)))
+    if defect == "too_short":
+        assert word_count < 300
+    else:
+        assert word_count >= 300
+    monkeypatch.setattr(docx, "Document", lambda *args, **kwargs: SimpleNamespace(
+        paragraphs=[SimpleNamespace(text=text) for text in paragraphs]))
+
+    with pytest.raises(ValueError, match="Native Word manuscript is incomplete"):
+        service.export(research_id)
+    journals = list(ws.path("research/exports").glob("*/verification.jsonl"))
+    assert len(journals) == 1
+    assert [row["phase"] for row in verification_rows(journals[0])] == VERIFICATION_PHASES[:5]
+    state = service.status(research_id)
+    assert state["stage"] == "manuscript" and state["execution_attempt"] == 1
+    assert runner.calls == 0
 
 
 @pytest.mark.parametrize("field", ["results", "parameters", "controls", "protocol_digest", "observation_digest", "summaries", "paired_deltas"])
@@ -1307,7 +1704,7 @@ def test_completed_export_revision_preserves_bytes_and_approval_then_requires_a_
 
     revised_draft = manuscript()
     revised_draft["title"] += " revised"
-    manuscript_state = service.submit_manuscript(research_id, revised_draft, REVIEW)
+    manuscript_state = service.submit_manuscript(research_id, revised_draft, MANUSCRIPT_REVIEW)
     assert manuscript_state["draft_attempt"] == 2
     fresh_review = json.loads(service.artifact_path(research_id, "manuscript-review").read_bytes())
     old_review = json.loads(original["manuscript-review"][1])
@@ -1343,7 +1740,7 @@ def test_completed_export_revision_preserves_bytes_and_approval_then_requires_a_
     again = service.revise_writing(research_id)
     assert len([key for key in again["artifacts"] if key.startswith("authoring-revision-")]) == 2
     revised_draft["title"] += " again"
-    service.submit_manuscript(research_id, revised_draft, REVIEW)
+    service.submit_manuscript(research_id, revised_draft, MANUSCRIPT_REVIEW)
     service.export(research_id)
     with zipfile.ZipFile(service.artifact_path(research_id, "reproducibility")) as archive:
         assert archive.testzip() is None and not any(name.endswith(".zip") for name in archive.namelist())
@@ -1429,11 +1826,16 @@ def test_writing_revision_rejects_unsafe_or_changed_completed_evidence_before_mu
                 value["manuscript_sha256"] = "0" * 64
             elif defect == "rejected_review":
                 value["review"]["accepted"] = False
+                value["review"]["issues"] = ["Synthetic manuscript quality rejection."]
             else:
                 value["observations"][0]["value"] = 99
             write_json(path, value)
         if defect != "tampered_raw":
-            record.artifacts[key] = FrozenArtifact(path=path.relative_to(ws.root).as_posix(), sha256=digest_file(path), size=path.stat().st_size)
+            artifact_path = path.relative_to(ws.root).as_posix()
+            changed = FrozenArtifact(path=artifact_path, sha256=digest_file(path), size=path.stat().st_size)
+            for alias, artifact in list(record.artifacts.items()):
+                if artifact.path == artifact_path:
+                    record.artifacts[alias] = changed
     ws.save("workflow", record)
     prior = record.model_dump(mode="json")
     files = {path: path.read_bytes() for path in ws.path("research").rglob("*") if path.is_file()}
@@ -1467,9 +1869,9 @@ def test_failed_revised_authoring_preserves_all_previous_completed_bytes(setup, 
     if failure_phase == "draft-render":
         monkeypatch.setattr(science, "validate_and_render", interrupted)
         with pytest.raises(RuntimeError, match="Synthetic revised"):
-            service.submit_manuscript(research_id, manuscript(), REVIEW)
+            service.submit_manuscript(research_id, manuscript(), MANUSCRIPT_REVIEW)
     else:
-        service.submit_manuscript(research_id, manuscript(), REVIEW)
+        service.submit_manuscript(research_id, manuscript(), MANUSCRIPT_REVIEW)
         monkeypatch.setattr(conversion, "convert", interrupted)
         with pytest.raises(RuntimeError, match="Synthetic revised"):
             service.export(research_id)
@@ -1488,7 +1890,7 @@ def test_failed_export_attempts_preserve_partial_files_without_rerunning_science
     prepare(service, research_id)
     service.start_experiment(research_id)
     assert finished(service, research_id)["stage"] == "analyzed"
-    service.submit_manuscript(research_id, manuscript(), REVIEW)
+    service.submit_manuscript(research_id, manuscript(), MANUSCRIPT_REVIEW)
     before = service.status(research_id)
     outputs = []
 
@@ -1659,14 +2061,14 @@ def test_contract_instructions_cover_measurements_and_manuscript_requirements(se
     service, runner, research_id = setup
     created = service.status(research_id)
     assert "ResearchPlan" in created["instructions"]
-    planned = service.submit_plan(research_id, protocol())
+    planned = approve_study(service, research_id)
     assert "returned observations envelope" in planned["instructions"]
     assert "intentional" in planned["instructions"] and "base64" in planned["instructions"]
     service.collect_literature(research_id)
     service.submit_code(research_id, BUNDLE, REVIEW)
     service.start_experiment(research_id)
     analyzed = finished(service, research_id)
-    assert "twelve hundred" in analyzed["instructions"]
+    assert "padded" in analyzed["instructions"] and "twelve hundred" not in analyzed["instructions"]
     assert "{{result:key}}" in analyzed["instructions"] and "{{citation:id}}" in analyzed["instructions"]
     for heading in science.REQUIRED_SECTIONS:
         assert heading in analyzed["instructions"]
@@ -1694,7 +2096,7 @@ def test_status_polling_can_exclude_materials(setup):
 
 def test_retained_metadata_only_literature_never_becomes_usable_on_repeat(setup):
     service, runner, research_id = setup
-    service.submit_plan(research_id, protocol())
+    service.submit_proposal(research_id, protocol())
     def metadata_only(*args, **kwargs):
         result = collect(*args, **kwargs)
         result["sources"][0]["scope"] = "metadata_only"
@@ -1711,7 +2113,7 @@ def test_partial_literature_completes_missing_query_without_changing_retained_by
     service, runner, research_id = setup
     plan = protocol()
     plan["literature_queries"] = ["first frozen query", "second frozen query"]
-    service.submit_plan(research_id, plan)
+    service.submit_proposal(research_id, plan)
     calls = []
 
     def partial_then_complete(queries, root, *, limit, cancel):
@@ -1745,17 +2147,146 @@ def test_partial_literature_completes_missing_query_without_changing_retained_by
     assert history["sha256"] == original_digest
     assert service.artifact_path(research_id, history["artifact_id"]) == original
     assert result["artifacts"][history["artifact_id"]]["sha256"] == original_digest
-    assert "literature-search-1" in result["artifacts"]
+    search_key = "literature-search-" + result["literature"]["searches"][1]["sha256"]
+    assert search_key in result["artifacts"]
     service.collect_literature(research_id)
     assert len(calls) == 2 and runner.calls == 0
     assert current.read_bytes() == service.artifact_path(research_id, "literature").read_bytes()
+
+
+def test_metadata_only_partial_collection_does_not_exhaust_later_inspected_source_budget(setup):
+    service, runner, research_id = setup
+    proposal = protocol()
+    proposal["literature_queries"] = ["metadata query", "readable query"]
+    service.submit_proposal(research_id, proposal)
+    calls = []
+    def metadata_then_readable(queries, root, *, limit, cancel):
+        calls.append((queries, limit))
+        evidence = collect(queries[:1], root, limit=limit, cancel=cancel)
+        if len(calls) == 1:
+            evidence["sources"] = [{**evidence["sources"][0], "id": f"metadata-{index}",
+                                    "scope": "metadata_only", "excerpts": []} for index in range(6)]
+        return evidence
+    service.collector = metadata_then_readable
+    with pytest.raises(WorkflowError) as insufficient:
+        service.collect_literature(research_id)
+    assert insufficient.value.code == "LITERATURE_EVIDENCE_INSUFFICIENT"
+    original = service.artifact_path(research_id, "literature")
+    retained = original.read_bytes()
+    completed = service.collect_literature(research_id)
+    assert calls == [(["metadata query", "readable query"], 6), (["readable query"], 6)]
+    sources = completed["literature"]["sources"]
+    assert len(sources) == 6 and sources[0]["id"] == "fixture-oracle" and sources[0]["scope"] == "abstract"
+    assert all(source["scope"] == "metadata_only" for source in sources[1:])
+    assert original.read_bytes() == retained
+    approved = service.submit_study_review(research_id, STUDY_REVIEW)
+    assert approved["stage"] == "planned" and runner.calls == 0
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+@pytest.mark.parametrize("old_scope,new_scope,retained_scope", [
+    ("metadata_only", "abstract", "abstract"),
+    ("metadata_only", "full_text", "full_text"),
+    ("abstract", "full_text", "full_text"),
+    ("abstract", "metadata_only", "abstract"),
+    ("full_text", "abstract", "full_text"),
+    ("full_text", "metadata_only", "full_text"),
+    ("abstract", "abstract", "abstract"),
+])
+def test_same_source_recovery_upgrades_reading_without_downgrading_or_overwriting_history(
+        setup, cancelled, old_scope, new_scope, retained_scope):
+    service, runner, research_id = setup
+    proposal = protocol()
+    proposal["literature_queries"] = ["first query", "second query"]
+    service.submit_proposal(research_id, proposal)
+    calls = []
+
+    def recover_reading(queries, root, *, limit, cancel):
+        calls.append((list(queries), limit))
+        evidence = collect(queries if cancelled or len(calls) > 1 else queries[:1], root, limit=6, cancel=cancel)
+        source = evidence["sources"][0]
+        scope = old_scope if len(calls) == 1 else new_scope
+        source["scope"] = scope
+        if scope == "metadata_only":
+            source["excerpts"] = []
+        raw_path = f"literature/recovered-source-{len(calls)}.json"
+        write_json(Path(root) / raw_path, {"scope": scope, "title": source["title"], "excerpts": source["excerpts"]})
+        source.update(raw_path=raw_path, sha256=digest_file(Path(root) / raw_path))
+        if len(calls) == 1:
+            evidence["cancelled"] = cancelled
+        return evidence
+
+    service.collector = recover_reading
+    expected_error = "LITERATURE_EVIDENCE_INSUFFICIENT" if cancelled or old_scope == "metadata_only" else "LITERATURE_QUERIES_INCOMPLETE"
+    with pytest.raises(WorkflowError) as partial:
+        service.collect_literature(research_id)
+    assert partial.value.code == expected_error
+    original = service.artifact_path(research_id, "literature")
+    prior_bytes = original.read_bytes()
+    original_source = json.loads(prior_bytes)["sources"][0]
+    prior_artifact = service.root / research_id / "research" / original_source["raw_path"]
+    prior_source_bytes = prior_artifact.read_bytes()
+
+    completed = service.collect_literature(research_id)
+    sources = completed["literature"]["sources"]
+    assert len(sources) == 1 and sources[0]["id"] == "fixture-oracle"
+    assert sources[0]["scope"] == retained_scope and sources[0]["excerpts"]
+    attempt = 2 if retained_scope != old_scope else 1
+    assert sources[0]["raw_path"] == f"literature/recovered-source-{attempt}.json"
+    assert calls == [(["first query", "second query"], 6),
+                     (["first query", "second query"] if cancelled else ["second query"],
+                      6 if old_scope == "metadata_only" else 5)]
+    history = completed["literature"]["history"]
+    assert len(history) == 1 and history[0]["sha256"] == hashlib.sha256(prior_bytes).hexdigest()
+    assert service.artifact_path(research_id, history[0]["artifact_id"]) == original
+    assert original.read_bytes() == prior_bytes and prior_artifact.read_bytes() == prior_source_bytes
+    approved = service.submit_study_review(research_id, STUDY_REVIEW)
+    assert approved["stage"] == "planned" and runner.calls == 0
+
+
+@pytest.mark.parametrize("defect,message", [
+    ("short_excerpt", "insufficient inspected text"),
+    ("mismatched_digest", "Literature differs from its retrieval digest"),
+])
+def test_same_source_upgrade_requires_substantive_reading_and_matching_artifact_before_commit(setup, defect, message):
+    service, runner, research_id = setup
+    proposal = protocol()
+    proposal["literature_queries"] = ["first query", "second query"]
+    service.submit_proposal(research_id, proposal)
+    calls = []
+
+    def unverified_upgrade(queries, root, *, limit, cancel):
+        calls.append(list(queries))
+        evidence = collect(queries[:1] if len(calls) == 1 else queries, root, limit=6, cancel=cancel)
+        if len(calls) == 2:
+            source = evidence["sources"][0]
+            source["scope"] = "full_text"
+            if defect == "short_excerpt":
+                source["excerpts"] = ["Too short to substantiate a claim."]
+            else:
+                source["sha256"] = "0" * 64
+        return evidence
+
+    service.collector = unverified_upgrade
+    with pytest.raises(WorkflowError) as partial:
+        service.collect_literature(research_id)
+    assert partial.value.code == "LITERATURE_QUERIES_INCOMPLETE"
+    original = service.artifact_path(research_id, "literature")
+    prior_bytes = original.read_bytes()
+    before = service.status(research_id)["artifacts"]
+    with pytest.raises(ValueError, match=message):
+        service.collect_literature(research_id)
+    assert original.read_bytes() == prior_bytes
+    assert service.artifact_path(research_id, "literature") == original
+    assert service.status(research_id)["artifacts"] == before
+    assert runner.calls == 0
 
 
 def test_failed_attempt_completes_query_but_unattempted_error_remains_missing(setup):
     service, runner, research_id = setup
     plan = protocol()
     plan["literature_queries"] = ["first frozen query", "second frozen query"]
-    service.submit_plan(research_id, plan)
+    service.submit_proposal(research_id, plan)
     calls = []
 
     def collector(queries, root, *, limit, cancel):
@@ -1873,7 +2404,7 @@ def test_material_reading_exposes_actual_runner_raw_evidence_for_fresh_review(se
     raw = service.read_material(research_id, "evidence", "observations")
     assert json.loads(raw["text"]) == runner.outputs
     assert raw["sha256"] == service.status(research_id)["artifacts"]["observations"]["sha256"]
-    service.submit_manuscript(research_id, manuscript(), REVIEW)
+    service.submit_manuscript(research_id, manuscript(), MANUSCRIPT_REVIEW)
     assert service.read_material(research_id, "evidence", "manuscript")["text"].startswith("# ")
     canonical = service.read_material(research_id, "evidence", "canonical")
     fragments = [canonical["text"]]
