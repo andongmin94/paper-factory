@@ -18,8 +18,8 @@ from test_workflow import BUNDLE, MANUSCRIPT_REVIEW, REVIEW, STUDY_REVIEW, SYNTH
 
 QUERIES = ["direct closest methods synthetic fixture"]
 REASON = "The retained review requires primary methods for its unresolved knowledge difference."
-PDF_HINT = {"doi": "10.1234/test", "title": "Verified record title",
-            "url": "https://www.cs.cmu.edu/~NatProg/papers/verified-author.pdf"}
+PDF_HINT = {"doi": "10.1234/test", "title": "Verified record title"}
+PDF_URL = "https://www.cs.cmu.edu/~NatProg/papers/verified-author.pdf"
 
 
 def rejected():
@@ -299,15 +299,22 @@ def test_tampered_frozen_provenance_cannot_receive_another_decision(setup, key):
     assert runner.calls == 0
 
 
-def test_ipc_declares_exact_api_fields_and_dispatches_native_method(setup):
+@pytest.mark.parametrize("retrieval", ["generic", "public_listing"])
+def test_ipc_declares_exact_api_fields_and_dispatches_native_method(setup, monkeypatch, retrieval):
     service, _, research_id, _ = initial(setup)
-    service.collector = collector()
-    params = {"researchId": research_id, "queries": QUERIES, "reason": REASON, "pdfCandidates": []}
+    service.collector = collector() if retrieval == "generic" else hinted_collector(monkeypatch)
+    params = {"researchId": research_id, "queries": QUERIES if retrieval == "generic" else [PDF_HINT["doi"]],
+              "reason": REASON, "pdfCandidates": [] if retrieval == "generic" else [PDF_HINT]}
     request = ipc.request(json.dumps({"id": "literature-request", "method": "workflow.collectStudyLiterature", "params": params}).encode())
     runtime = object.__new__(ipc.Dispatcher)
     runtime.service = service
     result = runtime.execute(request["method"], request["params"])
     assert result["study_literature_pending"] is True
+    if retrieval == "public_listing":
+        obsolete = {**params, "pdfCandidates": [{**PDF_HINT, "url": PDF_URL}]}
+        bad = ipc.request(json.dumps({"id": "obsolete-url", "method": request["method"], "params": obsolete}).encode())
+        assert_code("LITERATURE_QUERIES_INVALID", lambda: runtime.execute(bad["method"], bad["params"]))
+        assert service.status(research_id)["study_literature_attempt"] == 1
     for bad in ({**params, "untrustedPath": "elsewhere"}, {"researchId": research_id, "queries": QUERIES},
                 {key: value for key, value in params.items() if key != "pdfCandidates"}):
         with pytest.raises(ValueError):
@@ -410,18 +417,26 @@ def test_original_text_hash_tamper_cannot_support_fresh_approval(setup):
     assert runner.calls == 0
 
 
-def test_reproduction_archive_preserves_original_review_supplement_and_raw_bytes_without_dispatch(setup):
+@pytest.mark.parametrize("retrieval", ["generic", "public_listing"])
+def test_reproduction_archive_preserves_original_review_supplement_and_raw_bytes_without_dispatch(setup, monkeypatch, retrieval):
     service, runner, research_id, old = initial(setup)
     original_review = service.artifact_path(research_id, "study-review-1").read_bytes()
     original_literature = service.artifact_path(research_id, "literature").read_bytes()
     excluded = {}
     def retrieve(queries, root, **kwargs):
         excluded.update(root=root, files=excluded_raw(root))
-        return collector()(queries, root, **kwargs)
+        selected = collector() if retrieval == "generic" else hinted_collector(monkeypatch)
+        return selected(queries, root, **kwargs)
     service.collector = retrieve
-    state = service.collect_study_literature(research_id, QUERIES, REASON, [])
-    source = next(source for source in state["literature"]["sources"] if source["id"] == "new-primary")
-    service.submit_study_review(research_id, copy.deepcopy(STUDY_REVIEW))
+    state = service.collect_study_literature(research_id, QUERIES if retrieval == "generic" else [PDF_HINT["doi"]],
+                                             REASON, [] if retrieval == "generic" else [PDF_HINT])
+    source = next(source for source in state["literature"]["sources"] if (
+        source["id"] == "new-primary" if retrieval == "generic" else source.get("copy_type") == "author_copy"))
+    review = copy.deepcopy(STUDY_REVIEW)
+    if retrieval == "public_listing":
+        review["selected_sources"][0].update(source_id=source["id"], excerpt_index=0)
+        review["publication_readiness"]["closest_work"][0].update(source_id=source["id"], excerpt_index=0, quote=source["excerpts"][0][:200])
+    service.submit_study_review(research_id, review)
     service.submit_code(research_id, copy.deepcopy(BUNDLE), REVIEW)
     ws = service._workspace(research_id)
     record = ws.get("workflow", research_id, Workflow)
@@ -441,7 +456,13 @@ def test_reproduction_archive_preserves_original_review_supplement_and_raw_bytes
     record.artifacts["analysis"] = FrozenArtifact(path=path.relative_to(ws.root).as_posix(), sha256=digest_file(path), size=path.stat().st_size)
     record.execution_attempt, record.stage = 1, "analyzed"
     ws.save("workflow", record)
-    service.submit_manuscript(research_id, manuscript(), copy.deepcopy(MANUSCRIPT_REVIEW))
+    draft, manuscript_review = manuscript(), copy.deepcopy(MANUSCRIPT_REVIEW)
+    if retrieval == "public_listing":
+        for section in draft["sections"]:
+            section["text"] = section["text"].replace("{{citation:fixture-oracle}}", "{{citation:" + source["id"] + "}}")
+        manuscript_review["publication_readiness"]["closest_work"][0].update(
+            source_id=source["id"], excerpt_index=0, quote=source["excerpts"][0][:200])
+    service.submit_manuscript(research_id, draft, manuscript_review)
     record = ws.get("workflow", research_id, Workflow)
     root = ws.path("research/export-synthetic")
     root.mkdir()
@@ -456,8 +477,15 @@ def test_reproduction_archive_preserves_original_review_supplement_and_raw_bytes
         assert archive.read("literature/history/" + old["artifacts"]["literature"]["sha256"] + ".json") == original_literature
         for key in ("study-literature-intent-1", "study-literature-collection-1", "study-review-1-literature-1"):
             assert archive.read("research-design/literature/" + key + ".json") == service.artifact_path(research_id, key).read_bytes()
-        for field, digest in (("raw_path", "sha256"), ("metadata_path", "metadata_sha256"), ("text_path", "text_sha256")):
+        for field, digest in (("raw_path", "sha256"), ("metadata_path", "metadata_sha256"), ("text_path", "text_sha256"),
+                              ("discovery_path", "discovery_sha256"), ("identity_path", "identity_sha256")):
+            if field not in source:
+                continue
             assert hashlib.sha256(archive.read(source[field])).hexdigest() == source[digest]
+        if retrieval == "public_listing":
+            collection = json.loads(service.artifact_path(research_id, "study-literature-collection-1").read_bytes())
+            assert collection["pdf_listing"]["raw_path"] == source["discovery_path"]
+            assert hashlib.sha256(archive.read(collection["pdf_listing"]["raw_path"])).hexdigest() == collection["pdf_listing"]["sha256"]
         for relative, raw in excluded["files"].items():
             member = (excluded["root"] / relative).relative_to(ws.path("research")).as_posix()
             assert archive.read(member) == raw
@@ -626,7 +654,7 @@ def hinted_collector(monkeypatch, *, text=None, mutate=None, content_type="appli
 
 
 @pytest.mark.parametrize("candidates", [None, {}, [PDF_HINT] * 3, [{**PDF_HINT, "extra": True}],
-                                     [{**PDF_HINT, "url": "https://elsewhere.test/author.pdf"}],
+                                     [{**PDF_HINT, "url": PDF_URL}],
                                      [{**PDF_HINT, "doi": "10.1234/unrequested"}]])
 def test_invalid_pdf_hints_are_rejected_before_reservation_or_network(setup, candidates):
     service, runner, research_id, old = initial(setup)
@@ -663,9 +691,19 @@ def test_final_verified_primary_body_is_bound_to_intent_and_one_fresh_decision(s
     ws = service._workspace(research_id)
     proof = json.loads((ws.path("research") / source["identity_path"]).read_bytes())
     assert proof["candidate"] == PDF_HINT and proof["metadata_path"].startswith("literature/")
+    assert "url" not in proof["candidate"]
+    assert proof["discovery"]["listing_url"] == literature.AUTHOR_PUBLICATIONS
+    assert source["discovery_path"].startswith("study-literature/attempt-3/literature/")
+    assert hashlib.sha256((ws.path("research") / source["discovery_path"]).read_bytes()).hexdigest() == proof["discovery"]["sha256"]
     assert source["identity_path"].startswith("study-literature/attempt-3/literature/")
     collection = json.loads(service.artifact_path(research_id, "study-literature-collection-3").read_bytes())
     assert collection["pdf_hint_attempts"][0]["identity_path"] == source["identity_path"]
+    assert collection["pdf_hint_attempts"][0]["discovery"]["raw_path"] == source["discovery_path"]
+    assert collection["pdf_listing"]["raw_path"] == source["discovery_path"]
+    record = ws.get("workflow", research_id, Workflow)
+    for field, digest in (("discovery_path", "discovery_sha256"), ("identity_path", "identity_sha256")):
+        matches = [artifact for artifact in record.artifacts.values() if artifact.path == "research/" + source[field]]
+        assert len(matches) == 1 and matches[0].sha256 == source[digest]
     review = copy.deepcopy(STUDY_REVIEW)
     review["selected_sources"][0].update(source_id=source["id"], excerpt_index=0)
     review["publication_readiness"]["closest_work"][0].update(source_id=source["id"], excerpt_index=0, quote=source["excerpts"][0][:200])
@@ -712,9 +750,7 @@ def test_final_body_cannot_be_promoted_by_flags_or_forged_proof(setup, monkeypat
         if variant == "unverified":
             source.pop("copy_type")
         elif variant == "candidate":
-            proof["candidate"]["url"] = PDF_HINT["url"].replace("verified-author", "another-author")
-            proof["retrieved_url"] = proof["candidate"]["url"]
-            source["url"] = proof["candidate"]["url"]
+            proof["candidate"]["title"] += " with different methods"
         elif variant == "identity":
             proof["identity"]["title_range"]["end"] -= 1
         elif variant == "path":
@@ -740,6 +776,61 @@ def test_final_body_cannot_be_promoted_by_flags_or_forged_proof(setup, monkeypat
     state = service.status(research_id)
     assert state["study_literature_attempt"] == 3 and state["study_literature_pending"] is False
     assert "plan" not in state["artifacts"] and state["execution_attempt"] == 0 and runner.calls == 0
+
+
+@pytest.mark.parametrize("variant", ["listing_bytes", "listing_status", "listing_origin", "discovery_title", "discovery_href",
+                                     "redirect_location", "redirect_status", "redirect_next", "redirect_raw", "missing_redirect"])
+def test_native_reparses_listing_and_recomputes_actual_server_redirects(setup, monkeypatch, variant):
+    from test_public_pdf_hints import PDF
+    service, runner, research_id, old = two_negative_attempts(setup)
+    redirected = PDF_URL.replace("/~NatProg/", "/~natprog/").replace("verified-author", "server-declared-copy")
+    literal_location = redirected.replace("https://", "http://", 1)
+    def respond(request):
+        if str(request.url) == PDF_URL:
+            return httpx.Response(302, content=b"Literal synthetic server redirect response", headers={"location": literal_location})
+        assert str(request.url) == redirected and request.url.scheme == "https"
+        return httpx.Response(200, content=PDF, headers={"content-type": "application/pdf"})
+    def forged(evidence, root):
+        source = evidence["sources"][0]
+        path = root / source["identity_path"]
+        proof = json.loads(path.read_bytes())
+        discovery = proof["discovery"]
+        if variant == "listing_bytes":
+            listing = root / source["discovery_path"]
+            listing.write_bytes(listing.read_bytes().replace(PDF_HINT["title"].encode(), b"A different complete title"))
+            discovery["sha256"] = source["discovery_sha256"] = digest_file(listing)
+            evidence["pdf_listing"]["sha256"] = discovery["sha256"]
+        elif variant == "listing_status":
+            discovery["http_status"] = 206
+        elif variant == "listing_origin":
+            discovery["retrieved_url"] = "https://elsewhere.test/publications.html"
+        elif variant == "discovery_title":
+            discovery["quoted_title"] += " with a different subtitle"
+        elif variant == "discovery_href":
+            discovery["literal_href"] = discovery["url"] = redirected
+        elif variant == "redirect_location":
+            proof["redirects"][0]["location"] = "http://elsewhere.test/server-declared-copy.pdf"
+        elif variant == "redirect_status":
+            proof["redirects"][0]["status"] = 200
+        elif variant == "redirect_next":
+            proof["redirects"][0]["next_url"] = PDF_URL
+        elif variant == "redirect_raw":
+            proof["redirects"][0]["sha256"] = "0" * 64
+        else:
+            proof["redirects"] = []
+        # Mutate retrieved raw bytes directly; atomic workflow JSON publication
+        # is not the behavior exercised by this forged collector response.
+        path.write_bytes(json.dumps(proof, ensure_ascii=False).encode("utf-8"))
+        source["identity_sha256"] = digest_file(path)
+        # The collector packet and saved proof are deliberately inconsistent.
+        # Keep only the forged source to isolate native discovery verification.
+        evidence.pop("pdf_hint_attempts")
+    service.collector = hinted_collector(monkeypatch, mutate=forged, handler=respond)
+    assert_code("PUBLICATION_EVIDENCE_INVALID", lambda: service.collect_study_literature(research_id, [PDF_HINT["doi"]], REASON, [PDF_HINT]))
+    state = service.status(research_id)
+    assert state["study_literature_attempt"] == 3 and state["study_literature_pending"] is False
+    assert state["artifacts"]["proposal"] == old["artifacts"]["proposal"] and "plan" not in state["artifacts"]
+    assert state["execution_attempt"] == 0 and runner.calls == 0
 
 
 def test_identical_verified_primary_body_cannot_buy_another_final_decision(setup, monkeypatch):
@@ -779,28 +870,65 @@ def test_final_failed_identity_preserves_original_pdf_text_and_proof_without_rev
     assert runner.calls == 0
 
 
-@pytest.mark.parametrize("variant", ["octet_stream", "same_origin_redirect"])
+@pytest.mark.parametrize("listing_status", [403, 206])
+def test_complete_failed_listing_is_preserved_and_consumes_final_attempt_without_review(setup, monkeypatch, listing_status):
+    from test_public_pdf_hints import LISTING, collect_hint
+    service, runner, research_id, _ = two_negative_attempts(setup)
+    def retrieve(queries, root, **kwargs):
+        result, _ = collect_hint(monkeypatch, root, listing_status=listing_status)
+        result["searches"][0]["query"] = queries[0]
+        return result
+    service.collector = retrieve
+    state = service.collect_study_literature(research_id, [PDF_HINT["doi"]], REASON, [PDF_HINT])
+    assert state["study_literature_attempt"] == 3 and state["study_literature_pending"] is False and state["resume_kind"] is None
+    collection = json.loads(service.artifact_path(research_id, "study-literature-collection-3").read_bytes())
+    listing = collection["pdf_listing"]
+    assert listing["http_status"] == listing_status and listing["status"] == "rejected"
+    ws = service._workspace(research_id)
+    raw_path = ws.path("research") / listing["raw_path"]
+    assert raw_path.read_bytes() == LISTING and digest_file(raw_path) == listing["sha256"]
+    matches = [artifact for artifact in ws.get("workflow", research_id, Workflow).artifacts.values()
+               if artifact.path == raw_path.relative_to(ws.root).as_posix()]
+    assert len(matches) == 1 and matches[0].sha256 == listing["sha256"]
+    assert_code("REVIEW_EVIDENCE_CONFLICT", lambda: service.submit_study_review(research_id, rejected()))
+    assert_code("STUDY_LITERATURE_LIMIT", lambda: service.collect_study_literature(research_id, [PDF_HINT["doi"]], REASON, [PDF_HINT]))
+    assert runner.calls == 0
+
+
+@pytest.mark.parametrize("variant", ["octet_stream", "same_origin_redirect", "server_http_alias"])
 def test_final_hint_accepts_supported_collector_transport_with_exact_identity(setup, monkeypatch, variant):
     from test_public_pdf_hints import PDF
     service, runner, research_id, _ = two_negative_attempts(setup)
-    redirected = PDF_HINT["url"].replace("verified-author", "verified-mirror")
+    redirected = PDF_URL.replace("verified-author", "verified-mirror")
+    if variant == "server_http_alias":
+        redirected = redirected.replace("/~NatProg/", "/~natprog/")
     def respond(request):
-        if str(request.url) == PDF_HINT["url"]:
-            return httpx.Response(302, headers={"location": redirected})
+        if str(request.url) == PDF_URL:
+            location = redirected.replace("https://", "http://", 1) if variant == "server_http_alias" else redirected
+            return httpx.Response(302, content=b"Actual synthetic redirect body", headers={"location": location})
         assert str(request.url) == redirected
+        assert request.url.scheme == "https"
         return httpx.Response(200, content=PDF, headers={"content-type": "application/pdf"})
     service.collector = hinted_collector(monkeypatch,
         content_type="application/octet-stream" if variant == "octet_stream" else "application/pdf",
-        handler=respond if variant == "same_origin_redirect" else None)
+        handler=respond if variant != "octet_stream" else None)
     state = service.collect_study_literature(research_id, [PDF_HINT["doi"]], REASON, [PDF_HINT])
     source = next(source for source in state["literature"]["sources"] if source.get("copy_type") == "author_copy")
     proof = json.loads((service._workspace(research_id).path("research") / source["identity_path"]).read_bytes())
     assert proof["candidate"] == PDF_HINT
-    assert source["url"] == (redirected if variant == "same_origin_redirect" else PDF_HINT["url"])
+    assert source["url"] == (redirected if variant != "octet_stream" else PDF_URL)
+    if variant != "octet_stream":
+        collection = json.loads(service.artifact_path(research_id, "study-literature-collection-3").read_bytes())
+        public_transition, = collection["pdf_hint_attempts"][0]["redirects"]
+        original_transition, = proof["redirects"]
+        assert original_transition["next_url"] == public_transition["next_url"] == redirected
+        assert public_transition["raw_path"].startswith("study-literature/attempt-3/literature/")
+        raw = (service._workspace(research_id).path("research") / public_transition["raw_path"]).read_bytes()
+        assert raw == b"Actual synthetic redirect body" and hashlib.sha256(raw).hexdigest() == original_transition["sha256"]
     assert state["study_literature_pending"] is True and runner.calls == 0
 
 
-@pytest.mark.parametrize("variant", ["unfrozen_identity", "source_metadata", "unverifiable_version", "identity_digest"])
+@pytest.mark.parametrize("variant", ["unfrozen_identity", "unfrozen_listing", "source_metadata", "unverifiable_version", "identity_digest"])
 def test_approval_recomputes_author_copy_identity_and_requires_frozen_proof(setup, monkeypatch, variant):
     service, runner, research_id, _ = two_negative_attempts(setup)
     service.collector = hinted_collector(monkeypatch)
@@ -813,8 +941,9 @@ def test_approval_recomputes_author_copy_identity_and_requires_frozen_proof(setu
     selected = service._selected_literature(state["literature"], assessment.selected_sources)
     ws = service._workspace(research_id)
     record = ws.get("workflow", research_id, Workflow)
-    if variant == "unfrozen_identity":
-        path = (ws.path("research") / source["identity_path"]).relative_to(ws.root).as_posix()
+    if variant in {"unfrozen_identity", "unfrozen_listing"}:
+        field = "identity_path" if variant == "unfrozen_identity" else "discovery_path"
+        path = (ws.path("research") / source[field]).relative_to(ws.root).as_posix()
         record.artifacts = {key: frozen for key, frozen in record.artifacts.items() if frozen.path != path}
     elif variant == "source_metadata":
         selected["sources"][0]["title"] += " A different study"
@@ -827,16 +956,14 @@ def test_approval_recomputes_author_copy_identity_and_requires_frozen_proof(setu
     assert runner.calls == 0
 
 
-@pytest.mark.parametrize("variant", ["no_hints", "different_url", "different_title"])
+@pytest.mark.parametrize("variant", ["no_hints", "different_title"])
 @pytest.mark.parametrize("number", [1, 2])
 def test_every_returned_author_copy_binds_that_rounds_reserved_hint(setup, monkeypatch, variant, number):
     service, runner, research_id, old = initial(setup)
     if number == 2:
         service.collector = collector(no_sources=True)
         service.collect_study_literature(research_id, QUERIES, REASON, [])
-    candidates = [] if variant == "no_hints" else [{**PDF_HINT,
-        "url": PDF_HINT["url"].replace("verified-author", "another-author") if variant == "different_url" else PDF_HINT["url"],
-        "title": PDF_HINT["title"] + " with different methods" if variant == "different_title" else PDF_HINT["title"]}]
+    candidates = [] if variant == "no_hints" else [{**PDF_HINT, "title": PDF_HINT["title"] + " with different methods"}]
     actual = hinted_collector(monkeypatch)
     def unbound(queries, root, **kwargs):
         # Simulate a misbound collector result, not a forged scientific model

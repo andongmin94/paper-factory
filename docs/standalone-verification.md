@@ -1,6 +1,6 @@
 # 독립 앱 검증 기록
 
-갱신일: 2026-10-07 (Asia/Seoul). 현재 앱과 엔진 소스는 `0.14.7`이다. 최신 Windows 설치 파일 생성·정적 검증과 회귀 결과는 [0.14.7 기록](#0147-투고-준비도-검증-2026-10-07)에 있다. 새 설치·OAuth·로그인 복원은 미검증이고 GitHub Releases에는 게시하지 않았다. 기존 공식 연결로 실제 Madi 원고 심사를 진행 중이며, 새 투고 준비도 기준의 통과와 승인 원고 생성 수는 아직 확인하지 않았다. 아래는 `0.13.0` 전환 작업의 시작 commit `ac22fdd95778572968e3227d271a0b9846cd7f8b`부터 보존한 실제 검사 이력이다. 0.13.1의 5단계 개선·새 패키지 검사는 [UI 검증 기록](standalone-ui-provenance.md)에 구분해 기록한다.
+갱신일: 2026-10-07 (Asia/Seoul). 현재 앱과 엔진 소스는 `0.14.12`이다. 최신 Windows 설치 파일 생성·정적 검증과 회귀 결과는 [0.14.12 기록](#01412-공식-공개-목록에서-원문-발견-2026-10-07)에 있다. 새 설치·OAuth·로그인 복원은 미검증이고 GitHub Releases에는 게시하지 않았다. 새 투고 준비도 기준을 통과한 실제 완료 원고는 아직 없다. 아래는 `0.13.0` 전환 작업의 시작 commit `ac22fdd95778572968e3227d271a0b9846cd7f8b`부터 보존한 실제 검사 이력이다. 0.13.1의 5단계 개선·새 패키지 검사는 [UI 검증 기록](standalone-ui-provenance.md)에 구분해 기록한다.
 
 0.14.6의 네 기준 승인과 독립 유한 수치·인용·파일 검수는 당시 생성 흐름과 보존 근거의 일치를 확인했다. 학술지 제출에 충분한 신규성·중요성이나 더 넓은 주장 범위를 입증한 검증은 아니었다. 당시 승인·생성 파일·감사 기록은 보존하며, 새 투고 준비도 승인으로 소급해 계산하지 않는다.
 
@@ -897,3 +897,45 @@ Windows에서 부모 연구의 원고 보완 문헌을 후속 연구에 복사�
 교정 후 실제 b16e9de4a381 실행은 09:01 UTC에 완료됐으나 paperGenerated=false / shutdownConfirmed=true다. 모델 literature-plan b0b1e2b7-6648-4874-a98e-c8beb35569ec는 revise_design, 빈 queries/pdfCandidates를 반환했다. 관련 방법 본문 부족을 인정하면서 지원 경로의 정확한 공개 PDF URL을 모르므로 파일명을 추측하지 않았다. 마지막 direct-only 수집도 요청하지 않았고 문헌 attempt는 2, proposal은 3, 후속 SCI는 0을 유지했다. 새 원문·study review·plan·실험 코드·분석·완료 원고는 없다. 기존 제안·문헌·거절 심사·부모 SCI1/관측/프로토콜과 source를 보존했다. 준비 재개가 native 상태를 ready로 바꿨으며 controller는 설계 한도에서 STUDY_REJECTED로 보류했으므로 이를 native blocked가 그대로라는 주장으로 표현하지 않는다. 이 실행은 최종 PDF 회수의 성공이나 투고 준비도 통과가 아니다. 남은 제품 결손은 모델의 파일명 기억에 의존하지 않고 공식 공개 목록에서 PDF 주소를 발견하는 기능이다.
 
 완료 후 독립 감사는 29개 invariant를 모두 확인했다. 실제 source 928개·기존 frozen artifact 455개·현재 artifact 460개의 path/크기/SHA가 맞고, 새 5개는 준비 재개 영수증과 단일 literature-plan 요청/응답 기록이다. 실제 모델의 revise_design/빈 queries/빈 후보, attempt2/pending false/후속 SCI0, 새 수집·본문·review·원고 없음, 부모 SCI1과 원본 관측·프로토콜·역사 보존, 소유 PID 46988/30360 종료 및 harness 오타 하나만 교정한 사실을 대조했다. 보고서는 verification/madi-study-followup-01411-independent-audit.json, 349720 B, SHA256 2c76da0bce167045e055886ca262fb55e3933673026445304cad05c16876e5f9다. 감사 스크립트의 최초 dict/list 가정 오류도 initial.py/initial-failure.json으로 보존했으며 제품 실패와 구분한다. 이 29개 통과는 보존·실행 경계 검증이고 투고 가능한 논문이 나왔다는 증거가 아니다.
+
+## 0.14.12 공식 공개 목록에서 원문 발견: 2026-10-07
+
+0.14.11 실제 모델이 공개 PDF 파일명을 몰라 회수를 요청하지 못했다. 새 후보 계약은 최대 2개의 `doi/title`만 받으며 이전 `url` 필드 경로는 제거했다. Crossref의 정확한 DOI·전체 제목을 확인한 후 고정된 공식 저자 출판 목록 `https://www.cs.cmu.edu/~bam/resume.html`을 수집당 한 번 조회한다. 개별 leaf 목록 항목에 인용된 전체 제목이 유일하게 일치하고 허용된 로컬 PDF 링크도 하나일 때 실제 링크를 사용한다. 제목 prefix·모호한 목록·임의 파일명·외부 주소는 채택하지 않는다. 목록은 논문 발견 근거이며 본문 읽기 근거가 아니다.
+
+원래 HTML·일치 항목·실제 href와 모든 완료된 이동 응답/PDF를 보존한다. 현재 서버가 소문자 디렉터리 링크에서 대문자 디렉터리의 HTTP 주소를 Location으로 반환하므로, 실제 서버 응답의 같은 호스트·감사된 두 PDF 디렉터리 주소에만 HTTPS를 적용한다. HTTP 요청은 보내지 않고 파일명이나 경로 대소문자를 추측하지 않는다. 이동은 최대 3회이며 원래 Location과 실제 다음 HTTPS 주소를 각각 기록한다. 네이티브 심사 경계는 보존된 목록을 순수 함수로 다시 파싱하고 예약된 후보·Crossref·이동 경로·PDF/text 해시·첫 페이지 identity를 재검증한다. 공개 저자본의 출판 버전은 여전히 unknown이다. 기존 수집·제안·SCI·재설계 한도와 원본 이력은 바꾸지 않았다.
+
+| 0.14.12 검사 | 결과와 범위 |
+| --- | --- |
+| 문헌 관련 5모듈 | 310 통과·3 Windows symlink 권한 건너뜀, 69.76초. 목록 발견·이동·identity·기존 arXiv/Crossref·bounded extraction |
+| 네이티브 영향 검사 | 158 통과, 139.24초. 문헌 보완 115·publication 42·IPC raw reply 1 |
+| 데스크톱·SDK | 데스크톱 316 통과, SDK 48 통과·1 Windows 권한 검사 건너뜀. strict 2-field 계약·중복 DOI·이전 URL 필드 거부·기존 제어 흐름 |
+| Windows 포함 runtime | Python 3.14.8·Node 24.21.0·QuickJS 실제 host probe, inventory 2,218개·473,680,677 B·전수 해시 |
+| 직접 EngineBridge 재시작 | runtime ready, 기존 부모 analyzed/blocked/SCI1과 후속 proposed/ready/SCI0 조회 성공. 모델·과학실험 요청 없음 |
+| Windows 패키지 | 새 출력과 최종 release 복사본의 ASAR 7,667항목·SDK·renderer·Pretendard·현재 엔진 source·runtime 전수 대조 통과 |
+
+검사 그룹은 겹치므로 합산하지 않는다. 최초 네이티브 위조 회귀 10개는 제품 검증에 도달하기 전에 테스트 mutator의 atomic 임시 파일명이 Windows 긴 경로 제한에 걸렸다. 위조용 임시 원문을 직접 bytes로 쓰도록 테스트만 고친 뒤 10개 영향 검사와 위 전체 158개가 통과했다. 최초 실패 로그 `native-author-listing-01412-focused.log`도 보존했다. collector 최종 로그는 `.paper-factory/author-list-discovery-01412/literature-regression.log`이며 다른 로그는 `submission-quality-20261007/verification/`에 있다. 새 의존성은 추가하지 않았다.
+
+개발 Python의 별도 실제 positive control은 DOI·제목만 입력해 공식 목록 445,160 B와 실제 링크를 얻고, 302 이동을 거쳐 PDF 693,490 B·68,941자·본문 `[1469,62375)`·literal 발췌 12개를 확인했다. 당시 실제 연구 1,433개 파일과 runtime 2,219개 전체 파일의 전후 바이트는 같았다. receipt `author-list-discovery-01412/probe-a4bb27c1a830/receipt.json`의 SHA256은 `67c78610f2530c24183a8c788dc3493d3d0d3558bd22ec43a113012fb0e4f1b7`이다. 이는 실제 앱 연구에 문헌을 주입한 결과가 아니라 별도 수집 경로 검사다.
+
+Windows runtime inventory SHA256은 `6006f797986e21068dd36e068ba676eefa9b28dd608ca45e29f6ef56d3429908`이며 builder receipt는 `standalone-runtime-builder/build-win32-x64-45c6c88a-7739-4e4e-909d-6a3e719fd5d3/build-receipt.json`이다. 동일한 기존 Electron 44.5.1 dist로 새 출력 `windows-release-01412-author-index`에 구성했다. 기존 0.14.11 전체 payload는 `preserved-windows-release-01411`로 보존한 뒤 최종 `desktop/release` 복사본을 09:28:29.552 UTC / 18:28:29.552 KST에 다시 검증했다. 새 설치·OAuth·로그인 복원·macOS 실행은 미검증이고 GitHub Releases에는 게시하지 않았다.
+
+| 최종 배포 파일 | 크기(B) | SHA256 |
+| --- | ---: | --- |
+| Paper Factory Setup 0.14.12.exe | 213,123,608 | cb62806498c56250ba45cddeb2af8bd01ab0fa72d4f0aab10dc37615bb184840 |
+| win-unpacked/resources/app.asar | 44,765,294 | 551b051d5bf40a8958dadb6430b10c1cf8eb6715e9589fe64c651a3e9adb7c6d |
+
+포함 Python의 첫 실제 회수도 성공했지만 별도 reporter가 배포 metadata(dist-info)를 기대해 멈췄다. runtime은 package.__version__과 원본 source를 포함하는 구조다. 최초 script·실패·collection·before/after·HTML·PDF·proof를 남기고, 새 네트워크 요청 없이 버전/source SHA 증명과 네이티브 proof 재검증만 이어 완료했다. 원래 proof는 변경하지 않고 새 독립 Workspace에서 source 경로를 재배치해 `_verified_author_pdf`가 보존된 목록·이동·본문을 다시 검증했다. 21개 확인 항목이 모두 참이며 실제 연구 1,433개·runtime 2,219개 파일 전체 바이트가 불변이다. 첫 reporter가 실제 worker PID/명령을 저장하기 전에 실패했으므로 이를 보존했다고 주장하지 않는다. 최초 완료 receipt는 `author-list-discovery-01412/bundled-18812ec4e2d9/workspace/research/study-literature/attempt-3/receipt.json`, SHA256 `fa41bdcc48d6fe18040811139fc5855c8a65c73573258bea6d053a7fdbb38d05`다.
+
+reporter를 바로 고쳐 이미 시작한 별도 보조 회수도 종료했으며 원래 회수와 구분해 보존했다. 보조 `bundled-2f0dbd7856bf`는 19개 확인이 참이고 실제 PDF worker의 `-I/-B` 명령·exit 0을 보존했으며 receipt SHA256은 `3328b39d1799cef84d715c5b7888d83366bcc8fb9d52a206abc898db8810b3d3`다. 두 회수 모두 실제 연구/DB/모델/SCI를 변경하지 않은 검사이며 같은 연구의 문헌 보완 횟수로 계산하지 않는다.
+
+재개 직전 별도 읽기 전용 검사에서 실제 DB 2개와 frozen artifact-entry 460개, 각 연구의 source 464개·19,997,584 B가 기존 지문과 일치했다. 부모는 analyzed/blocked/MANUSCRIPT_REJECTED/SCI1이고 후속은 proposed/ready/code null/SCI0/proposal3/문헌 attempt2/pending false다. 새 harness `9c57ba1581bc95e733677c23a88445476b3945a80abc376a0d18b3c2cd494cd4`의 원래 goal·source·proposal/literature/review 지문과 일치했다. 이전 심사·관측·프로토콜은 바꾸지 않았으며 재개 config에 논문 DOI·제목·PDF URL이나 승인을 주입하지 않았다. source/test/baseline receipt `verification/native-author-listing-01412-verification.json`은 6,766 B, SHA256 `b1efff965c8d4e4df685d57c8d2f059fe56f8727569ba3fd945c5fd15cc9e14c`다.
+
+실제 앱 재개 `qpos/2dd124a6459a/recovery-runs/e4aa32cf56c8`는 09:32:29.754 UTC / 18:32:29.754 KST에 보류로 종료했다. `paperGenerated=false`, `shutdownConfirmed=true`다. 모델은 이전 Crossref metadata에서 확인한 DOI `10.1007/978-3-540-70816-2_14`와 전체 제목 Using Task Models for Cascading Selective Undo를 스스로 선택했다. 별도 positive control의 문헌은 실제 모델/config에 주입하지 않았다. 실제 공식 목록은 HTTP 200·445,160 B·SHA256 `c36d5271d52ef7c8d74785d6a1820044b75f375b24424a80a207147bab61f597`로 회수했지만 유일하게 일치하는 인용된 전체 제목이 없어 PDF 요청 전에 거부했다. 실제 후보는 Aaron G. Cass와 Chris S. T. Fernandes의 논문이고, 한정된 CMU 저자 목록에서 찾을 수 있다는 사전 근거가 없었다. 원래 HTML·metadata·rejected proof는 보존했으며 scope는 metadata_only, excerpts/redirects는 비어 있다.
+
+마지막 planner는 `revise_design`, 빈 queries/pdfCandidates를 반환했다. 신규 study review·plan·실험 코드·분석·원고는 없다. 후속은 proposed/blocked/STUDY_REJECTED, 문헌 attempt3/pending false, proposal3/SCI0이며 부모 SCI1·원시 관측·프로토콜·각 연구의 464개 source와 이전 artifact는 그대로다. 마지막 회수를 초기화하거나 같은 연구에 네 번째 수집을 열지 않는다. 이 실패는 지원하는 원문 발견 경로의 범위 부족이고, 선행연구 부재나 연구 자체의 실행 불가능성을 입증하지 않는다. 독립 감사의 전체 바이트·실제 모델 판단 대조 결과는 별도로 기록한다.
+
+완료 후 읽기 전용 독립 감사에서 30개 invariant가 모두 참이다. source 928개 실제 bytes/SHA, 기존 artifact-entry 460개 이력과 현재 476개 exact path/크기/SHA가 일치했다. 새 negative raw 4개는 각각 한 frozen binding을 가지며 같은 Crossref SHA의 search/metadata 두 경로도 각각 보존됐다. 실제 모델 2개 영수증→예약 후보/intent→Crossref 정확 서지→원래 목록 200/445,160 B→독립 전체 제목 일치 항목 0개/pure helper의 동일 거부→PDF/새 본문/새 심사/새 SCI 없음→마지막 revise_design을 확인했다. attempt3/pending false/proposal3, 부모 SCI1/후속 SCI0, 소유 Electron PID 28512와 engine PID 43588 종료도 확인했다. 감사 보고서는 `verification/madi-study-followup-01412-independent-audit.json`, SHA256 `418fe45f816fa4d967b3ddb8c6742e7a29b4ac6dae416fd214f1a810791d8187`이다. 이 확인은 보존·실행 경계의 감사이며 논문 품질 통과가 아니다.
+
+두 실제 planner의 설명에서 이전 900개 입력을 포괄적으로 "null 결과"라고 부른 문장은 부정확하다. 이전 분석에는 acceptance-set 차이의 production 평균 `0.7888888888888889`, insert_first의 생산 집합 거리 평균 `1.3333333333333333`과 구체적 비동등성 사례가 있다. 0은 비용 초과·끝점 실패의 제어 지표다. 원래 수치·결과·모델 응답을 수정하지 않고 이 서술 오류를 다음 설계/작성 개선 대상으로 기록한다. 본문 미확보와 신규성 보류 판단이 타당해도 설명의 정확성이 자동으로 보장되지는 않는다.
+
+이 구현·검사·별도 원문 확보는 투고 준비도를 통과한 논문 생성 성공으로 계산하지 않는다. 실제 앱의 마지막 문헌 회수는 필요한 본문을 얻지 못했고 새 기준을 통과한 완료 원고는 여전히 없다.

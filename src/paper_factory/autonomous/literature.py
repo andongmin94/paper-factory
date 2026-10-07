@@ -42,6 +42,7 @@ ARXIV = "https://export.arxiv.org/api/query"
 # Fixed provider boundaries prevent a metadata link from requesting local services.
 PDF_HOSTS = frozenset({"arxiv.org", "export.arxiv.org", "joss.theoj.org"})
 AUTHOR_PDF_HOST = "www.cs.cmu.edu"
+AUTHOR_PUBLICATIONS = "https://www.cs.cmu.edu/~bam/resume.html"
 MAX_JSON_BYTES = 2 * 1024 * 1024
 MAX_PDF_BYTES = 8 * 1024 * 1024
 MAX_PDF_PAGES = 40
@@ -126,22 +127,38 @@ def _author_pdf_url(url: str) -> str:
         raise ValueError("Invalid author PDF URL port") from error
     if (parts.scheme != "https" or parts.hostname != AUTHOR_PDF_HOST or parts.username is not None
             or parts.password is not None or port not in (None, 443) or parts.query or parts.fragment
-            or not re.fullmatch(r"/~NatProg/papers/[A-Za-z0-9][A-Za-z0-9_.-]{0,179}\.pdf", parts.path)):
+            or not re.fullmatch(r"/~(?:NatProg|natprog)/papers/[A-Za-z0-9][A-Za-z0-9_.-]{0,179}\.pdf", parts.path)):
         raise ValueError("Author PDF URL is outside the audited public-paper boundary")
     return "https://" + AUTHOR_PDF_HOST + parts.path
 
 
-def _checked_url(url: str, *, pdf: bool = False, author_pdf: bool = False) -> str:
+def author_pdf_redirect(url: str, location: str) -> str:
+    """Keep an audited server's literal path; never make a plain HTTP request."""
+    url = _author_pdf_url(url)
+    if not isinstance(location, str) or not location or len(location) > 2048 or any(ord(c) < 32 or ord(c) == 127 for c in location):
+        raise ValueError("Invalid author PDF redirect Location")
+    following = urljoin(url, location)
+    parts = urlsplit(following)
+    if parts.scheme == "http":
+        # Only the fixed author host/directory may upgrade its server Location.
+        # The HTTPS validator below still checks auth, port, path and parameters.
+        following = "https:" + following[len("http:"):]
+    return _author_pdf_url(following)
+
+
+def _checked_url(url: str, *, pdf: bool = False, author_pdf: bool = False, author_listing: bool = False) -> str:
     """Reject untrusted authorities before DNS or HTTP and private DNS answers."""
     if not isinstance(url, str) or len(url) > 2048 or any(ord(c) < 32 for c in url):
         raise ValueError("Invalid literature URL")
     parts = urlsplit(url)
+    if author_listing and (pdf or author_pdf or url != AUTHOR_PUBLICATIONS):
+        raise ValueError("Only the fixed official author publication list is allowed")
     if author_pdf:
         if not pdf:
             raise ValueError("Author-paper requests must be bounded PDF requests")
         url = _author_pdf_url(url)
         parts = urlsplit(url)
-    hosts = frozenset({AUTHOR_PDF_HOST}) if author_pdf else PDF_HOSTS if pdf else frozenset({"api.crossref.org", "export.arxiv.org"})
+    hosts = frozenset({AUTHOR_PDF_HOST}) if author_pdf or author_listing else PDF_HOSTS if pdf else frozenset({"api.crossref.org", "export.arxiv.org"})
     try:
         port = parts.port
     except ValueError as error:
@@ -153,8 +170,8 @@ def _checked_url(url: str, *, pdf: bool = False, author_pdf: bool = False) -> st
         raise ValueError("Literature URL is outside the allowed provider boundary")
     if parts.query and pdf:
         raise ValueError("Open-access PDF URLs cannot contain credentials or query parameters")
-    if author_pdf:
-        pass  # The hint-only directory boundary was already checked above.
+    if author_pdf or author_listing:
+        pass  # The fixed author directory/listing boundary was checked above.
     elif pdf:
         if parts.hostname in {"arxiv.org", "export.arxiv.org"}:
             if not re.fullmatch(r"/pdf/(?:\d{4}\.\d{4,5}|[a-z-]+/\d{7})(?:v\d+)?(?:\.pdf)?", parts.path):
@@ -173,7 +190,7 @@ def _checked_url(url: str, *, pdf: bool = False, author_pdf: bool = False) -> st
         # This exception applies only to the fixed provider allowlist above,
         # never to arbitrary publisher hosts, addresses, or redirects.
         proxies = getproxies_environment()
-        if not author_pdf and proxies.get("https") and not proxy_bypass_environment(parts.hostname, proxies):
+        if not (author_pdf or author_listing) and proxies.get("https") and not proxy_bypass_environment(parts.hostname, proxies):
             return url
         raise ValueError("Literature provider DNS lookup failed") from error
     if not addresses or any(not ipaddress.ip_address(record[4][0]).is_global for record in addresses):
@@ -184,32 +201,65 @@ def _checked_url(url: str, *, pdf: bool = False, author_pdf: bool = False) -> st
 def _fetch(
     client: httpx.Client, url: str, *, budget: _CollectionBudget, pdf: bool = False,
     params: dict[str, object] | None = None, cancel: Callable[[], bool] | None = None,
-    author_pdf: bool = False, retain_response: Callable[[bytes, str, str, int], None] | None = None,
+    author_pdf: bool = False, author_listing: bool = False,
+    retain_response: Callable[[bytes, str, str, int], None] | None = None,
+    redirects: list[dict] | None = None,
 ) -> tuple[bytes, str, str]:
     """Stream into a hard bound; validate every redirect before requesting it."""
     maximum = MAX_PDF_BYTES if pdf else MAX_JSON_BYTES
     redirect, retried = 0, False
     while True:
         _check_cancel(cancel)
-        url = _checked_url(url, pdf=pdf, author_pdf=author_pdf)
+        url = _checked_url(url, pdf=pdf, author_pdf=author_pdf, author_listing=author_listing)
         timeout = budget.request_timeout(pdf=pdf, arxiv=not pdf and urlsplit(url).hostname == "export.arxiv.org", cancel=cancel)
         budget.requests += 1
         with client.stream("GET", url, params=params, follow_redirects=False, timeout=timeout) as response:
             budget.wait(0, cancel)
-            hosts = {AUTHOR_PDF_HOST} if author_pdf else PDF_HOSTS if pdf else {"api.crossref.org", "export.arxiv.org"}
+            hosts = {AUTHOR_PDF_HOST} if author_pdf or author_listing else PDF_HOSTS if pdf else {"api.crossref.org", "export.arxiv.org"}
             if response.url.scheme != "https" or response.url.host not in hosts:
                 raise ValueError("Literature response escaped its allowed provider boundary")
             if author_pdf:
                 _author_pdf_url(str(response.url))
+            if author_listing and str(response.url) != AUTHOR_PUBLICATIONS:
+                raise ValueError("Author publication-list response escaped its fixed endpoint")
+
+            def content() -> bytes:
+                length = response.headers.get("content-length")
+                if length and (not length.isdecimal() or int(length) > maximum):
+                    raise ValueError("Literature response exceeds its size limit")
+                body = bytearray()
+                for chunk in response.iter_bytes():
+                    budget.wait(0, cancel)
+                    body.extend(chunk)
+                    if len(body) > maximum:
+                        raise ValueError("Literature response exceeds its size limit")
+                return bytes(body)
+
             if response.status_code in (301, 302, 303, 307, 308):
                 location = response.headers.get("location")
-                if not pdf or not location or redirect == 3:
-                    raise ValueError("Literature provider redirect was refused")
-                url = urljoin(str(response.url), location)
+                trace = None
+                if author_pdf and redirects is not None:
+                    trace = {"url": str(response.url), "status": response.status_code,
+                             "location": location, "next_url": None}
+                    redirects.append(trace)
+                try:
+                    if author_pdf or author_listing:
+                        raw = content()
+                        if retain_response is not None:
+                            retain_response(raw, str(response.url), response.headers.get("content-type", "").lower(), response.status_code)
+                    if not pdf or not location or redirect == 3:
+                        raise ValueError("Literature provider redirect was refused")
+                    url = author_pdf_redirect(str(response.url), location) if author_pdf else urljoin(str(response.url), location)
+                    if trace is not None:
+                        trace["next_url"] = url
+                except ValueError:
+                    if trace is not None:
+                        trace["error"] = "ValueError"
+                    raise
                 params = None
                 redirect, retried = redirect + 1, False
                 continue
-            if response.status_code == 429 and not pdf:
+            if response.status_code == 429 and not pdf and not author_listing:
                 delay = budget.rate_delay(response.headers.get("retry-after"))
                 response.close()
                 budget.wait(delay, cancel)
@@ -219,16 +269,7 @@ def _fetch(
                     continue
             if retain_response is None:
                 response.raise_for_status()
-            length = response.headers.get("content-length")
-            if length and (not length.isdecimal() or int(length) > maximum):
-                raise ValueError("Literature response exceeds its size limit")
-            content = bytearray()
-            for chunk in response.iter_bytes():
-                budget.wait(0, cancel)
-                content.extend(chunk)
-                if len(content) > maximum:
-                    raise ValueError("Literature response exceeds its size limit")
-            raw, retrieved_url, content_type = bytes(content), str(response.url), response.headers.get("content-type", "").lower()
+            raw, retrieved_url, content_type = content(), str(response.url), response.headers.get("content-type", "").lower()
             if retain_response is not None:
                 retain_response(raw, retrieved_url, content_type, response.status_code)
                 response.raise_for_status()
@@ -723,7 +764,6 @@ def _query_doi(query: str) -> str | None:
 class PdfCandidate(TypedDict):
     doi: str
     title: str
-    url: str
 
 
 def normalize_pdf_candidates(value: object, queries: list[str]) -> list[PdfCandidate]:
@@ -733,10 +773,10 @@ def normalize_pdf_candidates(value: object, queries: list[str]) -> list[PdfCandi
     explicit_dois = {_query_doi(query.strip()) for query in queries if isinstance(query, str)}
     candidates: list[PdfCandidate] = []
     for item in value:
-        if (not isinstance(item, dict) or set(item) != {"doi", "title", "url"}
-                or any(not isinstance(item[key], str) for key in ("doi", "title", "url"))):
-            raise ValueError("Public PDF candidates require only doi, title and url strings")
-        if any(ord(c) < 32 or ord(c) == 127 for key in ("doi", "title", "url") for c in item[key]):
+        if (not isinstance(item, dict) or set(item) != {"doi", "title"}
+                or any(not isinstance(item[key], str) for key in ("doi", "title"))):
+            raise ValueError("Public PDF candidates require only doi and title strings")
+        if any(ord(c) < 32 or ord(c) == 127 for key in ("doi", "title") for c in item[key]):
             raise ValueError("Public PDF candidate fields cannot contain control characters")
         title = item["title"].strip()
         if not title or len(title) > 500 or not _title_key(title):
@@ -744,11 +784,79 @@ def normalize_pdf_candidates(value: object, queries: list[str]) -> list[PdfCandi
         doi = _doi(item["doi"])
         if len(doi) > 500 or doi not in explicit_dois:
             raise ValueError("Public PDF candidate DOI must be explicitly requested in the literature queries")
-        candidate: PdfCandidate = {"doi": doi, "title": title, "url": _author_pdf_url(item["url"])}
-        if candidate in candidates:
-            raise ValueError("Public PDF candidates cannot repeat the same hint")
+        candidate: PdfCandidate = {"doi": doi, "title": title}
+        if any(previous["doi"] == doi for previous in candidates):
+            raise ValueError("Public PDF candidates cannot repeat a DOI")
         candidates.append(candidate)
     return candidates
+
+
+def discover_author_pdf(content: bytes, candidate: PdfCandidate) -> dict:
+    """Parse one exact quoted title and one literal PDF link from a leaf li.
+
+    The official list discovers a URL; it never establishes inspected findings.
+    Native verification reparses these same retained bytes, without HTML crawling.
+    """
+    if (not isinstance(candidate, dict) or normalize_pdf_candidates([candidate], [candidate.get("doi", "")]) != [candidate]
+            or not isinstance(content, bytes) or len(content) > MAX_JSON_BYTES):
+        raise ValueError("Author publication discovery requires bounded bytes and a canonical candidate")
+    soup = BeautifulSoup(content, "html.parser")
+    for element in soup(["script", "style", "template"]):
+        element.decompose()
+    matches = []
+    # Index all li elements, then require a leaf: nested lists cannot mix papers.
+    for index, leaf in enumerate(soup.find_all("li")):
+        if leaf.find("li") is not None:
+            continue
+        titles = re.findall(r'"([^"\n]{1,500})"|“([^“”\n]{1,500})”', leaf.get_text(" ", strip=True))
+        quoted = [left or right for left, right in titles]
+        exact = [title for title in quoted if _title_key(title) == _title_key(candidate["title"])]
+        if exact:
+            matches.append((index, leaf, quoted, exact))
+    if len(matches) != 1:
+        raise ValueError("Official author list has no unique exact quoted whole title")
+    index, leaf, quoted, exact = matches[0]
+    if len(quoted) != 1 or len(exact) != 1:
+        raise ValueError("Official publication leaf contains ambiguous quoted titles")
+    hrefs = [link.get("href") for link in leaf.find_all("a") if isinstance(link.get("href"), str)
+             and urlsplit(link["href"]).path.lower().endswith(".pdf")]
+    if len(hrefs) != 1:
+        raise ValueError("Official publication leaf has no unique PDF href")
+    href = hrefs[0]
+    # Only a literal root-relative audited path or a complete HTTPS URL.
+    # urljoin would silently normalize control characters or dot segments.
+    url = _author_pdf_url("https://" + AUTHOR_PDF_HOST + href if href.startswith("/") and not href.startswith("//") else href)
+    return {"provider": "CMU publications", "listing_url": AUTHOR_PUBLICATIONS, "leaf_index": index,
+            "quoted_title": exact[0], "literal_href": href, "url": url}
+
+
+def _author_listing(client: httpx.Client, root: Path, cache: dict, *, budget: _CollectionBudget,
+                    cancel: Callable[[], bool] | None) -> bytes:
+    """At most one anonymous fixed-list request in this collection, even on failure."""
+    record = cache["record"]
+    if not record["attempted"]:
+        record.update(attempted=True, status="rejected")
+
+        def retain(raw: bytes, url: str, content_type: str, status: int) -> None:
+            path, digest = _save(root, "author-publications", "html", raw)
+            record.update(raw_path=path, sha256=digest, retrieved_url=url, content_type=content_type, http_status=status)
+
+        try:
+            raw, _, content_type = _fetch(client, AUTHOR_PUBLICATIONS, author_listing=True,
+                                         retain_response=retain, budget=budget, cancel=cancel)
+            if record["http_status"] != 200 or content_type.split(";", 1)[0].strip() != "text/html":
+                raise ValueError("Official author publication list is not a complete HTML response")
+            cache["content"] = raw
+            record["status"] = "succeeded"
+        except (_Cancelled, _DeadlineExceeded, _RateLimited) as error:
+            record.update(status="interrupted", error=type(error).__name__)
+            raise
+        except (ValueError, OSError, httpx.HTTPError, httpx.InvalidURL) as error:
+            record["error"] = type(error).__name__
+            raise
+    if "content" not in cache:
+        raise ValueError("Official author publication list was unavailable in this collection")
+    return cache["content"]
 
 
 def author_pdf_identity(text: str, source: dict) -> dict:
@@ -813,24 +921,35 @@ def _retain_full_text(source: dict, root: Path, text: str, url: str, raw_path: s
                    "text_path": text_path, "text_sha256": text_digest})
 
 
-def _promote_hinted_pdf(client: httpx.Client, source: dict, hints: list[PdfCandidate], root: Path, *,
+def _promote_hinted_pdf(client: httpx.Client, source: dict, hints: list[PdfCandidate], root: Path, *, listing: dict,
                         budget: _CollectionBudget, cancel: Callable[[], bool] | None,
                         warnings: list[str], attempts: list[dict]) -> None:
     for hint in hints:
-        attempt = {"source_id": source["id"], "candidate": hint, "status": "rejected",
+        attempt = {"source_id": source["id"], "candidate": hint, "status": "rejected", "redirects": [],
                    "metadata_path": source["metadata_path"], "metadata_sha256": source["metadata_sha256"]}
         attempts.append(attempt)
 
         def retain(raw: bytes, url: str, content_type: str, status: int) -> None:
             path, digest = _save(root, source["id"] + "-hint-response", "pdf" if raw.startswith(b"%PDF-") else "bin", raw)
-            attempt.update(raw_path=path, sha256=digest, retrieved_url=url, content_type=content_type, http_status=status)
+            if status in (301, 302, 303, 307, 308):
+                attempt["redirects"][-1].update(raw_path=path, sha256=digest, content_type=content_type)
+            else:
+                attempt.update(raw_path=path, sha256=digest, retrieved_url=url, content_type=content_type, http_status=status)
 
         try:
             budget.wait(0, cancel)
             if _title_key(hint["title"]) != _title_key(source["title"]) or hint["doi"] != source.get("doi"):
                 raise ValueError("Public PDF hint identity differs from exact Crossref metadata")
-            raw, url, content_type = _fetch(client, hint["url"], pdf=True, author_pdf=True,
-                                           retain_response=retain, cancel=cancel, budget=budget)
+            try:
+                listing_bytes = _author_listing(client, root, listing, budget=budget, cancel=cancel)
+            finally:
+                attempt["discovery"] = {key: value for key, value in listing["record"].items()
+                                        if key in {"raw_path", "sha256", "retrieved_url", "content_type", "http_status"}}
+            discovered = discover_author_pdf(listing_bytes, hint)
+            attempt["discovery"].update(discovered)
+            source.update(discovery_path=attempt["discovery"]["raw_path"], discovery_sha256=attempt["discovery"]["sha256"])
+            raw, url, content_type = _fetch(client, discovered["url"], pdf=True, author_pdf=True,
+                                           redirects=attempt["redirects"], retain_response=retain, cancel=cancel, budget=budget)
             if attempt["http_status"] != 200:
                 raise ValueError("Author-paper provider did not return a complete HTTP 200 response")
             if content_type.split(";", 1)[0].strip() not in {"application/pdf", "application/octet-stream"}:
@@ -849,7 +968,7 @@ def _promote_hinted_pdf(client: httpx.Client, source: dict, hints: list[PdfCandi
         except (_Cancelled, _DeadlineExceeded, _RateLimited) as error:
             attempt.update(status="interrupted", error=type(error).__name__)
             raise
-        except (ValueError, OSError, httpx.HTTPError) as error:
+        except (ValueError, OSError, httpx.HTTPError, httpx.InvalidURL) as error:
             attempt["error"] = type(error).__name__
             attempt["note"] = str(error)[:300] if isinstance(error, ValueError) else "Public PDF retrieval or extraction failed"
             warnings.append(f"Public PDF hint unavailable for {source['id']} ({type(error).__name__}); reading scope was not upgraded")
@@ -932,6 +1051,10 @@ def collect(
     seen: set[str] = set()
     if hints:
         result["pdf_hint_attempts"] = []
+    listing = {"record": {"provider": "CMU publications", "listing_url": AUTHOR_PUBLICATIONS,
+                          "attempted": False, "status": "not_attempted"}}
+    if hints:
+        result["pdf_listing"] = listing["record"]
     candidates: list[list[str]] = []
     candidate_queries: dict[str, list[dict]] = {}
     exact_metadata: dict[str, tuple[bytes, str]] = {}
@@ -1084,7 +1207,7 @@ def collect(
                         try:
                             source_hints = [hint for hint in hints if hint["doi"] == candidate]
                             if source_hints:
-                                _promote_hinted_pdf(client, source, source_hints, root, budget=budget, cancel=cancel,
+                                _promote_hinted_pdf(client, source, source_hints, root, listing=listing, budget=budget, cancel=cancel,
                                                     warnings=result["warnings"], attempts=result["pdf_hint_attempts"])
                                 # A hinted DOI has one strict route, even when it
                                 # fails: it cannot become another generic search.

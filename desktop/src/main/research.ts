@@ -30,12 +30,12 @@ type Receipt = { id: string; phase: ResearchPhase; at: string; model: string; pr
   text?: string; textSha256?: string; code?: string };
 
 const sha = (value: string) => createHash('sha256').update(value).digest('hex');
-type PdfCandidate = { doi: string; title: string; url: string };
+type PdfCandidate = { doi: string; title: string };
 function isPdfCandidate(value: unknown): value is PdfCandidate {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const candidate = value as Record<string, unknown>;
-  return Object.keys(candidate).sort().join(',') === 'doi,title,url' &&
-    Object.entries({ doi: [1, 500], title: [1, 500], url: [1, 2048] }).every(([key, [min, max]]) =>
+  return Object.keys(candidate).sort().join(',') === 'doi,title' &&
+    Object.entries({ doi: [1, 500], title: [1, 500] }).every(([key, [min, max]]) =>
       typeof candidate[key] === 'string' && candidate[key].trim().length >= min &&
       candidate[key].trim().length <= max && !/[\u0000-\u001f\u007f]/.test(candidate[key]));
 }
@@ -882,11 +882,11 @@ export class ResearchController {
       'Return action=retrieve_literature only when additional inspected methods/results could establish the position of this unchanged, executable design. ' +
       'Use 1 to 4 distinct exact known DOIs, complete paper titles or concise method queries, each 8 to 500 printable characters. ' +
       'Known arxiv:<identifier> or 10.48550/arXiv.<identifier> queries bind an actual preprint version. Never invent identifiers, unseen findings or novelty. ' +
-      'Return pdfCandidates=[] unless you already know a public primary-author PDF URL for an explicitly requested DOI. ' +
-      'At most two candidates may each contain exactly doi, title and url. The title must be the complete exact Crossref title. ' +
-      'The supported author-copy path is https://www.cs.cmu.edu/~NatProg/papers/<known-filename>.pdf. Other hosts or author directories, HTML, credentials, queries and redirects to other hosts are unsupported. ' +
-      'Never construct or guess a filename or URL. Each candidate is an untrusted retrieval hint, not reading evidence or publication authority. ' +
-      'The engine independently checks the exact DOI record, whole title, authors and first-page DOI before retaining body evidence; author-copy version remains unknown. ' +
+      'For up to two explicitly requested known DOIs, pdfCandidates may contain exactly doi and title. The title must be the complete exact Crossref title. ' +
+      'The engine discovers a literal public PDF link by matching that whole title in the fixed official author publication index https://www.cs.cmu.edu/~bam/resume.html. ' +
+      'You do not need to know the PDF filename or URL. Never return a URL field, invent identifiers or treat the index as inspected paper content. ' +
+      'Each candidate is an untrusted retrieval hint, not reading evidence or publication authority. ' +
+      'The engine independently checks the exact DOI record, retained index entry and link, bounded redirects, whole title, authors and first-page DOI before retaining body evidence; author-copy version remains unknown. ' +
       'Avoid repeated successful queries that already supplied the required passages; account for every retained search outcome and reading scope. ' +
       'A failed search does not establish absence of prior work. No new protocol, observation or scientific execution is authorized. ' +
       'Return action=revise_design with queries=[] and pdfCandidates=[] when the question, contribution, comparator, sampling or validation needs substantive redesign. ' +
@@ -896,7 +896,7 @@ export class ResearchController {
       `There is ${workflow.study_literature_attempt < 3 ? 'one' : 'no'} final direct-primary-PDF attempt after the first two collections. ` +
       'This final attempt requires valid nonempty pdfCandidates and queries containing exactly their DOI identifiers; generic title/method searches are forbidden. ' +
       'It shares the same time/source/PDF bounds, never resets past attempts and cannot authorize science or approval. ' +
-      'Do not request it if you do not already know a defensible primary-author URL. ' +
+      'Use it only for defensible known DOI and whole-title candidates whose directly related methods could resolve the stated gap. The public index may have no matching paper. ' +
       'If no defensible unused literature route remains, explain the gap without promising approval. ' +
       'Write reason in the language of the original goal. Return only JSON with exactly action, queries, pdfCandidates and reason (24 to 2000 characters).\n' +
       JSON.stringify({ goal: workflow.goal, proposal: workflow.proposal, review: workflow.study_review, literature: workflow.literature });
@@ -908,7 +908,7 @@ export class ResearchController {
         new Set(result.queries.map(query => (query as string).trim())).size !== result.queries.length ||
         !Array.isArray(result.pdfCandidates) || result.pdfCandidates.length > 2 ||
         !result.pdfCandidates.every(isPdfCandidate) ||
-        new Set(result.pdfCandidates.map(candidate => candidate.url.trim())).size !== result.pdfCandidates.length ||
+        new Set(result.pdfCandidates.map(candidate => candidate.doi.trim().toLowerCase())).size !== result.pdfCandidates.length ||
         (result.action !== 'retrieve_literature' && result.pdfCandidates.length > 0) ||
         typeof result.reason !== 'string' || result.reason.trim().length < 24 || result.reason.trim().length > 2000 ||
         (result.action === 'retrieve_literature') !== (result.queries.length > 0)) {
@@ -916,7 +916,7 @@ export class ResearchController {
     }
     return { action: result.action as 'retrieve_literature' | 'revise_design' | 'infeasible',
       queries: result.queries.map(query => (query as string).trim()),
-      pdfCandidates: result.pdfCandidates.map(candidate => ({ doi: candidate.doi.trim(), title: candidate.title.trim(), url: candidate.url.trim() })),
+      pdfCandidates: result.pdfCandidates.map(candidate => ({ doi: candidate.doi.trim(), title: candidate.title.trim() })),
       reason: result.reason.trim() };
   }
 

@@ -1,4 +1,4 @@
-"""Untrusted public PDF hints bind to exact metadata and literal first-page identity."""
+"""Official author-list discovery binds exact metadata and literal PDF identity."""
 import hashlib
 import json
 
@@ -12,7 +12,8 @@ from test_autonomous_literature import clock, mocked, record
 DOI = "10.1234/test"
 TITLE = "Verified record title"
 URL = "https://www.cs.cmu.edu/~NatProg/papers/verified-author.pdf"
-HINT = {"doi": DOI, "title": TITLE, "url": URL}
+HINT = {"doi": DOI, "title": TITLE}
+LISTING = ('<html><ul><li>Ada Lovelace, "' + TITLE + '", <a href="' + URL + '">local pdf</a></li></ul></html>').encode()
 PDF = b"%PDF-complete-author-copy-fixture"
 HTTP_CLIENT = httpx.Client
 TEXT = ("[Page 1]\nVerified record title\nAda Lovelace\nExample University\n"
@@ -22,12 +23,14 @@ TEXT = ("[Page 1]\nVerified record title\nAda Lovelace\nExample University\n"
 
 
 def collect_hint(monkeypatch, tmp_path, *, text=TEXT, raw=PDF, content_type="application/pdf", status=200,
-                 metadata=None, handler=None, cancel=None, extractor=None):
+                 metadata=None, handler=None, cancel=None, extractor=None, listing=LISTING, listing_status=200):
     def respond(request):
         if request.url.host == "api.crossref.org":
             assert request.url.path == "/works/10.1234/test"
             return httpx.Response(200, json=metadata if metadata is not None else record())
         assert request.url.host == "www.cs.cmu.edu"
+        if str(request.url) == literature.AUTHOR_PUBLICATIONS:
+            return httpx.Response(listing_status, content=listing, headers={"content-type": "text/html"})
         if handler is not None:
             return handler(request)
         return httpx.Response(status, content=raw, headers={"content-type": content_type})
@@ -51,7 +54,7 @@ def test_verified_author_copy_preserves_metadata_pdf_text_identity_and_literal_r
     result, requests = collect_hint(monkeypatch, tmp_path)
     source, = result["sources"]
     attempt, = result["pdf_hint_attempts"]
-    assert len(requests) == 2 and not result["warnings"]
+    assert len(requests) == 3 and not result["warnings"]
     assert source["scope"] == "full_text" and source["url"] == URL
     assert source["copy_type"] == "author_copy" and source["publication_version"] == "unknown"
     assert source["doi"] == DOI and source["title"] == TITLE and source["authors"] == ["Ada Lovelace"]
@@ -62,6 +65,14 @@ def test_verified_author_copy_preserves_metadata_pdf_text_identity_and_literal_r
     proof = json.loads(assert_retained(tmp_path, source, "identity_path", "identity_sha256"))
     assert proof["status"] == attempt["status"] == "verified" and proof["metadata_sha256"] == source["metadata_sha256"]
     identity = proof["identity"]
+    discovery = proof["discovery"]
+    assert discovery["literal_href"] == discovery["url"] == URL
+    assert discovery["quoted_title"] == TITLE and discovery["http_status"] == 200
+    assert discovery["retrieved_url"] == literature.AUTHOR_PUBLICATIONS and proof["redirects"] == []
+    assert_retained(tmp_path, discovery, content=LISTING)
+    assert_retained(tmp_path, source, "discovery_path", "discovery_sha256", LISTING)
+    assert literature.discover_author_pdf(LISTING, HINT) == {key: discovery[key] for key in
+        ("provider", "listing_url", "leaf_index", "quoted_title", "literal_href", "url")}
     assert TEXT[identity["title_range"]["start"]:identity["title_range"]["end"]] == TITLE
     for location in identity["author_ranges"]:
         assert TEXT[location["start"]:location["end"]] == location["author"]
@@ -75,8 +86,7 @@ def test_verified_author_copy_preserves_metadata_pdf_text_identity_and_literal_r
 
 def test_hint_normalization_is_pure_and_requires_explicit_doi(monkeypatch):
     monkeypatch.setattr(literature.socket, "getaddrinfo", lambda *args, **kwargs: pytest.fail("Normalization must not do DNS"))
-    value = {"doi": " 10.1234/TEST ", "title": " Verified record title ",
-             "url": "https://www.cs.cmu.edu:443/~NatProg/papers/verified-author.pdf"}
+    value = {"doi": " 10.1234/TEST ", "title": " Verified record title "}
     normalized = literature.normalize_pdf_candidates([value], ["DOI: 10.1234/TEST"])
     assert normalized == [HINT] and value["doi"] == " 10.1234/TEST "
     assert literature.normalize_pdf_candidates([], [TITLE]) == []
@@ -85,20 +95,11 @@ def test_hint_normalization_is_pure_and_requires_explicit_doi(monkeypatch):
 
 
 @pytest.mark.parametrize("value", [None, {}, [HINT] * 3, [HINT] * 2, [{**HINT, "extra": True}],
-    [{"doi": DOI, "title": TITLE}], [{**HINT, "doi": "https://doi.org/10.1234/test"}],
+    [{"doi": DOI}], [{**HINT, "doi": "https://doi.org/10.1234/test"}],
     [{**HINT, "title": ""}], [{**HINT, "title": "x" * 501}], [{**HINT, "title": "title\x7f"}],
     [{**HINT, "title": "title\n"}], [{**HINT, "title": 2}], [{**HINT, "doi": "10.1234/else"}],
-    [{**HINT, "url": "http://www.cs.cmu.edu/~NatProg/papers/test.pdf"}],
-    [{**HINT, "url": "https://www.cs.cmu.edu.evil.test/~NatProg/papers/test.pdf"}],
-    [{**HINT, "url": "https://user:secret@www.cs.cmu.edu/~NatProg/papers/test.pdf"}],
-    [{**HINT, "url": "https://www.cs.cmu.edu:444/~NatProg/papers/test.pdf"}],
-    [{**HINT, "url": URL + "?token=secret"}], [{**HINT, "url": URL + "#fragment"}],
-    [{**HINT, "url": "https://www.cs.cmu.edu/~other/papers/test.pdf"}],
-    [{**HINT, "url": "https://www.cs.cmu.edu/~NatProg/papers/../private.pdf"}],
-    [{**HINT, "url": "https://www.cs.cmu.edu/~NatProg/papers/%2e%2e/private.pdf"}],
-    [{**HINT, "url": "https://www.cs.cmu.edu/~NatProg/papers/test.html"}],
-    [{**HINT, "url": URL + "\x7f"}], [{**HINT, "url": URL + "\n"}],
-    [{**HINT, "url": "https://127.0.0.1/~NatProg/papers/test.pdf"}]])
+    [{**HINT, "url": URL}], [{**HINT, "title": "!!!"}],
+    [{**HINT, "title": TITLE + " different"}, HINT]])
 def test_invalid_hints_rejected_before_files_dns_or_http(tmp_path, monkeypatch, value):
     monkeypatch.setattr(literature.socket, "getaddrinfo", lambda *args, **kwargs: pytest.fail("Unsafe hint reached DNS"))
     monkeypatch.setattr(literature.httpx, "Client", lambda **kwargs: pytest.fail("Unsafe hint reached HTTP"))
@@ -130,7 +131,7 @@ def test_identity_failure_never_promotes_but_preserves_complete_original_and_ext
     result, requests = collect_hint(monkeypatch, tmp_path, text=text)
     source, = result["sources"]
     attempt, = result["pdf_hint_attempts"]
-    assert len(requests) == 2 and source["scope"] == "metadata_only"
+    assert len(requests) == 3 and source["scope"] == "metadata_only"
     assert source["raw_path"] == source["metadata_path"] and "text_path" not in source
     assert attempt["status"] == "rejected" and attempt["error"] == "ValueError"
     assert_retained(tmp_path, attempt, content=PDF)
@@ -181,10 +182,10 @@ def test_same_origin_redirect_is_bounded_and_cross_origin_is_not_requested(tmp_p
         assert str(request.url) == final
         return httpx.Response(200, content=PDF, headers={"content-type": "application/pdf"})
     result, requests = collect_hint(monkeypatch, tmp_path, handler=same)
-    assert len(requests) == 3 and result["sources"][0]["url"] == final
+    assert len(requests) == 4 and result["sources"][0]["url"] == final
     result, requests = collect_hint(monkeypatch, tmp_path / "cross-origin", handler=lambda request:
         httpx.Response(302, headers={"location": "https://arxiv.org/pdf/1311.3903v1"}))
-    assert len(requests) == 2 and result["sources"][0]["scope"] == "metadata_only"
+    assert len(requests) == 3 and result["sources"][0]["scope"] == "metadata_only"
     assert result["pdf_hint_attempts"][0]["status"] == "rejected"
 
 
@@ -211,22 +212,30 @@ def test_failed_hint_has_no_arxiv_or_generic_pdf_fallback(tmp_path, monkeypatch)
     monkeypatch.setattr(literature, "_arxiv_pdf", lambda *args, **kwargs: pytest.fail("Hint route must never run arXiv discovery"))
     result, requests = collect_hint(monkeypatch, tmp_path, metadata=metadata,
                                     text=TEXT.replace(TITLE, "A different paper", 1))
-    assert len(requests) == 2 and {request.url.host for request in requests} == {"api.crossref.org", "www.cs.cmu.edu"}
+    assert len(requests) == 3 and {request.url.host for request in requests} == {"api.crossref.org", "www.cs.cmu.edu"}
     assert result["sources"][0]["scope"] == "metadata_only"
 
 
 def test_two_hints_retain_rejected_and_verified_bytes_with_separate_proofs(tmp_path, monkeypatch):
     other_url = URL.replace("verified-author.pdf", "another-author.pdf")
+    other_doi, other_title = "10.1234/another", "Another verified record title"
+    listing = LISTING.replace(b"</ul>", ('<li>"' + other_title + '" <a href="' + other_url + '">pdf</a></li></ul>').encode())
     wrong = b"%PDF-complete-different-paper"
     def respond(request):
         if request.url.host == "api.crossref.org":
-            return httpx.Response(200, json=record())
+            metadata = record(other_doi if request.url.path.endswith("another") else DOI)
+            if request.url.path.endswith("another"):
+                metadata["message"]["title"] = [other_title]
+            return httpx.Response(200, json=metadata)
+        if str(request.url) == literature.AUTHOR_PUBLICATIONS:
+            return httpx.Response(200, content=listing, headers={"content-type": "text/html"})
         return httpx.Response(200, content=wrong if str(request.url) == URL else PDF,
                               headers={"content-type": "application/pdf"})
     requests = mocked(monkeypatch, respond)
-    monkeypatch.setattr(literature, "_pdf_text", lambda raw: TEXT.replace(TITLE, "A different paper", 1) if raw == wrong else TEXT)
-    result = literature.collect([DOI], tmp_path, limit=1, pdf_candidates=[HINT, {**HINT, "url": other_url}])
-    assert len(requests) == 3 and result["sources"][0]["scope"] == "full_text"
+    monkeypatch.setattr(literature, "_pdf_text", lambda raw: TEXT.replace(TITLE, "A different paper", 1) if raw == wrong else TEXT.replace(TITLE, other_title).replace(DOI, other_doi))
+    result = literature.collect([DOI, other_doi], tmp_path, limit=2, pdf_candidates=[HINT, {"doi": other_doi, "title": other_title}])
+    assert len(requests) == 5 and result["sources"][1]["scope"] == "full_text"
+    assert sum(str(request.url) == literature.AUTHOR_PUBLICATIONS for request in requests) == 1
     rejected, verified = result["pdf_hint_attempts"]
     assert rejected["status"] == "rejected" and verified["status"] == "verified"
     assert_retained(tmp_path, rejected, content=wrong)
@@ -277,6 +286,8 @@ def test_hinted_explicit_doi_is_inspected_before_generic_abstract_source_limit(t
     other = "10.1234/generic"
     def respond(request):
         if request.url.host == "www.cs.cmu.edu":
+            if str(request.url) == literature.AUTHOR_PUBLICATIONS:
+                return httpx.Response(200, content=LISTING, headers={"content-type": "text/html"})
             return httpx.Response(200, content=PDF, headers={"content-type": "application/pdf"})
         if request.url.path == "/works":
             return httpx.Response(200, json={"status": "ok", "message": {"items": [{"DOI": other}]}})

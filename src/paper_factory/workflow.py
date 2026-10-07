@@ -99,7 +99,34 @@ def _verified_author_pdf(ws: Workspace, source: dict, candidates: list[dict] | N
         if (source.get("doi"), source.get("title"), source.get("authors")) != (doi, title, authors):
             raise ValueError("Author PDF source differs from exact retained Crossref metadata")
         if candidate["doi"] != doi or literature._title_key(candidate["title"]) != literature._title_key(title):
-            raise ValueError("Author PDF hint differs from exact metadata")
+            raise ValueError("Author PDF candidate differs from exact metadata")
+        discovery = proof["discovery"]
+        if (discovery["http_status"] != 200 or discovery["retrieved_url"] != literature.AUTHOR_PUBLICATIONS or
+                discovery["content_type"].split(";", 1)[0].strip().lower() != "text/html"):
+            raise ValueError("Author PDF discovery lacks the exact public listing response")
+        listing_path = safe_relative(ws.path("research"), source["discovery_path"])
+        original_listing = safe_relative(proof_path.parent.parent, discovery["raw_path"])
+        if (listing_path != original_listing or source["discovery_sha256"] != discovery["sha256"] or
+                digest_file(listing_path) != source["discovery_sha256"]):
+            raise ValueError("Author PDF discovery differs from retained publication-list bytes")
+        resolution = literature.discover_author_pdf(listing_path.read_bytes(), candidate)
+        if any(discovery.get(key) != value for key, value in resolution.items()):
+            raise ValueError("Author PDF discovery does not match the exact retained listing entry")
+        redirects = proof["redirects"]
+        if not isinstance(redirects, list) or len(redirects) > 3:
+            raise ValueError("Author PDF redirects exceed the bounded transition contract")
+        requested_url = resolution["url"]
+        for transition in redirects:
+            if transition["url"] != requested_url or transition["status"] not in {301, 302, 303, 307, 308}:
+                raise ValueError("Author PDF redirect does not bind the actual preceding request")
+            requested_url = literature.author_pdf_redirect(requested_url, transition["location"])
+            if requested_url != transition["next_url"]:
+                raise ValueError("Author PDF redirect differs from its literal server Location")
+            redirect_path = safe_relative(proof_path.parent.parent, transition["raw_path"])
+            if digest_file(redirect_path) != transition["sha256"]:
+                raise ValueError("Author PDF redirect differs from its retained response bytes")
+        if requested_url != proof["retrieved_url"]:
+            raise ValueError("Author PDF final response does not follow the retained discovery and redirects")
         text = safe_relative(ws.path("research"), source["text_path"]).read_bytes().decode("utf-8")
         if proof["identity"] != literature.author_pdf_identity(text, source):
             raise ValueError("Author PDF first-page identity does not match retained text")
@@ -964,7 +991,7 @@ class WorkflowService:
                 raise WorkflowError("STUDY_LITERATURE_LIMIT", "The bounded literature attempts were exhausted; preserve the unresolved evidence gap")
             if record.study_literature_attempt == 2 and (not pdf_candidates or
                     {literature._query_doi(query) for query in queries} != {candidate["doi"] for candidate in pdf_candidates}):
-                raise WorkflowError("STUDY_LITERATURE_HINT_REQUIRED", "The final attempt permits only verified public-PDF hints and their exact DOI queries")
+                raise WorkflowError("STUDY_LITERATURE_HINT_REQUIRED", "The final attempt permits only DOI/title public-PDF candidates and their exact DOI queries")
             if not self._study_literature_available(ws, record):
                 raise WorkflowError("STUDY_LITERATURE_INELIGIBLE", "The rejected design requires scientific revision rather than a literature-only attempt")
             previous = _read(ws, record, "literature")
@@ -995,7 +1022,7 @@ class WorkflowService:
             if number == 3 and any(source.get("scope") == "full_text" and (
                     source.get("doi") not in {candidate["doi"] for candidate in pdf_candidates} or
                     not source.get("identity_path")) for source in sources):
-                raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "The final literature attempt requires identity-bound hinted PDF bodies")
+                raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "The final literature attempt requires identity-bound discovered PDF bodies")
             for source in sources:
                 excerpts = source.get("excerpts", [])
                 if not isinstance(excerpts, list) or len(excerpts) > 12 or any(
@@ -1024,11 +1051,28 @@ class WorkflowService:
                     if key in record.artifacts and record.artifacts[key].path != relative:
                         key += "-" + hashlib.sha256(relative.encode()).hexdigest()[:12]
                     _freeze_literature_artifact(ws, record, key, original)
+            listing = evidence.get("pdf_listing")
+            if isinstance(listing, dict) and listing.get("raw_path"):
+                original = safe_relative(root, listing["raw_path"])
+                if digest_file(original) != listing.get("sha256"):
+                    raise WorkflowError("ARTIFACT_CHANGED", "Publication listing differs from its retrieval digest")
+                listing["raw_path"] = original.relative_to(ws.path("research")).as_posix()
+                _freeze_literature_artifact(ws, record, "literature-listing-" + listing["sha256"], original)
+            for attempt in evidence.get("pdf_hint_attempts", []):
+                retained_responses = [attempt.get("discovery", {}), *attempt.get("redirects", [])]
+                for response in retained_responses:
+                    if not response.get("raw_path"):
+                        continue
+                    original = safe_relative(root, response["raw_path"])
+                    if digest_file(original) != response.get("sha256"):
+                        raise WorkflowError("ARTIFACT_CHANGED", "Author PDF discovery response differs from its retrieval digest")
+                    response["raw_path"] = original.relative_to(ws.path("research")).as_posix()
+                    _freeze_literature_artifact(ws, record, "literature-discovery-" + response["sha256"], original)
             write_json(root / "collection.json", evidence)
             _freeze(ws, record, f"study-literature-collection-{number}", root / "collection.json")
             for source in sources:
                 if source.get("scope") == "full_text" and (number == 3 or source.get("copy_type") == "author_copy") and not _verified_author_pdf(ws, source, pdf_candidates):
-                    raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Author PDF evidence must bind the reserved hint and verified identity")
+                    raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Author PDF evidence must bind the reserved candidate, publication listing and verified identity")
             candidates = {source["id"]: source for source in previous.get("sources", [])}
             rank = lambda source: {"full_text": 2, "abstract": 1}.get(source.get("scope"), 0) if source.get("excerpts") else 0
             for source in sources:
@@ -1127,7 +1171,7 @@ class WorkflowService:
                     location = (source.get("excerpt_ranges") or [{}] * len(source["excerpts"]))[position]
                     provenance = {key: source.get(key) for key in ("id", "doi", "title", "authors", "scope", "text_path", "text_sha256", "raw_path", "sha256",
                                   "metadata_path", "metadata_sha256", "url", "arxiv_id", "body_range",
-                                  "identity_path", "identity_sha256", "copy_type", "publication_version")}
+                                  "identity_path", "identity_sha256", "discovery_path", "discovery_sha256", "copy_type", "publication_version")}
                     provenance.update(excerpt_index=indices[position], excerpt_range=location)
                     identity = (indices[position], source.get("text_sha256") or source["sha256"],
                                 hashlib.sha256(passage.encode()).hexdigest(), location.get("start"), location.get("end"))
@@ -1177,10 +1221,11 @@ class WorkflowService:
             if provenance.get("copy_type") == "author_copy":
                 if not _verified_author_pdf(ws, provenance):
                     raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Closest author-copy evidence lacks verified first-page identity")
-                identity_path = safe_relative(ws.path("research"), provenance["identity_path"]).relative_to(ws.root).as_posix()
-                if not any(key.startswith("literature-") and artifact.path == identity_path and
-                           artifact.sha256 == provenance["identity_sha256"] for key, artifact in record.artifacts.items()):
-                    raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Closest author-copy identity lacks frozen artifact binding")
+                for field, digest_field in (("identity_path", "identity_sha256"), ("discovery_path", "discovery_sha256")):
+                    expected = safe_relative(ws.path("research"), provenance[field]).relative_to(ws.root).as_posix()
+                    if not any(key.startswith("literature-") and artifact.path == expected and
+                               artifact.sha256 == provenance[digest_field] for key, artifact in record.artifacts.items()):
+                        raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Closest author-copy identity and discovery require frozen artifact bindings")
             text_path, digest = provenance.get("text_path"), provenance.get("text_sha256")
             if not isinstance(text_path, str) or not isinstance(digest, str):
                 raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Closest work lacks retained extracted text")

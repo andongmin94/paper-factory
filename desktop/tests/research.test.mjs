@@ -967,11 +967,13 @@ for (const invalid of [
   { ...retrievalRemediation(), queries: ['Same synthetic query', ' Same synthetic query '] },
   { ...retrievalRemediation(), queries: ['Synthetic\nquery with a control character'] },
   { ...retrievalRemediation(), action: 'approve' },
-  { ...retrievalRemediation(), pdfCandidates: [{ doi: '10.1234/synthetic', title: 'Synthetic method' }] },
-  { ...retrievalRemediation(), pdfCandidates: [{ doi: '10.1234/synthetic', title: 'Synthetic method', url: 'https://www.cs.cmu.edu/~NatProg/papers/synthetic.pdf', approval: true }] },
-  { ...retrievalRemediation(), pdfCandidates: Array.from({ length: 3 }, (_, index) => ({ doi: '10.1234/synthetic', title: 'Synthetic method', url: 'https://www.cs.cmu.edu/~NatProg/papers/synthetic-' + index + '.pdf' })) },
-  { ...retrievalRemediation(), pdfCandidates: [{ doi: '10.1234/synthetic', title: 'Synthetic method', url: 'https://www.cs.cmu.edu/\nsynthetic.pdf' }] },
-  { ...retrievalRemediation(), action: 'revise_design', queries: [], pdfCandidates: [{ doi: '10.1234/synthetic', title: 'Synthetic method', url: 'https://www.cs.cmu.edu/~NatProg/papers/synthetic.pdf' }] },
+  { ...retrievalRemediation(), pdfCandidates: [{ doi: '10.1234/synthetic' }] },
+  { ...retrievalRemediation(), pdfCandidates: [{ doi: '10.1234/synthetic', title: 'Synthetic method', approval: true }] },
+  { ...retrievalRemediation(), pdfCandidates: [{ doi: '10.1234/synthetic', title: 'Synthetic method', url: 'https://www.cs.cmu.edu/~NatProg/papers/synthetic.pdf' }] },
+  { ...retrievalRemediation(), pdfCandidates: Array.from({ length: 3 }, (_, index) => ({ doi: '10.1234/synthetic-' + index, title: 'Synthetic method ' + index })) },
+  { ...retrievalRemediation(), pdfCandidates: [{ doi: '10.1234/synthetic', title: 'Synthetic\nmethod' }] },
+  { ...retrievalRemediation(), pdfCandidates: [{ doi: '10.1234/synthetic', title: 'Synthetic method' }, { doi: '10.1234/SYNTHETIC', title: 'Other method' }] },
+  { ...retrievalRemediation(), action: 'revise_design', queries: [], pdfCandidates: [{ doi: '10.1234/synthetic', title: 'Synthetic method' }] },
 ]) {
   test('invalid study remediation cannot collect, replace the proposal or authorize science: ' + JSON.stringify(invalid), async () => {
     const workflow = { ...base(), stage: 'created', proposal_attempt: 0, study_review: null };
@@ -988,9 +990,8 @@ for (const invalid of [
   });
 }
 
-test('study PDF hints remain model receipts and untrusted engine inputs before independent approval', async () => {
-  const pdfCandidates = [{ doi: '10.1234/synthetic', title: 'Synthetic Primary Method',
-    url: 'https://www.cs.cmu.edu/~NatProg/papers/synthetic.pdf' }];
+test('DOI and title candidates discover PDFs without a model URL and retain independent approval boundaries', async () => {
+  const pdfCandidates = [{ doi: '10.1234/synthetic', title: 'Synthetic Primary Method' }];
   const workflow = { ...base(), stage: 'proposed', status: 'blocked', code: 'STUDY_REJECTED',
     proposal_attempt: 3, proposal: { source_files: ['module.ts'] }, plan: null, study_review: evidenceDeficitReview() };
   const f = await fixture([studyAccepted, { files: [] }, accepted, { sections: [] }, manuscriptAccepted], workflow, {
@@ -1009,12 +1010,14 @@ test('study PDF hints remain model receipts and untrusted engine inputs before i
     const methods = f.calls.map(call => call.method);
     assert.ok(methods.indexOf('workflow.submitStudyReview') < methods.indexOf('workflow.startExperiment'));
     assert.match(f.studyRemediationPrompts[0].input[0].content, /untrusted retrieval hint/);
-    assert.match(f.studyRemediationPrompts[0].input[0].content, /Never construct or guess/);
+    assert.match(f.studyRemediationPrompts[0].input[0].content, /fixed official author publication index/);
+    assert.match(f.studyRemediationPrompts[0].input[0].content, /do not need to know the PDF filename or URL/);
+    assert.match(f.studyRemediationPrompts[0].input[0].content, /Never return a URL field/);
   } finally { await f.cleanup(); }
 });
 
-test('native rejection of a PDF hint stops before science and preserves the completed planner receipt', async () => {
-  const pdfCandidates = [{ doi: '10.1234/synthetic', title: 'Synthetic Primary Method', url: 'https://www.cs.cmu.edu/~NatProg/papers/synthetic.pdf' }];
+test('native rejection of a DOI and title candidate stops science and retains its planner receipt', async () => {
+  const pdfCandidates = [{ doi: '10.1234/synthetic', title: 'Synthetic Primary Method' }];
   const workflow = { ...base(), stage: 'proposed', status: 'blocked', code: 'STUDY_REJECTED',
     proposal_attempt: 3, proposal: { source_files: ['module.ts'] }, plan: null, study_review: evidenceDeficitReview() };
   const f = await fixture([], workflow, {
@@ -1033,7 +1036,7 @@ test('native rejection of a PDF hint stops before science and preserves the comp
 });
 
 test('the final direct-PDF attempt follows two retained collections without resetting science or proposal budgets', async () => {
-  const pdfCandidates = [{ doi: '10.1234/synthetic', title: 'Synthetic Primary Method', url: 'https://www.cs.cmu.edu/~NatProg/papers/synthetic.pdf' }];
+  const pdfCandidates = [{ doi: '10.1234/synthetic', title: 'Synthetic Primary Method' }];
   const proposal = { source_files: ['module.ts'] };
   const workflow = { ...base(), stage: 'proposed', status: 'blocked', code: 'STUDY_REJECTED',
     study_literature_attempt: 2, proposal_attempt: 3, proposal, plan: null, study_review: evidenceDeficitReview() };
