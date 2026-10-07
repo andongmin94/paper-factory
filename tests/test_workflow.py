@@ -521,27 +521,29 @@ def rejected_study_review():
     return review
 
 
-def test_weak_study_is_blocked_before_code_measurement_and_export_and_cannot_resume(setup):
+def test_weak_study_remains_unapproved_when_resumed_for_bounded_evidence(setup):
     service, runner, research_id = setup
     service.submit_proposal(research_id, protocol())
     service.collect_literature(research_id)
     rejected = service.submit_study_review(research_id, rejected_study_review())
     assert rejected["status"] == "blocked" and rejected["code"] == "STUDY_REJECTED"
-    assert rejected["stage"] == "proposed" and rejected["resume_kind"] is None
+    assert rejected["stage"] == "proposed" and rejected["resume_kind"] == "preparation"
     assert "plan" not in rejected["artifacts"]
     assert not {"bundle", "observations", "analysis", "manuscript", "export-pdf"} & set(rejected["artifacts"])
     for operation in (lambda: service.submit_code(research_id, BUNDLE, REVIEW),
-                      lambda: service.start_experiment(research_id), lambda: service.export(research_id),
-                      lambda: service.resume(research_id)):
+                      lambda: service.start_experiment(research_id), lambda: service.export(research_id)):
         with pytest.raises(WorkflowError):
             operation()
     assert runner.calls == 0
     receipt = json.loads(service.artifact_path(research_id, "study-review-1").read_bytes())
     assert receipt["review"] == rejected_study_review()
+    resumed = service.resume(research_id)
+    assert resumed["stage"] == "proposed" and resumed["study_review"]["accepted"] is False
+    assert "plan" not in resumed["artifacts"] and runner.calls == 0
     cancelled = service.cancel(research_id)
-    assert cancelled["resume_kind"] is None
-    with pytest.raises(WorkflowError):
-        service.resume(research_id)
+    assert cancelled["resume_kind"] == "preparation"
+    assert service.resume(research_id)["study_review"]["accepted"] is False
+    assert json.loads(service.artifact_path(research_id, "study-review-1").read_bytes()) == receipt
     assert runner.calls == 0
 
 

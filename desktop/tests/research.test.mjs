@@ -12,7 +12,7 @@ const sourceText = 'export const actual = value => value;';
 const digest = text => createHash('sha256').update(text).digest('hex');
 const sourceInventory = texts => Object.entries(texts).map(([name, text]) => ({ name, sha256: digest(text), size: Buffer.byteLength(text) }));
 const base = () => ({ id, goal: 'A synthetic controller test; no actual research', stage: 'planned', status: 'ready', code: null, message: null,
-  terminal_control_failure: false, execution_attempt: 0, proposal_attempt: 1, cleanup_pending: false, resume_kind: 'preparation', artifacts: {}, instructions: 'Frozen test instructions', source_context: 'Synthetic bounded source excerpts only; no real research.',
+  terminal_control_failure: false, execution_attempt: 0, proposal_attempt: 1, study_literature_attempt: 0, study_literature_pending: false, cleanup_pending: false, resume_kind: 'preparation', artifacts: {}, instructions: 'Frozen test instructions', source_context: 'Synthetic bounded source excerpts only; no real research.',
   study_review: studyAccepted, manuscript_review: null,
   parent_research_id: null, root_research_id: null, redesign_attempt: 0, followup_research_id: null,
   improvement_available: false, redesign_pending: false,
@@ -525,11 +525,15 @@ function fakeEngineError(code) {
 
 async function fixture(responses = [], workflow = base(), transport = {}) {
   const home = await mkdtemp(join(tmpdir(), 'paper-factory-research-test-'));
-  const calls = []; const prompts = []; const selectionPrompts = []; const literaturePlanPrompts = []; const literatureSelectionPrompts = [];
+  const calls = []; const prompts = []; const selectionPrompts = []; const literaturePlanPrompts = []; const literatureSelectionPrompts = []; const studyRemediationPrompts = [];
   const events = []; const published = []; let responseIndex = 0; let starts = 0;
   const records = new Map([[workflow.id, workflow]]);
   const publicWorkflow = (record = workflow) => {
-    record.resume_kind = ['ready', 'cancelled'].includes(record.status) && !record.cleanup_pending && !record.terminal_control_failure && record.code !== 'CLEANUP_UNCONFIRMED'
+    const rejectedPreparation = record.stage === 'proposed' && record.study_review?.accepted === false &&
+      (record.study_literature_pending || (record.study_literature_attempt < 2 &&
+        ['question', 'comparison', 'sampling', 'feasibility'].every(key => record.study_review[key].passed) &&
+        record.study_review.publication_readiness?.validation.passed)) && record.code === 'STUDY_REJECTED';
+    record.resume_kind = (['ready', 'cancelled'].includes(record.status) || (record.status === 'blocked' && rejectedPreparation)) && !record.cleanup_pending && !record.terminal_control_failure && record.code !== 'CLEANUP_UNCONFIRMED'
       ? ['created', 'proposed', 'planned', 'code_ready'].includes(record.stage) && record.execution_attempt === 0 ? 'preparation'
         : ['analyzed', 'manuscript'].includes(record.stage) && record.execution_attempt === 1 ? 'authoring' : null : null;
     return structuredClone(record);
@@ -556,7 +560,8 @@ async function fixture(responses = [], workflow = base(), transport = {}) {
         workflow.status = 'ready'; workflow.code = null; workflow.study_review = null;
       } else if (method === 'workflow.submitStudyReview') {
         workflow.study_review = params.review;
-        if (params.review.accepted) { workflow.stage = 'planned'; workflow.plan = workflow.proposal; }
+        workflow.study_literature_pending = false;
+        if (params.review.accepted) { workflow.stage = 'planned'; workflow.plan = workflow.proposal; workflow.status = 'ready'; workflow.code = null; }
         else { workflow.status = 'blocked'; workflow.code = 'STUDY_REJECTED'; }
       }
       else if (method === 'workflow.submitCode') workflow.stage = 'code_ready';
@@ -565,6 +570,10 @@ async function fixture(responses = [], workflow = base(), transport = {}) {
         workflow.artifacts = observed().artifacts; workflow.material_manifest = observed().material_manifest;
       }
       else if (method === 'workflow.collectLiterature') { /* bounded synthetic retrieval, no network */ }
+      else if (method === 'workflow.collectStudyLiterature') {
+        workflow.study_literature_attempt++;
+        workflow.study_literature_pending = transport.studyNewEvidence ?? true;
+      }
       else if (method === 'workflow.collectAuthoringLiterature') { workflow.authoring_literature = transport.authoringLiterature ?? { sources: [] }; }
       else if (method === 'workflow.selectAuthoringLiterature') {
         const sources = params.selectedSources.map(selection => ({ ...workflow.authoring_literature.sources.find(source => source.id === selection.source_id),
@@ -603,6 +612,13 @@ async function fixture(responses = [], workflow = base(), transport = {}) {
     async listModels() { events.push('client.listModels'); return [{ slug: 'writer' }, { slug: 'reviewer' }]; },
     async streamResponse(options) {
       events.push('client.streamResponse');
+      if (options.input[0].content.startsWith('Plan remediation for a rejected study before execution.')) {
+        studyRemediationPrompts.push(options);
+        const result = transport.studyRemediation ? await transport.studyRemediation(options)
+          : { action: 'revise_design', queries: [], reason: 'Synthetic scientific design revision required; this fixture does not attest literature availability.' };
+        if (result instanceof Error) throw result;
+        return { text: typeof result === 'string' ? result : JSON.stringify(result) };
+      }
       if (options.input[0].content.startsWith('Plan missing directly relevant literature for submission readiness.')) {
         literaturePlanPrompts.push(options);
         const selection = transport.literaturePlan ? await transport.literaturePlan(options)
@@ -633,7 +649,7 @@ async function fixture(responses = [], workflow = base(), transport = {}) {
     },
   };
   const controller = new ResearchController(client, engine, home, snapshot => published.push(snapshot));
-  return { home, controller, calls, prompts, selectionPrompts, literaturePlanPrompts, literatureSelectionPrompts, events, published, engine, client, workflow, records, get starts() { return starts; },
+  return { home, controller, calls, prompts, selectionPrompts, literaturePlanPrompts, literatureSelectionPrompts, studyRemediationPrompts, events, published, engine, client, workflow, records, get starts() { return starts; },
     async cleanup() { await controller.shutdown(); await rm(home, { recursive: true, force: true }); } };
 }
 
@@ -855,12 +871,14 @@ test('a literature deficit collects refined evidence and receives fresh approval
     contribution: { passed: false, reason: 'Synthetic contribution cannot be positioned without relevant evidence.' },
     literature: { passed: false, reason: 'Synthetic query failed; no relevant excerpts were inspected.' } };
   const initial = { feasible: true, source_files: ['module.ts'], literature_queries: ['synthetic broad query'] };
-  const refined = { ...initial, literature_queries: ['synthetic exact method title'] };
   const workflow = { ...base(), stage: 'created', proposal_attempt: 0, study_review: null, plan: null, literature: missing };
   let collections = 0;
-  const f = await fixture([initial, rejected, refined, studyAccepted, { files: [] }, accepted,
-    { sections: [] }, manuscriptAccepted], workflow, { request(method) {
-      if (method === 'workflow.collectLiterature') {
+  const f = await fixture([initial, rejected, studyAccepted, { files: [] }, accepted,
+    { sections: [] }, manuscriptAccepted], workflow, {
+    studyRemediation: () => ({ action: 'retrieve_literature', queries: ['synthetic exact method title'],
+      reason: 'Synthetic missing methods require an actual bounded collection without changing this proposal.' }),
+    request(method) {
+      if (['workflow.collectLiterature', 'workflow.collectStudyLiterature'].includes(method)) {
         assert.equal(workflow.plan, null); assert.equal(workflow.execution_attempt, 0);
         workflow.literature = ++collections === 1 ? missing : inspected;
         workflow.instructions = 'Synthetic native study instructions with retrieved evidence: ' + JSON.stringify(workflow.literature);
@@ -869,19 +887,101 @@ test('a literature deficit collects refined evidence and receives fresh approval
   try {
     await f.controller.initialize(); await f.controller.create(input);
     const state = await settled(f.controller); assert.equal(state.jobs[0].pipeline, 'completed');
-    assert.equal(collections, 2); assert.deepEqual(workflow.plan, refined);
-    const secondPlan = f.prompts[2].input[0].content;
-    assert.match(secondPlan, /There are 2 proposal attempts remaining/);
-    assert.match(secondPlan, /provisional feasible candidate with refined literature_queries/);
-    assert.match(secondPlan, /failed search does not establish that relevant research is absent/);
-    assert.match(secondPlan, /withhold approval until directly relevant inspected evidence/);
-    assert.ok(secondPlan.includes(JSON.stringify(missing))); assert.ok(secondPlan.includes(JSON.stringify(rejected)));
-    assert.ok(f.prompts[3].input[0].content.includes(JSON.stringify(inspected)));
+    assert.equal(collections, 2); assert.deepEqual(workflow.plan, initial);
+    assert.equal(workflow.proposal_attempt, 1); assert.equal(workflow.study_literature_attempt, 1);
+    const followupPlan = f.studyRemediationPrompts[0].input[0].content;
+    assert.match(followupPlan, /unchanged, executable design/);
+    assert.match(followupPlan, /failed search does not establish absence/);
+    assert.ok(followupPlan.includes(JSON.stringify(missing))); assert.ok(followupPlan.includes(JSON.stringify(rejected)));
+    assert.ok(f.prompts[2].input[0].content.includes(JSON.stringify(inspected)));
     const methods = f.calls.map(call => call.method);
+    assert.equal(methods.filter(method => method === 'workflow.submitProposal').length, 1);
     assert.ok(methods.indexOf('workflow.submitCode') > methods.lastIndexOf('workflow.submitStudyReview'));
     assert.equal(methods.filter(method => method === 'workflow.startExperiment').length, 1);
   } finally { await f.cleanup(); }
 });
+
+const evidenceDeficitReview = () => ({ ...studyAccepted, accepted: false, issues: ['Synthetic nearest-method body evidence missing'],
+  contribution: { passed: false, reason: 'Synthetic contribution requires genuine directly related body evidence before any approval.' },
+  publication_readiness: { ...publicationReadiness, novelty: { passed: false, reason: 'Synthetic absent method evidence cannot establish novelty.' } } });
+const retrievalRemediation = () => ({ action: 'retrieve_literature', queries: ['Synthetic closest method title'],
+  reason: 'Collect a genuinely missing method passage without replacing the retained scientific proposal.' });
+
+test('a previously rejected third proposal resumes bounded literature collection and fresh review without re-proposing', async () => {
+  const proposal = { feasible: true, source_files: ['module.ts'], literature_queries: ['Synthetic original method'] };
+  const rejected = evidenceDeficitReview();
+  const workflow = { ...base(), stage: 'proposed', status: 'blocked', code: 'STUDY_REJECTED',
+    proposal_attempt: 3, proposal, plan: null, study_review: rejected };
+  const f = await fixture([studyAccepted, { files: [] }, accepted, { sections: [] }, manuscriptAccepted], workflow,
+    { studyRemediation: retrievalRemediation });
+  try {
+    await f.controller.initialize();
+    assert.equal(f.controller.snapshot().jobs[0].resumeKind, 'preparation');
+    await f.controller.resume(id, 'writer', 'reviewer');
+    assert.equal((await settled(f.controller)).jobs[0].pipeline, 'completed');
+    assert.equal(workflow.proposal_attempt, 3); assert.equal(workflow.study_literature_attempt, 1);
+    assert.deepEqual(workflow.plan, proposal);
+    assert.equal(f.calls.filter(call => call.method === 'workflow.submitProposal').length, 0);
+    assert.equal(f.calls.filter(call => call.method === 'workflow.submitStudyReview').length, 1);
+    const methods = f.calls.map(call => call.method);
+    assert.ok(methods.indexOf('workflow.collectStudyLiterature') < methods.indexOf('workflow.submitStudyReview'));
+    assert.ok(methods.indexOf('workflow.submitStudyReview') < methods.indexOf('workflow.startExperiment'));
+    assert.equal(methods.filter(method => method === 'workflow.startExperiment').length, 1);
+  } finally { await f.cleanup(); }
+});
+
+test('an already pending literal supplement is reviewed once without another collection or proposal', async () => {
+  const workflow = { ...base(), stage: 'proposed', status: 'cancelled', code: 'CANCELLED', proposal_attempt: 3,
+    study_literature_attempt: 2, study_literature_pending: true, proposal: { source_files: ['module.ts'] },
+    study_review: evidenceDeficitReview() };
+  const f = await fixture([studyAccepted, { files: [] }, accepted, { sections: [] }, manuscriptAccepted], workflow);
+  try {
+    await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer');
+    assert.equal((await settled(f.controller)).jobs[0].pipeline, 'completed');
+    assert.equal(f.studyRemediationPrompts.length, 0);
+    assert.equal(f.calls.filter(call => ['workflow.collectLiterature', 'workflow.collectStudyLiterature', 'workflow.submitProposal'].includes(call.method)).length, 0);
+    assert.equal(f.calls.filter(call => call.method === 'workflow.submitStudyReview').length, 1);
+  } finally { await f.cleanup(); }
+});
+
+test('two negative supplemental collections preserve the rejection and stop without repeated review or science', async () => {
+  const rejected = evidenceDeficitReview();
+  const workflow = { ...base(), stage: 'created', proposal_attempt: 0, study_review: null };
+  const f = await fixture([{ feasible: true, source_files: ['module.ts'] }, rejected], workflow,
+    { studyRemediation: retrievalRemediation, studyNewEvidence: false });
+  try {
+    await f.controller.initialize(); await f.controller.create(input);
+    const state = await settled(f.controller);
+    assert.equal(state.jobs[0].code, 'STUDY_REJECTED');
+    assert.deepEqual(state.jobs[0].studyReview, rejected);
+    assert.equal(workflow.proposal_attempt, 1); assert.equal(workflow.study_literature_attempt, 2);
+    assert.equal(f.calls.filter(call => call.method === 'workflow.collectStudyLiterature').length, 2);
+    assert.equal(f.calls.filter(call => call.method === 'workflow.submitStudyReview').length, 1);
+    assert.equal(f.calls.some(call => ['workflow.submitCode', 'workflow.startExperiment', 'workflow.submitManuscript'].includes(call.method)), false);
+  } finally { await f.cleanup(); }
+});
+
+for (const invalid of [
+  { ...retrievalRemediation(), queries: [] },
+  { ...retrievalRemediation(), action: 'revise_design' },
+  { ...retrievalRemediation(), queries: ['Same synthetic query', ' Same synthetic query '] },
+  { ...retrievalRemediation(), queries: ['Synthetic\nquery with a control character'] },
+  { ...retrievalRemediation(), action: 'approve' },
+]) {
+  test('invalid study remediation cannot collect, replace the proposal or authorize science: ' + JSON.stringify(invalid), async () => {
+    const workflow = { ...base(), stage: 'created', proposal_attempt: 0, study_review: null };
+    const f = await fixture([{ feasible: true, source_files: ['module.ts'] }, evidenceDeficitReview()], workflow,
+      { studyRemediation: () => invalid });
+    try {
+      await f.controller.initialize(); await f.controller.create(input);
+      assert.equal((await settled(f.controller)).jobs[0].code, 'MATERIAL_INVALID');
+      assert.equal(f.calls.filter(call => call.method === 'workflow.submitProposal').length, 1);
+      assert.equal(f.calls.some(call => ['workflow.collectStudyLiterature', 'workflow.startExperiment'].includes(call.method)), false);
+      const receipts = f.calls.filter(call => call.method === 'workflow.recordInference' && call.params.receipt.phase === 'literature-plan' && call.params.receipt.outcome === 'completed');
+      assert.deepEqual(JSON.parse(receipts[0].params.receipt.text), invalid);
+    } finally { await f.cleanup(); }
+  });
+}
 
 for (const defect of ['concat without merging', 'rounded expected JSON instead of a parser', 'history-dropping copy instead of project restoration', 'missing inspected literature after bounded query refinement']) {
   test('synthetic rejection for ' + defect + ' stops after three proposals and preserves all review receipts', async () => {
@@ -895,7 +995,7 @@ for (const defect of ['concat without merging', 'rounded expected JSON instead o
       await f.controller.initialize(); await f.controller.create(input);
       const state = await settled(f.controller);
       assert.equal(state.jobs[0].code, 'STUDY_REJECTED');
-      assert.equal(state.jobs[0].resumeKind, null);
+      assert.equal(state.jobs[0].resumeKind, defect.startsWith('missing inspected literature') ? 'preparation' : null);
       assert.deepEqual(state.jobs[0].studyReview.issues, [defect]);
       assert.equal(f.calls.filter(call => call.method === 'workflow.submitProposal').length, 3);
       assert.equal(f.calls.filter(call => call.method === 'workflow.submitStudyReview').length, 3);
@@ -904,7 +1004,8 @@ for (const defect of ['concat without merging', 'rounded expected JSON instead o
         call.params.receipt.phase === 'study-review' && call.params.receipt.outcome === 'completed');
       assert.equal(receipts.length, 3);
       for (const receipt of receipts) assert.deepEqual(JSON.parse(receipt.params.receipt.text).issues, [defect]);
-      assert.match(f.prompts[2].input[0].content, /substantively improve the contribution, comparator and sampling/);
+      assert.match(f.prompts[2].input[0].content, /Substantively improve the research question/);
+      assert.match(f.prompts[2].input[0].content, /contribution, comparator and sampling/);
     } finally { await f.cleanup(); }
   });
 }

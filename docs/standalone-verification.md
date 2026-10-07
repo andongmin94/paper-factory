@@ -839,3 +839,32 @@ Windows에서 부모 연구의 원고 보완 문헌을 후속 연구에 복사�
 실제 0.14.9 평가 `qpos/2dd124a6459a/recovery-runs/a75c65c2403f`는 기존 공식 연결·ResearchController·포함 엔진으로 세 번째 설계의 문헌 수집과 별도 `gpt-6-astra` 심사를 마쳤다. 모델에는 Greenberg 본문 10개 발췌가 전달됐으며 Section 2의 LCS마다 대표 embedding 하나와 Section 3의 모든 embedding 열거를 구분했다. 리뷰는 0·8·9를 선택하고 `accepted=false`, 기여·신규성 실패, 나머지 설계 기준 및 한정된 중요성·검증 계획은 잠정 통과로 판단했다. 알려진 열거 방법을 새 발견으로 승인하지 않았다. 선택적 undo·변경 적용 자료는 metadata-only였고, 보존된 부모 Git 원문도 이번 검색 packet에 없어 이전 요약을 새 본문 읽기로 대체할 수 없었다.
 
 읽기 전용 독립 감사도 이 반려를 타당하게 평가했다. 실제 proposal·literature·native review·모델 시작/완료 영수증·prompt·text의 전체 해시, canonical 원문 버전·PDF·포함 런타임의 추출 텍스트, 본문 `[959,24969)`·10개 발췌·두 최근접 인용문 offset을 대조했다. 보고서 `verification/child-study-review3-independent-audit.json`은 18,181 B, SHA256 `11cf1cf7acd9ee7251a24231fefe9d012c341555383883cbc35ded8353d262f6`이다. 부모 SCI 1회·원본 관측·프로토콜·artifact는 그대로이며 후속 연구 SCI는 0회다. `paperGenerated=false`, `shutdownConfirmed=true`이고 새 protocol·코드·완료 원고는 없다. 이 결과는 문헌 수집과 올바른 반려의 확인이며 투고 준비도 통과나 논문 생성 성공이 아니다. 남은 제품 결손은 부족한 문헌의 추가 수집이 같은 연구의 제안 횟수를 소모하는 흐름과 선택적 적용 본문 회수 범위다. 새 설치·OAuth·macOS 실행은 미검증이며 GitHub Releases에는 게시하지 않았다.
+
+## 0.14.10 설계 수정과 문헌 보완 분리: 2026-10-07
+
+실제 후속 연구는 같은 252개 편집 이력 설계의 검색어를 바꾸며 제안 3회를 소모했다. 추가 본문을 찾아 기여 위치를 확인하는 일은 새 과학 설계와 다르므로, 거절된 실행 가능 제안에 연구당 최대 2회의 별도 문헌 보완을 제공한다. 질문·비교·표본·실행 가능성·검증 계획이 통과했고 기여·문헌·신규성 중 부족한 기준이 있어야 사용할 수 있다. 실패·중단도 예약한 수집 횟수를 소모하며 설계 변경 후 초기화하지 않는다.
+
+모델은 `retrieve_literature`, `revise_design`, `infeasible` 중 근거 있는 행동을 선택한다. 문헌 보완은 1∼4개 검색어, 회당 최대 3개 source, 심사 packet 최대 6개 source와 기존 수집 기한을 유지한다. 새 단계·선정 API·제공자·의존성은 추가하지 않았다. 이전 제안·거절 심사·문헌 SHA를 고정한 intent를 저장한 뒤 수집하고 원래 검색 응답·PDF·텍스트를 보존한다. 문헌 별칭이 바뀌어도 원래 바이트는 변경 불가 history에 남는다. 새 심사에는 현재 제안·새 문헌·직전 심사·해당 collection SHA를 함께 기록하며 재현 ZIP과 다음 재설계에도 남긴다.
+
+재심사는 실제로 추가된 발췌 문장으로만 연다. 동일 내용의 ID·텍스트 파일 SHA·offset·본문 범위·공백·Unicode 표기만 바뀌거나 이전 발췌의 일부 window를 되받은 경우에는 새 읽기로 계산하지 않는다. 이 판정과 별개로 원문 해시·literal offset·본문 읽기 범위·독립 심사·승인 전 SCI 차단은 유지한다. 새 발췌가 없는 반복 수집에는 다시 승인 요청하지 않는다. 초록이 추가되면 심사는 가능하지만 본문 비교 근거로 승격하지 않으며, 실제 본문이 있어도 신규성·중요성·주장 범위 검사를 모두 통과해야 실행한다. 이는 기계적 증거 연결과 모델의 별도 심사이지 실제 학술지 심사 결과가 아니다.
+
+독립 코드 리뷰에서 같은 발췌의 식별자 변경으로 재심사를 여는 문제와 보류 재개 후 정상 설계 수정을 막는 상태 검사 문제를 발견해 수정했다. literal 대조 6개와 최종 코드·harness 검토는 추가 blocker를 찾지 못했다. 실제 harness는 현재 앱의 `controller.resume()`만 호출하며 연구 검색어·원문 URL·승인을 넣지 않는다. 기존 464개 원본 파일·모든 artifact SHA, 부모 SCI 1회 불변, 후속 연구별 SCI 최대 1회와 root+최대 2회 재설계, 종료 확인 검사를 유지한다.
+
+계정·API 키·이메일 없는 공개 원문 회수 확대도 읽기 전용으로 조사했다. 실제 선택적 undo DOI 두 건은 OpenAlex·OpenAIRE에서 정확한 서지 정보가 돌아왔지만 closed였고, Semantic Scholar는 제한된 재시도 후에도 429, DBLP는 JSON 대신 anti-bot HTML을 반환했다. 다른 공개 논문의 OpenAlex→Figshare 메타데이터·파일 URL 연결은 성공했지만 실제 PDF 요청은 403이었다. 새 provider는 구현하지 않았으며 API의 성공 응답을 본문 회수 성공으로 표현하지 않는다. 도전 화면을 우회하거나 별도 계정·키를 요구하지 않았다. 26개 raw 응답 해시와 원래 세 연구 문헌 collection 불변을 `oa-discovery-design-20261007/READONLY-FINDINGS.md` 및 `final-integrity-verification.json`에 기록했다.
+
+0.14.10 데스크톱 305개와 포함 SDK 48개가 통과했으며 SDK 1개는 Windows 권한 검사로 건너뛰었다. controller 242개는 이 데스크톱 그룹에 포함되므로 합산하지 않는다. Windows runtime은 Python 3.14.8·Node 24.21.0·실제 QuickJS host 검사를 통과했다. inventory는 2,218개·473,648,560 B이며 SHA256은 `7659921eec9bfae4f9edfb4ec2265fbddd4d4e561ab56c4d3203439510c521d7`이다. 포함 Python의 실제 `1311.3903v1` 회수에서 12개 literal 발췌·원문 해시와 전체 2,219개 파일의 목록·크기·SHA 불변을 확인했고 이후 EngineBridge 재시작과 보류 후속 연구의 준비 재개 가능 상태를 확인했다. 이 probe에는 모델 요청·과학실험이 없다.
+
+네이티브 보완·workflow·publication readiness·standalone IPC·models·workspace 6개 모듈 전체는 468개 통과·건너뜀 없음, 282.08초다. 독립 focused 검사와 겹치므로 합산하지 않는다. 로그는 `verification/native-study-literature-final.log`, 소스·검사·로그 결합 기록은 `verification/native-study-literature-01410-verification.json`이며 후자 SHA256은 `4dd7bf0109a77766a6c20a3b0b4853f212051bed9f29ea1ee328a2bee2271642`다. 데스크톱 로그 `study-followup-desktop-sdk-all.log`, 최종 버전 빌드 `study-followup-desktop-build-01410.log`, runtime `study-followup-runtime-01410.log`, 실제 PDF `study-followup-bundled-runtime-01410.log`, 엔진 재시작 `study-followup-engine-restart-01410.log`도 같은 verification 폴더에 보존했다.
+
+새 출력 폴더의 0.14.10 NSIS 생성은 성공했고, 정적 검사 후 기존 0.14.9 전체 payload를 `verification/preserved-windows-release-0149/`에 남긴 뒤 `desktop/release/`로 복사했다. 새 출력 폴더와 최종 복사본 모두 ASAR 7,667항목·SDK import·renderer·Pretendard·현재 Python 소스·runtime 전수 대조를 통과했다. 복사본 최종 검증은 08:13:41.258 UTC / 17:13:41.258 KST이며 로그는 `study-followup-package-default-release-01410.log`다. 실제 앱 연구 재개는 별도 포함 runtime/controller 실행으로 기록하며 설치 완료·새 OAuth·로그인 복원 검증으로 계산하지 않는다.
+
+| 최종 배포 파일 | 크기(B) | SHA256 |
+| --- | ---: | --- |
+| Paper Factory Setup 0.14.10.exe | 213,033,546 | cd8930d27c36c42e8ffde6356f86da144ccfe0d679fb7a761c71a3aefe519b59 |
+| win-unpacked/resources/app.asar | 44,762,492 | ef27f47338bb2275ec7fc8895695e7f92517cff8f95e5e815ac1fb700a5d834c |
+
+실제 앱 재개 `qpos/2dd124a6459a/recovery-runs/9ae204c34b1f`는 모델이 스스로 RGA DOI와 두 방법 질의를 선택해 첫 수집을 수행했다. 추가된 읽기는 무관한 경제학 초록뿐이고 선택적 undo 원문은 없었다. 같은 세 번째 제안을 새 문맥에서 다시 심사했지만 기여·문헌·신규성은 실패했다. Greenberg의 위치 embedding 열거 본문을 알려진 결과로 대조하고, 무관 초록이나 metadata-only 자료는 최근접 방법으로 승격하지 않은 판단이다. 두 번째 수집은 새로 발견한 Using Task Models for Cascading Selective Undo의 정확 DOI였으나 metadata-only였다. 새 발췌가 없어 추가 study review는 열지 않았다.
+
+마지막 보완 planner는 `revise_design`, 빈 queries를 선택했다. 하지만 제안 3회·문헌 보완 2회 한도에 도달해 실행은 보류됐다. 이는 연구 자체가 불가능하다는 판정이 아니다. `paperGenerated=false`, `shutdownConfirmed=true`, 부모 SCI 1회·관측·프로토콜·464개 source 불변, 후속 SCI 0회·proposal 3회·문헌 보완 2회이며 새 plan·실험 코드·분석·완료 원고는 없다. 별도 URL·DOI·원고·승인을 실제 연구에 주입하지 않았다. 최초 `literature-plan` 요청부터 실제 앱이 결정한 경로이며 설치·OAuth 전체 사용 검증과 구분한다.
+
+이 실제 실행은 정확한 보류와 안전한 보완 경로의 확인이며 투고 가능한 원고 생성 성공은 아니다. 새 발췌 판정은 관련 없는 초록도 포함해 불필요한 재심사를 소비할 수 있었고, collector가 선택에서 탈락시킨 후보의 metadata·arXiv negative discovery가 디스크에는 있어도 frozen artifacts와 재현 ZIP에서 빠질 수 있는 문제를 독립 감사가 발견했다. 원래 연구 데이터는 그대로 보존하고 다음 개선 대상으로 기록한다. 보완 횟수를 초기화하거나 같은 성공 과학실험을 반복하지 않는다.

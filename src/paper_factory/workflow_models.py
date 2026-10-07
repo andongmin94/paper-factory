@@ -52,6 +52,7 @@ class Workflow(Record):
     updated_at: str = Field(default_factory=now)
     experiment_timeout_seconds: int = Field(default=300, ge=1, le=300)
     proposal_attempt: int = Field(default=0, ge=0, le=3)
+    study_literature_attempt: int = Field(default=0, ge=0, le=2)
     code_attempt: int = Field(default=0, ge=0)
     execution_attempt: int = Field(default=0, ge=0)
     draft_attempt: int = Field(default=0, ge=0)

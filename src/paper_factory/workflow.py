@@ -18,6 +18,7 @@ import shutil
 import tempfile
 import threading
 import time
+import unicodedata
 import zipfile
 
 from . import conversion, project
@@ -70,6 +71,24 @@ def _attempted_literature_queries(evidence: dict) -> set[str]:
             if search.get("status") in {"succeeded", "failed"} and search.get("attempted") is not False}
 
 
+def _literature_passages(evidence: dict) -> set[str]:
+    """Normalize literal reading content, independently of its bound provenance."""
+    passages = set()
+    for source in evidence.get("sources", []):
+        if source.get("scope") not in {"abstract", "full_text"}:
+            continue
+        for passage in source.get("excerpts", []):
+            if not isinstance(passage, str) or len(passage.strip()) < 80:
+                continue
+            passages.add(" ".join(unicodedata.normalize("NFKC", passage).split()))
+    return passages
+
+
+def _has_new_literature(evidence: dict, previous: dict) -> bool:
+    inspected = _literature_passages(previous)
+    return any(not any(passage in known for known in inspected) for passage in _literature_passages(evidence))
+
+
 def _require_complete_literature(plan: ResearchPlan, evidence: dict) -> None:
     if evidence.get("cancelled"):
         raise WorkflowError("LITERATURE_EVIDENCE_INSUFFICIENT", "Complete the cancelled literature collection before study approval")
@@ -77,6 +96,8 @@ def _require_complete_literature(plan: ResearchPlan, evidence: dict) -> None:
         raise WorkflowError("LITERATURE_EVIDENCE_INSUFFICIENT", "Complete the timed-out literature collection before study approval")
     if evidence.get("rate_limited"):
         raise WorkflowError("LITERATURE_EVIDENCE_INSUFFICIENT", "Complete the rate-limited literature collection before study approval")
+    if evidence.get("study_literature", {}).get("quality_status") == "incomplete":
+        raise WorkflowError("LITERATURE_QUERIES_INCOMPLETE", "The targeted literature attempt is incomplete; study approval requires all retrieval attempts")
     queries = {query.strip() for query in plan.literature_queries}
     if queries - _attempted_literature_queries(evidence):
         raise WorkflowError("LITERATURE_QUERIES_INCOMPLETE", "Some proposed literature queries were not attempted; study approval requires complete retrieval attempts")
@@ -344,7 +365,8 @@ class WorkflowService:
         data["cleanup_pending"] = bool(record.status == "running" or record.active_handle or
                                        record.code == "CLEANUP_UNCONFIRMED" or
                                        (future is not None and not future.done()))
-        data["resume_kind"] = self._resume_kind(record)
+        data["study_literature_pending"] = self._study_literature_pending(ws, record)
+        data["resume_kind"] = self._resume_kind(ws, record)
         _verify_lineage(ws, record)
         data["followup_research_id"], data["redesign_pending"] = self._followup_state(ws, record)
         data["prior_study"] = _read(ws, record, "prior-study") if "prior-study" in record.artifacts else None
@@ -416,6 +438,8 @@ class WorkflowService:
             data["instructions"] = (science.study_review_prompt(ResearchPlan.model_validate(data["proposal"]),
                                         data["literature"], source_context, record.goal) if "literature" in data else
                                     "Collect the proposal's literature before assessing its research suitability. No protocol is frozen yet.")
+            if data["study_literature_pending"]:
+                data["instructions"] += "\nNew retained literal literature passages require a fresh independent review of this same proposal. Preserve its question, conditions, sampling and claim; no protocol or experiment is approved yet."
         elif record.stage in {"planned", "code_ready"}:
             if record.stage == "code_ready" and record.status == "ready":
                 data["instructions"] = "The reviewed code bundle is frozen. Start the isolated experiment, then read status until analysis is ready."
@@ -447,14 +471,49 @@ class WorkflowService:
                 data["planning_instructions"] += history
         return data
 
-    def _resume_kind(self, record: Workflow) -> str | None:
+    @staticmethod
+    def _study_literature_pending(ws: Workspace, record: Workflow) -> bool:
+        if record.stage != "proposed" or record.execution_attempt or not all(
+                key in record.artifacts for key in ("proposal", "literature", "study-review")):
+            return False
+        review = _read(ws, record, "study-review")
+        if review["review"]["accepted"] or review.get("proposal_sha256") != record.artifacts["proposal"].sha256:
+            return False
+        prior_digest = review.get("literature_sha256")
+        if prior_digest == record.artifacts["literature"].sha256:
+            return False
+        prior_key = next((key for key, artifact in record.artifacts.items()
+                          if (key == "literature" or key.startswith("literature-history-")) and artifact.sha256 == prior_digest), None)
+        if prior_key is None:
+            raise WorkflowError("ARTIFACT_CHANGED", "The rejected review's literature must remain retained")
+        return _has_new_literature(_read(ws, record, "literature"), _read(ws, record, prior_key))
+
+    def _study_literature_available(self, ws: Workspace, record: Workflow) -> bool:
+        if record.stage != "proposed" or record.execution_attempt or "study-review" not in record.artifacts:
+            return False
+        receipt = _read(ws, record, "study-review")
+        review = receipt["review"]
+        if review["accepted"] or receipt.get("proposal_sha256") != record.artifacts["proposal"].sha256:
+            return False
+        if self._study_literature_pending(ws, record):
+            return True
+        readiness = review.get("publication_readiness") or {}
+        return record.study_literature_attempt < 2 and all(
+            review[name]["passed"] for name in ("question", "comparison", "sampling", "feasibility")) and (
+                readiness.get("validation", {}).get("passed") is True) and (
+                not review["contribution"]["passed"] or not review["literature"]["passed"] or
+                readiness.get("novelty", {}).get("passed") is False)
+
+    def _resume_kind(self, ws: Workspace, record: Workflow) -> str | None:
         future = self._jobs.get(record.id)
-        if (self._closing or self._closed or record.status not in {"ready", "cancelled"} or
+        rejected = record.stage == "proposed" and record.code == "STUDY_REJECTED" and "study-review" in record.artifacts
+        if (self._closing or self._closed or (record.status not in {"ready", "cancelled"} and not (record.status == "blocked" and rejected)) or
                 record.active_handle or record.code == "CLEANUP_UNCONFIRMED" or record.terminal_control_failure or
                 (future is not None and not future.done())):
             return None
         if record.stage == "proposed" and "study-review" in record.artifacts:
-            return None
+            if not self._study_literature_available(ws, record):
+                return None
         if record.execution_attempt == 0 and record.stage in {"created", "proposed", "planned", "code_ready"}:
             if future is not None or any(key in {"execution", "observations", "analysis", "runtime-manifest"} or
                                          key.startswith(("execution-", "observations-", "analysis-", "cleanup-"))
@@ -692,8 +751,13 @@ class WorkflowService:
             self._require(ws, record, {"created", "proposed"})
             if record.execution_attempt or record.proposal_attempt >= 3:
                 raise WorkflowError("PROPOSAL_LIMIT", "Research proposals are limited to three before any execution")
-            if record.stage == "proposed" and record.code != "STUDY_REJECTED":
-                raise WorkflowError("INVALID_STATE", "Assess the retained proposal before replacing it")
+            if record.stage == "proposed":
+                decision = _read(ws, record, "study-review") if "study-review" in record.artifacts else {}
+                if (decision.get("review", {}).get("accepted") is not False or
+                        decision.get("proposal_sha256") != record.artifacts["proposal"].sha256):
+                    raise WorkflowError("INVALID_STATE", "Assess the retained proposal before replacing it")
+            if self._study_literature_pending(ws, record):
+                raise WorkflowError("STUDY_REVIEW_REQUIRED", "Review the new literal literature before revising the retained proposal")
             science.validate_plan(plan, ws.path("source"))
             if any(not safe_relative(ws.path("source"), path).is_file() for path in plan.source_files):
                 raise WorkflowError("PLAN_SOURCE_MISSING", "Protocol refers to absent source files")
@@ -737,8 +801,18 @@ class WorkflowService:
             if record.execution_attempt:
                 raise WorkflowError("EXPERIMENT_ALREADY_DISPATCHED", "Research design cannot change after execution")
             key = f"study-review-{record.proposal_attempt}"
+            prior_review_sha256 = None
             if key in record.artifacts:
-                raise WorkflowError("REVIEW_EVIDENCE_CONFLICT", "Each proposal's study decision is append-only")
+                if not self._study_literature_pending(ws, record):
+                    raise WorkflowError("REVIEW_EVIDENCE_CONFLICT", "A fresh study review requires newly retained literal literature")
+                prior_review_sha256 = record.artifacts["study-review"].sha256
+                intent = _read(ws, record, f"study-literature-intent-{record.study_literature_attempt}")
+                if (intent["proposal_sha256"] != record.artifacts["proposal"].sha256 or
+                        intent["prior_study_review_sha256"] != prior_review_sha256):
+                    raise WorkflowError("ARTIFACT_CHANGED", "Study literature must bind this proposal and preceding review")
+                key += f"-literature-{record.study_literature_attempt}"
+                if key in record.artifacts:
+                    raise WorkflowError("REVIEW_EVIDENCE_CONFLICT", "Each literature follow-up permits one bound study decision")
             evidence = _read(ws, record, "literature")
             if review.accepted:
                 _require_complete_literature(ResearchPlan.model_validate(_read(ws, record, "proposal")), evidence)
@@ -747,9 +821,14 @@ class WorkflowService:
                 self._publication_gate(ws, record, ResearchPlan.model_validate(_read(ws, record, "proposal")),
                                        review.publication_readiness, selected)
             root = _artifact(ws, record, "proposal").parent
+            if prior_review_sha256 is not None:
+                root = root / f"literature-{record.study_literature_attempt}"
             receipt = {"origin": "native_host_submission", "review": review.model_dump(mode="json"),
                        "proposal_sha256": record.artifacts["proposal"].sha256,
                        "literature_sha256": record.artifacts["literature"].sha256}
+            if prior_review_sha256 is not None:
+                receipt.update(prior_study_review_sha256=prior_review_sha256,
+                               study_literature_collection_sha256=record.artifacts[f"study-literature-collection-{record.study_literature_attempt}"].sha256)
             if review.accepted:
                 plan = ResearchPlan.model_validate(_read(ws, record, "proposal"))
                 path = ws.path("research/protocol.json")
@@ -766,6 +845,102 @@ class WorkflowService:
             write_json(root / "study-review.json", receipt)
             _freeze(ws, record, key, root / "study-review.json")
             _freeze(ws, record, "study-review", root / "study-review.json")
+            self._save(ws, record)
+            return self._public(ws, record)
+
+    def collect_study_literature(self, research_id: str, queries: list[str], reason: str) -> dict:
+        """Two targeted evidence attempts per study, without changing its proposal."""
+        if (not isinstance(queries, list) or not 1 <= len(queries) <= 4 or
+                any(not isinstance(query, str) or not 8 <= len(query.strip()) <= 500 or
+                    not query.isprintable() for query in queries) or
+                len({query.strip() for query in queries}) != len(queries) or
+                not isinstance(reason, str) or not 24 <= len(reason.strip()) <= 2000):
+            raise WorkflowError("LITERATURE_QUERIES_INVALID", "Study follow-up requires one to four distinct printable queries and a substantive reason")
+        with self._operation(research_id) as (ws, record):
+            self._require(ws, record, {"proposed"})
+            if record.execution_attempt:
+                raise WorkflowError("EXPERIMENT_ALREADY_DISPATCHED", "Study literature cannot change after execution")
+            if "study-review" not in record.artifacts or _read(ws, record, "study-review")["review"]["accepted"]:
+                raise WorkflowError("STUDY_REVIEW_REQUIRED", "Targeted literature requires a rejected study review")
+            prior_review = _read(ws, record, "study-review")
+            if prior_review.get("proposal_sha256") != record.artifacts["proposal"].sha256:
+                raise WorkflowError("ARTIFACT_CHANGED", "The rejected study review must bind the current proposal")
+            if self._study_literature_pending(ws, record):
+                raise WorkflowError("STUDY_REVIEW_REQUIRED", "Review the newly retained passages before collecting again")
+            if record.study_literature_attempt >= 2:
+                raise WorkflowError("STUDY_LITERATURE_LIMIT", "Two targeted literature attempts were exhausted; preserve the unresolved evidence gap")
+            if not self._study_literature_available(ws, record):
+                raise WorkflowError("STUDY_LITERATURE_INELIGIBLE", "The rejected design requires scientific revision rather than a literature-only attempt")
+            previous = _read(ws, record, "literature")
+            record.study_literature_attempt += 1
+            number = record.study_literature_attempt
+            root = ws.path(f"research/study-literature/attempt-{number}")
+            root.mkdir(parents=True, exist_ok=False)
+            intent = {"event": "study-literature-followup", "attempt": number, "at": now(),
+                      "proposal_sha256": record.artifacts["proposal"].sha256,
+                      "prior_study_review_sha256": record.artifacts["study-review"].sha256,
+                      "prior_literature_sha256": record.artifacts["literature"].sha256,
+                      "queries": [query.strip() for query in queries], "reason": reason.strip()}
+            write_json(root / "intent.json", intent)
+            _freeze(ws, record, f"study-literature-intent-{number}", root / "intent.json")
+            self._save(ws, record)
+            evidence = self.collector(intent["queries"], root, limit=3, cancel=lambda: False)
+            sources = evidence.get("sources", [])
+            if not isinstance(sources, list) or len(sources) > 3:
+                raise WorkflowError("LITERATURE_SOURCE_LIMIT", "Study supplement may retrieve at most three sources")
+            science._literature_sources(evidence)
+            for source in sources:
+                excerpts = source.get("excerpts", [])
+                if not isinstance(excerpts, list) or len(excerpts) > 12 or any(
+                        not isinstance(passage, str) or len(passage) > 1500 for passage in excerpts):
+                    raise WorkflowError("LITERATURE_SOURCE_LIMIT", "Study supplement exceeds the bounded passage contract")
+            evidence["queries"] = intent["queries"]
+            incomplete = any(evidence.get(flag) for flag in ("cancelled", "timed_out", "rate_limited")) or bool(
+                set(intent["queries"]) - _attempted_literature_queries(evidence))
+            evidence["quality_status"] = "incomplete" if incomplete else (
+                "full_text_available" if any(source.get("scope") == "full_text" for source in sources) else "no_full_text")
+            for entry in [*evidence.get("searches", []), *sources]:
+                fields = (("raw_path", "sha256"),) if entry not in sources else (
+                    ("raw_path", "sha256"), ("metadata_path", "metadata_sha256"),
+                    ("text_path", "text_sha256"), ("discovery_path", "discovery_sha256"))
+                for field, digest_field in fields:
+                    if not entry.get(field):
+                        continue
+                    original = safe_relative(root, entry[field])
+                    if digest_file(original) != entry.get(digest_field):
+                        raise WorkflowError("ARTIFACT_CHANGED", "Study literature differs from its retrieval digest")
+                    entry[field] = original.relative_to(ws.path("research")).as_posix()
+                    prefix = "literature-search-" if entry not in sources else "literature-"
+                    key = prefix + entry[digest_field] + ("-" + field if entry in sources else "")
+                    relative = original.relative_to(ws.root).as_posix()
+                    if key in record.artifacts and record.artifacts[key].path != relative:
+                        key += "-" + hashlib.sha256(relative.encode()).hexdigest()[:12]
+                    _freeze(ws, record, key, original)
+            write_json(root / "collection.json", evidence)
+            _freeze(ws, record, f"study-literature-collection-{number}", root / "collection.json")
+            candidates = {source["id"]: source for source in previous.get("sources", [])}
+            rank = lambda source: {"full_text": 2, "abstract": 1}.get(source.get("scope"), 0) if source.get("excerpts") else 0
+            for source in sources:
+                old = candidates.get(source["id"])
+                if old is None or rank(source) > rank(old) or (
+                        rank(source) == rank(old) == 2 and _has_new_literature({"sources": [source]}, {"sources": [old]})):
+                    candidates[source["id"]] = source
+            merged = sorted(candidates.values(), key=lambda source: (rank(source), source in sources), reverse=True)[:6]
+            original = record.artifacts["literature"]
+            history_key = "literature-history-" + original.sha256
+            record.artifacts[history_key] = original
+            packet = {**previous, **{key: value for key, value in evidence.items() if key not in {"sources", "searches", "warnings", "queries", "history", "quality_status"}},
+                      "sources": merged, "searches": previous.get("searches", []) + evidence.get("searches", []),
+                      "warnings": previous.get("warnings", []) + evidence.get("warnings", []),
+                      "cancelled": evidence.get("cancelled", False), "timed_out": evidence.get("timed_out", False),
+                      "rate_limited": evidence.get("rate_limited", False),
+                      "history": previous.get("history", []) + [{"artifact_id": history_key, "sha256": original.sha256, "size": original.size}],
+                      "study_literature": {**intent, "collection_sha256": record.artifacts[f"study-literature-collection-{number}"].sha256,
+                                           "quality_status": evidence["quality_status"]}}
+            write_json(root / "review-literature.json", packet)
+            _freeze(ws, record, "literature", root / "review-literature.json")
+            record.status, record.code = "blocked", "STUDY_REJECTED"
+            record.message = "Targeted literature was retained; an unchanged reading packet cannot receive another study decision."
             self._save(ws, record)
             return self._public(ws, record)
 
@@ -966,6 +1141,8 @@ class WorkflowService:
             # the partial receipt is retained as history rather than cleared.
             missing = queries if any(previous.get(flag) for flag in ("cancelled", "timed_out", "rate_limited")) else [
                 query for query in queries if query not in _attempted_literature_queries(previous)]
+            if missing and record.stage == "proposed" and "study-review" in record.artifacts:
+                raise WorkflowError("STUDY_LITERATURE_REQUIRED", "A rejected proposal must use its bounded targeted literature attempts")
             evidence = previous
             if missing:
                 existing_sources = previous.get("sources", [])
@@ -1303,7 +1480,7 @@ class WorkflowService:
             if future is not None and not future.done():
                 raise WorkflowError("CLEANUP_UNCONFIRMED", "Owned worker completion must be confirmed before resuming")
             self._require(ws, record, {"created", "proposed", "planned", "code_ready", "analyzed", "manuscript"}, allow_cancelled=True)
-            kind = self._resume_kind(record)
+            kind = self._resume_kind(ws, record)
             if kind is None:
                 raise WorkflowError("INVALID_STATE", "Only unexecuted preparation or verified authoring may resume")
             if kind == "authoring":
@@ -1548,7 +1725,7 @@ class WorkflowService:
             for key, frozen in parent.artifacts.items():
                 if key.startswith("prior-study-"):
                     relative, retained_key = frozen.path, key
-                elif (key in retained_keys or key.startswith(("analysis-", "authoring-literature", "authoring-selected-literature", "literature-")) or
+                elif (key in retained_keys or key.startswith(("analysis-", "authoring-literature", "authoring-selected-literature", "literature-", "study-literature-", "study-review-")) or
                       re.fullmatch(r"(?:draft|manuscript-review|code-review|cleanup)-[1-9][0-9]*", key)):
                     relative = "research/prior-studies/" + parent.id + "/" + frozen.path
                     retained_key = "prior-study-" + parent.id + "-" + key
@@ -1877,6 +2054,8 @@ class WorkflowService:
         if "runtime-manifest" in record.artifacts:
             selection["runtime-manifest.json"] = _artifact(ws, record, "runtime-manifest")
         for key in record.artifacts:
+            if key.startswith("study-literature-") or re.fullmatch(r"study-review-[1-3]-literature-[1-2]", key):
+                selection["research-design/literature/" + key + ".json"] = _artifact(ws, record, key)
             if key.startswith(("authoring-literature", "authoring-selected-literature")):
                 path = _artifact(ws, record, key)
                 selection["authoring/literature/" + key + ".json"] = path

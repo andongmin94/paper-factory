@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "profiles": {
     "win32-x64": {
-      "inventorySha256": "deadd0384f1b69b0f2c464948870052fa78a192721c262c9555bd36924609df6",
+      "inventorySha256": "7659921eec9bfae4f9edfb4ec2265fbddd4d4e561ab56c4d3203439510c521d7",
       "sourceManifestSha256": "bbc69a991cc2be903645f6274f33ed14f9f91d70a1e5941497c859d14f2540d1",
       "executables": {
         "python": "python/python.exe",
