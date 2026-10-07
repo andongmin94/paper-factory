@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readdir, readFile, rename, rm, rmdir } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rename, rm, rmdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -44,19 +44,44 @@ const retainedMaterials = {
   'code-review-10': JSON.stringify(accepted),
 };
 
+const observationIdentity = row => JSON.stringify([row.unit_id, row.seed, row.condition, row.metric]);
+const normalizedObservations = rows => [...rows].sort((a, b) => observationIdentity(a).localeCompare(observationIdentity(b)));
+function decodedObservations(projection) {
+  const { units, conditions, metrics, values } = projection.observations;
+  assert.equal(values.length, units.length);
+  return units.flatMap(([unit_id, seed], unitIndex) => {
+    assert.equal(values[unitIndex].length, conditions.length * metrics.length);
+    return conditions.flatMap((condition, conditionIndex) => metrics.map((metric, metricIndex) => {
+      const value = values[unitIndex][conditionIndex * metrics.length + metricIndex];
+      assert.ok(Number.isFinite(value));
+      return { unit_id, seed, condition, metric, value };
+    }));
+  });
+}
+function decodedFixtureMetadata(projection) {
+  assert.equal(projection.fixtures.encoding, 'base64');
+  assert.deepEqual(projection.fixtures.columns, ['label', 'sha256_base64', 'size']);
+  return projection.fixtures.rows.map(([label, encodedHash, size]) => {
+    const bytes = Buffer.from(encodedHash, 'base64');
+    assert.equal(bytes.length, 32);
+    assert.equal(bytes.toString('base64'), encodedHash);
+    return { label, encoding: 'base64', sha256: bytes.toString('hex'), size };
+  });
+}
+
 test('observation projection preserves all rows and controls and identifies omitted verified bytes', () => {
   const bytes = Buffer.from('한국어🙂\u0000\r\n');
-  const data = { observations: [{ unit_id: 'case-1', value: 0.12345678901234568 }], controls: [{ name: 'negative', passed: true }],
+  const data = { observations: [{ unit_id: 'case-1', seed: 17, condition: 'production', metric: 'distance', value: 0.12345678901234568 }], controls: [{ name: 'negative', passed: true }],
     fixtures: [{ label: 'input', encoding: 'base64', content: bytes.toString('base64'), sha256: createHash('sha256').update(bytes).digest('hex') }] };
   const raw = JSON.stringify(data); const artifact = { sha256: digest(raw), size: Buffer.byteLength(raw) };
   const projection = JSON.parse(projectObservationEvidence(raw, artifact));
-  assert.deepEqual(projection.observations, data.observations);
+  assert.deepEqual(decodedObservations(projection), data.observations);
   assert.deepEqual(projection.controls, data.controls);
-  assert.deepEqual(projection.fixtures, [{ label: 'input', encoding: 'base64', sha256: data.fixtures[0].sha256, size: bytes.length }]);
+  assert.deepEqual(decodedFixtureMetadata(projection), [{ label: 'input', encoding: 'base64', sha256: data.fixtures[0].sha256, size: bytes.length }]);
   assert.deepEqual(projection.model_context.original_artifact, { id: 'observations', ...artifact });
   assert.equal(projection.model_context.fixture_contents_included, false);
   assert.equal(projection.model_context.omitted_fixture_bytes, bytes.length);
-  assert.equal(Object.hasOwn(projection.fixtures[0], 'content'), false);
+  assert.equal(JSON.stringify(projection).includes(data.fixtures[0].content), false);
   assert.equal(JSON.stringify(data), raw);
 });
 
@@ -73,9 +98,128 @@ for (const defect of ['artifact-hash', 'artifact-size', 'fixture-hash', 'base64'
   });
 }
 
+test('dense observation grid preserves unit-seed identities and every finite numeric value across row orders', () => {
+  const numbers = [0.12345678901234568, Number.MIN_VALUE, Number.MAX_VALUE, -1e-300, Math.PI, 2 ** 40 + 0.5];
+  const observations = [['repeat', 17], ['repeat', 29], ['other', 17]].flatMap(([unit_id, seed], unitIndex) =>
+    ['second-condition', 'first-condition'].flatMap((condition, conditionIndex) =>
+      ['second-metric', 'first-metric'].map((metric, metricIndex) => ({ unit_id, seed, condition, metric,
+        value: numbers[(unitIndex * 4 + conditionIndex * 2 + metricIndex) % numbers.length] })))).reverse();
+  const data = { observations, controls: [{ name: 'unchanged', expected: -1e-300, observed: 0.12345678901234568, passed: false }], fixtures: [] };
+  const raw = JSON.stringify(data); const artifact = { sha256: digest(raw), size: Buffer.byteLength(raw) };
+  const projection = JSON.parse(projectObservationEvidence(raw, artifact));
+  assert.equal(projection.observations.units.length, 3);
+  assert.deepEqual(new Set(projection.observations.units.map(unit => JSON.stringify(unit))),
+    new Set([['repeat', 17], ['repeat', 29], ['other', 17]].map(unit => JSON.stringify(unit))));
+  assert.deepEqual(normalizedObservations(decodedObservations(projection)), normalizedObservations(observations));
+  assert.deepEqual(projection.controls, data.controls);
+  assert.equal(JSON.stringify(data), raw);
+  assert.match(projection.model_context.observation_layout, /conditionIndex \* metrics.length \+ metricIndex/);
+});
+
+for (const defect of ['missing-cell', 'duplicate-cell', 'null-row', 'missing-key', 'extra-key', 'fractional-seed',
+  'unsafe-seed', 'empty-unit', 'empty-condition', 'empty-metric', 'string-value', 'overflow-value']) {
+  test('malformed scalar evidence is rejected before projection: ' + defect, () => {
+    const data = { observations: ['production', 'comparator'].flatMap(condition => ['loss', 'distance'].map(metric =>
+      ({ unit_id: 'case-1', seed: 17, condition, metric, value: 1 }))), controls: [], fixtures: [] };
+    if (defect === 'missing-cell') data.observations.pop();
+    if (defect === 'duplicate-cell') data.observations[3] = structuredClone(data.observations[0]);
+    if (defect === 'null-row') data.observations[0] = null;
+    if (defect === 'missing-key') delete data.observations[0].metric;
+    if (defect === 'extra-key') data.observations[0].comment = 'Unrecognized row data cannot be omitted silently';
+    if (defect === 'fractional-seed') data.observations[0].seed = 17.5;
+    if (defect === 'unsafe-seed') data.observations[0].seed = Number.MAX_SAFE_INTEGER + 1;
+    if (defect === 'empty-unit') data.observations[0].unit_id = '';
+    if (defect === 'empty-condition') data.observations[0].condition = '';
+    if (defect === 'empty-metric') data.observations[0].metric = '';
+    if (defect === 'string-value') data.observations[0].value = '1';
+    let raw = JSON.stringify(data);
+    if (defect === 'overflow-value') raw = raw.replace('"value":1', '"value":1e999');
+    const artifact = { sha256: digest(raw), size: Buffer.byteLength(raw) };
+    assert.throws(() => projectObservationEvidence(raw, artifact), error => error.code === 'MATERIAL_INVALID');
+  });
+}
+
+test('900-unit evidence fits complete author and reviewer materials without changing frozen bytes or redispatching', async () => {
+  const conditions = ['production', 'insert_first'];
+  const metrics = ['edit_cost_excess', 'endpoint_failures', 'reachable_documents', 'union_missing_documents',
+    'different_acceptance_sets', 'production_set_distance'];
+  const labels = ['input', 'production input', 'production output', 'oracle and reviews'];
+  const data = {
+    observations: Array.from({ length: 900 }, (_, unit) => conditions.flatMap(condition => metrics.map((metric, metricIndex) =>
+      ({ unit_id: `pair-${unit}`, seed: unit % 2, condition, metric, value: metricIndex === 2 ? unit % 33 : unit % 3 })))).flat(),
+    controls: ['positive', 'negative', 'null'].map(name => ({ name: 'SYNTHETIC_' + name, passed: true, expected: 0, observed: 0 })),
+    fixtures: Array.from({ length: 3613 }, (_, index) => {
+      const contentIndex = index < 3611 ? index : index - 3611;
+      const bytes = Buffer.from(`SYNTHETIC_CONTEXT_FIXTURE_${contentIndex}\n` + 'f'.repeat(400));
+      return { label: index < 3600 ? `unit ${Math.floor(index / 4)} ${labels[index % 4]}` : `auxiliary fixture ${index}`,
+        encoding: 'base64', content: bytes.toString('base64'), sha256: digest(bytes) };
+    }),
+  };
+  const raw = JSON.stringify(data); const originalBytes = Buffer.from(raw);
+  const artifact = { sha256: digest(originalBytes), size: originalBytes.length };
+  assert.equal(data.observations.length, 10800); assert.equal(data.fixtures.length, 3613);
+  assert.equal(new Set(data.fixtures.map(fixture => fixture.sha256)).size, 3611);
+  for (const index of [1806, 3612]) {
+    const corrupted = structuredClone(data); corrupted.fixtures[index].sha256 = '0'.repeat(64);
+    const changed = JSON.stringify(corrupted);
+    assert.throws(() => projectObservationEvidence(changed, { sha256: digest(changed), size: Buffer.byteLength(changed) }),
+      error => error.code === 'ARTIFACT_CHANGED');
+  }
+  const sources = { 'module.ts': sourceText, 'README.md': 'SYNTHETIC_COMPLETE_SOURCE_NOTICE\n' + 's'.repeat(90_000) };
+  const materials = {
+    observations: raw,
+    'experiment.mjs': 'SYNTHETIC_COMPLETE_GENERATED_CODE\n' + 'c'.repeat(20_000),
+    'runtime-manifest': JSON.stringify({ compiled_files: 'SYNTHETIC_COMPILER_RECEIPT_SHA', retained: 'r'.repeat(34_000) }),
+    'code-review-10': JSON.stringify({ ...accepted, retained: 'a'.repeat(3000) }),
+  };
+  const workflow = observed(); workflow.artifacts.observations = artifact;
+  workflow.material_manifest.source = sourceInventory(sources);
+  const frozenArtifacts = structuredClone(workflow.artifacts); const frozenPlan = structuredClone(workflow.plan);
+  const f = await fixture([{ sections: [] }, manuscriptAccepted], workflow, { request(method, params) {
+    if (method !== 'workflow.readMaterial') return undefined;
+    const text = params.area === 'source' ? sources[params.name] : materials[params.name];
+    assert.equal(typeof text, 'string');
+    const end = Math.min(text.length, params.offset + params.limit);
+    return { text: text.slice(params.offset, end), next_offset: end < text.length ? end : null, sha256: digest(text) };
+  } });
+  const frozenPath = join(f.home, 'frozen-observations.json');
+  try {
+    await writeFile(frozenPath, originalBytes, { flag: 'wx' });
+    await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer');
+    assert.equal((await settled(f.controller)).jobs[0].pipeline, 'completed');
+    assert.deepEqual(f.prompts.map(prompt => prompt.model), ['writer', 'reviewer']);
+    assert.equal(f.calls.some(call => ['workflow.startExperiment', 'workflow.submitCode', 'workflow.collectLiterature'].includes(call.method)), false);
+    assert.equal(workflow.execution_attempt, 1);
+    assert.deepEqual(workflow.artifacts, frozenArtifacts); assert.deepEqual(workflow.plan, frozenPlan);
+    for (const request of f.prompts) {
+      const material = promptMaterials(request.input[0].content);
+      const projection = JSON.parse(material.retainedEvidence.observations);
+      assert.deepEqual(normalizedObservations(decodedObservations(projection)), normalizedObservations(data.observations));
+      assert.deepEqual(projection.controls, data.controls);
+      assert.deepEqual(decodedFixtureMetadata(projection), data.fixtures.map(fixture =>
+        ({ label: fixture.label, encoding: fixture.encoding, sha256: fixture.sha256, size: Buffer.from(fixture.content, 'base64').length })));
+      assert.deepEqual(projection.model_context.original_artifact, { id: 'observations', ...artifact });
+      assert.equal(projection.model_context.omitted_fixture_bytes, data.fixtures.reduce((sum, fixture) => sum + Buffer.from(fixture.content, 'base64').length, 0));
+      assert.deepEqual(material.productionSource, sources);
+      assert.equal(material.experimentFiles['experiment.mjs'], materials['experiment.mjs']);
+      assert.equal(material.retainedEvidence['runtime-manifest'], materials['runtime-manifest']);
+      assert.equal(material.retainedEvidence['code-review-10'], materials['code-review-10']);
+      const total = [...Object.values(material.productionSource), ...Object.values(material.experimentFiles), ...Object.values(material.retainedEvidence)]
+        .reduce((sum, text) => sum + text.length, 0);
+      assert.ok(total > 460_000 && total < 480_000, `Complete synthetic retained material length: ${total}`);
+      assert.ok(JSON.stringify(material).length < 500_000);
+      assert.equal(request.input[0].content.includes(data.fixtures[0].content), false);
+      assert.match(request.input[0].content, /model has not inspected omitted fixture bytes/);
+    }
+    assert.deepEqual(await readFile(frozenPath), originalBytes);
+    assert.equal(digest(await readFile(frozenPath)), artifact.sha256);
+    assert.equal(JSON.stringify(data), raw);
+  } finally { await f.cleanup(); }
+});
+
 test('large retained fixture bytes permit authoring from full measurements without redispatch', async () => {
   const bytes = Buffer.from('LARGE_RAW_FIXTURE_DO_NOT_SEND'.repeat(24_000));
-  const data = { observations: [{ unit_id: 'case-1', seed: 17, value: 0.12345678901234568 }], controls: [{ name: 'actual-negative-control', passed: true }],
+  const data = { observations: [{ unit_id: 'case-1', seed: 17, condition: 'production', metric: 'distance', value: 0.12345678901234568 }], controls: [{ name: 'actual-negative-control', passed: true }],
     fixtures: [{ label: 'large-input', encoding: 'base64', content: bytes.toString('base64'), sha256: createHash('sha256').update(bytes).digest('hex') }] };
   const raw = JSON.stringify(data); assert.ok(raw.length > 500_000);
   const workflow = observed(); workflow.artifacts.observations = { sha256: digest(raw), size: Buffer.byteLength(raw) };
@@ -96,8 +240,8 @@ test('large retained fixture bytes permit authoring from full measurements witho
       assert.match(prompt, /model has not inspected omitted fixture bytes/);
       const material = promptMaterials(prompt);
       const projected = JSON.parse(material.retainedEvidence.observations);
-      assert.deepEqual(projected.observations, data.observations); assert.deepEqual(projected.controls, data.controls);
-      assert.equal(projected.fixtures[0].sha256, data.fixtures[0].sha256);
+      assert.deepEqual(decodedObservations(projected), data.observations); assert.deepEqual(projected.controls, data.controls);
+      assert.equal(decodedFixtureMetadata(projected)[0].sha256, data.fixtures[0].sha256);
       assert.equal(projected.model_context.original_artifact.sha256, digest(raw));
     }
     assert.equal(JSON.stringify(data), raw);
@@ -409,10 +553,46 @@ test('proposal, inspected literature and fresh suitability acceptance precede an
   } finally { await f.cleanup(); }
 });
 
-for (const defect of ['concat without merging', 'rounded expected JSON instead of a parser', 'history-dropping copy instead of project restoration']) {
+test('a literature deficit collects refined evidence and receives fresh approval before code or science', async () => {
+  const missing = { sources: [], searches: [{ query: 'synthetic broad query', status: 'failed', error: 'HTTPStatusError', http_status: 503 }] };
+  const inspected = { sources: [{ id: 'synthetic-source', scope: 'abstract', excerpts: ['Synthetic directly relevant evidence for orchestration only.'] }] };
+  const rejected = { ...studyAccepted, accepted: false, selected_sources: [], issues: ['Missing relevant inspected evidence'],
+    contribution: { passed: false, reason: 'Synthetic contribution cannot be positioned without relevant evidence.' },
+    literature: { passed: false, reason: 'Synthetic query failed; no relevant excerpts were inspected.' } };
+  const initial = { feasible: true, source_files: ['module.ts'], literature_queries: ['synthetic broad query'] };
+  const refined = { ...initial, literature_queries: ['synthetic exact method title'] };
+  const workflow = { ...base(), stage: 'created', proposal_attempt: 0, study_review: null, plan: null, literature: missing };
+  let collections = 0;
+  const f = await fixture([initial, rejected, refined, studyAccepted, { files: [] }, accepted,
+    { sections: [] }, manuscriptAccepted], workflow, { request(method) {
+      if (method === 'workflow.collectLiterature') {
+        assert.equal(workflow.plan, null); assert.equal(workflow.execution_attempt, 0);
+        workflow.literature = ++collections === 1 ? missing : inspected;
+        workflow.instructions = 'Synthetic native study instructions with retrieved evidence: ' + JSON.stringify(workflow.literature);
+      }
+    } });
+  try {
+    await f.controller.initialize(); await f.controller.create(input);
+    const state = await settled(f.controller); assert.equal(state.jobs[0].pipeline, 'completed');
+    assert.equal(collections, 2); assert.deepEqual(workflow.plan, refined);
+    const secondPlan = f.prompts[2].input[0].content;
+    assert.match(secondPlan, /There are 2 proposal attempts remaining/);
+    assert.match(secondPlan, /provisional feasible candidate with refined literature_queries/);
+    assert.match(secondPlan, /failed search does not establish that relevant research is absent/);
+    assert.match(secondPlan, /withhold approval until directly relevant inspected evidence/);
+    assert.ok(secondPlan.includes(JSON.stringify(missing))); assert.ok(secondPlan.includes(JSON.stringify(rejected)));
+    assert.ok(f.prompts[3].input[0].content.includes(JSON.stringify(inspected)));
+    const methods = f.calls.map(call => call.method);
+    assert.ok(methods.indexOf('workflow.submitCode') > methods.lastIndexOf('workflow.submitStudyReview'));
+    assert.equal(methods.filter(method => method === 'workflow.startExperiment').length, 1);
+  } finally { await f.cleanup(); }
+});
+
+for (const defect of ['concat without merging', 'rounded expected JSON instead of a parser', 'history-dropping copy instead of project restoration', 'missing inspected literature after bounded query refinement']) {
   test('synthetic rejection for ' + defect + ' stops after three proposals and preserves all review receipts', async () => {
     const review = { ...studyAccepted, accepted: false, issues: [defect],
-      comparison: { passed: false, reason: 'Synthetic reviewer rejects this weak comparator: ' + defect } };
+      [defect.startsWith('missing inspected literature') ? 'literature' : 'comparison']:
+        { passed: false, reason: 'Synthetic reviewer rejects this evidence deficit: ' + defect } };
     const responses = Array.from({ length: 3 }, (_, index) => [
       { feasible: true, source_files: ['module.ts'], title: 'Synthetic proposal revision ' + index }, review]).flat();
     const f = await fixture(responses, { ...base(), stage: 'created', proposal_attempt: 0, study_review: null });
@@ -659,7 +839,7 @@ test('explicit manuscript resume gives both fresh models full retained evidence 
     assert.match(reviewer, /Decide from the scientific defects and evidence; do not favor acceptance/);
     for (const prompt of f.prompts) {
       assert.equal(prompt.input.length, 1);
-      for (const marker of ['SYNTHETIC_APPROVED_GENERATED_CODE', digest('SYNTHETIC_RAW_FIXTURE_BYTES'), 'SYNTHETIC_CONTROL_EVIDENCE', 'SYNTHETIC_COMPILER_RECEIPT_SHA', 'code-review-10']) {
+      for (const marker of ['SYNTHETIC_APPROVED_GENERATED_CODE', Buffer.from(digest('SYNTHETIC_RAW_FIXTURE_BYTES'), 'hex').toString('base64'), 'SYNTHETIC_CONTROL_EVIDENCE', 'SYNTHETIC_COMPILER_RECEIPT_SHA', 'code-review-10']) {
         assert.ok(prompt.input[0].content.includes(marker));
       }
       assert.equal(prompt.input[0].content.includes('SYNTHETIC_RAW_FIXTURE_BYTES'), false);
@@ -1849,7 +2029,7 @@ test('explicit completed-paper revision leases preparation before fresh writer/r
     assert.deepEqual(f.prompts.map(prompt => prompt.model), ['writer', 'reviewer']);
     for (const prompt of f.prompts) {
       assert.equal(prompt.input.length, 1); assert.equal(prompt.previousResponseId, undefined); assert.equal(prompt.conversationId, undefined);
-      for (const marker of ['SYNTHETIC_APPROVED_GENERATED_CODE', digest('SYNTHETIC_RAW_FIXTURE_BYTES'), 'SYNTHETIC_CONTROL_EVIDENCE', 'SYNTHETIC_COMPILER_RECEIPT_SHA']) {
+      for (const marker of ['SYNTHETIC_APPROVED_GENERATED_CODE', Buffer.from(digest('SYNTHETIC_RAW_FIXTURE_BYTES'), 'hex').toString('base64'), 'SYNTHETIC_CONTROL_EVIDENCE', 'SYNTHETIC_COMPILER_RECEIPT_SHA']) {
         assert.ok(prompt.input[0].content.includes(marker));
       }
     }

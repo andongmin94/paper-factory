@@ -173,6 +173,20 @@ must still prevent approval. Reject a genuinely unsupported runtime or design
 now rather than inventing a candidate. When revising a reviewed proposal, address
 the supplied retrieved evidence and failed criteria; do not ignore a substantive
 rejection merely because an initial proposal may precede literature collection.
+If a reviewed proposal lacks directly relevant inspected excerpts because its
+queries failed, returned irrelevant topics, or retrieved only metadata, distinguish
+that search gap from an impossible study. When the inspected source, runtime and
+original goal still support the question and design, use the remaining bounded
+controller proposal attempts to submit a feasible provisional candidate with
+refined, concrete literature_queries. Address the review's missing evidence:
+use an exact DOI only when genuinely known, an exact relevant title when known,
+or short method-specific queries; refine terms to exclude observed irrelevant
+topics. A failed search is not evidence that relevant literature is absent.
+Do not invent a DOI, reading, novelty or approval, repeat the same unsuccessful
+queries unchanged, or require the controller to exceed its proposal-attempt limit.
+Do not change the requested goal, production code, measurements or seeds to evade
+a search gap. Other failed criteria still require their own substantive repair;
+this retrieval retry does not make every rejected proposal feasible.
 
 If supplied prior-study context contains a manuscript rejection and structured
 remediation, propose a NEW study that resolves its concrete evidence_gaps and
@@ -185,8 +199,11 @@ for the new study. Disclose their role and freeze the new question, units,
 comparisons and analysis before its own execution. Design the study so that
 negative, null or unfavorable results still answer the question; do not select
 fixtures or predicted conclusions to obtain reviewer acceptance. If the required
-evidence cannot be collected within the inspected source, original goal and
+observations cannot be collected within the inspected source, original goal and
 supported runtime, return feasible=false with the specific blocking requirement.
+Unsupported runtime, irreconcilable mandatory-goal requirements or a logically
+impossible design justify infeasibility. A retrieved-literature gap alone while
+another bounded lookup is possible does not establish that impossibility.
 
 Explain research_gap as a specific unresolved question, expected_contribution as
 the nontrivial knowledge this design could establish, comparison_rationale as
@@ -207,8 +224,10 @@ Match sampling to the claim: fixed examples support only those examples; renamed
 copies and seed offsets do not create independent real-world observations.
 Larger grids and repeated metric rows alone do not create a contribution.
 Request literature about the actual research problem and relevant methods, not
-merely overlapping words. After retrieval, the study must stop if no directly relevant inspected
-literature supports positioning the question. Do not invent citations or fill
+merely overlapping words. After retrieval, the independent study review must
+withhold approval if no directly relevant inspected literature supports positioning
+the question; bounded proposal retries can search for the missing primary evidence.
+Do not invent citations or fill
 Related Work with irrelevant search hits. An independent study review must
 approve the question, contribution, literature, comparison, sampling and runtime
 feasibility before this proposed protocol is frozen or code is generated.

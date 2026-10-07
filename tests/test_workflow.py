@@ -430,6 +430,66 @@ def test_rejected_normalized_proposal_cannot_repeat_or_duplicate_instrumentation
     assert runner.calls == 0
 
 
+def test_revised_proposal_gets_fresh_literature_budget_and_retries_old_failed_queries(setup):
+    service, runner, research_id = setup
+    proposal = protocol()
+    proposal["literature_queries"] = ["previously failed query", "irrelevant initial topic"]
+    service.submit_proposal(research_id, proposal)
+    calls = []
+
+    def revised_search(queries, root, *, limit, cancel):
+        calls.append((list(queries), limit))
+        evidence = collect(queries, root, limit=limit, cancel=cancel)
+        source = evidence["sources"][0]
+        if len(calls) == 1:
+            evidence["sources"] = [{**source, "id": f"irrelevant-{index}",
+                                    "title": f"Unrelated synthetic reading {index}"} for index in range(6)]
+            evidence["searches"][0].update(status="failed", resolved_ids=[], error="HTTPStatusError", http_status=429)
+        else:
+            evidence["sources"].append({**source, "id": "second-fixture-oracle"})
+        return evidence
+
+    service.collector = revised_search
+    initial = service.collect_literature(research_id)
+    assert len(initial["literature"]["sources"]) == 6
+    rejected = rejected_study_review()
+    rejected["literature"] = {"passed": False, "reason": "All six retained readings are unrelated to the original research question."}
+    service.submit_study_review(research_id, rejected)
+    old_path = service.artifact_path(research_id, "literature")
+    old_bytes = old_path.read_bytes()
+    old_digest = digest_file(old_path)
+    prior = service.status(research_id)
+    retained = {key: service.artifact_path(research_id, key).read_bytes()
+                for key in prior["artifacts"] if key not in {"proposal", "study-review", "literature"}}
+
+    revised = copy.deepcopy(proposal)
+    revised["literature_queries"] = ["previously failed query", "refined relevant method query"]
+    proposed = service.submit_proposal(research_id, revised)
+    history_key = "literature-history-" + old_digest
+    assert proposed["proposal_attempt"] == 2 and proposed["stage"] == "proposed"
+    assert "literature" not in proposed["artifacts"] and "literature" not in proposed
+    assert service.artifact_path(research_id, history_key) == old_path
+    assert proposed["artifacts"][history_key]["sha256"] == old_digest
+    assert proposed["study_review"] is None and "plan" not in proposed["artifacts"]
+    with pytest.raises(WorkflowError) as missing:
+        service.submit_study_review(research_id, STUDY_REVIEW)
+    assert missing.value.code == "ARTIFACT_MISSING"
+
+    completed = service.collect_literature(research_id)
+    assert calls == [(proposal["literature_queries"], 6), (revised["literature_queries"], 6)]
+    assert len(completed["literature"]["sources"]) == 2
+    assert [search["query"] for search in completed["literature"]["searches"]] == revised["literature_queries"]
+    assert all(search["status"] == "succeeded" for search in completed["literature"]["searches"])
+    assert service.artifact_path(research_id, "literature") != old_path and old_path.read_bytes() == old_bytes
+    assert all(service.artifact_path(research_id, key).read_bytes() == content for key, content in retained.items())
+    fresh_review = copy.deepcopy(STUDY_REVIEW)
+    fresh_review["selected_sources"].append({**fresh_review["selected_sources"][0], "source_id": "second-fixture-oracle"})
+    approved = service.submit_study_review(research_id, fresh_review)
+    assert approved["stage"] == "planned" and runner.calls == 0
+    assert len(approved["literature"]["sources"]) == 2
+    assert old_path.read_bytes() == old_bytes
+
+
 @pytest.mark.parametrize("defect", ["unknown", "metadata", "out_of_bounds"])
 def test_suitability_selection_must_bind_a_retrieved_readable_source_excerpt(setup, defect):
     service, runner, research_id = setup
@@ -2653,7 +2713,7 @@ def test_metadata_only_partial_collection_does_not_exhaust_later_inspected_sourc
     assert approved["stage"] == "planned" and runner.calls == 0
 
 
-@pytest.mark.parametrize("cancelled", [False, True])
+@pytest.mark.parametrize("incomplete_flag", [None, "cancelled", "timed_out", "rate_limited"])
 @pytest.mark.parametrize("old_scope,new_scope,retained_scope", [
     ("metadata_only", "abstract", "abstract"),
     ("metadata_only", "full_text", "full_text"),
@@ -2664,7 +2724,7 @@ def test_metadata_only_partial_collection_does_not_exhaust_later_inspected_sourc
     ("abstract", "abstract", "abstract"),
 ])
 def test_same_source_recovery_upgrades_reading_without_downgrading_or_overwriting_history(
-        setup, cancelled, old_scope, new_scope, retained_scope):
+        setup, incomplete_flag, old_scope, new_scope, retained_scope):
     service, runner, research_id = setup
     proposal = protocol()
     proposal["literature_queries"] = ["first query", "second query"]
@@ -2673,7 +2733,7 @@ def test_same_source_recovery_upgrades_reading_without_downgrading_or_overwritin
 
     def recover_reading(queries, root, *, limit, cancel):
         calls.append((list(queries), limit))
-        evidence = collect(queries if cancelled or len(calls) > 1 else queries[:1], root, limit=6, cancel=cancel)
+        evidence = collect(queries if incomplete_flag or len(calls) > 1 else queries[:1], root, limit=6, cancel=cancel)
         source = evidence["sources"][0]
         scope = old_scope if len(calls) == 1 else new_scope
         source["scope"] = scope
@@ -2682,12 +2742,12 @@ def test_same_source_recovery_upgrades_reading_without_downgrading_or_overwritin
         raw_path = f"literature/recovered-source-{len(calls)}.json"
         write_json(Path(root) / raw_path, {"scope": scope, "title": source["title"], "excerpts": source["excerpts"]})
         source.update(raw_path=raw_path, sha256=digest_file(Path(root) / raw_path))
-        if len(calls) == 1:
-            evidence["cancelled"] = cancelled
+        if len(calls) == 1 and incomplete_flag:
+            evidence[incomplete_flag] = True
         return evidence
 
     service.collector = recover_reading
-    expected_error = "LITERATURE_EVIDENCE_INSUFFICIENT" if cancelled or old_scope == "metadata_only" else "LITERATURE_QUERIES_INCOMPLETE"
+    expected_error = "LITERATURE_EVIDENCE_INSUFFICIENT" if incomplete_flag or old_scope == "metadata_only" else "LITERATURE_QUERIES_INCOMPLETE"
     with pytest.raises(WorkflowError) as partial:
         service.collect_literature(research_id)
     assert partial.value.code == expected_error
@@ -2696,22 +2756,48 @@ def test_same_source_recovery_upgrades_reading_without_downgrading_or_overwritin
     original_source = json.loads(prior_bytes)["sources"][0]
     prior_artifact = service.root / research_id / "research" / original_source["raw_path"]
     prior_source_bytes = prior_artifact.read_bytes()
+    if incomplete_flag:
+        # Every query was attempted, but interrupted DOI reading cannot be approved.
+        assert all(search["attempted"] for search in json.loads(prior_bytes)["searches"])
+        assert len(json.loads(prior_bytes)["searches"]) == 2
+        before = service.status(research_id)["artifacts"]
+        with pytest.raises(WorkflowError) as premature:
+            service.submit_study_review(research_id, STUDY_REVIEW)
+        assert premature.value.code == "LITERATURE_EVIDENCE_INSUFFICIENT"
+        if incomplete_flag in {"timed_out", "rate_limited"}:
+            assert ("timed-out" if incomplete_flag == "timed_out" else "rate-limited") in str(premature.value)
+        assert service.status(research_id)["artifacts"] == before
+        assert "plan" not in before and "study-review" not in before
 
     completed = service.collect_literature(research_id)
+    assert completed["literature"]["cancelled"] is False
+    assert completed["literature"]["timed_out"] is False
+    assert completed["literature"]["rate_limited"] is False
     sources = completed["literature"]["sources"]
     assert len(sources) == 1 and sources[0]["id"] == "fixture-oracle"
     assert sources[0]["scope"] == retained_scope and sources[0]["excerpts"]
     attempt = 2 if retained_scope != old_scope else 1
     assert sources[0]["raw_path"] == f"literature/recovered-source-{attempt}.json"
     assert calls == [(["first query", "second query"], 6),
-                     (["first query", "second query"] if cancelled else ["second query"],
+                     (["first query", "second query"] if incomplete_flag else ["second query"],
                       6 if old_scope == "metadata_only" else 5)]
     history = completed["literature"]["history"]
     assert len(history) == 1 and history[0]["sha256"] == hashlib.sha256(prior_bytes).hexdigest()
     assert service.artifact_path(research_id, history[0]["artifact_id"]) == original
     assert original.read_bytes() == prior_bytes and prior_artifact.read_bytes() == prior_source_bytes
+    assert completed["study_review"] is None and "plan" not in completed["artifacts"]
+    invalid_selection = copy.deepcopy(STUDY_REVIEW)
+    invalid_selection["selected_sources"][0]["excerpt_index"] = 99
+    with pytest.raises(WorkflowError) as uninspected:
+        service.submit_study_review(research_id, invalid_selection)
+    assert uninspected.value.code == "LITERATURE_SELECTION_INVALID"
+    assert "plan" not in service.status(research_id)["artifacts"]
     approved = service.submit_study_review(research_id, STUDY_REVIEW)
     assert approved["stage"] == "planned" and runner.calls == 0
+    receipt = json.loads(service.artifact_path(research_id, "study-review").read_bytes())
+    assert receipt["literature_sha256"] == approved["artifacts"]["literature"]["sha256"]
+    selected = json.loads(service.artifact_path(research_id, "selected-literature").read_bytes())
+    assert selected["sources"][0]["raw_path"] == sources[0]["raw_path"]
 
 
 @pytest.mark.parametrize("defect,message", [

@@ -956,7 +956,7 @@ def test_planner_distinguishes_worthwhile_studies_from_convenient_checker_contro
     assert "a negative control, not" in prompt
     assert "credible alternatives for superiority" in prompt
     assert "seed offsets do not create independent real-world observations" in prompt
-    assert "must stop if no directly relevant inspected" in prompt
+    assert "withhold approval if no directly relevant inspected" in prompt
 
 
 def test_initial_planning_proposes_searchable_candidate_before_literature_approval(protocol, literature):
@@ -971,7 +971,8 @@ def test_initial_planning_proposes_searchable_candidate_before_literature_approv
     assert "After proposal submission, the controller collects the requested literature" in compact
     assert "before protocol freezing, code generation or execution" in compact
     assert "Missing or irrelevant inspected evidence at that review must still prevent approval" in compact
-    assert "After retrieval, the study must stop if no directly relevant inspected literature" in compact
+    assert "After retrieval, the independent study review must withhold approval" in compact
+    assert "bounded proposal retries can search for the missing primary evidence" in compact
     # A searchable proposal does not relax the later scientific or reading gate.
     review = " ".join(science.study_review_prompt(protocol, literature, "Inspected source", "Study an unresolved software question.").split())
     assert "metadata and word overlap are insufficient" in review
@@ -986,6 +987,46 @@ def test_planning_still_rejects_unsupported_designs_and_addresses_actual_review_
     assert "When revising a reviewed proposal, address the supplied retrieved evidence and failed criteria" in prompt
     assert "do not ignore a substantive rejection" in prompt
     assert "Unsupported required runtime observations make a proposal infeasible before execution" in prompt
+    assert "Unsupported runtime, irreconcilable mandatory-goal requirements or a logically impossible design justify infeasibility" in prompt
+    assert "Other failed criteria still require their own substantive repair" in prompt
+    assert "this retrieval retry does not make every rejected proposal feasible" in prompt
+
+
+@pytest.mark.parametrize("retrieval_gap", [
+    {"searches": [{"query": "two-string optimal alignment", "status": "failed", "error": "HTTPStatusError"}], "sources": []},
+    {"searches": [{"query": "selective text changes", "status": "succeeded"}],
+     "sources": [{"title": "Tree classification edits", "scope": "abstract", "excerpts": ["Matching subtrees in classifications."]},
+                 {"title": "Selective merged undo", "scope": "metadata_only", "excerpts": []}]},
+])
+def test_reviewed_planning_repairs_search_gaps_with_bounded_provisional_candidates(protocol, literature, retrieval_gap):
+    goal = "Study two-string alignment with the original mandatory corpus and seeds."
+    prior_review = {"accepted": False, "question": {"passed": True}, "comparison": {"passed": True},
+                    "sampling": {"passed": True}, "feasibility": {"passed": True},
+                    "contribution": {"passed": False}, "literature": {"passed": False},
+                    "issues": ["No directly relevant inspected excerpts support the provisional contribution."]}
+    supplied = json.dumps({"proposal_attempt": 1, "review": prior_review, "literature": retrieval_gap}, ensure_ascii=False)
+    prompt = science.planning_prompt(supplied, goal)
+    compact = " ".join(prompt.split())
+    assert prompt.endswith(supplied)
+    assert json.dumps(goal, ensure_ascii=False) in prompt
+    assert "queries failed, returned irrelevant topics, or retrieved only metadata" in compact
+    assert "original goal still support the question and design" in compact
+    assert "remaining bounded controller proposal attempts" in compact
+    assert "a feasible provisional candidate with refined, concrete literature_queries" in compact
+    assert "an exact DOI only when genuinely known" in compact
+    assert "an exact relevant title when known" in compact
+    assert "short method-specific queries; refine terms to exclude observed irrelevant topics" in compact
+    assert "A failed search is not evidence that relevant literature is absent" in compact
+    assert "Do not invent a DOI, reading, novelty or approval" in compact
+    assert "repeat the same unsuccessful queries unchanged" in compact
+    assert "exceed its proposal-attempt limit" in compact
+    assert "Do not change the requested goal, production code, measurements or seeds to evade a search gap" in compact
+    assert "A retrieved-literature gap alone while another bounded lookup is possible does not establish that impossibility" in compact
+    assert "provisional hypotheses to assess, not verified novelty" in compact
+    review = " ".join(science.study_review_prompt(protocol, literature, "Inspected source", goal).split())
+    assert "If none qualify, reject literature and the study" in review
+    assert "All six criteria must pass, issues must be empty" in review
+    assert "at least one source excerpt must be selected for accepted=true" in review
 
 
 def test_writer_receives_selected_evidence_without_length_or_audit_padding(protocol, literature, execution):

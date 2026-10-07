@@ -73,6 +73,10 @@ def _attempted_literature_queries(evidence: dict) -> set[str]:
 def _require_complete_literature(plan: ResearchPlan, evidence: dict) -> None:
     if evidence.get("cancelled"):
         raise WorkflowError("LITERATURE_EVIDENCE_INSUFFICIENT", "Complete the cancelled literature collection before study approval")
+    if evidence.get("timed_out"):
+        raise WorkflowError("LITERATURE_EVIDENCE_INSUFFICIENT", "Complete the timed-out literature collection before study approval")
+    if evidence.get("rate_limited"):
+        raise WorkflowError("LITERATURE_EVIDENCE_INSUFFICIENT", "Complete the rate-limited literature collection before study approval")
     queries = {query.strip() for query in plan.literature_queries}
     if queries - _attempted_literature_queries(evidence):
         raise WorkflowError("LITERATURE_QUERIES_INCOMPLETE", "Some proposed literature queries were not attempted; study approval requires complete retrieval attempts")
@@ -804,10 +808,11 @@ class WorkflowService:
             previous = _read(ws, record, "literature") if "literature" in record.artifacts else {}
             queries = list(dict.fromkeys(query.strip() for query in plan.literature_queries))
 
-            # Cancellation can occur during DOI resolution after every search
-            # was attempted. A fresh collection must complete before approval;
+            # Cancellation, timeout or rate limiting can interrupt DOI resolution
+            # after every search was attempted.
+            # A fresh collection must complete before approval;
             # the partial receipt is retained as history rather than cleared.
-            missing = queries if previous.get("cancelled") else [
+            missing = queries if any(previous.get(flag) for flag in ("cancelled", "timed_out", "rate_limited")) else [
                 query for query in queries if query not in _attempted_literature_queries(previous)]
             evidence = previous
             if missing:
@@ -842,7 +847,9 @@ class WorkflowService:
                             "sources": (inspected + metadata)[:6],
                             "searches": previous.get("searches", []) + supplement.get("searches", []),
                             "warnings": previous.get("warnings", []) + supplement.get("warnings", []),
-                            "cancelled": supplement.get("cancelled", False)}
+                            "cancelled": supplement.get("cancelled", False),
+                            "timed_out": supplement.get("timed_out", False),
+                            "rate_limited": supplement.get("rate_limited", False)}
                 if previous:
                     retained = record.artifacts["literature"]
                     history_key = "literature-history-" + retained.sha256

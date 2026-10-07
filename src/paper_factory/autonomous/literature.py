@@ -19,6 +19,7 @@ import subprocess
 import sys
 import sysconfig
 import time
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Callable
 from urllib.parse import quote, urljoin, urlsplit
@@ -45,6 +46,56 @@ MAX_EXCERPT_CHARS = 1_500
 
 class _Cancelled(Exception):
     pass
+
+
+class _DeadlineExceeded(Exception):
+    pass
+
+
+class _RateLimited(Exception):
+    pass
+
+
+class _CollectionBudget:
+    def __init__(self):
+        self.deadline = time.monotonic() + 90
+        self.next_request = 0.0
+        self.retries = 0
+        self.requests = 0
+
+    def wait(self, seconds: float, cancel: Callable[[], bool] | None) -> None:
+        end = time.monotonic() + seconds
+        while True:
+            _check_cancel(cancel)
+            current = time.monotonic()
+            if current >= self.deadline:
+                raise _DeadlineExceeded
+            if current >= end:
+                return
+            time.sleep(min(0.05, end - current, self.deadline - current))
+
+    def request_timeout(self, *, pdf: bool, cancel: Callable[[], bool] | None) -> httpx.Timeout:
+        self.wait(0 if pdf else max(0, self.next_request - time.monotonic()), cancel)
+        if not pdf:
+            self.next_request = time.monotonic() + 0.5
+        remaining = self.deadline - time.monotonic()
+        return httpx.Timeout(min(15, remaining), connect=min(5, remaining))
+
+    def rate_delay(self, value: str | None) -> float:
+        delay = 2.0
+        if value is not None:
+            try:
+                if value.isdecimal():
+                    delay = float(value)
+                else:
+                    date = parsedate_to_datetime(value)
+                    if date.tzinfo is not None:
+                        delay = max(0, date.timestamp() - time.time())
+            except (ValueError, TypeError, OverflowError):
+                pass
+        if delay > 10 or delay >= self.deadline - time.monotonic():
+            raise _RateLimited
+        return delay
 
 
 def _check_cancel(cancel: Callable[[], bool] | None) -> None:
@@ -93,15 +144,19 @@ def _checked_url(url: str, *, pdf: bool = False) -> str:
 
 
 def _fetch(
-    client: httpx.Client, url: str, *, pdf: bool = False,
+    client: httpx.Client, url: str, *, budget: _CollectionBudget, pdf: bool = False,
     params: dict[str, object] | None = None, cancel: Callable[[], bool] | None = None,
 ) -> tuple[bytes, str, str]:
     """Stream into a hard bound; validate every redirect before requesting it."""
     maximum = MAX_PDF_BYTES if pdf else MAX_JSON_BYTES
-    for redirect in range(4):
+    redirect, retried = 0, False
+    while True:
         _check_cancel(cancel)
         _checked_url(url, pdf=pdf)
-        with client.stream("GET", url, params=params, follow_redirects=False) as response:
+        timeout = budget.request_timeout(pdf=pdf, cancel=cancel)
+        budget.requests += 1
+        with client.stream("GET", url, params=params, follow_redirects=False, timeout=timeout) as response:
+            budget.wait(0, cancel)
             if response.url.scheme != "https" or response.url.host not in (PDF_HOSTS if pdf else {"api.crossref.org"}):
                 raise ValueError("Literature response escaped its allowed provider boundary")
             if response.status_code in (301, 302, 303, 307, 308):
@@ -110,19 +165,27 @@ def _fetch(
                     raise ValueError("Literature provider redirect was refused")
                 url = urljoin(str(response.url), location)
                 params = None
+                redirect, retried = redirect + 1, False
                 continue
+            if response.status_code == 429 and not pdf:
+                delay = budget.rate_delay(response.headers.get("retry-after"))
+                response.close()
+                budget.wait(delay, cancel)
+                if not retried and budget.retries < 3:
+                    budget.retries += 1
+                    retried = True
+                    continue
             response.raise_for_status()
             length = response.headers.get("content-length")
             if length and (not length.isdecimal() or int(length) > maximum):
                 raise ValueError("Literature response exceeds its size limit")
             content = bytearray()
             for chunk in response.iter_bytes():
-                _check_cancel(cancel)
+                budget.wait(0, cancel)
                 content.extend(chunk)
                 if len(content) > maximum:
                     raise ValueError("Literature response exceeds its size limit")
             return bytes(content), str(response.url), response.headers.get("content-type", "").lower()
-    raise ValueError("Literature provider redirect limit exceeded")
 
 
 def _prepare_root(root: Path) -> Path:
@@ -367,7 +430,9 @@ def collect(
     allowed full text is fetched. All queries are attempted before candidates
     are resolved in round-robin order. Explicit DOIs use an exact lookup;
     bibliographic searches do not exclude records without Crossref abstracts.
-    ``cancelled`` preserves partial evidence. Query provenance is not relevance.
+    Cancellation and the shared 90-second deadline preserve partial evidence,
+    with distinct ``cancelled`` and ``timed_out`` flags. A provider cooldown
+    beyond the remaining wait budget sets ``rate_limited``. Query provenance is not relevance.
     """
     if isinstance(limit, bool) or not isinstance(limit, int) or not 0 <= limit <= 12:
         raise ValueError("Literature source limit must be between 0 and 12")
@@ -384,26 +449,28 @@ def collect(
     candidates: list[list[str]] = []
     candidate_queries: dict[str, list[dict]] = {}
     exact_metadata: dict[str, tuple[bytes, str]] = {}
+    budget = _CollectionBudget()
     try:
         with httpx.Client(timeout=httpx.Timeout(15.0, connect=5.0), follow_redirects=False,
                           headers={"User-Agent": "PaperFactory/0.6 (bounded literature collector)"}) as client:
             for search in result["searches"]:
-                _check_cancel(cancel)
+                budget.wait(0, cancel)
                 query = search["query"]
                 search.update(status="failed", attempted=True)
                 query_candidates: list[str] = []
                 candidates.append(query_candidates)
+                initial_requests = budget.requests
                 try:
                     exact_doi = _query_doi(query)
                     search["lookup"] = "doi" if exact_doi else "bibliographic"
                     if exact_doi:
                         search["requested_doi"] = exact_doi
                         if exact_doi not in exact_metadata:
-                            content, url, _ = _fetch(client, CROSSREF + "/works/" + quote(exact_doi, safe=""), cancel=cancel)
+                            content, url, _ = _fetch(client, CROSSREF + "/works/" + quote(exact_doi, safe=""), cancel=cancel, budget=budget)
                         else:
                             content, url = exact_metadata[exact_doi]
                     else:
-                        content, url, _ = _fetch(client, CROSSREF + "/works", params={"query.bibliographic": query, "rows": max(1, limit)}, cancel=cancel)
+                        content, url, _ = _fetch(client, CROSSREF + "/works", params={"query.bibliographic": query, "rows": max(1, limit)}, cancel=cancel, budget=budget)
                     path, digest = _save(root, "search-" + hashlib.sha256(query.encode()).hexdigest()[:16], "json", content)
                     search.update({"url": url, "raw_path": path, "sha256": digest})
                     data = json.loads(content)
@@ -419,8 +486,16 @@ def collect(
                         if not isinstance(items, list):
                             raise ValueError("Crossref search did not return a result list")
                     search["status"] = "succeeded"
+                except (_Cancelled, _DeadlineExceeded, _RateLimited) as error:
+                    if budget.requests == initial_requests:
+                        search.update(status="not_attempted", attempted=False)
+                    elif isinstance(error, _RateLimited):
+                        search.update(error="HTTPStatusError", http_status=429)
+                    raise
                 except (ValueError, OSError, httpx.HTTPError) as error:
                     search["error"] = type(error).__name__
+                    if isinstance(error, httpx.HTTPStatusError):
+                        search["http_status"] = error.response.status_code
                     result["warnings"].append(f"Crossref search failed ({type(error).__name__}); no results were inferred")
                     continue
                 for item in items[:limit]:
@@ -439,7 +514,7 @@ def collect(
                 if sum(source["scope"] != "metadata_only" for source in result["sources"]) >= limit:
                     break
                 for query_candidates in candidates:
-                    _check_cancel(cancel)
+                    budget.wait(0, cancel)
                     if rank >= len(query_candidates):
                         continue
                     if sum(source["scope"] != "metadata_only" for source in result["sources"]) >= limit:
@@ -451,7 +526,7 @@ def collect(
                         if doi in exact_metadata:
                             metadata, metadata_url = exact_metadata[doi]
                         else:
-                            metadata, metadata_url, _ = _fetch(client, CROSSREF + "/works/" + quote(doi, safe=""), cancel=cancel)
+                            metadata, metadata_url, _ = _fetch(client, CROSSREF + "/works/" + quote(doi, safe=""), cancel=cancel, budget=budget)
                         document = json.loads(metadata)
                         resolved_doi, title, authors, year = _metadata(document)
                         if resolved_doi != doi:
@@ -466,33 +541,40 @@ def collect(
                                         "raw_path": metadata_path, "sha256": metadata_digest,
                                         "metadata_path": metadata_path, "metadata_sha256": metadata_digest,
                                         "queries": [search["query"] for search in candidate_queries[doi]]}
-                        for pdf_url in _pdf_links(document["message"]):
-                            _check_cancel(cancel)
-                            try:
-                                raw_pdf, retrieved_url, content_type = _fetch(client, pdf_url, pdf=True, cancel=cancel)
-                                if "pdf" not in content_type and content_type != "application/octet-stream":
-                                    raise ValueError("Open-access provider did not return a PDF content type")
-                                full_text = _pdf_text(raw_pdf)
-                                raw_path, raw_digest = _save(root, source_id + "-fulltext", "pdf", raw_pdf)
-                                text_path, text_digest = _save(root, source_id + "-text", "txt", full_text.encode())
-                                source.update({"scope": "full_text", "url": retrieved_url, "raw_path": raw_path,
-                                               "sha256": raw_digest, "excerpts": _excerpts(full_text),
-                                               "text_path": text_path, "text_sha256": text_digest})
-                                break
-                            except (ValueError, OSError, httpx.HTTPError) as error:
-                                result["warnings"].append(f"Open-access text unavailable for {source_id} ({type(error).__name__}); reading scope was not upgraded")
-                        seen.add(doi)
-                        if len(result["sources"]) < limit:
-                            result["sources"].append(source)
-                        elif source["scope"] != "metadata_only":
-                            replace = next((index for index, existing in enumerate(result["sources"])
-                                            if existing["scope"] == "metadata_only"), None)
-                            if replace is not None:
-                                result["sources"][replace] = source
-                        for search in candidate_queries[doi]:
-                            search["resolved_ids"].append(source_id)
+                        try:
+                            for pdf_url in _pdf_links(document["message"]):
+                                budget.wait(0, cancel)
+                                try:
+                                    raw_pdf, retrieved_url, content_type = _fetch(client, pdf_url, pdf=True, cancel=cancel, budget=budget)
+                                    if "pdf" not in content_type and content_type != "application/octet-stream":
+                                        raise ValueError("Open-access provider did not return a PDF content type")
+                                    # Reserve bounded extraction and owned-child cleanup before dispatch.
+                                    if budget.deadline - time.monotonic() < 18:
+                                        raise _DeadlineExceeded
+                                    full_text = _pdf_text(raw_pdf)
+                                    budget.wait(0, cancel)
+                                    raw_path, raw_digest = _save(root, source_id + "-fulltext", "pdf", raw_pdf)
+                                    text_path, text_digest = _save(root, source_id + "-text", "txt", full_text.encode())
+                                    source.update({"scope": "full_text", "url": retrieved_url, "raw_path": raw_path,
+                                                   "sha256": raw_digest, "excerpts": _excerpts(full_text),
+                                                   "text_path": text_path, "text_sha256": text_digest})
+                                    break
+                                except (ValueError, OSError, httpx.HTTPError) as error:
+                                    result["warnings"].append(f"Open-access text unavailable for {source_id} ({type(error).__name__}); reading scope was not upgraded")
+                        finally:
+                            seen.add(doi)
+                            if len(result["sources"]) < limit:
+                                result["sources"].append(source)
+                            elif source["scope"] != "metadata_only":
+                                replace = next((index for index, existing in enumerate(result["sources"])
+                                                if existing["scope"] == "metadata_only"), None)
+                                if replace is not None:
+                                    result["sources"][replace] = source
+                            for search in candidate_queries[doi]:
+                                search["resolved_ids"].append(source_id)
                     except (ValueError, OSError, httpx.HTTPError) as error:
                         result["warnings"].append(f"Crossref candidate verification failed ({type(error).__name__}); candidate was omitted")
+            budget.wait(0, cancel)
     except (ValueError, OSError, httpx.HTTPError) as error:
         for search in result["searches"]:
             if not search["attempted"]:
@@ -501,6 +583,12 @@ def collect(
     except _Cancelled:
         result["cancelled"] = True
         result["warnings"].append("Literature collection was cancelled; partial evidence was preserved")
+    except _DeadlineExceeded:
+        result["timed_out"] = True
+        result["warnings"].append("Literature collection exceeded its time budget; partial evidence was preserved")
+    except _RateLimited:
+        result["rate_limited"] = True
+        result["warnings"].append("Literature provider cooldown exceeded the wait budget; partial evidence was preserved")
     if not any(source["scope"] in {"abstract", "full_text"} for source in result["sources"]):
         result["warnings"].append("No abstract or full text was inspected in this collection attempt. Metadata does not establish related-work findings or novelty")
     return result
