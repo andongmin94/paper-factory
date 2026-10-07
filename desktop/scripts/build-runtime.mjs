@@ -320,7 +320,8 @@ if (platform === 'darwin') {
   }
 }
 await run(bootstrap, ['-I', '-B', helper, 'quickjs', quickjsArchive, join(attempt, 'quickjs-extracted'), quickjsMetadata], environment, 'quickjs-extract');
-await rename(join(attempt, 'quickjs-extracted', 'quickjs-runtime'), join(staging, 'quickjs-runtime'));
+await cp(join(attempt, 'quickjs-extracted', 'quickjs-runtime'), join(staging, 'quickjs-runtime'),
+  { recursive: true, errorOnExist: true, force: false });
 
 const enginePackage = join(sitePackages, 'paper_factory');
 await cp(join(repository, 'src', 'paper_factory'), enginePackage, { recursive: true, filter: (source) => !source.split(sep).some((name) => name === '__pycache__') && !/\.py[co]$/.test(source) });

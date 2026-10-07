@@ -817,7 +817,7 @@ class WorkflowService:
         if collection is not None:
             coverage = {key: collection.get(key, False) for key in ("cancelled", "timed_out", "rate_limited")}
             coverage.update(quality_status=collection.get("quality_status"),
-                searches=[{key: search[key] for key in ("query", "status", "attempted", "error", "http_status", "resolved_ids")
+                searches=[{key: search[key] for key in ("query", "provider", "lookup", "status", "attempted", "error", "http_status", "resolved_ids", "note")
                            if key in search} for search in collection.get("searches", [])],
                 warnings=[_diagnostic(warning, 300) for warning in collection.get("warnings", [])[:20]])
         if "authoring-selected-literature" not in record.artifacts:

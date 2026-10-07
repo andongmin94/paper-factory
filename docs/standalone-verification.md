@@ -807,3 +807,35 @@ Windows에서 부모 연구의 원고 보완 문헌을 후속 연구에 복사�
 기존 공식 연결을 사용한 실제 재개 `recovery-runs/c2e0bf4b49c7`에서 후속 연구 `research-20a75869ebbb`의 두 번째 설계 심사를 완료했다. `accepted=false`, 신규성 실패, 중요성과 검증 계획은 잠정 통과다. 사전 지정한 목표의 도달성, 모든 최적 정렬에서의 가능성, 하나의 review가 목표를 함께 제공할 가능성을 구분하는 설계는 유용하지만 최근접 복수 대응·선택적 적용 문헌 본문을 확보하지 못했다. 검사한 Git 본문만으로 신규성을 선언하거나 metadata-only·무관한 초록을 본문 근거로 계산하지 않았다. 별도 읽기 전용 감사도 이 반려를 타당하게 평가했다. 보고서 `verification/child-study-review2-independent-audit.json`은 12,811 B, SHA256 `ada57476b4bcf942b95649069a360555d32c90cc17574b767810b9e0eec869ba`이며 세 실제 인용문과 원문 범위·모델 영수증·설계 결합을 확인했다.
 
 앱은 같은 과학 설계를 유지한 세 번째 계획을 생성했다. 이 계획은 직접 arXiv 식별자를 제안하지 않았으므로 별도 probe의 성공을 실제 앱의 arXiv 문헌 선정으로 표현하지 않는다. 원문 발췌가 절 제목을 단어 prefix로 오인하고 같은 종류의 첫 절에 치우치는 일반 문제를 발견해 세 번째 문헌 수집 중 협력 중단했다. `shutdownConfirmed=true`, 새 과학실험·완료 원고는 없다. 원래 부모 SCI 1회와 900개 입력 쌍·10,800개 관측, 후속 설계·반려·모델 이력은 보존하며 다음 개선에서 같은 성공 실험을 반복하지 않는다. 0.14.8 구현·설계 검토·파일 검증을 투고 가능한 원고 생성 성공으로 계산하지 않는다. 새 설치·OAuth·로그인 복원은 여전히 미검증이며 GitHub Releases에는 게시하지 않았다.
+
+중단 뒤 별도 읽기 전용 감사는 부모 210개·후속 연구 185개 artifact, 두 연구의 원본 파일 928개, 이전 연구에서 복사한 92개 기록의 실제 바이트를 검증했다. 옮겨진 proposal·literature 별칭은 같은 해시의 변경 불가 이력에 남아 있다. 부모의 SCI 1회·원시 관측·프로토콜·실행 원본 SHA는 그대로이며, 후속 연구는 proposal 3회·SCI 0회·현재 심사/계획/실험 코드 없음·준비 재개 가능 상태다. 문헌 부분 기록은 `cancelled=true`이며 초록·metadata 자료만 있으므로 완료된 본문 회수로 계산하지 않는다. 두 소유 PID의 종료와 정리, 읽기 전용 DB 전후 해시 불변도 확인했다. 감사 보고서 `recovery-runs/c2e0bf4b49c7/preparation-checkpoint-verification.json`은 149,175 B, SHA256 `9a0c38e9959e1c81a077b62dc6a2f0390d16942a89675de163850c5c972afe99`다.
+
+## 0.14.9 정확한 제목과 본문 발췌: 2026-10-07
+
+실제 세 번째 제안은 Greenberg의 논문 제목을 요청했지만 arXiv 식별자를 제공하지 않았다. 식별자를 아는 별도 probe만 성공해서는 이 앱 흐름을 해결할 수 없었다. 이제 DOI가 아닌 질의는 arXiv의 전체 제목을 먼저 조회한다. 전체 결과 수와 반환 항목 수가 같고 3개 이내이며, 모든 항목의 제목이 유효하고 정규화한 전체 제목이 유일하게 일치해야 채택한다. 비슷한 제목·중복·잘린 결과·빈 제목·중첩 제목은 거부한다. DOI·식별자를 추측하거나 preprint를 학술지 출판본으로 승격하지 않는다. 부정 검색은 arXiv의 별도 기록으로 보존하고 같은 질의의 Crossref 결과와 구분한다. 완료된 XML과 정확한 버전의 PDF·추출 텍스트는 원래 바이트와 해시로 보존한다. HTTP 실패나 중단된 응답의 완전한 바이트까지 보존했다고 주장하지 않는다.
+
+이전 발췌기는 abstract의 `results of…`를 절 제목으로 취급하거나 여러 Methods·Results 중 앞부분만 선택했다. 새 발췌기는 실제 본문 범위 안에서 첫·마지막 부분, 독립된 절 제목, 여러 방법·결과 절을 앞·뒤에 분산해 선택한다. 식별자·DOI를 의미 검색어로 사용하지 않으며, 나머지 발췌도 본문 전체에 분산한다. 최대 12개·각 1,500자와 원래 offset·페이지를 유지하고 PDF·텍스트 원본은 바꾸지 않는다. 알려진 참고문헌 경계 밖은 비교 근거로 인증하지 않는다. 확보된 본문의 길이와 중복에 따라 10개 등 더 적은 발췌도 정상이다. 작성용 검색 범위에도 `provider/lookup/note`를 전달해 같은 질의의 부정 검색과 서지 결과를 혼동하지 않게 했다.
+
+실제 제안의 여섯 질의로 수행한 별도 39.75초 회수 probe는 Greenberg의 `cs/0211001v2`를 정확한 제목으로 얻었다. 원래 Atom XML SHA256은 `48d1be421286a6ee632ddc576fcbb23cfecd1e0e2fd8956b6da8dd1f6959521b`, PDF SHA256은 `b1d204393f0d636c0f0ea18dc95bf4cab4f83ac9c947dd5d6c9ab40e735b31d3`다. 실제 앱에서도 이 원문을 회수했고 아래 별도 심사에 전달했다. 원문 확보는 전체 분야의 문헌 공백이나 신규성을 입증하지 않는다.
+
+| 최종 0.14.9 검사 | 결과와 범위 |
+| --- | --- |
+| 문헌 관련 3모듈 | 213 통과·3 Windows symlink 권한 건너뜀, 36.38초. 정확한 제목·모호한 응답·버전 결합·literal 본문 발췌·실제 PDF child·기존 회수 계약 |
+| 연구·원고 관련 검사 | 329 통과, 261.24초. 최종 검색 범위 projection 변경 전 전체 검사. 변경 후 관련 6개 통과, XML fixture 보강 후 4개 통과 |
+| 데스크톱 빌드 | 0.14.9 typecheck·bundle·renderer build 통과. 이전 0.14.8 데스크톱 297·SDK 48 및 0.14.7 숨김 Electron 13 검사 이력과 구분 |
+| 포함 Windows runtime | Python 3.14.8·Node 24.21.0·QuickJS 실제 호스트 probe 통과. inventory 2,218파일·473,634,424 B, SHA256 `deadd0384f1b69b0f2c464948870052fa78a192721c262c9555bd36924609df6` |
+| 포함 PDF와 재실행 | 실제 `1311.3903v1`의 12개 literal 발췌·원문 해시 확인. 수집 전후 inventory 2,218개·전체 파일 2,219개의 목록·크기·SHA 불변. 이후 EngineBridge 재시작·workflow 조회 성공. SCI·모델 요청 없음 |
+| 최종 패키지 정적 검사 | 새 출력 폴더와 `desktop/release/` 복사본 모두 ASAR 7,667항목·SDK import·renderer·Pretendard·엔진 소스·런타임 전수 검증 |
+
+검사 그룹은 겹치므로 합산하지 않는다. 문헌 최종 로그는 `.paper-factory/arxiv-primary-design-20261007/tests-title-excerpt-hardened-final-0149.log`, 다른 최종 로그는 `.paper-factory/submission-quality-20261007/verification/`의 `title-native-workflow-0149-final.log`, `title-coverage-projection-0149-final.log`, `title-coverage-projection-0149-xml-final.log`, `title-runtime-0149-materialized-final.log`, `title-bundled-runtime-0149-final.log`, `title-engine-restart-0149-final.log`, `title-package-default-release-0149-final.log`다. 처음의 중복 제목 회귀 실패·잘못된 XML namespace fixture 실패와 수정 결과도 보존한다.
+
+새 runtime의 QuickJS staging rename에서도 Windows `EPERM`이 반복됐다. 이를 고유한 fresh staging 안의 명시적 복사로 바꾸고 archive·내부 52파일·실제 호스트·최종 inventory 검증을 거친 뒤 게시한다. 독립 검토도 52개 파일의 실제 이름·크기·SHA와 원래 inventory 바이트를 확인했다. 첫 0.14.9 packaging의 별도 `win-unpacked.tmp` rename은 다시 실패했고, 새 출력 폴더에서 재시도해 성공했다. 이 두 현상이 같은 원인이라고 단정하거나 QuickJS 변경이 Electron-builder의 rename까지 고쳤다고 표현하지 않는다. 실패 로그를 보존하고 0.14.8 배포 폴더 전체를 `verification/preserved-windows-release-0148/`에 남겼다.
+
+| 최종 배포 파일 | 크기(B) | SHA256 |
+| --- | ---: | --- |
+| Paper Factory Setup 0.14.9.exe | 213,030,782 | 0abda98cec072a76a49a2537df99dc9812e30a7bd6bb31afff939824c297afe8 |
+| win-unpacked/resources/app.asar | 44,757,936 | 9ce8924df6b7de702f1a1e3f29d453061750acabd705bf77b1e68e4682ce715a |
+
+실제 0.14.9 평가 `qpos/2dd124a6459a/recovery-runs/a75c65c2403f`는 기존 공식 연결·ResearchController·포함 엔진으로 세 번째 설계의 문헌 수집과 별도 `gpt-6-astra` 심사를 마쳤다. 모델에는 Greenberg 본문 10개 발췌가 전달됐으며 Section 2의 LCS마다 대표 embedding 하나와 Section 3의 모든 embedding 열거를 구분했다. 리뷰는 0·8·9를 선택하고 `accepted=false`, 기여·신규성 실패, 나머지 설계 기준 및 한정된 중요성·검증 계획은 잠정 통과로 판단했다. 알려진 열거 방법을 새 발견으로 승인하지 않았다. 선택적 undo·변경 적용 자료는 metadata-only였고, 보존된 부모 Git 원문도 이번 검색 packet에 없어 이전 요약을 새 본문 읽기로 대체할 수 없었다.
+
+읽기 전용 독립 감사도 이 반려를 타당하게 평가했다. 실제 proposal·literature·native review·모델 시작/완료 영수증·prompt·text의 전체 해시, canonical 원문 버전·PDF·포함 런타임의 추출 텍스트, 본문 `[959,24969)`·10개 발췌·두 최근접 인용문 offset을 대조했다. 보고서 `verification/child-study-review3-independent-audit.json`은 18,181 B, SHA256 `11cf1cf7acd9ee7251a24231fefe9d012c341555383883cbc35ded8353d262f6`이다. 부모 SCI 1회·원본 관측·프로토콜·artifact는 그대로이며 후속 연구 SCI는 0회다. `paperGenerated=false`, `shutdownConfirmed=true`이고 새 protocol·코드·완료 원고는 없다. 이 결과는 문헌 수집과 올바른 반려의 확인이며 투고 준비도 통과나 논문 생성 성공이 아니다. 남은 제품 결손은 부족한 문헌의 추가 수집이 같은 연구의 제안 횟수를 소모하는 흐름과 선택적 적용 본문 회수 범위다. 새 설치·OAuth·macOS 실행은 미검증이며 GitHub Releases에는 게시하지 않았다.

@@ -258,44 +258,55 @@ def _excerpts(text: str) -> list[str]:
 
 
 def _full_text_excerpts(text: str, queries: list[str]) -> tuple[list[str], list[dict[str, int]]]:
-    """Retain literal, located passages across the paper, not only its opening."""
-    if len(text) <= MAX_EXCERPT_CHARS:
-        starts = [0]
-    else:
-        starts = [0, len(text) - MAX_EXCERPT_CHARS]
-        # Prefer actual section openings before filling with query matches and
-        # evenly spaced passages. The source text remains complete and immutable.
-        headings = ("related work|background", "method(?:s|ology)?|analysis design",
-                    "results?|evaluation", "discussion|implications?", "threats? to validity|limitations?",
-                    "conclusions?")
-        for heading in headings:
-            match = re.search(r"(?mi)^\s*(?:\d+(?:\.\d+)*\.?\s+)?(?:" + heading + r")\b", text)
-            if match:
-                start = min(match.start(), len(text) - MAX_EXCERPT_CHARS)
-                if all(abs(start - previous) >= MAX_EXCERPT_CHARS for previous in starts):
-                    starts.append(start)
-        stop_words = {"https", "http", "with", "from", "that", "this", "different", "which", "using", "study"}
-        terms = {term.casefold() for query in queries for term in re.findall(r"[^\W\d_]{4,}", query)
-                 if term.casefold() not in stop_words}
-        windows = range(0, len(text), MAX_EXCERPT_CHARS)
-        ranked = sorted(windows, key=lambda start: (-sum(term in text[start:start + MAX_EXCERPT_CHARS].casefold()
-                                                        for term in terms), start))
-        for start in ranked:
-            if len(starts) >= min(MAX_EXCERPTS - 3, 9) or not terms:
+    """Sample literal body passages across repeated methods/results sections."""
+    body = full_text_body_range(text)
+    lower, upper = (body["start"], body["end"]) if body else (0, len(text))
+    last = max(lower, upper - MAX_EXCERPT_CHARS)
+    starts = [lower] if last == lower else [lower, last]
+
+    def add(start: int) -> None:
+        start = min(max(start, lower), last)
+        if len(starts) < MAX_EXCERPTS and all(abs(start - previous) >= MAX_EXCERPT_CHARS for previous in starts):
+            starts.append(start)
+
+    def outer_first(positions: list[int]) -> list[int]:
+        # First, last, second, penultimate: late sections cannot be crowded out
+        # by a long run of earlier sections or equally scored query windows.
+        return [positions[index // 2 if index % 2 == 0 else -1 - index // 2] for index in range(len(positions))]
+
+    headings = ("related work|background", "method(?:s|ology)?|analysis design", "results?|evaluation",
+                "discussions?|implications?", "threats? to validity|limitations?", "conclusions?")
+    groups = []
+    for heading in headings:
+        # Unnumbered headings must occupy their entire line. Numbered headings
+        # may have a title suffix, but prose such as "results of ..." is not a heading.
+        pattern = (r"(?mi)^[ \t]*(?:(?:\d+(?:\.\d+)*|[IVX]+)\.?[ \t]+(?:" + heading +
+                   r")\b[^\n]{0,100}|(?:" + heading + r")[ \t]*)$")
+        groups.append(outer_first([match.start() for match in re.finditer(pattern, text)
+                                   if lower <= match.start() < upper]))
+    for rank in range(max(map(len, groups), default=0)):
+        for positions in groups:
+            if rank < len(positions):
+                add(positions[rank])
+
+    stop_words = {"https", "http", "with", "from", "that", "this", "different", "which", "using", "study", "arxiv", "doi"}
+    semantic_queries = [query for query in queries if not _is_arxiv_query(query) and _query_doi(query) is None]
+    terms = {term.casefold() for query in semantic_queries for term in re.findall(r"[^\W\d_]{4,}", query)
+             if term.casefold() not in stop_words}
+    scores = [(sum(term in text[start:min(start + MAX_EXCERPT_CHARS, upper)].casefold() for term in terms), start)
+              for start in range(lower, upper, MAX_EXCERPT_CHARS)]
+    for score in sorted({score for score, _ in scores if score > 0}, reverse=True):
+        for start in outer_first([start for value, start in scores if value == score]):
+            if len(starts) >= MAX_EXCERPTS - 3:
                 break
-            start = min(start, len(text) - MAX_EXCERPT_CHARS)
-            if all(abs(start - previous) >= MAX_EXCERPT_CHARS for previous in starts):
-                starts.append(start)
-        for index in range(1, MAX_EXCERPTS):
-            if len(starts) >= MAX_EXCERPTS:
-                break
-            start = min(index * len(text) // MAX_EXCERPTS, len(text) - MAX_EXCERPT_CHARS)
-            if all(abs(start - previous) >= MAX_EXCERPT_CHARS for previous in starts):
-                starts.append(start)
+            add(start)
+    remaining = MAX_EXCERPTS - len(starts)
+    for index in range(1, remaining + 1):
+        add(lower + index * (upper - lower) // (remaining + 1))
     excerpts, ranges = [], []
     pages = [(match.start(), int(match.group(1))) for match in re.finditer(r"\[Page (\d+)\]\n", text)]
     for start in sorted(starts):
-        end = min(start + MAX_EXCERPT_CHARS, len(text))
+        end = min(start + MAX_EXCERPT_CHARS, upper)
         location = {"start": start, "end": end}
         for key, offset in (("page_start", start), ("page_end", end - 1)):
             page = next((page for position, page in reversed(pages) if position <= offset), None)
@@ -378,12 +389,9 @@ def _arxiv_match(content: bytes, doi: str, title: str) -> tuple[str, str] | None
     return matches[0]
 
 
-def _arxiv_metadata(content: bytes, requested: str) -> dict:
-    """Bind one explicit lookup to its actual version, without a publication claim."""
-    entries = _arxiv_entries(content)
-    if len(entries) != 1:
-        raise ValueError("An explicit arXiv lookup requires one unambiguous entry")
-    entry, values = entries[0], {}
+def _arxiv_record(entry: ET.Element) -> dict:
+    """Validate one canonical preprint entry without a journal publication claim."""
+    values = {}
     for field in ("id", "title", "published", "updated"):
         elements = entry.findall(ATOM + field)
         if len(elements) != 1 or len(elements[0]) or not elements[0].text or not elements[0].text.strip():
@@ -393,8 +401,6 @@ def _arxiv_metadata(content: bytes, requested: str) -> dict:
     if match is None or not re.search(r"v[1-9]\d*$", match.group(1)):
         raise ValueError("arXiv entry has no canonical versioned identifier")
     identifier = match.group(1)
-    if (identifier if re.search(r"v[1-9]\d*$", requested) else re.sub(r"v[1-9]\d*$", "", identifier)) != requested:
-        raise ValueError("arXiv resolved a different identifier or version")
     title = " ".join(values["title"].split())
     if len(title) > 4000:
         raise ValueError("arXiv title exceeds its metadata limit")
@@ -424,6 +430,70 @@ def _arxiv_metadata(content: bytes, requested: str) -> dict:
     return {"arxiv_id": identifier, "title": title, "authors": authors,
             "year": dates["published"].year, "published": values["published"], "updated": values["updated"],
             "provider": "arXiv", "publication_type": "preprint", "abstract": _abstract(summary)}
+
+
+def _arxiv_metadata(content: bytes, requested: str) -> dict:
+    """Bind one explicit lookup to its actual version, without a publication claim."""
+    entries = _arxiv_entries(content)
+    if len(entries) != 1:
+        raise ValueError("An explicit arXiv lookup requires one unambiguous entry")
+    record = _arxiv_record(entries[0])
+    identifier = record["arxiv_id"]
+    if (identifier if re.search(r"v[1-9]\d*$", requested) else re.sub(r"v[1-9]\d*$", "", identifier)) != requested:
+        raise ValueError("arXiv resolved a different identifier or version")
+    return record
+
+
+def _arxiv_title_metadata(content: bytes, title: str) -> dict | None:
+    """A complete small feed must have exactly one normalized full-title match."""
+    entries = _arxiv_entries(content)
+    feed = ET.fromstring(content.decode("utf-8-sig"))
+    totals = feed.findall("{http://a9.com/-/spec/opensearch/1.1/}totalResults")
+    if (len(totals) != 1 or not totals[0].text or not totals[0].text.isdecimal() or
+            int(totals[0].text) != len(entries) or int(totals[0].text) > 3):
+        raise ValueError("arXiv exact-title lookup requires a complete bounded result set")
+    titles = [entry.findall(ATOM + "title") for entry in entries]
+    if any(len(fields) != 1 or len(fields[0]) or not fields[0].text or not fields[0].text.strip() for fields in titles):
+        raise ValueError("arXiv exact-title candidates require single nonempty plain-text titles")
+    matches = [entry for entry in entries if _title_key(entry.findtext(ATOM + "title", "")) == _title_key(title)]
+    if len(matches) > 1:
+        raise ValueError("arXiv exact title is ambiguous; provide an explicit identifier")
+    return _arxiv_record(matches[0]) if matches else None
+
+
+def _arxiv_title_lookup(client: httpx.Client, query: str, root: Path, search: dict, *, budget: _CollectionBudget,
+                        cancel: Callable[[], bool] | None, warnings: list[str]) -> tuple[bytes, str, dict] | None:
+    """Preserve each exact-title attempt, including failed or empty discovery."""
+    search.update(provider="arXiv", lookup="exact_title")
+    initial_requests = budget.requests
+    try:
+        title_query = " ".join(re.findall(r"\w+", query))
+        if not title_query:
+            raise ValueError("arXiv exact-title query has no searchable title")
+        content, url, content_type = _fetch(client, ARXIV, budget=budget, cancel=cancel,
+            params={"search_query": 'ti:"' + title_query + '"', "max_results": 3})
+        if content_type.split(";", 1)[0].strip() not in {"application/atom+xml", "application/xml", "text/xml"}:
+            raise ValueError("arXiv lookup did not return XML content")
+        path, digest = _save(root, "search-" + hashlib.sha256(query.encode()).hexdigest()[:16], "xml", content)
+        search.update(url=url, raw_path=path, sha256=digest)
+        details = _arxiv_title_metadata(content, query)
+        search["status"] = "succeeded"
+        if details is None:
+            search["note"] = "No unique exact-title preprint was resolved; this is not evidence that relevant work is absent"
+        return (content, url, details) if details is not None else None
+    except (_Cancelled, _DeadlineExceeded, _RateLimited) as error:
+        if budget.requests == initial_requests:
+            search.update(status="not_attempted", attempted=False)
+        elif isinstance(error, _RateLimited):
+            search.update(error="HTTPStatusError", http_status=429)
+        raise
+    except (ValueError, OSError, httpx.HTTPError) as error:
+        search["error"] = type(error).__name__
+        search["note"] = "Exact-title identity could not be established; provide an explicit arXiv identifier if known"
+        if isinstance(error, httpx.HTTPStatusError):
+            search["http_status"] = error.response.status_code
+        warnings.append(f"arXiv exact-title discovery unavailable ({type(error).__name__}); no preprint identity was assumed")
+        return None
 
 
 def _arxiv_pdf(client: httpx.Client, source: dict, root: Path, *, budget: _CollectionBudget,
@@ -666,8 +736,9 @@ def collect(
     ``raw_path`` is relative to ``root`` and points to the artifact supporting
     the declared reading scope. Metadata remains separately recorded when an
     allowed full text is fetched. All queries are attempted before candidates
-    are resolved in round-robin order. Explicit arXiv lookups precede Crossref
-    searches and bind the actual preprint version. Other DOIs use an exact lookup;
+    are resolved in round-robin order. Explicit and unique exact-title arXiv
+    lookups bind the actual preprint version and precede bibliographic candidates.
+    Other DOIs use an exact Crossref lookup;
     bibliographic searches do not exclude records without Crossref abstracts.
     Cancellation and the shared 90-second deadline preserve partial evidence,
     with distinct ``cancelled`` and ``timed_out`` flags. A provider cooldown
@@ -695,7 +766,7 @@ def collect(
     try:
         with httpx.Client(timeout=httpx.Timeout(15.0, connect=5.0), follow_redirects=False,
                           headers={"User-Agent": "PaperFactory/0.6 (bounded literature collector)"}) as client:
-            for search in result["searches"]:
+            for search in list(result["searches"]):
                 budget.wait(0, cancel)
                 query = search["query"]
                 search.update(status="failed", attempted=True)
@@ -726,6 +797,24 @@ def collect(
                         search["status"] = "succeeded"
                         continue
                     exact_doi = _query_doi(query)
+                    if exact_doi is None:
+                        resolved = _arxiv_title_lookup(client, query, root, search, budget=budget, cancel=cancel,
+                                                       warnings=result["warnings"])
+                        if resolved is not None:
+                            content, url, details = resolved
+                            key = "arxiv:" + details["arxiv_id"]
+                            arxiv_metadata.setdefault(key, (content, url, details))
+                            if limit:
+                                query_candidates.append(key)
+                                candidate_queries.setdefault(key, []).append(search)
+                            continue
+                        if search["provider"] == "arXiv":
+                            # Retain negative discovery separately before the
+                            # original query continues as a Crossref search.
+                            result["searches"].append(dict(search))
+                            search.clear()
+                            search.update(query=query, provider="Crossref", status="failed", attempted=True, resolved_ids=[])
+                        initial_requests = budget.requests
                     search["lookup"] = "doi" if exact_doi else "bibliographic"
                     if exact_doi:
                         search["requested_doi"] = exact_doi
@@ -774,6 +863,7 @@ def collect(
                     except ValueError as error:
                         result["warnings"].append(f"Crossref candidate verification failed ({type(error).__name__}); candidate was omitted")
 
+            candidates.sort(key=lambda batch: not batch or batch[0] not in arxiv_metadata)
             for rank in range(limit):
                 if sum(source["scope"] != "metadata_only" for source in result["sources"]) >= limit:
                     break

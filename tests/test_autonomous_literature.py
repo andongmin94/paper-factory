@@ -33,7 +33,11 @@ def record(doi="10.1234/test", *, abstract=None, links=None):
     return {"status": "ok", "message": message}
 
 
-def mocked(monkeypatch, handler):
+def mocked(monkeypatch, handler, *, title_discovery=False):
+    # Most fixtures target Crossref or explicit-ID/discovery behavior. Exact-title
+    # provider tests opt into the complete multi-provider flow separately.
+    if not title_discovery:
+        monkeypatch.setattr(literature, "_arxiv_title_lookup", lambda *args, **kwargs: None)
     original = httpx.Client
     requests = []
 

@@ -297,6 +297,15 @@ def test_bounded_negative_authoring_search_is_retained_without_aborting_usable_e
     before = {key: service.artifact_path(research_id, key).read_bytes() for key in ("plan", "literature", "selected-literature", "observations", "analysis", "execution")}
     def unavailable(*args, **kwargs):
         evidence = collect(*args, **kwargs)
+        query = args[0][0]
+        empty_feed = b'<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/"><opensearch:totalResults>0</opensearch:totalResults></feed>'
+        empty_path = args[1] / "empty-title-discovery.xml"
+        empty_path.write_bytes(empty_feed)
+        evidence["searches"] = [{"query": query, "provider": "arXiv", "lookup": "exact_title",
+            "status": "succeeded", "attempted": True, "resolved_ids": [],
+            "note": "No unique exact-title preprint was resolved; this is not evidence that relevant work is absent",
+            "raw_path": empty_path.name, "sha256": hashlib.sha256(empty_feed).hexdigest()},
+            {**evidence["searches"][0], "provider": "Crossref", "lookup": "bibliographic"}]
         if outcome == "no_sources":
             evidence["sources"] = []
         elif outcome == "abstract_only":
@@ -311,6 +320,10 @@ def test_bounded_negative_authoring_search_is_retained_without_aborting_usable_e
     coverage = state["literature"]["authoring_collection"]
     assert coverage["quality_status"] == state["authoring_literature"]["quality_status"]
     assert coverage["searches"][0]["query"] == "Retrieve relevant original methods and results"
+    assert [(search["provider"], search["lookup"]) for search in coverage["searches"]] == [
+        ("arXiv", "exact_title"), ("Crossref", "bibliographic")]
+    assert coverage["searches"][0]["resolved_ids"] == []
+    assert "not evidence that relevant work is absent" in coverage["searches"][0]["note"]
     assert not {"raw_path", "sha256"} & coverage["searches"][0].keys()
     assert all(service.artifact_path(research_id, key).read_bytes() == value for key, value in before.items())
     if outcome != "no_sources":
