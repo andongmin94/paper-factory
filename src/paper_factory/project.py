@@ -148,8 +148,6 @@ def _github_checkout(source: str, destination: Path) -> tuple[str, dict]:
             names.add(relative.casefold())
             if item.is_dir():
                 continue
-            if item.file_size > 8 * 1024 * 1024:
-                raise ValueError("Public repository file exceeds its byte limit")
             if any(part.casefold() in IGNORED_DIRECTORIES or _secret(Path(part)) for part in Path(relative).parts):
                 continue
             target.parent.mkdir(parents=True, exist_ok=True)

@@ -23,6 +23,11 @@ from paper_factory.autonomous.quickjs_runner import QuickJSRunner
 
 RUNTIME_ASSETS = Path(__file__).resolve().parents[1] / "desktop/runtime-inputs/assets"
 SOURCE = "module.exports = {calculate(x) { return x + 1; }};\n"
+SCIENTIFIC_KEY = "supporting-document-0123456789ab"
+
+
+def scientific_record(text: str = "Original evidence", name: str = "source.md") -> dict:
+    return {"name": name, "text": text, "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest()}
 
 
 def experiment(body: str) -> str:
@@ -186,6 +191,207 @@ def failed_observed(result):
 
 
 @pytest.mark.parametrize("runner", ["private", "provided"], indirect=True)
+def test_scientific_inputs_are_exact_read_only_text_in_experiment_guest_only(runner, inputs):
+    original = "\ufeff# 원문\r\n가🙂 \\\"quoted\\\"\r\n"
+    document = scientific_record(original)
+    source = scientific_record("export const component = <div>read only text</div>;\n", "component.tsx")
+    (inputs[0] / "source.js").write_text(
+        "module.exports={calculate(x){return typeof readScientificInput === 'undefined' ? x+1 : -100}};", encoding="utf-8")
+    code = experiment("""
+        const gate = readScientificInput;
+        if (readScientificInput !== gate) throw Error('Input gate identity unstable');
+        const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'readScientificInput');
+        if (descriptor.writable || descriptor.configurable) throw Error('Writable input gate');
+        try { globalThis.readScientificInput = () => 'forged'; } catch {}
+        if (readScientificInput !== gate) throw Error('Input gate assignment succeeded');
+        try { Object.defineProperty(globalThis, 'readScientificInput', {value: () => 'forged'}); } catch {}
+        if (readScientificInput !== gate) throw Error('Input gate redefinition succeeded');
+        const first = JSON.parse(readScientificInput('supporting-document-0123456789ab'));
+        first.text = 'forged'; first.sha256 = '0'.repeat(64); first.name = 'replaced.md';
+        const second = JSON.parse(readScientificInput('supporting-document-0123456789ab'));
+        const source = JSON.parse(readScientificInput('source/component.tsx'));
+        if (!source.text.includes('<div>read only text</div>')) throw Error('TSX source text changed');
+        const fixture = JSON.parse(retainFixture('original', second.text));
+        const value = JSON.parse(callProduction('[41]'));
+        """ + envelope(fixtures="[fixture]"))
+    result = run(runner, inputs, code, scientific_inputs={SCIENTIFIC_KEY: document, "source/component.tsx": source})
+    assert result["status"] == "succeeded", result["stderr"]
+    fixture = observed(result)["fixtures"][0]
+    assert base64.b64decode(fixture["content"]) == original.encode("utf-8")
+    assert fixture["sha256"] == document["sha256"]
+    receipt = manifest(inputs)
+    assert receipt["scientific_inputs"] == {
+        key: {"name": item["name"], "sha256": item["sha256"], "size": len(item["text"].encode("utf-8"))}
+        for key, item in ((SCIENTIFIC_KEY, document), ("source/component.tsx", source))}
+    assert receipt["scientific_input_reads"] == 3
+    encoded = lambda item: len(json.dumps(item, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    assert receipt["scientific_input_read_bytes"] == 2 * encoded(document) + encoded(source)
+    assert receipt["scientific_input_bytes"] == len(original.encode("utf-8")) + len(source["text"].encode("utf-8"))
+    assert observed(result)["observations"][0]["value"] == 42
+
+
+@pytest.mark.parametrize("argument", [
+    "", "undefined", "null", "0", "{}", "'unknown'", "'source/../host.txt'",
+    "'supporting-document-0123456789ab\\u0000'", "'\\ud800'", "'supporting-document-0123456789ab', 'extra'",
+])
+def test_caught_invalid_scientific_read_is_fatal_without_production_dispatch(runner, inputs, argument):
+    code = experiment("let denied=false; try { readScientificInput(" + argument + "); } catch { denied=true; }\n"
+                      "const value=denied ? 1 : 0;\n" + envelope())
+    result = run(runner, inputs, code, scientific_inputs={SCIENTIFIC_KEY: scientific_record()})
+    assert failed_observed(result)["observations"][0]["value"] == 1
+    assert result["production_calls"] == []
+    assert manifest(inputs)["scientific_input_reads"] == 0
+    assert manifest(inputs)["fatal_infrastructure_failure"] is not None
+
+
+@pytest.mark.parametrize("reads", [512, 513])
+def test_scientific_read_count_boundary_cannot_be_caught_into_success(runner, inputs, reads):
+    code = experiment("let denied=0; for (let i=0;i<" + str(reads) + ";i++) {\n"
+                      "try { readScientificInput('supporting-document-0123456789ab'); } catch { denied++; }}\n"
+                      "const value=denied;\n" + envelope())
+    result = run(runner, inputs, code, scientific_inputs={SCIENTIFIC_KEY: scientific_record("x")})
+    actual = observed(result) if reads == 512 else failed_observed(result)
+    assert actual["observations"][0]["value"] == reads - 512
+    assert manifest(inputs)["scientific_input_reads"] == 512
+
+
+@pytest.mark.parametrize("overflow", [False, True])
+def test_scientific_read_byte_boundary_counts_exact_returned_utf8_json(runner, inputs, overflow):
+    empty = scientific_record("")
+    overhead = len(json.dumps(empty, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    document = scientific_record("x" * (64 * 1024 - overhead))
+    code = experiment("let denied=0; for(let i=0;i<" + str(256 + overflow) + ";i++){\n"
+                      "try { readScientificInput('supporting-document-0123456789ab'); } catch { denied++; }}\n"
+                      "const value=denied;\n" + envelope())
+    result = run(runner, inputs, code, scientific_inputs={SCIENTIFIC_KEY: document})
+    actual = failed_observed(result) if overflow else observed(result)
+    assert actual["observations"][0]["value"] == int(overflow)
+    assert manifest(inputs)["scientific_input_reads"] == 256
+    assert manifest(inputs)["scientific_input_read_bytes"] == 16 * 1024 * 1024
+
+
+def test_scientific_input_inventory_accepts_twenty_sources_and_eight_documents(runner, inputs):
+    records = {"source/file-" + str(i) + ".tsx": scientific_record("<div/>", "file-" + str(i) + ".tsx") for i in range(20)}
+    records.update({f"supporting-document-{i:012x}": scientific_record("x", f"document-{i}.md") for i in range(8)})
+    result = run(runner, inputs, experiment("const value=JSON.parse(callProduction('[41]'));\n" + envelope()), scientific_inputs=records)
+    assert observed(result)["observations"][0]["value"] == 42
+    assert len(manifest(inputs)["scientific_inputs"]) == 28
+
+
+def test_scientific_input_path_limit_matches_unicode_codepoints_in_both_validators(runner, inputs):
+    name = "🙂" * 252 + ".md"
+    document = scientific_record("Unicode path evidence", name)
+    key = "source/" + name
+    code = experiment("const actual=JSON.parse(readScientificInput(" + json.dumps(key) + "));\n"
+                      "const value=actual.name.length;\n" + envelope())
+    result = run(runner, inputs, code, scientific_inputs={key: document})
+    assert observed(result)["observations"][0]["value"] == 507
+    assert manifest(inputs)["scientific_inputs"][key]["name"] == name
+
+
+@pytest.mark.parametrize("runner", ["private", "provided"], indirect=True)
+def test_scientific_read_after_caught_guest_heap_exhaustion_fails_closed(runner, inputs):
+    code = experiment("""
+        const held = [];
+        let saturated = false;
+        try { for(let i=0;i<1024;i++) held.push(new Array(10000).fill(1)); }
+        catch { saturated = true; }
+        if (!saturated || !held.length) throw Error('Heap saturation was not reached');
+        held.pop();
+        let denied = false;
+        try { readScientificInput('supporting-document-0123456789ab'); }
+        catch (error) { denied = true; }
+        held.length = 0;
+        const value = denied ? 1 : 0;
+        """ + envelope())
+    result = run(runner, inputs, code, scientific_inputs={SCIENTIFIC_KEY: scientific_record("x" * (8 * 1024 * 1024))})
+    # A saturated worker may be unable to emit any envelope; it must still fail
+    # and confirm its owned child has exited rather than publishing success.
+    assert result["status"] == "failed", result
+    assert result["cleanup_confirmed"] is True
+    assert runner._records == {} and runner._active == {}
+
+
+@pytest.mark.parametrize("invalid", [
+    [], {str(i): scientific_record() for i in range(29)}, {SCIENTIFIC_KEY: None},
+    {SCIENTIFIC_KEY: {**scientific_record(), "size": 17}}, {SCIENTIFIC_KEY: {"name": "source.md", "text": "text"}},
+    {SCIENTIFIC_KEY: {**scientific_record(), "text": 1}}, {SCIENTIFIC_KEY: {**scientific_record(), "sha256": "0" * 64}},
+    {SCIENTIFIC_KEY: {**scientific_record(), "sha256": "A" * 64}}, {SCIENTIFIC_KEY: scientific_record("bad\0text")},
+    {SCIENTIFIC_KEY: {**scientific_record(), "text": "\ud800"}}, {SCIENTIFIC_KEY: {**scientific_record(), "name": "\ud800.md"}},
+    {"source/../host.txt": scientific_record()}, {"source/other.md": scientific_record()},
+    {SCIENTIFIC_KEY: scientific_record(name="../host.md")}, {SCIENTIFIC_KEY: scientific_record(name="nested/source.md")},
+    {SCIENTIFIC_KEY: scientific_record(name="file://host.md")}, {SCIENTIFIC_KEY: scientific_record(name="dir\\source.md")},
+    {SCIENTIFIC_KEY: scientific_record(name="x" * 257)},
+])
+def test_invalid_scientific_inventory_is_rejected_before_readiness_or_spawn(inputs, supervisor_root, monkeypatch, invalid):
+    candidate = QuickJSRunner(inputs[0].parent / "unused-runtime", supervisor_root=supervisor_root)
+    monkeypatch.setattr(candidate, "status", lambda: pytest.fail("Invalid inputs must not launch readiness workers"))
+    with pytest.raises(ValueError, match="Scientific input|Scientific|scientific"):
+        run(candidate, inputs, experiment("return {};"), scientific_inputs=invalid)
+    assert not inputs[2].exists()
+    assert candidate._records == {} and candidate._active == {}
+
+
+@pytest.mark.parametrize("overflow", [False, True])
+def test_source_and_scientific_input_boundary_counts_utf8_bytes_together(inputs, supervisor_root, monkeypatch, overflow):
+    candidate = QuickJSRunner(inputs[0].parent / "unused-runtime", supervisor_root=supervisor_root)
+    monkeypatch.setattr(module, "MAX_SOURCE_BYTES", len(SOURCE.encode("utf-8")) + 6)
+    monkeypatch.setattr(candidate, "status", lambda: {"ready": False, "reason": "Boundary accepted before runtime lookup"})
+    document = scientific_record("가🙂" if overflow else "가가")
+    if overflow:
+        with pytest.raises(ValueError, match="source and scientific inputs exceed byte boundary"):
+            run(candidate, inputs, experiment("return {};"), scientific_inputs={SCIENTIFIC_KEY: document})
+        assert not inputs[2].exists()
+    else:
+        result = run(candidate, inputs, experiment("return {};"), scientific_inputs={SCIENTIFIC_KEY: document})
+        assert result["stderr"] == "Boundary accepted before runtime lookup"
+
+
+def test_serialized_scientific_packet_keeps_twenty_four_mib_boundary_before_spawn(inputs, supervisor_root, monkeypatch):
+    candidate = QuickJSRunner(inputs[0].parent / "unused-runtime", supervisor_root=supervisor_root)
+    monkeypatch.setattr(candidate, "status", lambda: {"ready": True})
+    monkeypatch.setattr(candidate, "_runtime", lambda: (Path("trusted-node"), {}))
+    monkeypatch.setattr(module.subprocess, "Popen", lambda *_a, **_kw: pytest.fail("Oversized packet must not spawn"))
+    with pytest.raises(ValueError, match="Trusted request exceeds byte boundary"):
+        run(candidate, inputs, experiment("return {};"), scientific_inputs={SCIENTIFIC_KEY: scientific_record('"' * (13 * 1024 * 1024))})
+    assert candidate._records == {} and candidate._active == {}
+
+
+@pytest.mark.parametrize("defect", ["missing-map", "null-map", "array-map", "count", "extra-field", "hash", "key", "unicode", "bytes"])
+def test_worker_independently_rejects_invalid_frozen_scientific_inputs(runner, monkeypatch, defect):
+    code = experiment("return {};")
+    records = {SCIENTIFIC_KEY: scientific_record()}
+    packet = {"source_files": {"source.js": {"text": SOURCE, "sha256": hashlib.sha256(SOURCE.encode()).hexdigest()}},
+              "experiment_files": {"experiment.mjs": {"text": code, "sha256": hashlib.sha256(code.encode()).hexdigest()}},
+              "scientific_inputs": records, "entrypoint": "experiment.mjs", "production_entrypoint": "source.js:calculate", "timeout_seconds": 5}
+    if defect == "missing-map":
+        packet.pop("scientific_inputs")
+    elif defect == "null-map":
+        packet["scientific_inputs"] = None
+    elif defect == "array-map":
+        packet["scientific_inputs"] = []
+    elif defect == "count":
+        packet["scientific_inputs"] = {f"supporting-document-{i:012x}": scientific_record() for i in range(29)}
+    elif defect == "extra-field":
+        records[SCIENTIFIC_KEY]["size"] = 17
+    elif defect == "hash":
+        records[SCIENTIFIC_KEY]["sha256"] = "0" * 64
+    elif defect == "key":
+        packet["scientific_inputs"] = {"source/../host.md": scientific_record()}
+    elif defect == "unicode":
+        records[SCIENTIFIC_KEY]["text"] = "\ud800"
+        original_dumps = json.dumps
+        monkeypatch.setattr(module.json, "dumps", lambda value, **kwargs: original_dumps(value, **{**kwargs, "ensure_ascii": True}))
+    elif defect == "bytes":
+        packet["scientific_inputs"] = {SCIENTIFIC_KEY: scientific_record("x" * (16 * 1024 * 1024))}
+    node, _ = runner._runtime()
+    result = runner._execute(node, packet, purpose="probe")
+    assert result["exit_code"] != 0 and result["cleanup_confirmed"] is True
+    assert result["envelope"] is None
+    assert runner._records == {} and runner._active == {}
+
+
+@pytest.mark.parametrize("runner", ["private", "provided"], indirect=True)
 def test_smallest_real_guest_calls_original_and_retains_unicode(runner, inputs):
     text = "실제 UTF-8 관측값: 가🙂\\n"
     code = experiment("const value = JSON.parse(callProduction('[41]'));\n"
@@ -212,9 +418,15 @@ def test_original_guest_state_and_callable_are_separate_and_read_only(runner, in
         globalThis.module = {exports: {calculate() {return -100;}}};
         const originalGate = callProduction;
         try { globalThis.callProduction = () => '-100'; } catch {}
-        for (const name of ['callProduction', 'retainFixture']) {
+        for (const name of ['callProduction', 'retainFixture', 'readScientificInput']) {
+            const original = globalThis[name];
             const gate = Object.getOwnPropertyDescriptor(globalThis, name);
-            if (gate.writable || gate.configurable) throw Error('mutable gate');
+            if (gate.writable || gate.configurable || gate.set) throw Error('mutable gate');
+            try { Object.defineProperty(globalThis, name, {value: () => '-100'}); } catch {}
+            try { Object.defineProperty(globalThis, name, {get: () => () => '-100'}); } catch {}
+            if (Reflect.defineProperty(globalThis, name, {value: () => '-100'})) throw Error('gate replaced via Reflect');
+            try { delete globalThis[name]; } catch {}
+            if (globalThis[name] !== original) throw Error('gate redefined');
         }
         if (callProduction !== originalGate) throw Error('replaced gate');
         const value = JSON.parse(callProduction('[25]'));
@@ -400,11 +612,13 @@ def test_invalid_gate_inputs_are_rejected_without_original_dispatch(runner, inpu
 
 def test_guest_receipt_fields_do_not_replace_controller_evidence(runner, inputs):
     payload = envelope().replace("fixtures:", """production_calls: [{path: 'source.js', function: 'calculate', calls: 999}],
-        cleanup_confirmed: true, runtime_manifest: {source_files: {}}, fixtures:""")
+        cleanup_confirmed: true, runtime_manifest: {source_files: {}, scientific_inputs: {fake: {}}, scientific_input_reads: 999}, fixtures:""")
     result = run(runner, inputs, experiment("const value = JSON.parse(callProduction('[41]'));\n" + payload))
     observed(result)
     assert result["production_calls"] == [{"path": "source.js", "function": "calculate", "calls": 1}]
     assert manifest(inputs)["source_files"]["source.js"]["original_sha256"] == hashlib.sha256(SOURCE.encode()).hexdigest()
+    assert manifest(inputs)["scientific_inputs"] == {}
+    assert manifest(inputs)["scientific_input_reads"] == 0
 
 
 def test_original_exceptions_count_and_exhaust_dispatch_budget(runner, inputs):

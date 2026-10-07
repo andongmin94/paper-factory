@@ -159,6 +159,34 @@ def _supporting_documents(ws: Workspace, record: Workflow) -> list[dict]:
     return [documents[key] for key in sorted(documents)]
 
 
+def _scientific_inputs(ws: Workspace, record: Workflow, plan: ResearchPlan) -> dict:
+    """Pass only declared frozen UTF-8 source and imported documents to the guest."""
+    assets = {asset.path: asset for asset in ws.latest("project", Project).assets}
+    inputs = {}
+
+    def add(key, name, path, expected_sha, expected_size):
+        raw = path.read_bytes()
+        if len(raw) != expected_size or hashlib.sha256(raw).hexdigest() != expected_sha:
+            raise WorkflowError("ARTIFACT_CHANGED", "Scientific input bytes changed before dispatch")
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            raise WorkflowError("MATERIAL_NOT_TEXT", "Scientific inputs must be UTF-8 text") from None
+        if re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", text):
+            raise WorkflowError("MATERIAL_NOT_TEXT", "Scientific inputs must contain readable text")
+        inputs[key] = {"name": name, "text": text, "sha256": expected_sha}
+
+    for name in plan.source_files:
+        asset = assets.get(name)
+        if asset is None:
+            raise WorkflowError("MATERIAL_NOT_DECLARED", "Scientific source input is absent from the frozen inventory")
+        add("source/" + name, name, safe_relative(ws.path("source"), name), asset.sha256, asset.size)
+    for document in _supporting_documents(ws, record):
+        add(document["id"], document["name"], _artifact(ws, record, document["id"]),
+            document["sha256"], document["size"])
+    return inputs
+
+
 def _production_execution(execution: dict, plan: ResearchPlan) -> None:
     if execution.get("coverage_truncated") is not False:
         raise WorkflowError("PRODUCTION_EXECUTION_UNVERIFIED", "Production-call profiling was incomplete")
@@ -1090,6 +1118,7 @@ class WorkflowService:
             receipt = self.runner.run(ws.path("source"), _artifact(ws, record, "bundle").parent, output,
                                         runtime=metadata["runtime"], entrypoint=metadata["entrypoint"],
                                         production_entrypoint=plan.production_entrypoint,
+                                        scientific_inputs=_scientific_inputs(ws, record, plan),
                                         timeout_seconds=record.experiment_timeout_seconds, cancel=stopped, on_handle=retain)
             with self._mutex, ws.lock("workflow"):
                 record = ws.get("workflow", research_id, Workflow)
@@ -1351,7 +1380,9 @@ class WorkflowService:
         runtime_instructions = (
             "Use Paper Factory's recorded bundled Python, Node and extracted QuickJS runtime.\n"
             "Inspect runtime-inventory.json from the desktop distribution and require runtime readiness before execution.\n"
-            "QuickJS runs frozen source and generated code in separate guests using callProduction and retainFixture.\n"
+            "QuickJS runs frozen source and generated code in separate guests using callProduction, retainFixture and readScientificInput.\n"
+            "Rebuild the scientific_inputs argument to QuickJSRunner.run from runtime-manifest.json scientific_inputs: each key maps to {name,text,sha256}.\n"
+            "Source keys use the matching source/<path> archive member; supporting-document IDs use supporting-documents/<id>/ and its import receipt. Preserve the manifest name, decode original UTF-8 bytes without newline conversion, and verify recorded size and SHA256 before dispatch.\n"
             "TypeScript is erased by the recorded trusted transformer; inspect original and compiled hashes in runtime-manifest.json.\n"
         )
         with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as output:

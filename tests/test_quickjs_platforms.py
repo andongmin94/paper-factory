@@ -51,6 +51,7 @@ source='module.exports={calculate(x){return x+1}};'
 code='export default function run(){while(true){}}'
 request={'source_files':{'source.cjs':{'text':source,'sha256':hashlib.sha256(source.encode()).hexdigest()}},
 'experiment_files':{'test.mjs':{'text':code,'sha256':hashlib.sha256(code.encode()).hexdigest()}},
+'scientific_inputs':{},
 'entrypoint':'test.mjs','production_entrypoint':'source.cjs:calculate','timeout_seconds':300}
 runner=QuickJSRunner(runtime,supervisor_root=state)
 node,_=runner._runtime()
@@ -129,6 +130,7 @@ source='module.exports={calculate(x){return x+1}};'
 code='export default function run(){while(true){}}'
 request={'source_files':{'source.cjs':{'text':source,'sha256':hashlib.sha256(source.encode()).hexdigest()}},
 'experiment_files':{'test.mjs':{'text':code,'sha256':hashlib.sha256(code.encode()).hexdigest()}},
+'scientific_inputs':{},
 'entrypoint':'test.mjs','production_entrypoint':'source.cjs:calculate','timeout_seconds':300}
 runner=QuickJSRunner(runtime,supervisor_root=state)
 node,_=runner._runtime()

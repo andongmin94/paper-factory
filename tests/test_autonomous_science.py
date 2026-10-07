@@ -818,6 +818,35 @@ def test_planner_distinguishes_worthwhile_studies_from_convenient_checker_contro
     assert "must stop if no directly relevant inspected" in prompt
 
 
+def test_initial_planning_proposes_searchable_candidate_before_literature_approval(protocol, literature):
+    prompt = science.planning_prompt("Inspected production code supports a bounded comparison.", "Study an unresolved software question.")
+    compact = " ".join(prompt.split())
+    assert "This stage proposes a candidate; it does not approve or freeze a study." in compact
+    assert "controller literature collection has not happened yet" in compact
+    assert "concrete literature_queries for the controller to retrieve next" in compact
+    assert "Do not set feasible=false solely because those queries have not been collected" in compact
+    assert "or the independent study review has not yet occurred" in compact
+    assert "provisional hypotheses to assess, not verified novelty" in compact
+    assert "After proposal submission, the controller collects the requested literature" in compact
+    assert "before protocol freezing, code generation or execution" in compact
+    assert "Missing or irrelevant inspected evidence at that review must still prevent approval" in compact
+    assert "After retrieval, the study must stop if no directly relevant inspected literature" in compact
+    # A searchable proposal does not relax the later scientific or reading gate.
+    review = " ".join(science.study_review_prompt(protocol, literature, "Inspected source").split())
+    assert "metadata and word overlap are insufficient" in review
+    assert "If none qualify, reject literature and the study" in review
+    assert "All six criteria must pass, issues must be empty" in review
+    assert "at least one source excerpt must be selected for accepted=true" in review
+
+
+def test_planning_still_rejects_unsupported_designs_and_addresses_actual_review_rejection():
+    prompt = " ".join(science.planning_prompt("Inspected source", "Bounded research goal").split())
+    assert "Reject a genuinely unsupported runtime or design now rather than inventing a candidate" in prompt
+    assert "When revising a reviewed proposal, address the supplied retrieved evidence and failed criteria" in prompt
+    assert "do not ignore a substantive rejection" in prompt
+    assert "Unsupported required runtime observations make a proposal infeasible before execution" in prompt
+
+
 def test_writer_receives_selected_evidence_without_length_or_audit_padding(protocol, literature, execution):
     prompt = science.writing_prompt(protocol, {"trusted": "analysis"}, literature, execution)
     assert "Selected directly relevant literature evidence:" in prompt
@@ -839,6 +868,8 @@ def test_code_prompts_assign_protocol_and_fixture_provenance_to_controller(proto
     source = "Inspected Unicode production excerpt: 한글"
     prompt = science.code_prompt(protocol, source) if role == "generation" else science.code_review_prompt(protocol, bundle, source)
     compact = " ".join(prompt.split())
+    assert "readScientificInput(key)" in compact
+    assert "normalization" in compact and "provenance" in compact
     assert "controller preserves the authoritative frozen protocol.json bytes and SHA-256" in compact
     assert "records that hash in the generated bundle and execution receipt" in compact
     assert "includes the exact protocol.json in the reproducibility ZIP" in compact

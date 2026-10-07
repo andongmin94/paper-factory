@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
-import { ResearchController, durableJson, parseModelObject } from '../dist/research.js';
+import { ResearchController, durableJson, parseModelObject, projectObservationEvidence } from '../dist/research.js';
 
 const id = 'research-abcdef123456';
 const sourceText = 'export const actual = value => value;';
@@ -27,14 +27,74 @@ const manuscriptAccepted = { ...accepted,
 const manuscriptRejected = issues => ({ ...manuscriptAccepted, accepted: false, issues,
   contribution: { passed: false, reason: 'Synthetic quality rejection; the candidate has no justified research contribution.' } });
 const observed = () => ({ ...base(), stage: 'analyzed', execution_attempt: 1, resume_kind: 'authoring',
-  artifacts: { observations: {}, 'runtime-manifest': {}, 'code-review-2': {}, 'code-review-10': {} },
+  artifacts: { observations: { sha256: digest(retainedMaterials.observations), size: Buffer.byteLength(retainedMaterials.observations) }, 'runtime-manifest': {}, 'code-review-2': {}, 'code-review-10': {} },
   material_manifest: { source: sourceInventory({ 'module.ts': sourceText }), experiment: [{ name: 'experiment.mjs' }] } });
 const retainedMaterials = {
   'experiment.mjs': 'SYNTHETIC_APPROVED_GENERATED_CODE',
-  observations: JSON.stringify({ fixtures: 'SYNTHETIC_RAW_FIXTURE_BYTES', observations: [] }),
+  observations: JSON.stringify({ fixtures: [{ label: 'synthetic-fixture', encoding: 'base64', content: Buffer.from('SYNTHETIC_RAW_FIXTURE_BYTES').toString('base64'), sha256: digest('SYNTHETIC_RAW_FIXTURE_BYTES') }], observations: [], controls: [{ name: 'SYNTHETIC_CONTROL_EVIDENCE', passed: true }] }),
   'runtime-manifest': JSON.stringify({ compiled_files: 'SYNTHETIC_COMPILER_RECEIPT_SHA' }),
   'code-review-10': JSON.stringify(accepted),
 };
+
+test('observation projection preserves all rows and controls and identifies omitted verified bytes', () => {
+  const bytes = Buffer.from('한국어🙂\u0000\r\n');
+  const data = { observations: [{ unit_id: 'case-1', value: 0.12345678901234568 }], controls: [{ name: 'negative', passed: true }],
+    fixtures: [{ label: 'input', encoding: 'base64', content: bytes.toString('base64'), sha256: createHash('sha256').update(bytes).digest('hex') }] };
+  const raw = JSON.stringify(data); const artifact = { sha256: digest(raw), size: Buffer.byteLength(raw) };
+  const projection = JSON.parse(projectObservationEvidence(raw, artifact));
+  assert.deepEqual(projection.observations, data.observations);
+  assert.deepEqual(projection.controls, data.controls);
+  assert.deepEqual(projection.fixtures, [{ label: 'input', encoding: 'base64', sha256: data.fixtures[0].sha256, size: bytes.length }]);
+  assert.deepEqual(projection.model_context.original_artifact, { id: 'observations', ...artifact });
+  assert.equal(projection.model_context.fixture_contents_included, false);
+  assert.equal(projection.model_context.omitted_fixture_bytes, bytes.length);
+  assert.equal(Object.hasOwn(projection.fixtures[0], 'content'), false);
+  assert.equal(JSON.stringify(data), raw);
+});
+
+for (const defect of ['artifact-hash', 'artifact-size', 'fixture-hash', 'base64', 'duplicate-label']) {
+  test('invalid observation evidence cannot become a manuscript projection: ' + defect, () => {
+    const data = JSON.parse(retainedMaterials.observations);
+    if (defect === 'fixture-hash') data.fixtures[0].sha256 = '0'.repeat(64);
+    if (defect === 'base64') data.fixtures[0].content += '!';
+    if (defect === 'duplicate-label') data.fixtures.push(structuredClone(data.fixtures[0]));
+    const raw = JSON.stringify(data); const artifact = { sha256: digest(raw), size: Buffer.byteLength(raw) };
+    if (defect === 'artifact-hash') artifact.sha256 = '0'.repeat(64);
+    if (defect === 'artifact-size') artifact.size++;
+    assert.throws(() => projectObservationEvidence(raw, artifact), error => ['ARTIFACT_CHANGED', 'MATERIAL_INVALID'].includes(error.code));
+  });
+}
+
+test('large retained fixture bytes permit authoring from full measurements without redispatch', async () => {
+  const bytes = Buffer.from('LARGE_RAW_FIXTURE_DO_NOT_SEND'.repeat(24_000));
+  const data = { observations: [{ unit_id: 'case-1', seed: 17, value: 0.12345678901234568 }], controls: [{ name: 'actual-negative-control', passed: true }],
+    fixtures: [{ label: 'large-input', encoding: 'base64', content: bytes.toString('base64'), sha256: createHash('sha256').update(bytes).digest('hex') }] };
+  const raw = JSON.stringify(data); assert.ok(raw.length > 500_000);
+  const workflow = observed(); workflow.artifacts.observations = { sha256: digest(raw), size: Buffer.byteLength(raw) };
+  const f = await fixture([{ markdown: 'Synthetic draft only' }, manuscriptAccepted], workflow, { request(method, params) {
+    if (method !== 'workflow.readMaterial' || params.name !== 'observations') return undefined;
+    const end = Math.min(raw.length, params.offset + params.limit);
+    return { text: raw.slice(params.offset, end), next_offset: end < raw.length ? end : null, sha256: digest(raw) };
+  } });
+  try {
+    await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer');
+    const state = await settled(f.controller);
+    assert.equal(state.jobs[0].pipeline, 'completed'); assert.equal(f.prompts.length, 2);
+    assert.equal(f.calls.some(call => call.method === 'workflow.startExperiment'), false);
+    assert.equal(workflow.execution_attempt, 1);
+    for (const request of f.prompts) {
+      const prompt = request.input[0].content;
+      assert.equal(prompt.includes(data.fixtures[0].content), false);
+      assert.match(prompt, /model has not inspected omitted fixture bytes/);
+      const material = promptMaterials(prompt);
+      const projected = JSON.parse(material.retainedEvidence.observations);
+      assert.deepEqual(projected.observations, data.observations); assert.deepEqual(projected.controls, data.controls);
+      assert.equal(projected.fixtures[0].sha256, data.fixtures[0].sha256);
+      assert.equal(projected.model_context.original_artifact.sha256, digest(raw));
+    }
+    assert.equal(JSON.stringify(data), raw);
+  } finally { await f.cleanup(); }
+});
 
 function fakeEngineError(code) {
   // research.js bundles its own EngineError; another dist entrypoint has a different prototype.
@@ -69,7 +129,7 @@ async function fixture(responses = [], workflow = base(), transport = {}) {
       if (method === 'workflow.create' || method === 'workflow.status') return publicWorkflow();
       if (method === 'workflow.readMaterial') return { text: params.area === 'source'
         ? sourceText : retainedMaterials[params.name], next_offset: null,
-        ...(params.area === 'source' ? { sha256: digest(sourceText) } : {}) };
+        ...(params.area === 'source' ? { sha256: digest(sourceText) } : params.name === 'observations' ? { sha256: digest(retainedMaterials.observations) } : {}) };
       if (method === 'workflow.recordInference') return { retained: true };
       if (method === 'workflow.submitProposal') {
         workflow.stage = 'proposed'; workflow.proposal = params.value; workflow.proposal_attempt++;
@@ -126,8 +186,9 @@ async function settled(controller) {
 const input = { source: 'https://github.com/fixture/repository', goal: 'Inspect a synthetic test fixture only.', model: 'writer', reviewerModel: 'reviewer' };
 
 test('proposal, inspected literature and fresh suitability acceptance precede any code or experiment', async () => {
-  const proposal = { feasible: true, source_files: ['module.ts'], title: 'Synthetic proposal only' };
-  const workflow = { ...base(), stage: 'created', proposal_attempt: 0, study_review: null };
+  const proposal = { feasible: true, source_files: ['module.ts'], title: 'Synthetic proposal only', reason: 'This initial proposal has not yet been reviewed.' };
+  const selectedLiterature = { sources: [{ id: 'synthetic-source', scope: 'abstract', excerpts: ['Synthetic selected reading fixture, not actual literature.'] }] };
+  const workflow = { ...base(), stage: 'created', proposal_attempt: 0, study_review: null, literature: selectedLiterature };
   const f = await fixture([proposal, studyAccepted, { files: [] }, accepted, { sections: [] }, manuscriptAccepted], workflow);
   try {
     await f.controller.initialize(); await f.controller.create(input);
@@ -143,6 +204,13 @@ test('proposal, inspected literature and fresh suitability acceptance precede an
       .map(call => [call.params.receipt.id, call.params.receipt.phase])).values()];
     assert.deepEqual(phases, ['plan', 'study-review', 'code', 'code-review', 'manuscript', 'manuscript-review']);
     assert.deepEqual(state.jobs[0].studyReview, studyAccepted);
+    const codePrompt = f.prompts[2].input[0].content;
+    assert.ok(codePrompt.includes('this request only implements the frozen plan as CodeBundle JSON'));
+    assert.ok(codePrompt.includes('only then execute approved code'));
+    assert.ok(codePrompt.includes('You are not responsible for calling review tools'));
+    assert.ok(codePrompt.includes('not its current approval state'));
+    assert.ok(codePrompt.includes(JSON.stringify({ studyReview: studyAccepted, literature: selectedLiterature })));
+    assert.deepEqual(workflow.plan, proposal, 'The initial proposal reason and frozen plan must stay unchanged');
   } finally { await f.cleanup(); }
 });
 
@@ -189,6 +257,28 @@ test('a prepared workflow without current study approval stops before model requ
     assert.equal((await settled(f.controller)).jobs[0].code, 'STUDY_REVIEW_REQUIRED');
     assert.equal(f.prompts.length, 0);
     assert.equal(f.calls.some(call => call.method === 'workflow.startExperiment'), false);
+  } finally { await f.cleanup(); }
+});
+
+
+test('code repair retains the earlier implementation when an intermediate candidate is a stub', async () => {
+  const implemented = { files: [{ path: 'experiment.mjs', content: 'IMPLEMENTED_BASELINE_A' }] };
+  const stub = { files: [{ path: 'experiment.mjs', content: 'INTERMEDIATE_STUB_B' }] };
+  const reject = issue => ({ ...accepted, accepted: false, issues: [issue] });
+  const f = await fixture([implemented, reject('Implement source provenance checks'), stub,
+    reject('The stub is not a complete implementation'), options => {
+      const prompt = options.input[0].content;
+      for (const text of ['IMPLEMENTED_BASELINE_A', 'INTERMEDIATE_STUB_B',
+        'Implement source provenance checks', 'The stub is not a complete implementation']) assert.ok(prompt.includes(text));
+      return { text: JSON.stringify({ files: [{ path: 'experiment.mjs', content: 'COMPLETE_SYNTHETIC_CANDIDATE' }] }) };
+    }, accepted, { sections: [] }, manuscriptAccepted]);
+  try {
+    await f.controller.initialize(); await f.controller.create(input);
+    const state = await settled(f.controller);
+    assert.equal(state.jobs[0].pipeline, 'completed');
+    assert.equal(f.calls.filter(call => call.method === 'workflow.submitCode').length, 1);
+    assert.equal(f.calls.filter(call => call.method === 'workflow.startExperiment').length, 1);
+    assert.deepEqual(f.workflow.plan, base().plan);
   } finally { await f.cleanup(); }
 });
 
@@ -374,9 +464,12 @@ test('explicit manuscript resume gives both fresh models full retained evidence 
     assert.match(reviewer, /Decide from the scientific defects and evidence; do not favor acceptance/);
     for (const prompt of f.prompts) {
       assert.equal(prompt.input.length, 1);
-      for (const marker of ['SYNTHETIC_APPROVED_GENERATED_CODE', 'SYNTHETIC_RAW_FIXTURE_BYTES', 'SYNTHETIC_COMPILER_RECEIPT_SHA', 'code-review-10']) {
+      for (const marker of ['SYNTHETIC_APPROVED_GENERATED_CODE', digest('SYNTHETIC_RAW_FIXTURE_BYTES'), 'SYNTHETIC_CONTROL_EVIDENCE', 'SYNTHETIC_COMPILER_RECEIPT_SHA', 'code-review-10']) {
         assert.ok(prompt.input[0].content.includes(marker));
       }
+      assert.equal(prompt.input[0].content.includes('SYNTHETIC_RAW_FIXTURE_BYTES'), false);
+      assert.match(prompt.input[0].content, /model has not inspected omitted fixture bytes/);
+      assert.match(prompt.input[0].content, /Keep this model-context notice outside the manuscript/);
     }
     const reads = f.calls.filter(c => c.method === 'workflow.readMaterial').map(c => c.params);
     assert.ok(reads.some(r => r.area === 'source' && r.name === 'module.ts'));
@@ -1561,7 +1654,7 @@ test('explicit completed-paper revision leases preparation before fresh writer/r
     assert.deepEqual(f.prompts.map(prompt => prompt.model), ['writer', 'reviewer']);
     for (const prompt of f.prompts) {
       assert.equal(prompt.input.length, 1); assert.equal(prompt.previousResponseId, undefined); assert.equal(prompt.conversationId, undefined);
-      for (const marker of ['SYNTHETIC_APPROVED_GENERATED_CODE', 'SYNTHETIC_RAW_FIXTURE_BYTES', 'SYNTHETIC_COMPILER_RECEIPT_SHA']) {
+      for (const marker of ['SYNTHETIC_APPROVED_GENERATED_CODE', digest('SYNTHETIC_RAW_FIXTURE_BYTES'), 'SYNTHETIC_CONTROL_EVIDENCE', 'SYNTHETIC_COMPILER_RECEIPT_SHA']) {
         assert.ok(prompt.input[0].content.includes(marker));
       }
     }

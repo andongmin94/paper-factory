@@ -26,6 +26,8 @@ from .runner_common import MAX_ARTIFACT_BYTES, MAX_LOG_BYTES, _production_calls,
 
 INVENTORY_SHA256 = "ab3b2f965197a33c3c58ee1ca26b75871e78e8b59e4f09fd24addd6d88d7e51a"
 MAX_SOURCE_BYTES = 16 * 1024 * 1024
+MAX_SCIENTIFIC_INPUTS = 28
+MAX_SCIENTIFIC_READS = 512
 MAX_REQUEST_BYTES = 24 * 1024 * 1024
 MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 LIMITS = {"guest_linear_memory_bytes": 128 * 1024 * 1024,
@@ -33,6 +35,8 @@ LIMITS = {"guest_linear_memory_bytes": 128 * 1024 * 1024,
           "guest_os_processes": 0, "guest_threads": 0, "network": "none", "host_filesystem": "not exposed",
           "artifact_bytes": MAX_ARTIFACT_BYTES, "log_bytes": MAX_LOG_BYTES,
           "gate_json_bytes": 1024 * 1024, "production_dispatches": 65536,
+          "source_and_scientific_input_bytes": MAX_SOURCE_BYTES, "scientific_inputs": MAX_SCIENTIFIC_INPUTS,
+          "scientific_input_reads": MAX_SCIENTIFIC_READS, "scientific_input_read_bytes": MAX_SOURCE_BYTES,
           "node_embedder_old_heap_bytes": 128 * 1024 * 1024,
           "native_host_rss_limit_claimed": False}
 WORKER = Path(__file__).with_name("quickjs_worker.mjs")
@@ -85,6 +89,38 @@ def _files(root: Path, *, limit: int, count: int) -> dict:
             raise ValueError("Frozen code contains unsupported NUL text")
         files[name] = {"text": text, "sha256": _hash(raw)}
     return files
+
+
+def _scientific_inputs(value: dict | None, source_bytes: int) -> dict:
+    if value is None:
+        value = {}
+    if type(value) is not dict or len(value) > MAX_SCIENTIFIC_INPUTS:
+        raise ValueError("Scientific input map exceeds type or count boundary")
+    result = {}
+    total = source_bytes
+    for key, record in value.items():
+        if (type(key) is not str or type(record) is not dict or set(record) != {"name", "text", "sha256"}
+                or any(type(record[field]) is not str for field in record)):
+            raise ValueError("Scientific input must have exact name, text and SHA-256 fields")
+        name, text, digest = record["name"], record["text"], record["sha256"]
+        path = PurePosixPath(name)
+        if (not name or len(name) > 256 or "\\" in name or ":" in name or any(ord(c) < 32 or ord(c) == 127 for c in name)
+                or path.is_absolute() or any(part in {".", ".."} for part in path.parts) or path.as_posix() != name):
+            raise ValueError("Scientific input name must be a bounded relative path")
+        if key != "source/" + name and not (re.fullmatch(r"supporting-document-[a-f0-9]{12}", key) and len(path.parts) == 1):
+            raise ValueError("Scientific input key must identify frozen source or a supporting document")
+        try:
+            name.encode("utf-8", "strict")
+            raw = text.encode("utf-8", "strict")
+        except UnicodeError as exc:
+            raise ValueError("Scientific input must be lossless UTF-8 text") from exc
+        if "\0" in text or not re.fullmatch(r"[a-f0-9]{64}", digest) or _hash(raw) != digest:
+            raise ValueError("Scientific input bytes differ or contain unsupported text")
+        total += len(raw)
+        if total > MAX_SOURCE_BYTES:
+            raise ValueError("Frozen source and scientific inputs exceed byte boundary")
+        result[key] = {"name": name, "text": text, "sha256": digest}
+    return result
 
 
 def _linux_identity(pid: int) -> dict:
@@ -665,15 +701,24 @@ class QuickJSRunner:
         result = self._status_fields()
         try:
             node, runtime = self._runtime()
-            source = 'module.exports={calculate(x){if(x===null)throw new Error("original rejection");return x+1}};'
+            source = 'module.exports={calculate(x){if(typeof readScientificInput!=="undefined")throw new Error("scientific input exposed to production");if(x===null)throw new Error("original rejection");return x+1}};'
+            input_text = "\ufeff가🙂\r\n"
+            input_key = "supporting-document-000000000000"
+            input_record = {"name": "check.md", "text": input_text, "sha256": _hash(input_text.encode("utf-8"))}
             code = '''export default function run(){
               const unavailable=["process","require","fetch","WebSocket","Worker","WebAssembly"].every(k=>typeof globalThis[k]==="undefined");
               let immutable=false; try{globalThis.callProduction=()=>"forged"}catch{immutable=true}
+              let inputImmutable=false; try{globalThis.readScientificInput=()=>"forged"}catch{inputImmutable=true}
+              const inputGate=readScientificInput;
+              try{Object.defineProperty(globalThis,"readScientificInput",{value:()=>"forged"})}catch{}
+              inputImmutable=inputImmutable && readScientificInput===inputGate;
+              const input=JSON.parse(readScientificInput("supporting-document-000000000000"));
               const value=JSON.parse(callProduction("[6]"));
               let rejection=false; try{callProduction("[null]")}catch(e){rejection=e.message.includes("original rejection")}
-              return {unavailable,immutable,value,rejection,fixture:JSON.parse(retainFixture("unicode","가"))};
+              return {unavailable,immutable,inputImmutable,input,value,rejection,fixture:JSON.parse(retainFixture("unicode","가"))};
             }'''
             packet = {"source_files": {"check.cjs": {"text": source, "sha256": _hash(source.encode())}},
+                      "scientific_inputs": {input_key: input_record},
                       "experiment_files": {"check.mjs": {"text": code, "sha256": _hash(code.encode())}},
                       "production_entrypoint": "check.cjs:calculate", "entrypoint": "check.mjs", "timeout_seconds": 5}
             receipt = self._execute(node, packet, purpose="probe")
@@ -682,7 +727,9 @@ class QuickJSRunner:
                 raise ValueError("Actual Wasm boundary self-check failed")
             observed = loads_json(base64.b64decode(envelope["observation_b64"], validate=True).decode("utf-8"))
             fixture = observed["fixture"]
-            if (observed.get("value") != 7 or not all(observed.get(k) is True for k in ("unavailable", "immutable", "rejection"))
+            if (observed.get("value") != 7 or not all(observed.get(k) is True for k in ("unavailable", "immutable", "inputImmutable", "rejection"))
+                    or observed.get("input") != input_record
+                    or envelope["runtime_manifest"].get("scientific_input_reads") != 1
                     or fixture["sha256"] != _hash("가".encode()) or base64.b64decode(fixture["content"], validate=True) != "가".encode()
                     or envelope["production_calls"][0]["calls"] != 2
                     or envelope["runtime_manifest"].get("distinct_wasm_memories") is not True
@@ -694,7 +741,7 @@ class QuickJSRunner:
             ts_source = 'import {delta} from "./delta.ts"; export function calculate(x:number):number{return x+delta}'
             ts_helper = 'export const delta:number=1;'
             ts_code = 'export default function run(){return {value:JSON.parse(callProduction("[6]"))}}'
-            ts_packet = {**packet, "production_entrypoint": "check.ts:calculate",
+            ts_packet = {**packet, "production_entrypoint": "check.ts:calculate", "scientific_inputs": {},
                          "source_files": {name: {"text": text, "sha256": _hash(text.encode())}
                                           for name, text in (("check.ts", ts_source), ("delta.ts", ts_helper))},
                          "experiment_files": {"check.mjs": {"text": ts_code, "sha256": _hash(ts_code.encode())}}}
@@ -726,7 +773,7 @@ class QuickJSRunner:
             # Readiness also proves that this host permits termination through
             # the owned identity path, not just that pidfd APIs are importable.
             kill_code = 'export default function run(){while(true){}}'
-            kill_packet = {**packet, "timeout_seconds": 5,
+            kill_packet = {**packet, "timeout_seconds": 5, "scientific_inputs": {},
                            "experiment_files": {"check.mjs": {"text": kill_code, "sha256": _hash(kill_code.encode())}}}
             kill_started = time.monotonic()
             killed = self._execute(node, kill_packet, cancel=lambda: time.monotonic() - kill_started > 0.02, purpose="probe")
@@ -741,7 +788,7 @@ class QuickJSRunner:
 
     def run(self, source_dir: Path, bundle_dir: Path, output_dir: Path, *, runtime: str,
             entrypoint: str, production_entrypoint: str = "", timeout_seconds: int = 300,
-            cancel=None, on_handle=None) -> dict:
+            scientific_inputs: dict | None = None, cancel=None, on_handle=None) -> dict:
         if runtime != "quickjs":
             raise ValueError("QuickJS runner only accepts runtime quickjs")
         if type(timeout_seconds) is not int or not 1 <= timeout_seconds <= 3600:
@@ -755,6 +802,7 @@ class QuickJSRunner:
         if not separator or not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*", function):
             raise ValueError("Production entrypoint must identify a frozen exported callable")
         source_files, code_files = _files(source, limit=MAX_SOURCE_BYTES, count=2048), _files(bundle, limit=512 * 1024, count=12)
+        scientific_inputs = _scientific_inputs(scientific_inputs, sum(len(item["text"].encode("utf-8")) for item in source_files.values()))
         if selected not in source_files or entrypoint not in code_files:
             raise ValueError("Entrypoint is absent from frozen code inventory")
         output = Path(output_dir)
@@ -782,6 +830,7 @@ class QuickJSRunner:
             return result
         node, metadata = self._runtime()
         packet = {"source_files": source_files, "experiment_files": code_files, "entrypoint": entrypoint,
+                  "scientific_inputs": scientific_inputs,
                   "production_entrypoint": production_entrypoint, "timeout_seconds": timeout_seconds}
         execution = self._execute(node, packet, cancel=cancel, on_handle=on_handle)
         result.update({key: execution[key] for key in ("exit_code", "cleanup_confirmed", "active_handle", "duration_seconds")})

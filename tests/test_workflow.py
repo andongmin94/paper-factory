@@ -16,8 +16,8 @@ import zipfile
 import pytest
 
 from paper_factory.autonomous import science
-from paper_factory.autonomous.models import FrozenArtifact
-from paper_factory.workflow import WorkflowError, WorkflowService
+from paper_factory.autonomous.models import FrozenArtifact, ResearchPlan
+from paper_factory.workflow import WorkflowError, WorkflowService, _scientific_inputs
 from paper_factory.workflow_models import Workflow
 from paper_factory.workspace import Workspace, digest_file, write_json
 
@@ -124,6 +124,7 @@ class FixtureRunner:
     def __init__(self):
         self.outputs = observations()
         self.calls = 0
+        self.scientific_inputs = None
         self.entered = threading.Event()
         self.release = None
         self.production_calls = True
@@ -141,11 +142,12 @@ class FixtureRunner:
             self.release.set()
         return self.cleanable
 
-    def run(self, source_dir, bundle_dir, output_dir, *, runtime, entrypoint, production_entrypoint, timeout_seconds, cancel, on_handle):
+    def run(self, source_dir, bundle_dir, output_dir, *, runtime, entrypoint, production_entrypoint, scientific_inputs, timeout_seconds, cancel, on_handle):
         assert runtime == "quickjs" and timeout_seconds == 300
         assert production_entrypoint == "transform.js:transform"
         assert Path(source_dir, "transform.js").is_file() and Path(bundle_dir, entrypoint).is_file()
         self.calls += 1
+        self.scientific_inputs = copy.deepcopy(scientific_inputs)
         on_handle({"kind": "fixture", "pid": 123, "simulation": True})
         self.entered.set()
         if self.release:
@@ -198,6 +200,51 @@ def approve_study(service, research_id):
 def prepare(service, research_id):
     approve_study(service, research_id)
     service.submit_code(research_id, copy.deepcopy(BUNDLE), REVIEW)
+
+
+def test_scientific_inputs_bind_declared_source_and_exact_imported_document_bytes(setup):
+    service, runner, research_id = setup
+    raw = '\ufeff한글 원문\r\nSecond line.\r\n'.encode('utf-8')
+    imported = service.add_evidence(research_id, [{"name": "source.txt", "contentBase64": base64.b64encode(raw).decode()}])
+    document = imported["supporting_documents"][0]
+    ws = service._workspace(research_id)
+    source_raw = ws.path('source/transform.js').read_bytes()
+    prepare(service, research_id)
+    service.start_experiment(research_id)
+    runner.entered.wait(2)
+    assert runner.calls == 1
+    assert runner.scientific_inputs == {
+        'source/transform.js': {'name': 'transform.js', 'text': source_raw.decode('utf-8'),
+                                'sha256': hashlib.sha256(source_raw).hexdigest()},
+        document['id']: {'name': 'source.txt', 'text': raw.decode('utf-8'), 'sha256': hashlib.sha256(raw).hexdigest()},
+    }
+
+
+@pytest.mark.parametrize('area', ['source', 'supporting'])
+def test_scientific_inputs_reject_changed_bytes_before_runner_dispatch(setup, area):
+    service, runner, research_id = setup
+    imported = service.add_evidence(research_id, [{"name": "source.txt", "contentBase64": base64.b64encode(b'Original text.\n').decode()}])
+    ws = service._workspace(research_id)
+    record = ws.get('workflow', research_id, Workflow)
+    document = imported['supporting_documents'][0]
+    path = ws.path('source/transform.js') if area == 'source' else ws.path(record.artifacts[document['id']].path)
+    path.chmod(0o600)
+    path.write_bytes(b'Changed input.\n')
+    with pytest.raises(WorkflowError) as error:
+        _scientific_inputs(ws, record, ResearchPlan.model_validate(protocol()))
+    assert error.value.code == 'ARTIFACT_CHANGED'
+    assert runner.calls == 0
+
+
+def test_scientific_inputs_cannot_read_undeclared_source_paths(setup):
+    service, runner, research_id = setup
+    ws = service._workspace(research_id)
+    record = ws.get('workflow', research_id, Workflow)
+    altered = protocol() | {'source_files': ['../private.txt']}
+    with pytest.raises(WorkflowError) as error:
+        _scientific_inputs(ws, record, ResearchPlan.model_validate(altered))
+    assert error.value.code == 'MATERIAL_NOT_DECLARED'
+    assert runner.calls == 0
 
 
 def test_planning_context_discloses_projection_and_only_retained_compiler_evidence(setup):

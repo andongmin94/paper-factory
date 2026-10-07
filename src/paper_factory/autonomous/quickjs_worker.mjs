@@ -6,6 +6,9 @@ import { join, posix } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const MAX_INPUT = 24 * 1024 * 1024;
+const MAX_SOURCE_AND_SCIENTIFIC_BYTES = 16 * 1024 * 1024;
+const MAX_SCIENTIFIC_INPUTS = 28;
+const MAX_SCIENTIFIC_READS = 512;
 const MAX_OBSERVATION = 8 * 1024 * 1024;
 const MAX_GATE = 1024 * 1024;
 const MAX_CALLS = 65536;
@@ -42,10 +45,44 @@ for (const files of [source, experiment]) {
     if (typeof record.text !== 'string' || record.text.includes('\0') || !record.text.isWellFormed() || sha256(Buffer.from(record.text, 'utf8')) !== record.sha256) throw new Error('Frozen module bytes differ or contain unsupported text');
   }
 }
+if (request.scientific_inputs === null || typeof request.scientific_inputs !== 'object' || Array.isArray(request.scientific_inputs)) {
+  throw new Error('Scientific input map is required');
+}
+const scientificInputs = new Map();
+let frozenBytes = [...source.values()].reduce((total, item) => total + Buffer.byteLength(item.text, 'utf8'), 0);
+let scientificInputBytes = 0;
+if (Object.keys(request.scientific_inputs).length > MAX_SCIENTIFIC_INPUTS || frozenBytes > MAX_SOURCE_AND_SCIENTIFIC_BYTES) {
+  throw new Error('Frozen scientific input count or byte boundary exceeded');
+}
+for (const [key, record] of Object.entries(request.scientific_inputs)) {
+  if (!record || typeof record !== 'object' || Array.isArray(record) || Object.keys(record).length !== 3 ||
+      !['name', 'text', 'sha256'].every(field => Object.hasOwn(record, field) && typeof record[field] === 'string')) {
+    throw new Error('Scientific input must have exact name, text and SHA-256 fields');
+  }
+  const { name, text, sha256: digest } = record;
+  if (!name || name.length > 512 || [...name].length > 256 || !name.isWellFormed() || /[\\:\x00-\x1f\x7f]/.test(name) || name.startsWith('/') ||
+      posix.normalize(name) !== name || name.split('/').some(part => part === '.' || part === '..')) {
+    throw new Error('Scientific input name must be a bounded relative path');
+  }
+  if (key !== `source/${name}` && !(/^supporting-document-[a-f0-9]{12}$/.test(key) && !name.includes('/'))) {
+    throw new Error('Scientific input key must identify frozen source or a supporting document');
+  }
+  const raw = Buffer.from(text, 'utf8');
+  if (!text.isWellFormed() || text.includes('\0') || !/^[a-f0-9]{64}$/.test(digest) || sha256(raw) !== digest) {
+    throw new Error('Scientific input bytes differ or contain unsupported text');
+  }
+  frozenBytes += raw.length;
+  scientificInputBytes += raw.length;
+  if (frozenBytes > MAX_SOURCE_AND_SCIENTIFIC_BYTES) throw new Error('Frozen source and scientific inputs exceed byte boundary');
+  const json = JSON.stringify({ name, text, sha256: digest });
+  scientificInputs.set(key, Object.freeze({ name, sha256: digest, size: raw.length, json, jsonBytes: Buffer.byteLength(json, 'utf8') }));
+}
 const compiled = new Map();
 const manifest = { backend: 'quickjs-wasm', library_version: '0.32.0', node_version: process.version,
   wasm_sha256: sha256(wasm), production_entrypoint: request.production_entrypoint,
   source_files: Object.fromEntries([...source].map(([name, item]) => [name, { original_sha256: item.sha256 }])),
+  scientific_inputs: Object.fromEntries([...scientificInputs].map(([key, item]) => [key, { name: item.name, sha256: item.sha256, size: item.size }])),
+  scientific_input_bytes: scientificInputBytes,
   compiled_files: {}, experiment_files: Object.fromEntries([...experiment].map(([name, item]) => [name, { sha256: item.sha256 }])),
   transformer: { name: 'node:module.stripTypeScriptTypes', version: process.version,
     options: TYPESCRIPT_OPTIONS, options_scope: 'shared', native_typescript_execution: false },
@@ -56,6 +93,8 @@ const manifest = { backend: 'quickjs-wasm', library_version: '0.32.0', node_vers
 let deadline = Date.now() + request.timeout_seconds * 1000;
 let calls = 0;
 let completedCalls = 0;
+let scientificReads = 0;
+let scientificReadBytes = 0;
 let fixtureBytes = 0;
 let fixtureCount = 0;
 const labels = new Set();
@@ -284,9 +323,32 @@ try {
       return { error: ec.newError(String(error.message).slice(0, 1000)) };
     }
   });
-  for (const [name, gate] of [['callProduction', productionGate], ['retainFixture', fixtureGate]]) {
-    ec.defineProp(ec.global, name, { value: gate, configurable: false, writable: false });
-    gate.dispose();
+  const scientificInputGate = ec.newFunction('readScientificInput', (...args) => {
+    try {
+      if (args.length !== 1 || ec.typeof(args[0]) !== 'string') throw new Error('Scientific input gate accepts exactly one registered key');
+      const key = experimentString(args[0]);
+      const item = scientificInputs.get(key);
+      if (!item) throw new Error('Scientific input is absent from frozen map');
+      if (scientificReads >= MAX_SCIENTIFIC_READS || scientificReadBytes + item.jsonBytes > MAX_SOURCE_AND_SCIENTIFIC_BYTES) {
+        throw new Error('Scientific input reading boundary exceeded');
+      }
+      scientificReads += 1;
+      scientificReadBytes += item.jsonBytes;
+      const value = ec.newString(item.json);
+      if (ec.typeof(value) !== 'string') {
+        value.dispose();
+        throw new Error('Scientific input string allocation failed');
+      }
+      return value;
+    } catch (error) {
+      infrastructureFailure ||= String(error.message).slice(0, 1000);
+      return { error: ec.newError(String(error.message).slice(0, 1000)) };
+    }
+  });
+  for (const [name, gate] of [['callProduction', productionGate], ['retainFixture', fixtureGate], ['readScientificInput', scientificInputGate]]) {
+    // Getter-only capabilities reject assignment and value/getter redefinition.
+    handles.push(gate);
+    ec.defineProp(ec.global, name, { get: () => gate.dup(), configurable: false });
   }
   const experimentNamespace = namespaceResult(experimentGuest, evaluate(experimentGuest, experiment.get(request.entrypoint).text, `experiment/${request.entrypoint}`, { type: 'module' }));
   const run = ec.getProp(experimentNamespace, 'default');
@@ -338,6 +400,8 @@ try {
 }
 manifest.production_dispatch_attempts = calls;
 manifest.production_completed_calls = completedCalls;
+manifest.scientific_input_reads = scientificReads;
+manifest.scientific_input_read_bytes = scientificReadBytes;
 manifest.imports = imports;
 manifest.fatal_infrastructure_failure = infrastructureFailure;
 console.log(JSON.stringify(envelope));
