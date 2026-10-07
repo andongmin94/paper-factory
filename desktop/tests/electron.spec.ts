@@ -1502,7 +1502,19 @@ test("research and manuscript quality rejections show reasons without presenting
     sampling: passed, feasibility: passed, selected_sources: [] };
   const manuscriptReview = { accepted: false, issues: ["함수 검사 결과의 주장 범위를 줄여야 합니다."], checks: [],
     contribution: passed, literature: passed,
-    interpretation: { passed: false, reason: "합성 입력 결과를 실제 앱 전체의 효과로 확대했습니다." }, presentation: passed };
+    interpretation: { passed: false, reason: "합성 입력 결과를 실제 앱 전체의 효과로 확대했습니다." }, presentation: passed,
+    publication_readiness: {
+      novelty: { passed: false, reason: "합성 UI 검사용 신규성 부족 사유입니다." },
+      significance: { passed: false, reason: "합성 UI 검사용 중요성 부족 사유입니다." },
+      validation: { passed: false, reason: "합성 UI 검사용 검증 범위 부족 사유입니다." },
+      claim: "실제 연구 승인을 나타내지 않는 합성 UI 주장입니다.",
+      scope: "합성 UI 화면에만 해당하는 유한 열거 범위입니다.",
+      evidence_basis: "실제 실험이나 논문의 품질을 증명하지 않는 표시 fixture입니다.",
+      evidence_mode: "finite_enumeration" as const, analysis_keys: [], fixture_labels: [], proof_section: null, proof_quote: null,
+      closest_work: [{ source_id: "source-synthetic", excerpt_index: 0,
+        quote: "실제 문헌이 아닌 화면 확인용 합성 인용문입니다. 본문 출처 인증이나 신규성 승인 근거로 사용할 수 없습니다.",
+        known_result: "합성 UI의 알려진 결과 표시입니다.", difference: "합성 UI의 연구 차이 표시입니다." }],
+    } };
   const base: Omit<ResearchSnapshot["jobs"][number], "id" | "source" | keyof ReturnType<typeof researchFixture>> = {
     goal: "검토 반려 이유 표시만 확인하는 합성 연구입니다.", model: "fixture-model", reviewerModel: "fixture-model",
     phase: "study-review", pipeline: "failed", stage: "proposed", status: "blocked", code: "STUDY_REJECTED",
@@ -1541,6 +1553,7 @@ test("research and manuscript quality rejections show reasons without presenting
     await expect(rejectedStudy.getByText("새로운 기여 · 미충족", { exact: true })).toBeVisible();
     await expect(rejectedStudy.getByText(studyReview.contribution.reason, { exact: true })).toBeVisible();
     await expect(rejectedStudy.getByText(studyReview.comparison.reason, { exact: true })).toBeVisible();
+    await expect(rejectedStudy.getByText("이 기록에는 신규성·기여의 중요성·검증 범위를 평가한 투고 준비도 검토가 없습니다.", { exact: true })).toBeVisible();
     await expect(rejectedStudy.getByRole("button")).toHaveCount(0);
     const infeasibleStudy = page.getByRole("article", { name: "infeasible-study", exact: true });
     await expect(infeasibleStudy.getByText("연구 보류", { exact: true })).toBeVisible();
@@ -1550,6 +1563,12 @@ test("research and manuscript quality rejections show reasons without presenting
     const rejectedManuscript = page.getByRole("article", { name: "manuscript-rejected", exact: true });
     await expect(rejectedManuscript.getByText("원고 보류", { exact: true })).toBeVisible();
     await expect(rejectedManuscript.getByText(manuscriptReview.interpretation.reason, { exact: true })).toBeVisible();
+    const readiness = rejectedManuscript.getByRole("region", { name: "투고 준비도 평가", exact: true });
+    await expect(readiness.getByText("선행 연구 대비 신규성 · 미충족", { exact: true })).toBeVisible();
+    await expect(readiness.getByText("기여의 중요성 · 미충족", { exact: true })).toBeVisible();
+    await expect(readiness.getByText("주장 범위에 맞는 검증 · 미충족", { exact: true })).toBeVisible();
+    await readiness.getByText("직접 관련 선행 연구 비교 1", { exact: true }).click();
+    await expect(readiness.getByText(manuscriptReview.publication_readiness.closest_work[0].quote, { exact: true })).toBeVisible();
     await expect(rejectedManuscript.getByRole("button")).toHaveCount(0);
     const retainedDraft = page.getByRole("article", { name: "retained-draft", exact: true });
     await expect(retainedDraft.getByText("원고 생성 완료", { exact: true })).toBeVisible();

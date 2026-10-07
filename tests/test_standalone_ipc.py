@@ -83,6 +83,7 @@ def create_local(engine, tmp_path):
 
 
 def protocol():
+    from test_workflow import protocol as workflow_protocol
     return {"feasible": True, "reason": "A public transformation supports independently annotated fixture checks.",
             "title": "Controlled production transformation fixture validation", "question": "How does the transformation preserve annotated fixture values?",
             "research_gap": "Synthetic IPC fixture; no actual gap in research literature is established.",
@@ -98,7 +99,8 @@ def protocol():
             "parameters": {}, "procedure": ["Generate seeded annotations.", "Invoke unchanged source and comparator.", "Record paired errors and controls."],
             "analysis_method": "Descriptive means paired by fixture and seed.",
             "limitations": ["Synthetic fixtures do not represent natural populations.", "Instrumentation affects execution timing."],
-            "literature_queries": ["independent software test oracle"]}
+            "literature_queries": ["independent software test oracle"],
+            "research_claim": workflow_protocol()["research_claim"]}
 
 
 @pytest.mark.parametrize("raw", [

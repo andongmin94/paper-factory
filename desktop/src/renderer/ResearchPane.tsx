@@ -1,14 +1,14 @@
 import { useEffect, useState } from "react";
 import { Download, ExternalLink, LoaderCircle } from "lucide-react";
 import type { AppSnapshot } from "../shared/contracts";
-import type { ManuscriptReview, PublicRepository, ResearchPhase, ResearchSnapshot, ReviewCriterion } from "../shared/research";
+import type { ManuscriptReview, PublicationReadiness, PublicRepository, ResearchPhase, ResearchSnapshot, ReviewCriterion } from "../shared/research";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
 
 const phaseLabels: Record<ResearchPhase, string> = {
-  idle: "대기", plan: "연구 설계", redesign: "연구 설계 보완", literature: "문헌 수집", "study-review": "연구 적합성 검토", code: "실험 코드 작성",
+  idle: "대기", plan: "연구 설계", redesign: "연구 설계 보완", "literature-plan": "투고 근거 보완 계획", literature: "문헌 수집", "study-review": "연구 적합성 검토", code: "실험 코드 작성",
   "code-review": "실험 코드 리뷰", experiment: "과학실험", "evidence-selection": "설명 근거 확인", manuscript: "원고 작성",
   "manuscript-review": "원고 품질 검토", export: "결과 파일 생성",
 };
@@ -45,7 +45,7 @@ function ManuscriptRecovery({ remediation }: { remediation: NonNullable<Manuscri
 }
 
 function QualityReview({ title, review, criteria, selectedSources }: {
-  title: string; review: { accepted: boolean; issues: string[] };
+  title: string; review: { accepted: boolean; issues: string[]; publication_readiness?: PublicationReadiness | null };
   criteria: Array<{ label: string; judgment: ReviewCriterion }>; selectedSources?: number;
 }) {
   return (
@@ -58,6 +58,29 @@ function QualityReview({ title, review, criteria, selectedSources }: {
         </div>)}
       </dl>
       {selectedSources !== undefined && <p className="detail-note mt-3">선정한 문헌 근거 {selectedSources}개</p>}
+      {review.publication_readiness ? <section className="mt-4 space-y-3" aria-label="투고 준비도 평가">
+        <h4 className="font-semibold">투고 준비도 평가</h4>
+        <dl className="space-y-3">
+          {[
+            { label: "선행 연구 대비 신규성", judgment: review.publication_readiness.novelty },
+            { label: "기여의 중요성", judgment: review.publication_readiness.significance },
+            { label: "주장 범위에 맞는 검증", judgment: review.publication_readiness.validation },
+          ].map(({ label, judgment }) => <div key={label}>
+            <dt className="font-semibold">{label} · {judgment.passed ? "충족" : "미충족"}</dt>
+            <dd className="detail-note mt-1 whitespace-pre-wrap">{judgment.reason}</dd>
+          </div>)}
+          <div><dt className="font-semibold">핵심 주장</dt><dd className="detail-note mt-1 whitespace-pre-wrap">{review.publication_readiness.claim}</dd></div>
+          <div><dt className="font-semibold">적용 범위</dt><dd className="detail-note mt-1 whitespace-pre-wrap">{review.publication_readiness.scope}</dd></div>
+          <div><dt className="font-semibold">검증 근거 · {{ formal: "이론·증명", empirical: "경험적 평가", finite_enumeration: "유한 공간 완전 열거" }[review.publication_readiness.evidence_mode]}</dt>
+            <dd className="detail-note mt-1 whitespace-pre-wrap">{review.publication_readiness.evidence_basis}</dd></div>
+        </dl>
+        {review.publication_readiness.closest_work.map((work, index) => <details key={`${work.source_id}:${work.excerpt_index}`} className="detail-note">
+          <summary>직접 관련 선행 연구 비교 {index + 1}</summary>
+          <p className="mt-2 whitespace-pre-wrap">알려진 결과: {work.known_result}</p>
+          <p className="mt-2 whitespace-pre-wrap">이번 연구의 차이: {work.difference}</p>
+          <blockquote className="mt-2 border-l-2 border-border pl-3 whitespace-pre-wrap">{work.quote}</blockquote>
+        </details>)}
+      </section> : <p className="detail-note mt-3">이 기록에는 신규성·기여의 중요성·검증 범위를 평가한 투고 준비도 검토가 없습니다.</p>}
       {review.issues.length > 0 && <div className="mt-3">
         <p className="font-semibold">보완할 내용</p>
         <ul className="mt-1 list-disc space-y-1 pl-5">{review.issues.map((issue, index) => <li key={index}>{issue}</li>)}</ul>

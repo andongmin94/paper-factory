@@ -21,11 +21,21 @@ const base = () => ({ id, goal: 'A synthetic controller test; no actual research
   schemas: { plan: {}, study_review: {}, code: {}, review: {}, manuscript: {}, manuscript_review: {} } });
 const accepted = { accepted: true, issues: [], checks: ['production', 'controls', 'evidence'] };
 const criterion = { passed: true, reason: 'Synthetic orchestration fixture only; no scholarly adequacy is claimed.' };
+const publicationReadiness = { novelty: criterion, significance: criterion, validation: criterion,
+  claim: 'Synthetic orchestration claim only; no genuine publication readiness is established.',
+  scope: 'Synthetic bounded test units only; this is not a claim about an actual repository.',
+  evidence_mode: 'finite_enumeration', evidence_basis: 'Synthetic evidence binding for controller orchestration, not a real experiment.',
+  closest_work: [{ source_id: 'synthetic-source', excerpt_index: 0,
+    quote: 'Synthetic full-text passage used only to exercise controller contracts, with no claim of inspected actual scientific literature.',
+    known_result: 'Synthetic prior finding used exclusively by orchestration tests.', difference: 'Synthetic distinct result used exclusively by orchestration tests.' }],
+  analysis_keys: ['synthetic.condition_1.mean'], fixture_labels: [], proof_section: null, proof_quote: null };
 const studyAccepted = { accepted: true, issues: [],
   ...Object.fromEntries(['question', 'contribution', 'literature', 'comparison', 'sampling', 'feasibility'].map(name => [name, criterion])),
-  selected_sources: [{ source_id: 'synthetic-source', excerpt_index: 0, relevance: 'Synthetic literature linkage for orchestration tests only.' }] };
+  selected_sources: [{ source_id: 'synthetic-source', excerpt_index: 0, relevance: 'Synthetic literature linkage for orchestration tests only.' }],
+  publication_readiness: publicationReadiness };
 const manuscriptAccepted = { ...accepted,
-  ...Object.fromEntries(['contribution', 'literature', 'interpretation', 'presentation'].map(name => [name, criterion])) };
+  ...Object.fromEntries(['contribution', 'literature', 'interpretation', 'presentation'].map(name => [name, criterion])),
+  publication_readiness: publicationReadiness };
 const manuscriptRejected = issues => ({ ...manuscriptAccepted, accepted: false, issues,
   contribution: { passed: false, reason: 'Synthetic quality rejection; the candidate has no justified research contribution.' },
   remediation: { strategy: 'revise_manuscript', reason: 'Explain the supported synthetic finding without adding any new scientific evidence.',
@@ -515,7 +525,8 @@ function fakeEngineError(code) {
 
 async function fixture(responses = [], workflow = base(), transport = {}) {
   const home = await mkdtemp(join(tmpdir(), 'paper-factory-research-test-'));
-  const calls = []; const prompts = []; const selectionPrompts = []; const events = []; const published = []; let responseIndex = 0; let starts = 0;
+  const calls = []; const prompts = []; const selectionPrompts = []; const literaturePlanPrompts = []; const literatureSelectionPrompts = [];
+  const events = []; const published = []; let responseIndex = 0; let starts = 0;
   const records = new Map([[workflow.id, workflow]]);
   const publicWorkflow = (record = workflow) => {
     record.resume_kind = ['ready', 'cancelled'].includes(record.status) && !record.cleanup_pending && !record.terminal_control_failure && record.code !== 'CLEANUP_UNCONFIRMED'
@@ -536,8 +547,9 @@ async function fixture(responses = [], workflow = base(), transport = {}) {
       if (params.researchId && records.has(params.researchId)) workflow = records.get(params.researchId);
       if (method === 'workflow.create' || method === 'workflow.status') return publicWorkflow();
       if (method === 'workflow.readMaterial') return { text: params.area === 'source'
-        ? sourceText : retainedMaterials[params.name], next_offset: null,
-        ...(params.area === 'source' ? { sha256: digest(sourceText) } : params.name === 'observations' ? { sha256: digest(retainedMaterials.observations) } : {}) };
+        ? sourceText : params.name === 'authoring-selected-literature' ? workflow.authoringSelectedText : retainedMaterials[params.name], next_offset: null,
+        ...(params.area === 'source' ? { sha256: digest(sourceText) } : params.name === 'observations' ? { sha256: digest(retainedMaterials.observations) }
+          : params.name === 'authoring-selected-literature' ? { sha256: digest(workflow.authoringSelectedText) } : {}) };
       if (method === 'workflow.recordInference') return { retained: true };
       if (method === 'workflow.submitProposal') {
         workflow.stage = 'proposed'; workflow.proposal = params.value; workflow.proposal_attempt++;
@@ -553,6 +565,14 @@ async function fixture(responses = [], workflow = base(), transport = {}) {
         workflow.artifacts = observed().artifacts; workflow.material_manifest = observed().material_manifest;
       }
       else if (method === 'workflow.collectLiterature') { /* bounded synthetic retrieval, no network */ }
+      else if (method === 'workflow.collectAuthoringLiterature') { workflow.authoring_literature = transport.authoringLiterature ?? { sources: [] }; }
+      else if (method === 'workflow.selectAuthoringLiterature') {
+        const sources = params.selectedSources.map(selection => ({ ...workflow.authoring_literature.sources.find(source => source.id === selection.source_id),
+          selected_excerpt_index: selection.excerpt_index, relevance: selection.relevance }));
+        workflow.authoringSelectedText = JSON.stringify({ sources, selection: params.selectedSources });
+        workflow.artifacts['authoring-selected-literature'] = { sha256: digest(workflow.authoringSelectedText), size: Buffer.byteLength(workflow.authoringSelectedText) };
+        workflow.literature = { sources: [...(workflow.literature?.sources ?? []), ...sources] };
+      }
       else if (method === 'workflow.resume') { workflow.status = 'ready'; workflow.code = null; }
       else if (method === 'workflow.reviseWriting') { workflow.stage = 'analyzed'; workflow.status = 'ready'; workflow.code = null; }
       else if (method === 'workflow.improveWriting') { workflow.status = 'ready'; workflow.code = null; workflow.improvement_available = false; }
@@ -583,6 +603,20 @@ async function fixture(responses = [], workflow = base(), transport = {}) {
     async listModels() { events.push('client.listModels'); return [{ slug: 'writer' }, { slug: 'reviewer' }]; },
     async streamResponse(options) {
       events.push('client.streamResponse');
+      if (options.input[0].content.startsWith('Plan missing directly relevant literature for submission readiness.')) {
+        literaturePlanPrompts.push(options);
+        const selection = transport.literaturePlan ? await transport.literaturePlan(options)
+          : { queries: [], reason: 'Synthetic empty literature plan; no new reading or publication readiness is claimed.' };
+        if (selection instanceof Error) throw selection;
+        return { text: typeof selection === 'string' ? selection : JSON.stringify(selection) };
+      }
+      if (options.input[0].content.startsWith('Select inspected body passages from the newly retained authoring literature.')) {
+        literatureSelectionPrompts.push(options);
+        const selection = transport.literatureSelection ? await transport.literatureSelection(options)
+          : { selected_sources: [], reason: 'Synthetic empty body-passage selection; no actual reading is claimed.' };
+        if (selection instanceof Error) throw selection;
+        return { text: typeof selection === 'string' ? selection : JSON.stringify(selection) };
+      }
       if (options.input[0].content.startsWith('Select retained explanatory fixtures for manuscript authoring.')) {
         selectionPrompts.push(options);
         const selection = transport.evidenceSelection ? await transport.evidenceSelection(options)
@@ -599,7 +633,7 @@ async function fixture(responses = [], workflow = base(), transport = {}) {
     },
   };
   const controller = new ResearchController(client, engine, home, snapshot => published.push(snapshot));
-  return { home, controller, calls, prompts, selectionPrompts, events, published, engine, client, workflow, records, get starts() { return starts; },
+  return { home, controller, calls, prompts, selectionPrompts, literaturePlanPrompts, literatureSelectionPrompts, events, published, engine, client, workflow, records, get starts() { return starts; },
     async cleanup() { await controller.shutdown(); await rm(home, { recursive: true, force: true }); } };
 }
 
@@ -2422,6 +2456,99 @@ for (const code of ['MANUSCRIPT_INVALID', 'ARTIFACT_CHANGED']) {
     } finally { await f.cleanup(); }
   });
 }
+
+test('historical approval acquires and selects body evidence without changing successful science', async () => {
+  const workflow = observed(); workflow.study_review = { ...studyAccepted, publication_readiness: null };
+  const before = structuredClone({ plan: workflow.plan, artifacts: workflow.artifacts });
+  const passage = 'SYNTHETIC_BODY_PASSAGE: a retained earlier method and limitation, for orchestration checks only. No scholarly conclusion is claimed.';
+  const literature = { sources: [{ id: 'synthetic-source', scope: 'full_text', excerpts: [passage], text_sha256: digest(passage) }] };
+  const selection = [{ source_id: 'synthetic-source', excerpt_index: 0, relevance: 'Synthetic body passage selection checks immutable authoring supplementation only.' }];
+  const f = await fixture([{ sections: [] }, manuscriptAccepted], workflow, {
+    authoringLiterature: literature,
+    literaturePlan: () => ({ queries: ['Synthetic exact scientific method title'], reason: 'Historical approval lacks body evidence; retrieve a directly relevant synthetic source.' }),
+    literatureSelection: () => ({ selected_sources: selection, reason: 'Use this retained synthetic method passage without altering any original study evidence.' }),
+  });
+  try {
+    await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer');
+    assert.equal((await settled(f.controller)).jobs[0].pipeline, 'completed');
+    assert.equal(f.literaturePlanPrompts.length, 1); assert.equal(f.literatureSelectionPrompts.length, 1);
+    const methods = f.calls.map(call => call.method);
+    assert.ok(methods.indexOf('workflow.collectAuthoringLiterature') < methods.indexOf('workflow.selectAuthoringLiterature'));
+    assert.ok(methods.indexOf('workflow.selectAuthoringLiterature') < methods.indexOf('workflow.submitManuscript'));
+    assert.deepEqual(f.calls.find(call => call.method === 'workflow.selectAuthoringLiterature').params.selectedSources, selection);
+    const packets = f.prompts.map(request => promptMaterials(request.input[0].content));
+    assert.equal(JSON.stringify(packets[0]), JSON.stringify(packets[1]));
+    assert.equal(packets[0].retainedEvidence['authoring-selected-literature'], workflow.authoringSelectedText);
+    assert.ok(f.prompts.every(request => request.input[0].content.includes(passage)));
+    assert.match(f.prompts[1].input[0].content, /Abstract-only background cannot establish/);
+    for (const [key, artifact] of Object.entries(before.artifacts)) assert.deepEqual(workflow.artifacts[key], artifact);
+    assert.deepEqual(workflow.plan, before.plan); assert.equal(workflow.execution_attempt, 1); assertNoScientificDispatch(f);
+    const receipts = f.calls.filter(call => call.method === 'workflow.recordInference' && call.params.receipt.phase === 'literature-plan');
+    assert.ok(receipts.some(call => call.params.receipt.outcome === 'completed'));
+    assert.ok(receipts.every(call => call.params.receipt.promptSha256 === digest(f.literaturePlanPrompts[0].input[0].content)));
+  } finally { await f.cleanup(); }
+});
+
+test('unqualified new literature is retained without inventing a selected body passage', async () => {
+  const workflow = observed(); workflow.study_review = { ...studyAccepted, publication_readiness: null };
+  const review = manuscriptRejected(['Synthetic missing prior-work evidence cannot establish originality.']);
+  review.publication_readiness = { ...publicationReadiness, closest_work: [], novelty: { passed: false,
+    reason: 'Synthetic retrieved metadata contains no inspected body evidence for the closest-work comparison.' } };
+  review.remediation = { ...review.remediation, strategy: 'infeasible', reason: 'Synthetic public evidence source is unavailable within this test retrieval boundary.' };
+  const f = await fixture([{ sections: [] }, review], workflow, {
+    literaturePlan: () => ({ queries: ['Synthetic unavailable direct method'], reason: 'Seek directly relevant inspected body evidence before attempting manuscript review.' }),
+  });
+  try {
+    await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer');
+    assert.equal((await settled(f.controller)).jobs[0].code, 'MANUSCRIPT_REJECTED');
+    assert.equal(f.calls.filter(call => call.method === 'workflow.collectAuthoringLiterature').length, 1);
+    assert.equal(f.calls.some(call => call.method === 'workflow.selectAuthoringLiterature'), false);
+    assert.equal(f.calls.some(call => call.method === 'workflow.export'), false);
+    assert.equal(f.literatureSelectionPrompts.length, 1); assert.equal(workflow.execution_attempt, 1); assertNoScientificDispatch(f);
+  } finally { await f.cleanup(); }
+});
+
+for (const defect of ['no-assessment', 'false-originality', 'false-significance', 'false-validation', 'no-closest-work', 'orphan-proof']) {
+  test('a formerly sufficient arithmetic review cannot bypass submission readiness: ' + defect, async () => {
+    const review = structuredClone(manuscriptAccepted);
+    if (defect === 'no-assessment') delete review.publication_readiness;
+    if (defect === 'false-originality') review.publication_readiness.novelty.passed = false;
+    if (defect === 'false-significance') review.publication_readiness.significance.passed = false;
+    if (defect === 'false-validation') review.publication_readiness.validation.passed = false;
+    if (defect === 'no-closest-work') review.publication_readiness.closest_work = [];
+    if (defect === 'orphan-proof') review.publication_readiness.proof_section = 'Discussion';
+    const f = await fixture([{ sections: [] }, review], observed());
+    try {
+      await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer');
+      assert.equal((await settled(f.controller)).jobs[0].code, 'REVIEW_INVALID');
+      assert.equal(f.calls.some(call => ['workflow.submitManuscript', 'workflow.export'].includes(call.method)), false);
+      assert.ok(f.calls.some(call => call.method === 'workflow.recordInference' && call.params.receipt.phase === 'manuscript-review' && call.params.receipt.outcome === 'completed'));
+      assertNoScientificDispatch(f);
+    } finally { await f.cleanup(); }
+  });
+}
+
+test('cancellation during authoring literature collection preserves evidence and dispatches no writing or experiment', async () => {
+  const workflow = observed(); workflow.study_review = { ...studyAccepted, publication_readiness: null };
+  let release; let entered;
+  const collection = new Promise(resolve => { release = resolve; });
+  const started = new Promise(resolve => { entered = resolve; });
+  const f = await fixture([], workflow, {
+    literaturePlan: () => ({ queries: ['Synthetic cancellation literature query'], reason: 'This synthetic query exercises a cancellation boundary without making actual provider requests.' }),
+    async request(method) {
+      if (method !== 'workflow.collectAuthoringLiterature') return undefined;
+      entered(); await collection; return { ...workflow, authoring_literature: { sources: [] } };
+    },
+  });
+  try {
+    await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer'); await started;
+    const cancelling = f.controller.cancel(id); release(); await cancelling;
+    assert.equal((await settled(f.controller)).busy, false);
+    assert.equal(f.prompts.length, 0); assert.equal(f.selectionPrompts.length, 0); assert.equal(f.literatureSelectionPrompts.length, 0);
+    assert.equal(f.calls.some(call => ['workflow.submitManuscript', 'workflow.selectAuthoringLiterature', 'workflow.export'].includes(call.method)), false);
+    assert.equal(workflow.execution_attempt, 1); assertNoScientificDispatch(f);
+  } finally { release(); await f.cleanup(); }
+});
 
 test('startup reconciles a prepared revision after interruption to paused analyzed state without automatic authoring', async () => {
   const workflow = observed();

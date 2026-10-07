@@ -23,7 +23,7 @@ import zipfile
 from . import conversion, project
 from .author import load_author
 from .autonomous import literature, science
-from .autonomous.models import CodeBundle, FrozenArtifact, ManuscriptDraft, ManuscriptReview, ResearchPlan, ScientificReview, StudyReview
+from .autonomous.models import CodeBundle, FrozenArtifact, LiteratureSelection, ManuscriptDraft, ManuscriptReview, PublicationReadiness, ResearchPlan, ScientificReview, StudyReview
 from .models import Project, now, uid
 from .workflow_models import ModelEvidenceReceipt, Workflow
 from .workspace import Workspace, digest_file, ensure_unlinked, loads_json, safe_relative, write_json
@@ -39,7 +39,7 @@ SCHEMAS = {"plan": ResearchPlan.model_json_schema(), "study_review": StudyReview
            "code": CodeBundle.model_json_schema(), "review": ScientificReview.model_json_schema(),
            "manuscript": ManuscriptDraft.model_json_schema(), "manuscript_review": ManuscriptReview.model_json_schema()}
 READABLE_EVIDENCE = {"proposal", "plan", "study-review", "selected-literature", "observations", "analysis",
-                     "literature", "manuscript", "canonical", "runtime-manifest", "prior-study", "redesign-origin"}
+                     "literature", "authoring-selected-literature", "manuscript", "canonical", "runtime-manifest", "prior-study", "redesign-origin"}
 PUBLIC_EXECUTION_FIELDS = ("status", "code", "backend", "simulation", "exit_code", "coverage_mechanism", "coverage_truncated",
                            "production_calls", "cleanup_confirmed", "duration_seconds", "limits", "source_digest",
                            "protocol_sha256", "bundle_sha256")
@@ -368,6 +368,8 @@ class WorkflowService:
         data["manuscript_review"] = (ManuscriptReview.model_validate(manuscript_review).model_dump(mode="json")
             if manuscript_review and all(name in manuscript_review for name in
                 ("contribution", "literature", "interpretation", "presentation")) else None)
+        data["authoring_literature"] = _read(ws, record, "authoring-literature") if "authoring-literature" in record.artifacts else None
+        data["authoring_selection"] = _read(ws, record, "authoring-selected-literature") if "authoring-selected-literature" in record.artifacts else None
         data["improvement_available"] = self._improvement_available(ws, record)
         if record.code == "STUDY_REJECTED" and data["study_review"]:
             data["message"] = "연구 적합성 검토에서 보완이 필요합니다. " + _diagnostic("; ".join(data["study_review"]["issues"]))
@@ -397,7 +399,7 @@ class WorkflowService:
                     value["cleanup_reconciled"] = self._confirmed_cleanup(ws, record)
                 data[key] = value
         if "selected-literature" in record.artifacts:
-            data["literature"] = _read(ws, record, "selected-literature")
+            data["literature"] = self._writing_literature(ws, record)
         source_context = _artifact(ws, record, "context").read_text(encoding="utf-8")
         if record.code == "CLEANUP_UNCONFIRMED":
             data["instructions"] = "Owned worker cleanup is unconfirmed. Do not submit code or start another experiment. Restore the bundled runtime and restart the app so owned cleanup can be reconciled."
@@ -684,6 +686,8 @@ class WorkflowService:
 
     def submit_proposal(self, research_id: str, value: dict) -> dict:
         plan = ResearchPlan.model_validate(value)
+        if plan.research_claim is None:
+            raise WorkflowError("RESEARCH_CLAIM_REQUIRED", "A new proposal must identify its claim, scope, importance and validation strategy")
         with self._operation(research_id) as (ws, record):
             self._require(ws, record, {"created", "proposed"})
             if record.execution_attempt or record.proposal_attempt >= 3:
@@ -724,6 +728,10 @@ class WorkflowService:
     def submit_study_review(self, research_id: str, value: dict) -> dict:
         """Freeze a protocol only after a literature-grounded suitability decision."""
         review = StudyReview.model_validate(value)
+        if review.publication_readiness is None:
+            raise WorkflowError("PUBLICATION_READINESS_REQUIRED", "Every new study review must assess novelty, significance and validation")
+        if not review.accepted and not review.issues:
+            raise WorkflowError("REVIEW_ISSUES_REQUIRED", "A fresh rejection must record its concrete deficiencies")
         with self._operation(research_id) as (ws, record):
             self._require(ws, record, {"proposed"})
             if record.execution_attempt:
@@ -734,7 +742,10 @@ class WorkflowService:
             evidence = _read(ws, record, "literature")
             if review.accepted:
                 _require_complete_literature(ResearchPlan.model_validate(_read(ws, record, "proposal")), evidence)
-            selected = self._selected_literature(evidence, review)
+            selected = self._selected_literature(evidence, review.selected_sources)
+            if review.accepted:
+                self._publication_gate(ws, record, ResearchPlan.model_validate(_read(ws, record, "proposal")),
+                                       review.publication_readiness, selected)
             root = _artifact(ws, record, "proposal").parent
             receipt = {"origin": "native_host_submission", "review": review.model_dump(mode="json"),
                        "proposal_sha256": record.artifacts["proposal"].sha256,
@@ -759,10 +770,10 @@ class WorkflowService:
             return self._public(ws, record)
 
     @staticmethod
-    def _selected_literature(evidence: dict, review: StudyReview) -> dict:
+    def _selected_literature(evidence: dict, selections: list[LiteratureSelection]) -> dict:
         sources = science._literature_sources(evidence)
         selected = []
-        for selection in review.selected_sources:
+        for selection in selections:
             source = sources.get(selection.source_id)
             if source is None:
                 raise WorkflowError("LITERATURE_SELECTION_INVALID", "Selected source was not retrieved")
@@ -772,17 +783,158 @@ class WorkflowService:
                 raise WorkflowError("LITERATURE_SELECTION_INVALID", str(error)) from None
             if selection.excerpt_index >= len(source["excerpts"]) or not source["excerpts"][selection.excerpt_index].strip():
                 raise WorkflowError("LITERATURE_SELECTION_INVALID", "Selected excerpt was not inspected")
-            if any(item["id"] == source["id"] for item in selected):
-                raise WorkflowError("LITERATURE_SELECTION_INVALID", "Select one grounded excerpt per source")
+            if "excerpt_ranges" in source and (not isinstance(source["excerpt_ranges"], list) or
+                    selection.excerpt_index >= len(source["excerpt_ranges"])):
+                raise WorkflowError("LITERATURE_SELECTION_INVALID", "Selected excerpt lacks its retained-text range")
+            existing = next((item for item in selected if item["id"] == source["id"]), None)
+            if existing is not None:
+                indices = existing.get("selected_excerpt_indices", [existing["selected_excerpt_index"]])
+                if selection.excerpt_index in indices:
+                    raise WorkflowError("LITERATURE_SELECTION_INVALID", "Selected source and excerpt pairs must be distinct")
+                existing["selected_excerpt_indices"] = indices + [selection.excerpt_index]
+                existing["excerpts"].append(source["excerpts"][selection.excerpt_index])
+                existing["relevance"] += "\n" + selection.relevance
+                if "excerpt_ranges" in source:
+                    existing["excerpt_ranges"].append(source["excerpt_ranges"][selection.excerpt_index])
+                continue
             grounded = {**source, "excerpts": [source["excerpts"][selection.excerpt_index]],
                         "relevance": selection.relevance, "selected_excerpt_index": selection.excerpt_index}
+            if "excerpt_ranges" in source:
+                grounded["excerpt_ranges"] = [source["excerpt_ranges"][selection.excerpt_index]]
             try:
                 science._citation_evidence(grounded)
             except ValueError as error:
                 raise WorkflowError("LITERATURE_SELECTION_INVALID", str(error)) from None
             selected.append(grounded)
-        return {"sources": selected, "selection": review.model_dump(mode="json")["selected_sources"],
+        return {"sources": selected, "selection": [item.model_dump(mode="json") for item in selections],
                 "scope": "Only sources explicitly selected by the study suitability review may ground the manuscript"}
+
+    @staticmethod
+    def _writing_literature(ws: Workspace, record: Workflow) -> dict:
+        literature_evidence = _read(ws, record, "selected-literature")
+        collection = _read(ws, record, "authoring-literature") if "authoring-literature" in record.artifacts else None
+        coverage = None
+        if collection is not None:
+            coverage = {key: collection.get(key, False) for key in ("cancelled", "timed_out", "rate_limited")}
+            coverage.update(quality_status=collection.get("quality_status"),
+                searches=[{key: search[key] for key in ("query", "status", "attempted", "error", "http_status", "resolved_ids")
+                           if key in search} for search in collection.get("searches", [])],
+                warnings=[_diagnostic(warning, 300) for warning in collection.get("warnings", [])[:20]])
+        if "authoring-selected-literature" not in record.artifacts:
+            return {**literature_evidence, "authoring_collection": coverage} if coverage is not None else literature_evidence
+        supplement = _read(ws, record, "authoring-selected-literature")
+        if supplement.get("collection_sha256") != record.artifacts["authoring-literature"].sha256:
+            raise WorkflowError("ARTIFACT_CHANGED", "Authoring selection belongs to a different retained collection")
+        sources = {source["id"]: source for source in literature_evidence["sources"]}
+        for extra in supplement["sources"]:
+            original = sources.get(extra["id"])
+            if original is None:
+                sources[extra["id"]] = extra
+                continue
+            scopes = {"metadata_only": 0, "abstract": 1, "full_text": 2}
+            primary = extra if scopes.get(extra.get("scope"), 0) >= scopes.get(original.get("scope"), 0) else original
+            merged = {**primary, "excerpts": [], "excerpt_ranges": [], "passage_provenance": [], "selected_excerpt_indices": []}
+            seen = {}
+            for source in (original, extra):
+                indices = source.get("selected_excerpt_indices", [source["selected_excerpt_index"]])
+                for position, passage in enumerate(source["excerpts"]):
+                    location = (source.get("excerpt_ranges") or [{}] * len(source["excerpts"]))[position]
+                    provenance = {key: source.get(key) for key in ("scope", "text_path", "text_sha256", "raw_path", "sha256",
+                                  "metadata_path", "metadata_sha256", "url", "arxiv_id", "body_range")}
+                    provenance.update(excerpt_index=indices[position], excerpt_range=location)
+                    identity = (indices[position], source.get("text_sha256") or source["sha256"],
+                                hashlib.sha256(passage.encode()).hexdigest(), location.get("start"), location.get("end"))
+                    if identity in seen:
+                        previous = merged["passage_provenance"][seen[identity]]
+                        if scopes.get(provenance.get("scope"), 0) > scopes.get(previous.get("scope"), 0) or (
+                                scopes.get(provenance.get("scope"), 0) == scopes.get(previous.get("scope"), 0) and
+                                provenance.get("body_range") is not None):
+                            merged["passage_provenance"][seen[identity]] = provenance
+                        continue
+                    seen[identity] = len(merged["excerpts"])
+                    merged["excerpts"].append(passage)
+                    merged["excerpt_ranges"].append(location)
+                    merged["passage_provenance"].append(provenance)
+                    merged["selected_excerpt_indices"].append(indices[position])
+            merged["selected_excerpt_index"] = merged["selected_excerpt_indices"][0]
+            sources[extra["id"]] = merged
+        return {"sources": list(sources.values()), "selection": literature_evidence["selection"] + supplement["selection"],
+                "scope": "Only inspected study and authoring-selected passages may ground the manuscript",
+                "authoring_collection": coverage}
+
+    @staticmethod
+    def _publication_gate(ws: Workspace, record: Workflow, plan: ResearchPlan, readiness: PublicationReadiness,
+                          selected: dict, draft: ManuscriptDraft | None = None) -> None:
+        if not readiness.eligible():
+            raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Publication approval requires novelty, significance, validation and closest inspected work")
+        if plan.research_claim is not None and (readiness.evidence_mode != plan.research_claim.mode or
+                readiness.claim != plan.research_claim.claim or readiness.scope != plan.research_claim.scope):
+            raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Publication assessment must preserve the frozen claim, scope and evidence mode")
+        sources = science._literature_sources(selected)
+        for work in readiness.closest_work:
+            source = sources.get(work.source_id)
+            if source is None or source.get("scope") != "full_text":
+                raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Closest-work positioning requires selected full-text evidence")
+            indices = source.get("selected_excerpt_indices", [source.get("selected_excerpt_index")])
+            if work.excerpt_index not in indices:
+                raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Closest-work passage was not selected")
+            candidates = [index for index, original_index in enumerate(indices) if original_index == work.excerpt_index and
+                          work.quote in source["excerpts"][index] and (not source.get("passage_provenance") or
+                          source["passage_provenance"][index].get("scope") == "full_text")]
+            if not candidates:
+                raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Closest-work quote must identify an inspected literal full-text passage")
+            index = next((candidate for candidate in reversed(candidates) if (
+                source["passage_provenance"][candidate] if source.get("passage_provenance") else source).get("body_range") is not None), candidates[-1])
+            passage = source["excerpts"][index]
+            provenance = source["passage_provenance"][index] if source.get("passage_provenance") else source
+            text_path, digest = provenance.get("text_path"), provenance.get("text_sha256")
+            if not isinstance(text_path, str) or not isinstance(digest, str):
+                raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Closest work lacks retained extracted text")
+            expected_path = safe_relative(ws.path("research"), text_path)
+            retained_key = next((key for key, frozen in record.artifacts.items() if key.startswith("literature-") and
+                                 frozen.path == expected_path.relative_to(ws.root).as_posix() and frozen.sha256 == digest), None)
+            if retained_key is None:
+                raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Closest-work text lacks a frozen artifact binding")
+            retained = _artifact(ws, record, retained_key)
+            text = retained.read_bytes().decode("utf-8")
+            ranges = source.get("excerpt_ranges", [])
+            location = provenance.get("excerpt_range") if source.get("passage_provenance") else (
+                ranges[index] if index < len(ranges) else None)
+            if not isinstance(location, dict):
+                raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Closest-work passage lacks a literal retained-text range")
+            start, end = location.get("start"), location.get("end")
+            if type(start) is not int or type(end) is not int or not 0 <= start < end <= len(text) or text[start:end] != passage:
+                raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Closest-work excerpt is not literal retained source text")
+            if work.quote not in passage or len(work.quote.strip()) < 80:
+                raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Closest-work quote must identify an inspected literal passage")
+            body = literature.full_text_body_range(text)
+            if body is None or provenance.get("body_range") != body:
+                raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Closest work lacks a recognizable retained paper-body boundary")
+            quote_start = start + passage.index(work.quote)
+            if not body["start"] <= quote_start or quote_start + len(work.quote) > body["end"]:
+                raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Closest-work comparison must use paper-body text rather than abstract or bibliography")
+        if draft is None:
+            if readiness.analysis_keys or readiness.fixture_labels or readiness.proof_section is not None:
+                raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Pre-execution assessment cannot claim observed or completed proof evidence")
+            return
+        analysis = _read(ws, record, "analysis")
+        if any(key not in analysis["results"] for key in readiness.analysis_keys):
+            raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Publication assessment refers to an absent analysis result")
+        observations = _read(ws, record, "observations")
+        labels = {fixture["label"] for fixture in observations.get("fixtures", [])}
+        if any(label not in labels for label in readiness.fixture_labels):
+            raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Publication assessment refers to an absent retained fixture")
+        if readiness.evidence_mode in {"empirical", "finite_enumeration"} and not readiness.analysis_keys:
+            raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Measured claims must identify actual retained analysis results")
+        if readiness.evidence_mode == "formal" and readiness.proof_section is None:
+            raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "A formal claim requires an explicit retained proof passage")
+        if readiness.proof_section is not None:
+            section = next((item for item in draft.sections if item.heading == readiness.proof_section), None)
+            if section is None or readiness.proof_quote not in section.text or len(readiness.proof_quote.strip()) < 80:
+                raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Proof reference must identify a literal substantive candidate passage")
+        related = next((section.text for section in draft.sections if section.heading == "Related Work"), "")
+        if any("{{citation:" + work.source_id + "}}" not in related for work in readiness.closest_work):
+            raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "The manuscript must cite its inspected closest work in Related Work")
 
     def _require_study_review(self, ws: Workspace, record: Workflow) -> None:
         if "study-review" not in record.artifacts or "selected-literature" not in record.artifacts:
@@ -797,7 +949,7 @@ class WorkflowService:
                 receipt.get("protocol_sha256") != record.artifacts["plan"].sha256 or
                 receipt.get("literature_sha256") != record.artifacts["literature"].sha256 or
                 receipt.get("selected_literature_sha256") != record.artifacts["selected-literature"].sha256 or
-                _read(ws, record, "selected-literature") != self._selected_literature(evidence, review)):
+                _read(ws, record, "selected-literature") != self._selected_literature(evidence, review.selected_sources)):
             raise WorkflowError("ARTIFACT_CHANGED", "Study approval does not bind the retained protocol and selected literature")
         _require_complete_literature(ResearchPlan.model_validate(_read(ws, record, "plan")), evidence)
 
@@ -872,7 +1024,8 @@ class WorkflowService:
                         raise WorkflowError("ARTIFACT_CHANGED", "Literature search differs from its retrieval digest")
                     _freeze(ws, record, "literature-search-" + search["sha256"], original)
             for number, source in enumerate(evidence.get("sources", [])):
-                for field, digest in (("raw_path", "sha256"), ("metadata_path", "metadata_sha256"), ("text_path", "text_sha256")):
+                for field, digest in (("raw_path", "sha256"), ("metadata_path", "metadata_sha256"), ("text_path", "text_sha256"),
+                                      ("discovery_path", "discovery_sha256")):
                     if source.get(field):
                         original = safe_relative(ws.path("research"), source[field])
                         if digest_file(original) != source.get(digest):
@@ -883,6 +1036,86 @@ class WorkflowService:
                                                     for source in evidence.get("sources", [])):
                 raise WorkflowError("LITERATURE_EVIDENCE_INSUFFICIENT", "Metadata alone cannot support Related Work; retrieval evidence is retained")
             _require_complete_literature(plan, evidence)
+            return self._public(ws, record)
+
+    def collect_authoring_literature(self, research_id: str, queries: list[str]) -> dict:
+        """Retain one bounded authoring collection without replacing the measured study."""
+        if (not isinstance(queries, list) or not 1 <= len(queries) <= 4 or
+                any(not isinstance(query, str) or not 8 <= len(query.strip()) <= 1000 for query in queries) or
+                len(set(query.strip() for query in queries)) != len(queries)):
+            raise WorkflowError("LITERATURE_QUERIES_INVALID", "Authoring literature requires one to four distinct substantive queries")
+        with self._operation(research_id) as (ws, record):
+            self._require(ws, record, {"analyzed"})
+            self._require_successful_analysis(ws, record)
+            self._require_study_review(ws, record)
+            queries = [query.strip() for query in queries]
+            root = ws.path("research/authoring-literature/" + uid("collection"))
+            root.mkdir(parents=True, exist_ok=False)
+            evidence = self.collector(queries, root, limit=3, cancel=lambda: False)
+            evidence["queries"] = queries
+            incomplete = any(evidence.get(flag) for flag in ("cancelled", "timed_out", "rate_limited")) or (
+                set(queries) - _attempted_literature_queries(evidence))
+            evidence["quality_status"] = "incomplete" if incomplete else (
+                "full_text_available" if any(source.get("scope") == "full_text" for source in evidence.get("sources", [])) else "no_full_text")
+            sources = evidence.get("sources", [])
+            if not isinstance(sources, list) or len(sources) > 3:
+                raise WorkflowError("LITERATURE_SOURCE_LIMIT", "One authoring collection may retrieve at most three sources")
+            # Collector paths are relative to its owned root. Store workflow-relative
+            # research paths so raw files can use the same frozen-evidence checks.
+            for source in sources:
+                excerpts = source.get("excerpts", [])
+                if not isinstance(excerpts, list) or len(excerpts) > 12 or any(
+                        not isinstance(passage, str) or len(passage) > 1500 for passage in excerpts):
+                    raise WorkflowError("LITERATURE_SOURCE_LIMIT", "Authoring passages exceed the bounded collection contract")
+            for entry in [*evidence.get("searches", []), *sources]:
+                fields = (("raw_path", "sha256"),) if entry not in sources else (
+                    ("raw_path", "sha256"), ("metadata_path", "metadata_sha256"),
+                    ("text_path", "text_sha256"), ("discovery_path", "discovery_sha256"))
+                for field, digest_field in fields:
+                    if not entry.get(field):
+                        continue
+                    original = safe_relative(root, entry[field])
+                    if digest_file(original) != entry.get(digest_field):
+                        raise WorkflowError("ARTIFACT_CHANGED", "Authoring literature differs from its retrieval digest")
+                    entry[field] = original.relative_to(ws.path("research")).as_posix()
+                    prefix = "literature-search-" if entry not in sources else "literature-"
+                    key = prefix + entry[digest_field] + ("-" + field if entry in sources else "")
+                    relative = original.relative_to(ws.root).as_posix()
+                    if key in record.artifacts and record.artifacts[key].path != relative:
+                        key += "-" + hashlib.sha256(relative.encode()).hexdigest()[:12]
+                    _freeze(ws, record, key, original)
+            path = root / "evidence.json"
+            write_json(path, evidence)
+            key = "authoring-literature-" + root.name
+            _freeze(ws, record, key, path)
+            _freeze(ws, record, "authoring-literature", path)
+            # A new source index requires a new explicit selection. Earlier
+            # selections remain immutable under their numbered artifact keys.
+            record.artifacts.pop("authoring-selected-literature", None)
+            self._save(ws, record)
+            return self._public(ws, record)
+
+    def select_authoring_literature(self, research_id: str, selected_sources: list[dict]) -> dict:
+        """Freeze only the literal passages selected for the current writing packet."""
+        if not isinstance(selected_sources, list) or not 1 <= len(selected_sources) <= 6:
+            raise WorkflowError("LITERATURE_SELECTION_INVALID", "Select one to six inspected authoring passages")
+        selections = [LiteratureSelection.model_validate(value) for value in selected_sources]
+        if len({(item.source_id, item.excerpt_index) for item in selections}) != len(selections):
+            raise WorkflowError("LITERATURE_SELECTION_INVALID", "Selected source and excerpt pairs must be distinct")
+        with self._operation(research_id) as (ws, record):
+            self._require(ws, record, {"analyzed"})
+            self._require_successful_analysis(ws, record)
+            evidence = _read(ws, record, "authoring-literature")
+            # Selection does not approve scientific quality; it only binds the
+            # source passages subsequently supplied identically to both models.
+            selected = self._selected_literature(evidence, selections)
+            selected["collection_sha256"] = record.artifacts["authoring-literature"].sha256
+            selected["scope"] = "Selected literal authoring passages; selection is not scientific approval"
+            path = ws.path("research/authoring-literature/" + uid("selection") + ".json")
+            write_json(path, selected)
+            _freeze(ws, record, "authoring-selected-literature-" + path.stem, path)
+            _freeze(ws, record, "authoring-selected-literature", path)
+            self._save(ws, record)
             return self._public(ws, record)
 
     def record_inference(self, research_id: str, value: dict) -> dict:
@@ -1315,7 +1548,7 @@ class WorkflowService:
             for key, frozen in parent.artifacts.items():
                 if key.startswith("prior-study-"):
                     relative, retained_key = frozen.path, key
-                elif (key in retained_keys or key.startswith("analysis-") or
+                elif (key in retained_keys or key.startswith(("analysis-", "authoring-literature", "authoring-selected-literature", "literature-")) or
                       re.fullmatch(r"(?:draft|manuscript-review|code-review|cleanup)-[1-9][0-9]*", key)):
                     relative = "research/prior-studies/" + parent.id + "/" + frozen.path
                     retained_key = "prior-study-" + parent.id + "-" + key
@@ -1535,12 +1768,19 @@ class WorkflowService:
     def submit_manuscript(self, research_id: str, value: dict, review: dict) -> dict:
         draft = ManuscriptDraft.model_validate(value)
         assessment = ManuscriptReview.model_validate(review)
+        if assessment.publication_readiness is None:
+            raise WorkflowError("PUBLICATION_READINESS_REQUIRED", "Every new manuscript review must assess novelty, significance and validation")
+        if not assessment.accepted and not assessment.issues:
+            raise WorkflowError("REVIEW_ISSUES_REQUIRED", "A fresh rejection must record its concrete deficiencies")
         if not assessment.accepted and assessment.remediation is None:
             raise WorkflowError("REVIEW_REMEDIATION_REQUIRED", "A new rejection must identify evidence-grounded remediation before it can be submitted")
         with self._operation(research_id) as (ws, record):
             self._require(ws, record, {"analyzed"})
             self._require_study_review(ws, record)
             plan = ResearchPlan.model_validate(_read(ws, record, "plan"))
+            writing_literature = self._writing_literature(ws, record)
+            if assessment.accepted:
+                self._publication_gate(ws, record, plan, assessment.publication_readiness, writing_literature, draft)
             record.draft_attempt += 1
             root = ws.path(f"research/drafts/attempt-{record.draft_attempt}")
             while root.exists():
@@ -1554,6 +1794,9 @@ class WorkflowService:
                              "protocol_sha256": record.artifacts["plan"].sha256,
                              "analysis_sha256": record.artifacts["analysis"].sha256,
                              "literature_sha256": record.artifacts["literature"].sha256}
+            for key in ("authoring-literature", "authoring-selected-literature"):
+                if key in record.artifacts:
+                    review_receipt[key.replace("-", "_") + "_sha256"] = record.artifacts[key].sha256
             if not assessment.accepted:
                 write_json(root / "review.json", review_receipt)
                 _freeze(ws, record, f"manuscript-review-{record.draft_attempt}", root / "review.json")
@@ -1562,7 +1805,7 @@ class WorkflowService:
                 self._save(ws, record)
                 return self._public(ws, record)
             rendered = science.validate_and_render(draft.model_dump(mode="json"), plan, _read(ws, record, "analysis"),
-                                                  _read(ws, record, "selected-literature"), root,
+                                                  writing_literature, root,
                                                   author=load_author().model_dump(exclude_defaults=True))
             markdown = Path(rendered["markdown_path"])
             _append_figures(ws, record, markdown)
@@ -1634,6 +1877,9 @@ class WorkflowService:
         if "runtime-manifest" in record.artifacts:
             selection["runtime-manifest.json"] = _artifact(ws, record, "runtime-manifest")
         for key in record.artifacts:
+            if key.startswith(("authoring-literature", "authoring-selected-literature")):
+                path = _artifact(ws, record, key)
+                selection["authoring/literature/" + key + ".json"] = path
             if re.fullmatch(r"(?:proposal|study-review)-[1-3]", key):
                 path = _artifact(ws, record, key)
                 selection["research-design/" + key + ".json"] = path
@@ -1685,7 +1931,7 @@ class WorkflowService:
                 selection["literature/history/" + key.removeprefix("literature-history-") + ".json"] = path
             elif key.startswith("literature-"):
                 path = _artifact(ws, record, key)
-                selection["literature/" + path.relative_to(ws.path("research/literature")).as_posix()] = path
+                selection[path.relative_to(ws.path("research")).as_posix()] = path
         imported = ws.latest("project", Project)
         for asset in imported.assets:
             selection["source/" + asset.path] = safe_relative(ws.path("source"), asset.path)
@@ -1738,6 +1984,12 @@ class WorkflowService:
 
             phase("artifact-source-validation")
             _verify_artifacts(ws, record)
+            approval = _read(ws, record, "manuscript-review")
+            for key in ("authoring-literature", "authoring-selected-literature"):
+                binding = approval.get(key.replace("-", "_") + "_sha256")
+                if (key in record.artifacts and binding != record.artifacts[key].sha256) or (
+                        key not in record.artifacts and binding is not None):
+                    raise WorkflowError("ARTIFACT_CHANGED", "Manuscript approval differs from its retained authoring literature")
             plan = ResearchPlan.model_validate(_read(ws, record, "plan"))
             _production_execution(_read(ws, record, "execution"), plan)
             if not self._confirmed_cleanup(ws, record):
@@ -1755,7 +2007,7 @@ class WorkflowService:
             canonical = _read(ws, record, "canonical")
             with tempfile.TemporaryDirectory(prefix="paperfactory-manuscript-") as directory:
                 rendered = science.validate_and_render({"title": canonical["title"], "sections": canonical["sections"]}, plan, analysis,
-                    _read(ws, record, "selected-literature"), Path(directory), author=canonical.get("author"))
+                    self._writing_literature(ws, record), Path(directory), author=canonical.get("author"))
                 _append_figures(ws, record, Path(rendered["markdown_path"]))
                 if digest_file(Path(rendered["markdown_path"])) != record.artifacts["manuscript"].sha256:
                     raise ValueError("Manuscript differs from independent evidence rendering")

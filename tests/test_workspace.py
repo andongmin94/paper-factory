@@ -1,5 +1,7 @@
 import errno
+import hashlib
 import os
+from pathlib import Path
 import sys
 from types import SimpleNamespace
 
@@ -29,6 +31,43 @@ def test_json_evidence_preserves_valid_types_and_exact_integers():
     assert loads_json('{"control":true,"label":"가","units":[null,1.25,9007199254740993]}'.encode("utf-8")) == {
         "control": True, "label": "가", "units": [None, 1.25, 9007199254740993],
     }
+
+
+def test_long_artifact_paths_preserve_relative_identity_and_verified_io(tmp_path):
+    ws = Workspace.create(tmp_path / "workspace")
+    relative = "/".join(["retained-" + "a" * 64] * 3 + ["evidence.json"])
+    path = ws.path(relative)
+    assert len(str(path)) > 260
+    assert str(path) == str(ws.root / relative)
+    assert path.relative_to(ws.root).as_posix() == relative
+    assert path.resolve() == ws.root / relative
+    module.write_json(path, {"retained": "exact synthetic evidence"})
+    content = path.read_bytes()
+    assert loads_json(content) == {"retained": "exact synthetic evidence"}
+    assert module.digest_file(path) == hashlib.sha256(content).hexdigest()
+    assert path.stat().st_size == len(content)
+    staging = ws.path("staging.json")
+    staging.write_bytes(content)
+    target = path.with_name("atomic-copy.json")
+    os.replace(staging, target)
+    target.chmod(0o444)
+    assert target.read_bytes() == content and not staging.exists()
+    assert not str(target).startswith("\\\\?\\")
+    assert Path(str(target)).relative_to(ws.root).as_posix().endswith("atomic-copy.json")
+
+
+def test_long_relative_artifact_checks_absolute_ancestors_without_changing_identity(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    Workspace.create(tmp_path / "workspace")
+    relative = "/".join(["retained-" + "a" * 64] * 3 + ["evidence.txt"])
+    path = module.safe_relative(Path("workspace"), relative)
+    assert not path.is_absolute()
+    assert path.absolute() == tmp_path / "workspace" / relative
+    assert not str(path.absolute()).startswith("\\\\?\\")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"relative identity, absolute verified IO")
+    assert path.resolve().is_relative_to((tmp_path / "workspace").resolve())
+    assert path.read_bytes() == b"relative identity, absolute verified IO"
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows byte-range locking regression")

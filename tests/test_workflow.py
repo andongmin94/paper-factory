@@ -15,7 +15,7 @@ import zipfile
 
 import pytest
 
-from paper_factory.autonomous import science
+from paper_factory.autonomous import literature, science
 from paper_factory.autonomous.models import FrozenArtifact, ResearchPlan
 from paper_factory.workflow import WorkflowError, WorkflowService, _scientific_inputs
 from paper_factory.workflow_models import Workflow
@@ -43,6 +43,10 @@ def protocol():
         "analysis_method": "Descriptive statistics with differences paired by seed and fixture unit.",
         "limitations": ["Synthetic inputs do not represent natural populations.", "Instrumentation affects measured execution time."],
         "literature_queries": ["independent software testing oracle"],
+        "research_claim": {"mode": "finite_enumeration", "claim": "Synthetic controlled fixture checks establish no real academic contribution.",
+                           "scope": "Only synthetic orchestration inputs; no population or universal correctness claim.",
+                           "importance": "This simulated declaration tests product contracts and establishes no scholarly importance.",
+                           "validation_plan": "Retained synthetic fixture rows exercise deterministic paired-result binding."},
     }
 
 
@@ -87,34 +91,59 @@ def manuscript():
 
 
 REVIEW = {"accepted": True, "issues": [], "checks": ["Synthetic native host review fixture"]}
+SYNTHETIC_PASSAGE = ("Synthetic passage: independent software test oracles define expected outcomes separately from the implementation. "
+                     "Controlled fixtures compare behavior with annotations and cannot establish population failure rates.")
+SYNTHETIC_ABSTRACT = "Synthetic abstract describes fixture checks without establishing actual prior-work methods, findings, or any scientific importance."
+SYNTHETIC_PREFIX = "Abstract\n" + SYNTHETIC_ABSTRACT + "\n\nIntroduction\n"
+SYNTHETIC_SUFFIX = "\nReferences\nSynthetic bibliography is contextual metadata and is not a research method or finding."
+SYNTHETIC_BODY_START = len(SYNTHETIC_PREFIX)
+
+
+def publication_readiness(*, manuscript=False):
+    return {**{name: {"passed": True, "reason": "Synthetic positive fixture only; no real journal readiness is attested."}
+               for name in ("novelty", "significance", "validation")},
+            "claim": protocol()["research_claim"]["claim"], "scope": protocol()["research_claim"]["scope"],
+            "evidence_mode": "finite_enumeration",
+            "evidence_basis": "Synthetic deterministic records bind this simulated assessment to fixture results.",
+            "closest_work": [{"source_id": "fixture-oracle", "excerpt_index": 0, "quote": SYNTHETIC_PASSAGE[:100],
+                              "known_result": "Synthetic independent-oracle passage is a test artifact rather than actual prior work.",
+                              "difference": "This synthetic comparison exercises binding without asserting any scientific novelty."}],
+            "analysis_keys": ["error.paired_2_minus_1.mean"] if manuscript else [], "fixture_labels": [],
+            "proof_section": None, "proof_quote": None}
+
+
 STUDY_CRITERIA = ("question", "contribution", "literature", "comparison", "sampling", "feasibility")
 STUDY_REVIEW = {"accepted": True, "issues": [], **{
     name: {"passed": True, "reason": "Synthetic positive decision fixture for orchestration; not an academic assessment."}
     for name in STUDY_CRITERIA}, "selected_sources": [{
         "source_id": "fixture-oracle", "excerpt_index": 0,
-        "relevance": "Synthetic passage selection exercises retained literature binding, not research relevance."}]}
+        "relevance": "Synthetic passage selection exercises retained literature binding, not research relevance."}],
+        "publication_readiness": publication_readiness()}
 MANUSCRIPT_REVIEW = {**REVIEW, **{
     name: {"passed": True, "reason": "Synthetic positive manuscript decision fixture; no scholarly adequacy is attested."}
-    for name in ("contribution", "literature", "interpretation", "presentation")}, "remediation": None}
+    for name in ("contribution", "literature", "interpretation", "presentation")}, "remediation": None,
+    "publication_readiness": publication_readiness(manuscript=True)}
 BUNDLE = {"runtime": "quickjs", "entrypoint": "experiment.mjs", "files": [
     {"path": "experiment.mjs", "content": "export default function run() { throw new Error('Unexecuted synthetic fixture'); }\n"}],
     "explanation": "Controlled experiment fixture for deterministic workflow orchestration checks."}
 
 
 def collect(queries, root, *, limit, cancel):
-    assert queries and limit == 6
-    text = ("Synthetic passage: independent software test oracles define expected outcomes separately from the implementation. "
-            "Controlled fixtures compare behavior with annotations and cannot establish population failure rates.")
+    assert queries and limit in {3, 6}
+    text = SYNTHETIC_PASSAGE
     raw = Path(root) / "literature" / "fixture-source.json"
     metadata = raw.with_name("fixture-metadata.json")
     decoded = raw.with_suffix(".txt")
     write_json(raw, {"fixture": True, "reading_text": text})
     write_json(metadata, {"title": "Synthetic oracle passage"})
-    decoded.write_text(text, encoding="utf-8")
-    source = {"id": "fixture-oracle", "scope": "abstract", "title": "Synthetic oracle passage", "authors": ["Fixture Author"],
+    full_text = SYNTHETIC_PREFIX + text + SYNTHETIC_SUFFIX
+    decoded.write_bytes(full_text.encode("utf-8"))
+    source = {"id": "fixture-oracle", "scope": "full_text", "title": "Synthetic oracle passage", "authors": ["Fixture Author"],
               "simulation": True, "raw_path": "literature/fixture-source.json", "sha256": digest_file(raw),
               "metadata_path": "literature/fixture-metadata.json", "metadata_sha256": digest_file(metadata),
-              "text_path": "literature/fixture-source.txt", "text_sha256": digest_file(decoded), "excerpts": [text]}
+              "text_path": "literature/fixture-source.txt", "text_sha256": digest_file(decoded), "excerpts": [text],
+              "excerpt_ranges": [{"start": SYNTHETIC_BODY_START, "end": SYNTHETIC_BODY_START + len(text), "page_start": 1, "page_end": 1}],
+              "body_range": literature.full_text_body_range(full_text)}
     return {"sources": [source], "cancelled": False, "simulation": True,
             "searches": [{"query": query, "provider": "Crossref", "status": "succeeded", "attempted": True,
                           "resolved_ids": [source["id"]]} for query in queries]}
@@ -616,6 +645,8 @@ def test_only_selected_literature_is_available_to_writer_and_citation_validation
         evidence = collect(*args, **kwargs)
         first, second = evidence["sources"][0]["excerpts"][0].split(". ", 1)
         evidence["sources"][0]["excerpts"] = [first + ".", second]
+        evidence["sources"][0]["excerpt_ranges"] = [{"start": SYNTHETIC_BODY_START, "end": SYNTHETIC_BODY_START + len(first) + 1},
+                                                    {"start": SYNTHETIC_BODY_START + len(first) + 2, "end": SYNTHETIC_BODY_START + len(SYNTHETIC_PASSAGE)}]
         evidence["sources"].append({**evidence["sources"][0], "id": "unselected-source",
                                    "title": "Unrelated source that was retrieved but not selected"})
         return evidence
@@ -626,6 +657,8 @@ def test_only_selected_literature_is_available_to_writer_and_citation_validation
     raw_bytes = raw_path.read_bytes()
     review = copy.deepcopy(STUDY_REVIEW)
     review["selected_sources"][0]["excerpt_index"] = 1
+    work = review["publication_readiness"]["closest_work"][0]
+    work.update(excerpt_index=1, quote=json.loads(raw_bytes)["sources"][0]["excerpts"][1][:100])
     service.submit_study_review(research_id, review)
     service.submit_code(research_id, BUNDLE, REVIEW)
     state = service.status(research_id)
@@ -643,8 +676,10 @@ def test_only_selected_literature_is_available_to_writer_and_citation_validation
     bad = manuscript()
     related = next(section for section in bad["sections"] if section["heading"] == "Related Work")
     related["text"] = related["text"].replace("{{citation:fixture-oracle}}", "{{citation:unselected-source}}")
-    with pytest.raises(ValueError, match="unknown citation"):
-        service.submit_manuscript(research_id, bad, MANUSCRIPT_REVIEW)
+    manuscript_review = copy.deepcopy(MANUSCRIPT_REVIEW)
+    manuscript_review["publication_readiness"]["closest_work"] = review["publication_readiness"]["closest_work"]
+    with pytest.raises(ValueError, match="cite its inspected closest work"):
+        service.submit_manuscript(research_id, bad, manuscript_review)
     assert service.status(research_id)["stage"] == "analyzed" and runner.calls == 1
 
 
@@ -2801,7 +2836,7 @@ def test_metadata_only_partial_collection_does_not_exhaust_later_inspected_sourc
     completed = service.collect_literature(research_id)
     assert calls == [(["metadata query", "readable query"], 6), (["readable query"], 6)]
     sources = completed["literature"]["sources"]
-    assert len(sources) == 6 and sources[0]["id"] == "fixture-oracle" and sources[0]["scope"] == "abstract"
+    assert len(sources) == 6 and sources[0]["id"] == "fixture-oracle" and sources[0]["scope"] == "full_text"
     assert all(source["scope"] == "metadata_only" for source in sources[1:])
     assert original.read_bytes() == retained
     approved = service.submit_study_review(research_id, STUDY_REVIEW)
@@ -2887,6 +2922,11 @@ def test_same_source_recovery_upgrades_reading_without_downgrading_or_overwritin
         service.submit_study_review(research_id, invalid_selection)
     assert uninspected.value.code == "LITERATURE_SELECTION_INVALID"
     assert "plan" not in service.status(research_id)["artifacts"]
+    if retained_scope != "full_text":
+        with pytest.raises(WorkflowError) as abstract_positioning:
+            service.submit_study_review(research_id, STUDY_REVIEW)
+        assert abstract_positioning.value.code == "PUBLICATION_EVIDENCE_INVALID" and runner.calls == 0
+        return
     approved = service.submit_study_review(research_id, STUDY_REVIEW)
     assert approved["stage"] == "planned" and runner.calls == 0
     receipt = json.loads(service.artifact_path(research_id, "study-review").read_bytes())
@@ -2909,6 +2949,8 @@ def test_same_source_upgrade_requires_substantive_reading_and_matching_artifact_
     def unverified_upgrade(queries, root, *, limit, cancel):
         calls.append(list(queries))
         evidence = collect(queries[:1] if len(calls) == 1 else queries, root, limit=6, cancel=cancel)
+        if len(calls) == 1:
+            evidence["sources"][0]["scope"] = "abstract"
         if len(calls) == 2:
             source = evidence["sources"][0]
             source["scope"] = "full_text"

@@ -18,6 +18,36 @@ from .models import Record
 T = TypeVar("T", bound=Record)
 
 
+class _ArtifactPath(type(Path())):
+    """Keep portable path values while using long absolute Windows paths for IO."""
+
+    def is_absolute(self) -> bool:
+        # Python 3.14 tests __fspath__ here; lexical identity must stay separate
+        # from the absolute Windows representation used by file operations.
+        return Path(str(self)).is_absolute()
+
+    def __fspath__(self) -> str:
+        value = str(self)
+        if os.name != "nt":
+            return value
+        absolute = os.path.abspath(value)
+        if len(absolute) < 248:
+            return value
+        value = absolute
+        if value.startswith("\\\\?\\"):
+            return value
+        return "\\\\?\\UNC\\" + value[2:] if value.startswith("\\\\") else "\\\\?\\" + value
+
+    def resolve(self, strict: bool = False) -> Path:
+        resolved = super().resolve(strict=strict)
+        value = str(resolved)
+        if value.startswith("\\\\?\\UNC\\"):
+            value = "\\\\" + value[8:]
+        elif value.startswith("\\\\?\\"):
+            value = value[4:]
+        return type(self)(value)
+
+
 def is_link(path: Path) -> bool:
     """Include Windows junctions and other reparse points."""
     try:
@@ -76,7 +106,7 @@ def safe_relative(root: Path, relative: str) -> Path:
             posix.is_absolute() or PureWindowsPath(relative).is_absolute() or
             any(part in {"", ".", ".."} or part.endswith((".", " ")) or part.split(".", 1)[0].upper() in devices for part in relative.split("/"))):
         raise ValueError(f"Expected a safe relative artifact path: {relative!r}")
-    path = root / relative
+    path = _ArtifactPath(root / relative)
     ensure_unlinked(path)
     if not path.resolve().is_relative_to(root.resolve()):
         raise ValueError("Artifact path escapes its working directory")

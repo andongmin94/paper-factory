@@ -31,6 +31,8 @@ METHODS = {
     "workflow.submitProposal": {"researchId", "value"}, "workflow.submitStudyReview": {"researchId", "review"},
     "workflow.submitCode": {"researchId", "value", "review"},
     "workflow.collectLiterature": {"researchId"}, "workflow.startExperiment": {"researchId"},
+    "workflow.collectAuthoringLiterature": {"researchId", "queries"},
+    "workflow.selectAuthoringLiterature": {"researchId", "selectedSources"},
     "workflow.cancel": {"researchId"}, "workflow.resume": {"researchId"}, "workflow.reviseWriting": {"researchId"},
     "workflow.redesignStudy": {"researchId"},
     "workflow.improveWriting": {"researchId"},
@@ -78,6 +80,12 @@ def request(raw: bytes) -> dict:
             any(not isinstance(item, dict) or set(item) != {"name", "contentBase64"} or
                 not isinstance(item["name"], str) or not isinstance(item["contentBase64"], str) for item in params["files"])):
         raise ValueError("Supporting files require one to eight name/contentBase64 objects")
+    if "queries" in params and (not isinstance(params["queries"], list) or not 1 <= len(params["queries"]) <= 4 or
+            any(not isinstance(value, str) or not 8 <= len(value.strip()) <= 1000 for value in params["queries"])):
+        raise ValueError("Authoring queries require one to four substantive bounded strings")
+    if "selectedSources" in params and (not isinstance(params["selectedSources"], list) or
+            not 1 <= len(params["selectedSources"]) <= 6 or any(not isinstance(value, dict) for value in params["selectedSources"])):
+        raise ValueError("Select one to six authoring source passages")
     return data
 
 
@@ -210,6 +218,10 @@ class Dispatcher:
             return self.service.submit_proposal(p["researchId"], p["value"])
         if method == "workflow.submitStudyReview":
             return self.service.submit_study_review(p["researchId"], p["review"])
+        if method == "workflow.collectAuthoringLiterature":
+            return self.service.collect_authoring_literature(p["researchId"], p["queries"])
+        if method == "workflow.selectAuthoringLiterature":
+            return self.service.select_authoring_literature(p["researchId"], p["selectedSources"])
         if method == "workflow.submitCode":
             if not isinstance(p["value"], dict) or p["value"].get("runtime") != "quickjs":
                 raise ValueError("Standalone research supports QuickJS only")

@@ -1,7 +1,7 @@
 """Bounded literature retrieval with an explicit distinction between metadata and reading.
 
-Only Crossref records, Crossref-provided abstracts, and allowlisted open-access
-PDFs are fetched. Bibliographic search candidates are resolved by DOI before
+Only Crossref records, Crossref-provided abstracts, arXiv discovery metadata,
+and allowlisted public PDFs are fetched. Bibliographic candidates resolve by DOI before
 they become sources. The collector does not infer a finding from a title or DOI.
 """
 
@@ -19,6 +19,8 @@ import subprocess
 import sys
 import sysconfig
 import time
+import unicodedata
+import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Callable
@@ -34,12 +36,13 @@ from ..workspace import ensure_unlinked, is_link
 from .windows_runtime import WindowsJob
 
 CROSSREF = "https://api.crossref.org"
+ARXIV = "https://export.arxiv.org/api/query"
 # Fixed provider boundaries prevent a metadata link from requesting local services.
 PDF_HOSTS = frozenset({"arxiv.org", "export.arxiv.org", "joss.theoj.org"})
 MAX_JSON_BYTES = 2 * 1024 * 1024
 MAX_PDF_BYTES = 8 * 1024 * 1024
 MAX_PDF_PAGES = 40
-MAX_TEXT_CHARS = 90_000
+MAX_TEXT_CHARS = 200_000
 MAX_EXCERPTS = 12
 MAX_EXCERPT_CHARS = 1_500
 
@@ -60,6 +63,7 @@ class _CollectionBudget:
     def __init__(self):
         self.deadline = time.monotonic() + 90
         self.next_request = 0.0
+        self.next_arxiv_request = 0.0
         self.retries = 0
         self.requests = 0
 
@@ -74,9 +78,12 @@ class _CollectionBudget:
                 return
             time.sleep(min(0.05, end - current, self.deadline - current))
 
-    def request_timeout(self, *, pdf: bool, cancel: Callable[[], bool] | None) -> httpx.Timeout:
-        self.wait(0 if pdf else max(0, self.next_request - time.monotonic()), cancel)
-        if not pdf:
+    def request_timeout(self, *, pdf: bool, arxiv: bool = False, cancel: Callable[[], bool] | None) -> httpx.Timeout:
+        next_request = self.next_arxiv_request if arxiv else self.next_request
+        self.wait(0 if pdf else max(0, next_request - time.monotonic()), cancel)
+        if arxiv:
+            self.next_arxiv_request = time.monotonic() + 3
+        elif not pdf:
             self.next_request = time.monotonic() + 0.5
         remaining = self.deadline - time.monotonic()
         return httpx.Timeout(min(15, remaining), connect=min(5, remaining))
@@ -108,7 +115,7 @@ def _checked_url(url: str, *, pdf: bool = False) -> str:
     if not isinstance(url, str) or len(url) > 2048 or any(ord(c) < 32 for c in url):
         raise ValueError("Invalid literature URL")
     parts = urlsplit(url)
-    hosts = PDF_HOSTS if pdf else frozenset({"api.crossref.org"})
+    hosts = PDF_HOSTS if pdf else frozenset({"api.crossref.org", "export.arxiv.org"})
     try:
         port = parts.port
     except ValueError as error:
@@ -126,6 +133,9 @@ def _checked_url(url: str, *, pdf: bool = False) -> str:
                 raise ValueError("Only an arXiv paper PDF endpoint is allowed")
         elif not re.fullmatch(r"/papers/(?:10\.21105/joss\.\d{5}|[a-f0-9]{40})\.pdf", parts.path):
             raise ValueError("Only a JOSS paper PDF endpoint is allowed")
+    elif parts.hostname == "export.arxiv.org":
+        if parts.path != "/api/query":
+            raise ValueError("Only the arXiv discovery endpoint is allowed")
     elif parts.path != "/works" and not parts.path.startswith("/works/10."):
         raise ValueError("Only Crossref work endpoints are allowed")
     try:
@@ -153,11 +163,11 @@ def _fetch(
     while True:
         _check_cancel(cancel)
         _checked_url(url, pdf=pdf)
-        timeout = budget.request_timeout(pdf=pdf, cancel=cancel)
+        timeout = budget.request_timeout(pdf=pdf, arxiv=not pdf and urlsplit(url).hostname == "export.arxiv.org", cancel=cancel)
         budget.requests += 1
         with client.stream("GET", url, params=params, follow_redirects=False, timeout=timeout) as response:
             budget.wait(0, cancel)
-            if response.url.scheme != "https" or response.url.host not in (PDF_HOSTS if pdf else {"api.crossref.org"}):
+            if response.url.scheme != "https" or response.url.host not in (PDF_HOSTS if pdf else {"api.crossref.org", "export.arxiv.org"}):
                 raise ValueError("Literature response escaped its allowed provider boundary")
             if response.status_code in (301, 302, 303, 307, 308):
                 location = response.headers.get("location")
@@ -241,6 +251,138 @@ def _excerpts(text: str) -> list[str]:
             if len(output) == MAX_EXCERPTS:
                 return output
     return output
+
+
+def _full_text_excerpts(text: str, queries: list[str]) -> tuple[list[str], list[dict[str, int]]]:
+    """Retain literal, located passages across the paper, not only its opening."""
+    if len(text) <= MAX_EXCERPT_CHARS:
+        starts = [0]
+    else:
+        starts = [0, len(text) - MAX_EXCERPT_CHARS]
+        # Prefer actual section openings before filling with query matches and
+        # evenly spaced passages. The source text remains complete and immutable.
+        headings = ("related work|background", "method(?:s|ology)?|analysis design",
+                    "results?|evaluation", "discussion|implications?", "threats? to validity|limitations?",
+                    "conclusions?")
+        for heading in headings:
+            match = re.search(r"(?mi)^\s*(?:\d+(?:\.\d+)*\.?\s+)?(?:" + heading + r")\b", text)
+            if match:
+                start = min(match.start(), len(text) - MAX_EXCERPT_CHARS)
+                if all(abs(start - previous) >= MAX_EXCERPT_CHARS for previous in starts):
+                    starts.append(start)
+        stop_words = {"https", "http", "with", "from", "that", "this", "different", "which", "using", "study"}
+        terms = {term.casefold() for query in queries for term in re.findall(r"[^\W\d_]{4,}", query)
+                 if term.casefold() not in stop_words}
+        windows = range(0, len(text), MAX_EXCERPT_CHARS)
+        ranked = sorted(windows, key=lambda start: (-sum(term in text[start:start + MAX_EXCERPT_CHARS].casefold()
+                                                        for term in terms), start))
+        for start in ranked:
+            if len(starts) >= min(MAX_EXCERPTS - 3, 9) or not terms:
+                break
+            start = min(start, len(text) - MAX_EXCERPT_CHARS)
+            if all(abs(start - previous) >= MAX_EXCERPT_CHARS for previous in starts):
+                starts.append(start)
+        for index in range(1, MAX_EXCERPTS):
+            if len(starts) >= MAX_EXCERPTS:
+                break
+            start = min(index * len(text) // MAX_EXCERPTS, len(text) - MAX_EXCERPT_CHARS)
+            if all(abs(start - previous) >= MAX_EXCERPT_CHARS for previous in starts):
+                starts.append(start)
+    excerpts, ranges = [], []
+    pages = [(match.start(), int(match.group(1))) for match in re.finditer(r"\[Page (\d+)\]\n", text)]
+    for start in sorted(starts):
+        end = min(start + MAX_EXCERPT_CHARS, len(text))
+        location = {"start": start, "end": end}
+        for key, offset in (("page_start", start), ("page_end", end - 1)):
+            page = next((page for position, page in reversed(pages) if position <= offset), None)
+            if page is not None:
+                location[key] = page
+        excerpts.append(text[start:end])
+        ranges.append(location)
+    return excerpts, ranges
+
+
+def full_text_body_range(text: str) -> dict[str, int] | None:
+    """Locate a recognizable paper body; an unknown layout certifies nothing.
+
+    A PDF can contain both an abstract and a bibliography. Merely retrieving
+    its full text does not make either a methods/results passage. Offsets are
+    derived from the retained literal text and can be recomputed at review.
+    """
+    numbering = r"(?:(?:\d+(?:\.\d+)*|[IVX]+)\.?[ \t]+|(?:\d+|[IVX]+)\.?[ \t]*\n[ \t]*)?"
+    introduction = re.search(r"(?mi)^[ \t]*" + numbering + r"(?:introduction|서론)[ \t]*$", text)
+    if introduction is None:
+        return None
+    references = re.search(r"(?mi)^[ \t]*" + numbering + r"(?:references(?: and notes)?|bibliography|literature cited|참고문헌)[ \t]*$",
+                           text[introduction.end():])
+    if references is None:
+        return None
+    end = introduction.end() + references.start()
+    return {"start": introduction.end(), "end": end}
+
+
+def _title_key(title: str) -> str:
+    return " ".join(re.findall(r"\w+", unicodedata.normalize("NFKC", title).casefold()))
+
+
+def _arxiv_match(content: bytes, doi: str, title: str) -> tuple[str, str] | None:
+    """A similar title is discovery, never identity: require the exact journal DOI."""
+    try:
+        decoded = content.decode("utf-8-sig")
+    except UnicodeDecodeError as error:
+        raise ValueError("arXiv discovery XML must use UTF-8") from error
+    if len(content) > MAX_JSON_BYTES or re.search(r"<!\s*(?:DOCTYPE|ENTITY)\b", decoded, re.I):
+        raise ValueError("arXiv discovery XML contains a refused declaration or exceeds its limit")
+    try:
+        feed = ET.fromstring(decoded)
+    except ET.ParseError as error:
+        raise ValueError("arXiv discovery returned invalid XML") from error
+    atom, arxiv = "{http://www.w3.org/2005/Atom}", "{http://arxiv.org/schemas/atom}"
+    if feed.tag != atom + "feed":
+        raise ValueError("arXiv discovery did not return an Atom feed")
+    entries = feed.findall(atom + "entry")
+    if len(entries) > 3:
+        raise ValueError("arXiv discovery exceeds its candidate limit")
+    matches = []
+    for entry in entries:
+        if any(len(entry.findall(field)) != 1 for field in (arxiv + "doi", atom + "title", atom + "id")):
+            continue
+        returned_doi, returned_title = entry.findtext(arxiv + "doi"), entry.findtext(atom + "title")
+        if not returned_doi or not returned_title:
+            continue
+        try:
+            if _doi(returned_doi) != doi or _title_key(returned_title) != _title_key(title):
+                continue
+        except ValueError:
+            continue
+        identifier = entry.findtext(atom + "id", "")
+        # Atom IDs historically use HTTP; they are parsed as identifiers, never
+        # requested. Construct only the fixed HTTPS PDF endpoint ourselves.
+        match = re.fullmatch(r"https?://arxiv\.org/abs/((?:\d{4}\.\d{4,5}|[a-z-]+/\d{7})v\d+)", identifier)
+        if match:
+            matches.append(("https://arxiv.org/pdf/" + match.group(1), match.group(1)))
+    if len(set(matches)) != 1:
+        return None
+    return matches[0]
+
+
+def _arxiv_pdf(client: httpx.Client, source: dict, root: Path, *, budget: _CollectionBudget,
+               cancel: Callable[[], bool] | None) -> str | None:
+    title_query = " ".join(re.findall(r"\w+", source["title"]))
+    if not title_query or len(title_query) > 500:
+        return None
+    content, url, content_type = _fetch(client, ARXIV, budget=budget, cancel=cancel,
+                                      params={"search_query": 'ti:"' + title_query + '"', "max_results": 3})
+    if content_type.split(";", 1)[0].strip() not in {"application/atom+xml", "application/xml", "text/xml"}:
+        raise ValueError("arXiv discovery did not return XML content")
+    path, digest = _save(root, source["id"] + "-discovery", "xml", content)
+    source.update(discovery_path=path, discovery_sha256=digest, discovery_url=url)
+    match = _arxiv_match(content, source["doi"], source["title"])
+    if match is None:
+        return None
+    pdf_url, identifier = match
+    source["arxiv_id"] = identifier
+    return pdf_url
 
 
 def _extract_pdf(content: bytes) -> str:
@@ -542,7 +684,19 @@ def collect(
                                         "metadata_path": metadata_path, "metadata_sha256": metadata_digest,
                                         "queries": [search["query"] for search in candidate_queries[doi]]}
                         try:
-                            for pdf_url in _pdf_links(document["message"]):
+                            pdf_urls = _pdf_links(document["message"])
+                            if (document["message"].get("type") in {"journal-article", "proceedings-article", "posted-content"}
+                                    and not any(urlsplit(url).scheme == "https" and urlsplit(url).hostname in PDF_HOSTS
+                                                for url in pdf_urls)):
+                                try:
+                                    arxiv_pdf = _arxiv_pdf(client, source, root, budget=budget, cancel=cancel)
+                                    if arxiv_pdf:
+                                        # The other URLs are outside the permitted
+                                        # provider boundary and remain in raw metadata.
+                                        pdf_urls = [arxiv_pdf]
+                                except (ValueError, OSError, httpx.HTTPError) as error:
+                                    result["warnings"].append(f"arXiv identity-bound discovery unavailable for {source_id} ({type(error).__name__}); reading scope was not upgraded")
+                            for pdf_url in pdf_urls:
                                 budget.wait(0, cancel)
                                 try:
                                     raw_pdf, retrieved_url, content_type = _fetch(client, pdf_url, pdf=True, cancel=cancel, budget=budget)
@@ -555,8 +709,12 @@ def collect(
                                     budget.wait(0, cancel)
                                     raw_path, raw_digest = _save(root, source_id + "-fulltext", "pdf", raw_pdf)
                                     text_path, text_digest = _save(root, source_id + "-text", "txt", full_text.encode())
+                                    excerpts, ranges = _full_text_excerpts(full_text, source["queries"])
                                     source.update({"scope": "full_text", "url": retrieved_url, "raw_path": raw_path,
-                                                   "sha256": raw_digest, "excerpts": _excerpts(full_text),
+                                                   "sha256": raw_digest, "excerpts": excerpts, "excerpt_ranges": ranges,
+                                                   "body_range": full_text_body_range(full_text),
+                                                   "text_chars": len(full_text),
+                                                   "reading_scope": "Only the located literal excerpts were inspected; the complete extracted text is retained separately",
                                                    "text_path": text_path, "text_sha256": text_digest})
                                     break
                                 except (ValueError, OSError, httpx.HTTPError) as error:

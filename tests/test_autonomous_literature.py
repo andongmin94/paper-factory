@@ -773,7 +773,8 @@ def test_explicit_doi_without_crossref_abstract_can_use_verified_open_access_tex
     result = literature.collect(["10.21105/joss.01234"], tmp_path)
     source = result["sources"][0]
     assert len(requests) == 2
-    assert source["scope"] == "full_text" and source["excerpts"] == ["[Page 1] Retrieved primary-source passage."]
+    assert source["scope"] == "full_text" and source["excerpts"] == ["[Page 1]\nRetrieved primary-source passage."]
+    assert source["excerpt_ranges"] == [{"start": 0, "end": len(source["excerpts"][0]), "page_start": 1, "page_end": 1}]
     assert (tmp_path / source["raw_path"]).read_bytes() == b"%PDF-test"
     assert source["sha256"] == hashlib.sha256(b"%PDF-test").hexdigest()
     assert not result["warnings"]

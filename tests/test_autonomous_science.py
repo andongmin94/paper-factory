@@ -275,7 +275,7 @@ def test_quality_reviews_cannot_accept_open_issues_or_unexplained_rejection(kind
 
 
 @pytest.mark.parametrize("second_excerpt_index", [0, 1])
-def test_study_review_requires_selected_reading_for_acceptance_and_one_excerpt_per_source(second_excerpt_index):
+def test_study_review_requires_reading_and_allows_distinct_passages_from_one_source(second_excerpt_index):
     payload = review_payload("study")
     payload["selected_sources"] = []
     with pytest.raises(ValidationError, match="acceptance must agree"):
@@ -286,8 +286,11 @@ def test_study_review_requires_selected_reading_for_acceptance_and_one_excerpt_p
     assert StudyReview.model_validate(payload).selected_sources == []
     payload = review_payload("study")
     payload["selected_sources"].append({**payload["selected_sources"][0], "excerpt_index": second_excerpt_index})
-    with pytest.raises(ValidationError, match="one relevant excerpt per distinct source"):
-        StudyReview.model_validate(payload)
+    if second_excerpt_index == 0:
+        with pytest.raises(ValidationError, match="excerpt pairs must be distinct"):
+            StudyReview.model_validate(payload)
+    else:
+        assert len(StudyReview.model_validate(payload).selected_sources) == 2
 
 
 @pytest.mark.parametrize("reason", ["Looks good", " " * 30])
