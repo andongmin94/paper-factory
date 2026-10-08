@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
-import { access, readFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sha256 } from '../dist/chromium-contract.js';
@@ -61,6 +61,80 @@ test('original exception is observable while trusted dispatch count includes its
   assert.equal(receipt.envelope.status, 'succeeded'); assert.match(observed(receipt).message, /original rejection/);
   assert.equal(receipt.envelope.runtime_manifest.call_receipts[0].status, 'rejected');
   assert.equal(receipt.envelope.runtime_manifest.production_dispatch_attempts, 1); assert.equal(receipt.envelope.runtime_manifest.production_completed_calls, 0);
+});
+
+test('evaluation-only delayed flush retains the caught negative frame and exit 1 after hidden windows close', options, async () => {
+  const original = await readFile(join(desktop, 'dist/chromium-worker.mjs'), 'utf8');
+  const listener = /app\.on\("window-all-closed", \(\) => \{\s*\}\);/g;
+  assert.equal([...original.matchAll(listener)].length, 1, 'Expected the worker-owned window-close listener');
+  const flush = 'process.stdout.write(line, () => app.exit(frame.status === "succeeded" ? 0 : 1));';
+  assert.equal(original.split(flush).length, 2, 'Expected exactly one final worker result flush');
+  // Instrumented copies expose the shutdown race; the production worker has no delay or test hook.
+  const delayed = original.replace(flush, 'process.stdout.write(line, () => { process.stderr.write("EVALUATION_ONLY_DELAYED_FLUSH\\n"); setTimeout(() => app.exit(frame.status === "succeeded" ? 0 : 1), 250); });');
+  const base = join(repository, '.paper-factory/is19'); await mkdir(base, { recursive: true });
+  const scratch = await mkdtemp(join(base, 'flush-'));
+  const controls = { old: delayed.replace(listener, ''), fixed: delayed };
+  const evaluator = join(scratch, 'evaluate.py');
+  await writeFile(evaluator, String.raw`"""Instrumented cloned-worker evaluation only; no model, auth, workflow or SCI."""
+import hashlib, json
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'src'))
+from paper_factory.autonomous.browser_runner import BrowserRunner
+sys.stdin.reconfigure(encoding='utf-8', errors='strict')
+sys.stdout.reconfigure(encoding='utf-8', errors='strict')
+value = json.load(sys.stdin)
+def binding(path):
+    path = Path(path).resolve(); raw = path.read_bytes()
+    return {'path': str(path), 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
+worker = binding(value['worker'])
+runner = BrowserRunner({'executable': binding(value['executable']), 'worker': worker,
+    'app_entry': worker, 'assets': []}, supervisor_root=Path(value['home']))
+try:
+    receipt = runner._execute(value['packet'], purpose='probe')
+    raw = receipt.pop('raw_response')
+    with (runner.supervisor_root / 'original-worker-response.bin').open('xb') as stream: stream.write(raw)
+    receipt.update(raw_response_bytes=len(raw), raw_response_sha256=hashlib.sha256(raw).hexdigest(),
+                   model_requests=0, scientific_execution_attempts=0,
+                   evaluation_scope='Cloned worker with delayed final flush callback, not unmodified whole-product execution')
+    if value['control'] == 'fixed': runner._verify_manifest(receipt['envelope'], value['packet'])
+finally:
+    runner.close()
+receipt['journal'] = json.loads((runner.supervisor_root / 'owned-workers.json').read_bytes())
+with (runner.supervisor_root / 'receipt.json').open('x', encoding='utf-8') as stream: json.dump(receipt, stream, ensure_ascii=False, indent=2)
+print(json.dumps(receipt, ensure_ascii=False))
+`, { flag: 'wx' });
+  const python = process.env.PF_CHROMIUM_TEST_PYTHON ?? join(repository, '.venv/Scripts/python.exe');
+  assert(isAbsolute(python)); await access(python);
+  const receipts = {};
+  for (const [control, code] of Object.entries(controls)) {
+    const worker = join(scratch, control + '.mjs'); await writeFile(worker, code, { flag: 'wx' });
+    const child = spawn(python, ['-I', '-B', evaluator], { cwd: repository, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    const stdout = [], stderr = []; let bytes = 0;
+    child.stdout.on('data', piece => { bytes += piece.length; if (bytes > 18 * 1024 * 1024) child.kill(); else stdout.push(piece); });
+    child.stderr.on('data', piece => stderr.push(piece));
+    child.stdin.end(JSON.stringify({ control, worker, home: join(scratch, control + '-supervisor'),
+      executable: join(desktop, 'node_modules/electron/dist/electron.exe'),
+      packet: packet(production, 'export default async function run(){try{globalThis.callProduction=()=>"forged"}catch{}return {caught:true}}') }));
+    const exitCode = await new Promise((resolveExit, reject) => { child.once('error', reject); child.once('close', resolveExit); });
+    assert.equal(exitCode, 0, Buffer.concat(stderr).toString().slice(0, 2000));
+    const receipt = receipts[control] = JSON.parse(Buffer.concat(stdout).toString());
+    assert.equal(receipt.cleanup_confirmed, true); assert.equal(receipt.forced_stop_confirmed, true);
+    assert.deepEqual(receipt.active_handle, {}); assert.deepEqual(receipt.journal.workers, []);
+    assert.equal(receipt.model_requests, 0); assert.equal(receipt.scientific_execution_attempts, 0);
+    assert.equal(await readFile(worker, 'utf8'), code, 'Instrumented worker bytes must remain unchanged');
+  }
+  assert(receipts.old.exit_code === 0 || !receipts.old.envelope,
+    'Removing the listener must expose automatic quit before the delayed failure exit');
+  assert.equal(receipts.fixed.reason, null); assert.equal(receipts.fixed.exit_code, 1);
+  assert.equal(receipts.fixed.envelope.status, 'failed');
+  assert.match(receipts.fixed.envelope.error, /Browser capability replacement: callProduction/);
+  assert.equal(receipts.fixed.envelope.runtime_manifest.shutdown_windows_closed, true);
+  assert.match(receipts.fixed.stderr, /EVALUATION_ONLY_DELAYED_FLUSH/);
+  assert.equal(await readFile(join(desktop, 'dist/chromium-worker.mjs'), 'utf8'), original);
+  await writeFile(join(scratch, 'control-comparison.json'), JSON.stringify({ scope: 'Synthetic instrumented shutdown comparison only',
+    sourceWorkerSha256: sha256(original), cloneWorkerSha256: Object.fromEntries(Object.entries(controls).map(([name, code]) => [name, sha256(code)])),
+    delayMs: 250, receipts, modelRequests: 0, SCI: 0 }, null, 2) + '\n', { flag: 'wx' });
 });
 
 for (const [name, source, code, pattern] of [

@@ -3,6 +3,7 @@
 Only Crossref records, Crossref-provided abstracts, identity-bound arXiv metadata,
 and allowlisted public PDFs are fetched. Bibliographic candidates resolve by DOI;
 explicit arXiv identifiers resolve to a fixed preprint version before reading.
+Method queries can discover two version-bound preprints through the same API.
 The collector does not infer a finding from a title or identifier.
 """
 
@@ -49,6 +50,7 @@ MAX_PDF_PAGES = 40
 MAX_TEXT_CHARS = 200_000
 MAX_EXCERPTS = 12
 MAX_EXCERPT_CHARS = 1_500
+MAX_METHOD_CANDIDATES = 2
 ARXIV_ID = r"(?:\d{2}(?:0[1-9]|1[0-2])\.\d{4,5}|[a-z-]+/\d{2}(?:0[1-9]|1[0-2])\d{3})(?:v[1-9]\d*)?"
 ATOM = "{http://www.w3.org/2005/Atom}"
 
@@ -570,6 +572,77 @@ def _arxiv_title_lookup(client: httpx.Client, query: str, root: Path, search: di
         return None
 
 
+def _arxiv_method_lookup(client: httpx.Client, query: str, root: Path, search: dict, *, maximum: int,
+                         budget: _CollectionBudget, cancel: Callable[[], bool] | None,
+                         warnings: list[str]) -> tuple[bytes, str, list[dict]] | None:
+    """Discover bounded candidates, without treating a query match as identity or relevance."""
+    initial_requests = budget.requests
+    try:
+        terms = list(dict.fromkeys(re.findall(r"\w+", query)))
+        if not terms:
+            raise ValueError("arXiv method query has no searchable terms")
+        # Operators and fields come from the collector, never from query input.
+        # httpx encodes the literal Unicode words as a single parameter value.
+        expression = " AND ".join('all:"' + term + '"' for term in terms)
+        content, url, content_type = _fetch(client, ARXIV, budget=budget, cancel=cancel,
+            params={"search_query": expression, "start": 0, "max_results": maximum, "sortBy": "relevance"})
+        path, digest = _save(root, "method-" + hashlib.sha256(query.encode()).hexdigest()[:16], "xml", content)
+        search.update(url=url, raw_path=path, sha256=digest)
+        if content_type.split(";", 1)[0].strip() not in {"application/atom+xml", "application/xml", "text/xml"}:
+            raise ValueError("arXiv method discovery did not return XML content")
+        entries = _arxiv_entries(content)
+        if len(entries) > maximum:
+            raise ValueError("arXiv method discovery exceeds its requested candidate limit")
+        records = [_arxiv_record(entry) for entry in entries]
+        identifiers = [re.sub(r"v[1-9]\d*$", "", record["arxiv_id"]) for record in records]
+        if len(set(identifiers)) != len(identifiers):
+            raise ValueError("arXiv method discovery has ambiguous duplicate identities")
+        search.update(status="succeeded", candidate_arxiv_ids=[record["arxiv_id"] for record in records])
+        search["note"] = "Discovery candidates require an exact version lookup and PDF reading; relevance requires independent review"
+        return content, url, records
+    except (_Cancelled, _DeadlineExceeded, _RateLimited) as error:
+        if budget.requests == initial_requests:
+            search.update(status="not_attempted", attempted=False)
+        elif isinstance(error, _RateLimited):
+            search.update(error="HTTPStatusError", http_status=429)
+        raise
+    except (ValueError, OSError, httpx.HTTPError) as error:
+        search["error"] = type(error).__name__
+        if isinstance(error, httpx.HTTPStatusError):
+            search["http_status"] = error.response.status_code
+        warnings.append(f"arXiv method discovery unavailable ({type(error).__name__}); no preprint identity was assumed")
+        return None
+
+
+def _arxiv_candidate_lookup(client: httpx.Client, discovered: dict, root: Path, search: dict, *,
+                            budget: _CollectionBudget, cancel: Callable[[], bool] | None) -> tuple[bytes, str, dict]:
+    """Recheck the discovered version and bibliographic identity in one exact original feed."""
+    initial_requests = budget.requests
+    try:
+        content, url, content_type = _fetch(client, ARXIV, budget=budget, cancel=cancel,
+            params={"id_list": discovered["arxiv_id"], "max_results": 1})
+        path, digest = _save(root, "version-" + hashlib.sha256(discovered["arxiv_id"].encode()).hexdigest()[:16], "xml", content)
+        search.update(url=url, raw_path=path, sha256=digest)
+        if content_type.split(";", 1)[0].strip() not in {"application/atom+xml", "application/xml", "text/xml"}:
+            raise ValueError("arXiv version lookup did not return XML content")
+        details = _arxiv_metadata(content, discovered["arxiv_id"])
+        if any(details[key] != discovered[key] for key in ("arxiv_id", "title", "authors", "published", "updated")):
+            raise ValueError("arXiv version metadata differs from its discovered identity")
+        search["status"] = "succeeded"
+        return content, url, details
+    except (_Cancelled, _DeadlineExceeded, _RateLimited) as error:
+        if budget.requests == initial_requests:
+            search.update(status="not_attempted", attempted=False)
+        elif isinstance(error, _RateLimited):
+            search.update(error="HTTPStatusError", http_status=429)
+        raise
+    except (ValueError, OSError, httpx.HTTPError) as error:
+        search["error"] = type(error).__name__
+        if isinstance(error, httpx.HTTPStatusError):
+            search["http_status"] = error.response.status_code
+        raise
+
+
 def _arxiv_pdf(client: httpx.Client, source: dict, root: Path, *, budget: _CollectionBudget,
                cancel: Callable[[], bool] | None) -> str | None:
     title_query = " ".join(re.findall(r"\w+", source["title"]))
@@ -1009,16 +1082,29 @@ def _promote_full_text(client: httpx.Client, source: dict, pdf_urls: list[str], 
     for pdf_url in pdf_urls:
         budget.wait(0, cancel)
         try:
-            raw_pdf, retrieved_url, content_type = _fetch(client, pdf_url, pdf=True, cancel=cancel, budget=budget)
+            def retain(raw: bytes, url: str, content_type: str, status: int) -> None:
+                _save(root, source["id"] + "-fulltext", "pdf" if raw.startswith(b"%PDF-") else "bin", raw)
+
+            raw_pdf, retrieved_url, content_type = _fetch(client, pdf_url, pdf=True, cancel=cancel, budget=budget,
+                retain_response=retain if source.get("arxiv_id") else None)
+            if source.get("arxiv_id"):
+                returned = urlsplit(retrieved_url)
+                if (returned.hostname not in {"arxiv.org", "export.arxiv.org"} or
+                        returned.path.removesuffix(".pdf") != "/pdf/" + source["arxiv_id"]):
+                    raise ValueError("arXiv PDF resolved a different identifier or version")
             if "pdf" not in content_type and content_type != "application/octet-stream":
                 raise ValueError("Open-access provider did not return a PDF content type")
+            budget.wait(0, cancel)
             # Reserve bounded extraction and owned-child cleanup before dispatch.
             if budget.deadline - time.monotonic() < 18:
                 raise _DeadlineExceeded
             full_text = _pdf_text(raw_pdf)
             budget.wait(0, cancel)
             raw_path, raw_digest = _save(root, source["id"] + "-fulltext", "pdf", raw_pdf)
-            _retain_full_text(source, root, full_text, retrieved_url, raw_path, raw_digest)
+            canonical_url = "https://arxiv.org/pdf/" + source["arxiv_id"] if source.get("arxiv_id") else retrieved_url
+            if canonical_url != retrieved_url:
+                source["retrieved_url"] = retrieved_url
+            _retain_full_text(source, root, full_text, canonical_url, raw_path, raw_digest)
             break
         except (ValueError, OSError, httpx.HTTPError) as error:
             warnings.append(f"Open-access text unavailable for {source['id']} ({type(error).__name__}); reading scope was not upgraded")
@@ -1036,6 +1122,9 @@ def collect(
     allowed full text is fetched. All queries are attempted before candidates
     are resolved in round-robin order. Explicit and unique exact-title arXiv
     lookups bind the actual preprint version and precede bibliographic candidates.
+    At most two method searches discover two candidates in total. They retain
+    their original Atom feeds, recheck each exact version, and attempt PDF
+    reading before bibliographic abstracts can consume the source limit.
     Other DOIs use an exact Crossref lookup;
     bibliographic searches do not exclude records without Crossref abstracts.
     Explicit DOI-bound author PDF hints precede generic candidates and use their
@@ -1075,6 +1164,8 @@ def collect(
     exact_metadata: dict[str, tuple[bytes, str]] = {}
     arxiv_metadata: dict[str, tuple[bytes, str, dict]] = {}
     exact_arxiv: dict[str, tuple[bytes, str, dict]] = {}
+    method_candidates: dict[str, tuple[bytes, str, dict]] = {}
+    method_searches = 0
     budget = _CollectionBudget()
     try:
         with httpx.Client(timeout=httpx.Timeout(15.0, connect=5.0), follow_redirects=False,
@@ -1121,12 +1212,33 @@ def collect(
                                 query_candidates.append(key)
                                 candidate_queries.setdefault(key, []).append(search)
                             continue
+                        method_eligible = search["provider"] != "arXiv" or search["status"] == "succeeded"
                         if search["provider"] == "arXiv":
                             # Retain negative discovery separately before the
                             # original query continues as a Crossref search.
                             result["searches"].append(dict(search))
                             search.clear()
                             search.update(query=query, provider="Crossref", status="failed", attempted=True, resolved_ids=[])
+                        if method_eligible and limit and method_searches < 2 and len(method_candidates) < min(MAX_METHOD_CANDIDATES, limit):
+                            search.update(status="not_attempted", attempted=False)
+                            method_searches += 1
+                            method_search = {"query": query, "provider": "arXiv", "lookup": "method",
+                                             "status": "failed", "attempted": True, "resolved_ids": []}
+                            result["searches"].append(method_search)
+                            resolved_methods = _arxiv_method_lookup(client, query, root, method_search,
+                                maximum=min(MAX_METHOD_CANDIDATES, limit) - len(method_candidates),
+                                budget=budget, cancel=cancel, warnings=result["warnings"])
+                            if resolved_methods is not None:
+                                discovery, discovery_url, records = resolved_methods
+                                for details in records:
+                                    key = "arxiv:" + details["arxiv_id"]
+                                    if key not in method_candidates:
+                                        method_candidates[key] = (discovery, discovery_url, details)
+                                        # One batch per primary candidate gives both
+                                        # PDF opportunities before round-robin abstracts.
+                                        candidates.append([key])
+                                    candidate_queries.setdefault(key, []).append(method_search)
+                        search.update(status="failed", attempted=True)
                         initial_requests = budget.requests
                     search["lookup"] = "doi" if exact_doi else "bibliographic"
                     if exact_doi:
@@ -1153,7 +1265,7 @@ def collect(
                             raise ValueError("Crossref search did not return a result list")
                     search["status"] = "succeeded"
                 except (_Cancelled, _DeadlineExceeded, _RateLimited) as error:
-                    if budget.requests == initial_requests:
+                    if not search["attempted"] or budget.requests == initial_requests:
                         search.update(status="not_attempted", attempted=False)
                     elif isinstance(error, _RateLimited):
                         search.update(error="HTTPStatusError", http_status=429)
@@ -1178,7 +1290,8 @@ def collect(
 
             hint_dois = {hint["doi"] for hint in hints}
             candidates.sort(key=lambda batch: (not batch or batch[0] not in hint_dois,
-                                                not batch or batch[0] not in arxiv_metadata))
+                                                not batch or batch[0] not in arxiv_metadata,
+                                                not batch or batch[0] not in method_candidates))
             for rank in range(limit):
                 if sum(source["scope"] != "metadata_only" for source in result["sources"]) >= limit:
                     break
@@ -1193,6 +1306,19 @@ def collect(
                         if candidate in seen:
                             continue
                         source_id = "source-" + hashlib.sha256(candidate.encode()).hexdigest()[:20]
+                        version_search = None
+                        if candidate in method_candidates:
+                            discovery, discovery_url, discovered = method_candidates[candidate]
+                            if candidate not in arxiv_metadata:
+                                version_search = {"query": candidate_queries[candidate][0]["query"], "provider": "arXiv",
+                                                  "lookup": "arxiv_version", "requested_arxiv_id": discovered["arxiv_id"],
+                                                  "status": "failed", "attempted": True, "resolved_ids": []}
+                                result["searches"].append(version_search)
+                                arxiv_metadata[candidate] = _arxiv_candidate_lookup(client, discovered, root, version_search,
+                                    budget=budget, cancel=cancel)
+                            if any(arxiv_metadata[candidate][2][key] != discovered[key] for key in
+                                   ("arxiv_id", "title", "authors", "published", "updated")):
+                                raise ValueError("arXiv method identity differs from its exact lookup")
                         if candidate in arxiv_metadata:
                             metadata, metadata_url, details = arxiv_metadata[candidate]
                             metadata_path, metadata_digest = _save(root, source_id + "-metadata", "xml", metadata)
@@ -1218,7 +1344,12 @@ def collect(
                                         "excerpts": _excerpts(abstract) if abstract else [],
                                         "raw_path": metadata_path, "sha256": metadata_digest,
                                         "metadata_path": metadata_path, "metadata_sha256": metadata_digest,
-                                        "queries": [search["query"] for search in candidate_queries[candidate]]})
+                                        "queries": list(dict.fromkeys(search["query"] for search in candidate_queries[candidate]))})
+                        if candidate in method_candidates:
+                            discovery, discovery_url, _ = method_candidates[candidate]
+                            discovery_path, discovery_digest = _save(root, source_id + "-discovery", "xml", discovery)
+                            source.update(discovery_path=discovery_path, discovery_sha256=discovery_digest,
+                                          discovery_url=discovery_url, discovery_kind="method")
                         try:
                             source_hints = [hint for hint in hints if hint["doi"] == candidate]
                             if source_hints:
@@ -1255,6 +1386,8 @@ def collect(
                                     result["sources"][replace] = source
                             for search in candidate_queries[candidate]:
                                 search["resolved_ids"].append(source_id)
+                            if version_search is not None:
+                                version_search["resolved_ids"].append(source_id)
                     except (ValueError, OSError, httpx.HTTPError) as error:
                         result["warnings"].append(f"Literature candidate verification failed ({type(error).__name__}); candidate was omitted")
             budget.wait(0, cancel)

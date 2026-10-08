@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 from email.utils import formatdate
+from html import escape
 from types import SimpleNamespace
 
 import httpx
@@ -33,11 +34,13 @@ def record(doi="10.1234/test", *, abstract=None, links=None):
     return {"status": "ok", "message": message}
 
 
-def mocked(monkeypatch, handler, *, title_discovery=False):
+def mocked(monkeypatch, handler, *, title_discovery=False, method_discovery=False):
     # Most fixtures target Crossref or explicit-ID/discovery behavior. Exact-title
     # provider tests opt into the complete multi-provider flow separately.
     if not title_discovery:
         monkeypatch.setattr(literature, "_arxiv_title_lookup", lambda *args, **kwargs: None)
+    if not method_discovery:
+        monkeypatch.setattr(literature, "MAX_METHOD_CANDIDATES", 0)
     original = httpx.Client
     requests = []
 
@@ -901,3 +904,320 @@ def test_cancellation_during_query_discovery_keeps_completed_search_receipt(tmp_
     assert result["searches"][1]["attempted"] is False
     search = result["searches"][0]
     assert hashlib.sha256((tmp_path / search["raw_path"]).read_bytes()).hexdigest() == search["sha256"]
+
+
+def method_entry(identifier="2301.00001v2", *, title="Synthetic Differential Testing Method",
+                 authors=("Example Author",), published="2023-01-01T00:00:00Z", updated="2023-01-02T00:00:00Z"):
+    return ("<entry><id>http://arxiv.org/abs/" + escape(identifier) + "</id><title>" + escape(title) + "</title>"
+            "<published>" + escape(published) + "</published><updated>" + escape(updated) + "</updated>"
+            + "".join("<author><name>" + escape(author) + "</name></author>" for author in authors)
+            + "<summary>A literal synthetic abstract, without a scientific approval.</summary></entry>")
+
+
+def method_feed(*entries):
+    return ('<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">'
+            + "<opensearch:totalResults>" + str(len(entries)) + "</opensearch:totalResults>"
+            + "".join(entries) + "</feed>").encode()
+
+
+METHOD_TEXT = ("[Page 1]\nAbstract\nAn abstract only.\n1 Introduction\n"
+               + "This synthetic body describes differential comparison methods and their limits. " * 35
+               + "\nReferences\nUninspected bibliography.")
+
+
+def test_method_discovery_reads_both_version_bound_pdfs_before_six_abstracts(tmp_path, monkeypatch, clock):
+    entries = {"2301.00001v2": method_entry(), "2301.00002v1": method_entry("2301.00002v1", title="Synthetic Comparison Method")}
+    original = method_feed(*entries.values())
+    starts = []
+
+    def handler(request):
+        if request.url.host == "export.arxiv.org":
+            starts.append(clock.value)
+            if "id_list" in request.url.params:
+                return httpx.Response(200, content=method_feed(entries[request.url.params["id_list"]]),
+                                      headers={"content-type": "application/atom+xml"})
+            assert request.url.params["max_results"] == "2" and request.url.params["sortBy"] == "relevance"
+            return httpx.Response(200, content=original, headers={"content-type": "application/atom+xml"})
+        if request.url.host == "arxiv.org":
+            return httpx.Response(200, content=b"%PDF-synthetic-" + request.url.path.encode(), headers={"content-type": "application/pdf"})
+        if request.url.path == "/works":
+            return httpx.Response(200, json={"status": "ok", "message": {"items": [{"DOI": f"10.1234/abstract-{i}"} for i in range(6)]}})
+        return httpx.Response(200, json=record("10.1234/" + request.url.path.rsplit("/", 1)[-1], abstract="A bibliographic abstract."))
+
+    requests = mocked(monkeypatch, handler, method_discovery=True)
+    monkeypatch.setattr(literature, "_pdf_text", lambda raw: METHOD_TEXT)
+    query = "differential testing comparison"
+    result = literature.collect([query], tmp_path, pdf_candidates=[])
+    assert len(result["sources"]) == 6
+    primary = result["sources"][:2]
+    assert [source["arxiv_id"] for source in primary] == list(entries)
+    assert all(source["scope"] == "full_text" and source["publication_type"] == "preprint" for source in primary)
+    assert all(source["queries"] == [query] and source["discovery_kind"] == "method" for source in primary)
+    first_crossref_record = next(index for index, request in enumerate(requests) if request.url.path.startswith("/works/"))
+    assert sum(request.url.host == "arxiv.org" for request in requests[:first_crossref_record]) == 2
+    assert all(right - left >= 3 - 1e-9 for left, right in zip(starts, starts[1:]))
+    method, = [search for search in result["searches"] if search.get("lookup") == "method"]
+    assert method["query"] == query and method["candidate_arxiv_ids"] == list(entries)
+    assert method["resolved_ids"] == [source["id"] for source in primary]
+    assert "independent review" in method["note"] and not result["warnings"]
+    versions = [search for search in result["searches"] if search.get("lookup") == "arxiv_version"]
+    assert len(versions) == 2 and all(search["status"] == "succeeded" for search in versions)
+    for source in primary:
+        assert (tmp_path / source["discovery_path"]).read_bytes() == original
+        assert (tmp_path / source["metadata_path"]).read_bytes() == method_feed(entries[source["arxiv_id"]])
+        assert literature._arxiv_metadata((tmp_path / source["metadata_path"]).read_bytes(), source["arxiv_id"])["title"] == source["title"]
+        for path_key, hash_key in (("discovery_path", "discovery_sha256"), ("metadata_path", "metadata_sha256"),
+                                   ("raw_path", "sha256"), ("text_path", "text_sha256")):
+            assert hashlib.sha256((tmp_path / source[path_key]).read_bytes()).hexdigest() == source[hash_key]
+        body = literature.full_text_body_range(METHOD_TEXT)
+        assert source["body_range"] == body
+        assert all(body["start"] <= location["start"] < location["end"] <= body["end"] and
+                   METHOD_TEXT[location["start"]:location["end"]] == passage
+                   for passage, location in zip(source["excerpts"], source["excerpt_ranges"]))
+
+
+def test_method_discovery_treats_query_operators_and_unicode_as_literal_words(tmp_path, monkeypatch):
+    query = 'differential OR id:2301.00001v2 "testing" \\ βeta'
+
+    def handler(request):
+        if request.url.host == "export.arxiv.org":
+            assert request.url.params["search_query"] == ('all:"differential" AND all:"OR" AND all:"id" AND '
+                'all:"2301" AND all:"00001v2" AND all:"testing" AND all:"βeta"')
+            assert set(request.url.params) == {"search_query", "start", "max_results", "sortBy"}
+            assert "%CE%B2" in str(request.url)
+            return httpx.Response(200, content=method_feed(), headers={"content-type": "application/atom+xml"})
+        assert request.url.params["query.bibliographic"] == query
+        return httpx.Response(200, json={"status": "ok", "message": {"items": []}})
+
+    mocked(monkeypatch, handler, method_discovery=True)
+    result = literature.collect([query], tmp_path, pdf_candidates=[])
+    assert result["sources"] == []
+    method, = [search for search in result["searches"] if search.get("lookup") == "method"]
+    assert method["query"] == query and method["status"] == "succeeded" and method["candidate_arxiv_ids"] == []
+    assert (tmp_path / method["raw_path"]).read_bytes() == method_feed()
+
+
+@pytest.mark.parametrize("returned", [
+    method_feed(method_entry("2301.00001v3")),
+    method_feed(method_entry(title="A Conflicting Whole Title")),
+    method_feed(method_entry(authors=("A Different Author",))),
+    method_feed(method_entry(updated="2023-01-03T00:00:00Z")),
+    method_feed(method_entry(), method_entry()),
+])
+def test_method_version_identity_failure_omits_candidate_and_retains_both_original_feeds(tmp_path, monkeypatch, clock, returned):
+    original = method_feed(method_entry())
+
+    def handler(request):
+        assert request.url.host != "arxiv.org", "A mismatched exact identity must not request its PDF"
+        if request.url.host == "export.arxiv.org":
+            return httpx.Response(200, content=returned if "id_list" in request.url.params else original,
+                                  headers={"content-type": "application/atom+xml"})
+        return httpx.Response(200, json={"status": "ok", "message": {"items": []}})
+
+    mocked(monkeypatch, handler, method_discovery=True)
+    result = literature.collect(["differential testing"], tmp_path, pdf_candidates=[])
+    assert result["sources"] == []
+    method, = [search for search in result["searches"] if search.get("lookup") == "method"]
+    version, = [search for search in result["searches"] if search.get("lookup") == "arxiv_version"]
+    assert method["status"] == "succeeded" and version["status"] == "failed" and version["resolved_ids"] == []
+    assert version["requested_arxiv_id"] == "2301.00001v2" and version["error"] == "ValueError"
+    for search, raw in ((method, original), (version, returned)):
+        assert (tmp_path / search["raw_path"]).read_bytes() == raw
+        assert hashlib.sha256(raw).hexdigest() == search["sha256"]
+
+
+@pytest.mark.parametrize("content", [
+    b"<invalid>",
+    method_feed(method_entry("2301.00001")),
+    method_feed(method_entry(), method_entry()),
+    method_feed(method_entry(), method_entry("2301.00001v3")),
+    method_feed(method_entry(), method_entry("2301.00002v1"), method_entry("2301.00003v1")),
+    b'<!DOCTYPE feed [<!ENTITY unsafe "identity">]><feed xmlns="http://www.w3.org/2005/Atom"/>',
+])
+def test_method_discovery_rejects_invalid_ambiguous_or_excess_candidates_with_raw_preserved(tmp_path, monkeypatch, content):
+    def handler(request):
+        assert request.url.host != "arxiv.org"
+        if request.url.host == "export.arxiv.org":
+            assert "id_list" not in request.url.params
+            return httpx.Response(200, content=content, headers={"content-type": "application/atom+xml"})
+        return httpx.Response(200, json={"status": "ok", "message": {"items": []}})
+
+    mocked(monkeypatch, handler, method_discovery=True)
+    result = literature.collect(["differential testing"], tmp_path, pdf_candidates=[])
+    assert not result["sources"]
+    method, = [search for search in result["searches"] if search.get("lookup") == "method"]
+    assert method["status"] == "failed" and method["error"] == "ValueError"
+    assert (tmp_path / method["raw_path"]).read_bytes() == content
+    assert hashlib.sha256(content).hexdigest() == method["sha256"]
+
+
+def test_method_searches_are_globally_bounded_and_zero_source_budget_skips_discovery(tmp_path, monkeypatch):
+    def handler(request):
+        if request.url.host == "export.arxiv.org":
+            return httpx.Response(200, content=method_feed(), headers={"content-type": "application/atom+xml"})
+        return httpx.Response(200, json={"status": "ok", "message": {"items": []}})
+
+    requests = mocked(monkeypatch, handler, method_discovery=True)
+    result = literature.collect([f"method query {i}" for i in range(8)], tmp_path, pdf_candidates=[])
+    assert sum(request.url.host == "export.arxiv.org" for request in requests) == 2
+    assert sum(search.get("lookup") == "method" for search in result["searches"]) == 2
+    assert len([search for search in result["searches"] if search["provider"] == "Crossref"]) == 8
+    before = len(requests)
+    result = literature.collect(["method query"], tmp_path / "zero", limit=0, pdf_candidates=[])
+    assert len(requests) == before + 1 and not any(search.get("lookup") == "method" for search in result["searches"])
+
+
+def test_method_source_limit_one_requests_one_candidate_and_reads_before_any_abstract(tmp_path, monkeypatch, clock):
+    original = method_feed(method_entry())
+
+    def handler(request):
+        if request.url.host == "export.arxiv.org":
+            assert request.url.params["max_results"] == "1"
+            return httpx.Response(200, content=original, headers={"content-type": "application/atom+xml"})
+        if request.url.host == "arxiv.org":
+            return httpx.Response(200, content=b"%PDF-one", headers={"content-type": "application/pdf"})
+        assert request.url.path == "/works", "Crossref candidates must not consume the single primary opportunity"
+        return httpx.Response(200, json={"status": "ok", "message": {"items": [{"DOI": "10.1234/abstract"}]}})
+
+    requests = mocked(monkeypatch, handler, method_discovery=True)
+    monkeypatch.setattr(literature, "_pdf_text", lambda raw: METHOD_TEXT)
+    result = literature.collect(["differential testing"], tmp_path, limit=1, pdf_candidates=[])
+    assert len(result["sources"]) == 1 and result["sources"][0]["scope"] == "full_text"
+    assert len(requests) == 4 and not result["warnings"]
+
+
+def test_ambiguous_exact_whole_title_cannot_be_reinterpreted_as_a_method_search(tmp_path, monkeypatch):
+    title = "Synthetic Differential Testing Method"
+    ambiguous = method_feed(method_entry(), method_entry("2301.00002v1"))
+
+    def handler(request):
+        if request.url.host == "export.arxiv.org":
+            assert request.url.params["search_query"] == 'ti:"' + title + '"'
+            return httpx.Response(200, content=ambiguous, headers={"content-type": "application/atom+xml"})
+        return httpx.Response(200, json={"status": "ok", "message": {"items": []}})
+
+    requests = mocked(monkeypatch, handler, title_discovery=True, method_discovery=True)
+    result = literature.collect([title], tmp_path, pdf_candidates=[])
+    assert not result["sources"] and sum(request.url.host == "export.arxiv.org" for request in requests) == 1
+    exact, = [search for search in result["searches"] if search.get("lookup") == "exact_title"]
+    assert exact["status"] == "failed" and (tmp_path / exact["raw_path"]).read_bytes() == ambiguous
+    assert not any(search.get("lookup") == "method" for search in result["searches"])
+
+
+@pytest.mark.parametrize("location", ["/pdf/2301.00001v3", "/pdf/2301.00002v2", "/pdf/2301.00001"])
+def test_arxiv_pdf_redirect_identity_failure_keeps_raw_without_upgrading_scope(tmp_path, monkeypatch, clock, location):
+    original = method_feed(method_entry())
+    rejected = b"%PDF-rejected-version\r\nexact bytes\x00"
+
+    def handler(request):
+        if request.url.host == "export.arxiv.org":
+            return httpx.Response(200, content=original, headers={"content-type": "application/atom+xml"})
+        if request.url.host == "arxiv.org":
+            if request.url.path == "/pdf/2301.00001v2":
+                return httpx.Response(302, headers={"location": location})
+            return httpx.Response(200, content=rejected, headers={"content-type": "application/pdf"})
+        return httpx.Response(200, json={"status": "ok", "message": {"items": []}})
+
+    mocked(monkeypatch, handler, method_discovery=True)
+    monkeypatch.setattr(literature, "_pdf_text", lambda raw: pytest.fail("A different PDF version must never be parsed"))
+    result = literature.collect(["differential testing"], tmp_path, pdf_candidates=[])
+    source, = result["sources"]
+    assert source["scope"] == "abstract" and "text_path" not in source
+    assert (tmp_path / source["raw_path"]).read_bytes() == original
+    pdfs = list((tmp_path / "literature").glob("*.pdf"))
+    assert len(pdfs) == 1 and pdfs[0].read_bytes() == rejected
+    assert any("reading scope was not upgraded" in warning for warning in result["warnings"])
+
+
+def test_arxiv_same_version_pdf_suffix_retains_actual_url_and_canonical_identity(tmp_path, monkeypatch, clock):
+    original = method_feed(method_entry())
+
+    def handler(request):
+        if request.url.host == "export.arxiv.org":
+            return httpx.Response(200, content=original, headers={"content-type": "application/atom+xml"})
+        if request.url.host == "arxiv.org":
+            if not request.url.path.endswith(".pdf"):
+                return httpx.Response(302, headers={"location": "/pdf/2301.00001v2.pdf"})
+            return httpx.Response(200, content=b"%PDF-same-version", headers={"content-type": "application/pdf"})
+        return httpx.Response(200, json={"status": "ok", "message": {"items": []}})
+
+    mocked(monkeypatch, handler, method_discovery=True)
+    monkeypatch.setattr(literature, "_pdf_text", lambda raw: METHOD_TEXT)
+    result = literature.collect(["differential testing"], tmp_path, pdf_candidates=[])
+    source, = result["sources"]
+    assert source["scope"] == "full_text" and source["url"] == "https://arxiv.org/pdf/2301.00001v2"
+    assert source["retrieved_url"] == "https://arxiv.org/pdf/2301.00001v2.pdf"
+    assert len(list((tmp_path / "literature").glob("*.pdf"))) == 1 and not result["warnings"]
+
+
+def test_method_collection_cancellation_preserves_discovery_and_does_not_claim_crossref_attempt(tmp_path, monkeypatch):
+    original = method_feed(method_entry())
+
+    def handler(request):
+        assert request.url.host == "export.arxiv.org"
+        return httpx.Response(200, content=original, headers={"content-type": "application/atom+xml"})
+
+    requests = mocked(monkeypatch, handler, method_discovery=True)
+    result = literature.collect(["differential testing", "unattempted comparison"], tmp_path, pdf_candidates=[],
+        cancel=lambda: any((tmp_path / "literature").glob("method-*")))
+    assert len(requests) == 1 and result["cancelled"] is True and not result["sources"]
+    method, = [search for search in result["searches"] if search.get("lookup") == "method"]
+    assert method["status"] == "succeeded" and (tmp_path / method["raw_path"]).read_bytes() == original
+    assert all(not search["attempted"] and search["status"] == "not_attempted"
+               for search in result["searches"] if search["provider"] == "Crossref")
+
+
+def test_method_shared_deadline_retains_raw_pdf_before_refusing_worker_dispatch(tmp_path, monkeypatch, clock):
+    original = method_feed(method_entry())
+    raw_pdf = b"%PDF-time-budget"
+
+    def handler(request):
+        if request.url.host == "export.arxiv.org":
+            return httpx.Response(200, content=original, headers={"content-type": "application/atom+xml"})
+        if request.url.host == "arxiv.org":
+            clock.value = 73
+            return httpx.Response(200, content=raw_pdf, headers={"content-type": "application/pdf"})
+        return httpx.Response(200, json={"status": "ok", "message": {"items": []}})
+
+    mocked(monkeypatch, handler, method_discovery=True)
+    monkeypatch.setattr(literature, "_pdf_text", lambda raw: pytest.fail("Insufficient cleanup budget must not start a worker"))
+    result = literature.collect(["differential testing"], tmp_path, pdf_candidates=[])
+    source, = result["sources"]
+    assert result["timed_out"] is True and source["scope"] == "abstract" and "text_path" not in source
+    assert next((tmp_path / "literature").glob("*.pdf")).read_bytes() == raw_pdf
+    assert clock.value < 90
+
+
+def test_method_long_cooldown_does_not_claim_other_provider_or_query_attempts(tmp_path, monkeypatch, clock):
+    requests = mocked(monkeypatch, lambda request: httpx.Response(429, headers={"retry-after": "11"}), method_discovery=True)
+    result = literature.collect(["differential testing", "unattempted comparison"], tmp_path, pdf_candidates=[])
+    assert len(requests) == 1 and result["rate_limited"] is True and not result.get("timed_out")
+    method, = [search for search in result["searches"] if search.get("lookup") == "method"]
+    assert method["attempted"] is True and method["status"] == "failed" and method["http_status"] == 429
+    assert all(not search["attempted"] and search["status"] == "not_attempted"
+               for search in result["searches"] if search["provider"] == "Crossref")
+    assert not list((tmp_path / "literature").iterdir())
+
+
+@pytest.mark.parametrize("query", ["arxiv:2301.00001v2", "Synthetic Differential Testing Method", "10.1234/test"])
+def test_exact_identity_routes_are_not_reinterpreted_as_method_queries(tmp_path, monkeypatch, clock, query):
+    original = method_feed(method_entry())
+
+    def handler(request):
+        if request.url.host == "export.arxiv.org":
+            if "search_query" in request.url.params:
+                assert request.url.params["search_query"] == 'ti:"Synthetic Differential Testing Method"'
+            else:
+                assert request.url.params["id_list"] == "2301.00001v2"
+            return httpx.Response(200, content=original, headers={"content-type": "application/atom+xml"})
+        if request.url.host == "arxiv.org":
+            return httpx.Response(200, content=b"%PDF-exact", headers={"content-type": "application/pdf"})
+        assert request.url.path == "/works/10.1234/test" and not request.url.params
+        return httpx.Response(200, json=record(abstract="A literal exact DOI abstract."))
+
+    requests = mocked(monkeypatch, handler, title_discovery=True, method_discovery=True)
+    monkeypatch.setattr(literature, "_pdf_text", lambda raw: METHOD_TEXT)
+    result = literature.collect([query], tmp_path, pdf_candidates=[])
+    assert len(result["sources"]) == 1 and len(requests) == (1 if query.startswith("10.") else 2)
+    assert not any(search.get("lookup") in {"method", "arxiv_version"} for search in result["searches"])
+    assert result["sources"][0]["queries"] == [query] and not result["warnings"]

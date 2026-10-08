@@ -19,7 +19,7 @@ import time
 import uuid
 from urllib.parse import quote
 
-from ..workspace import ensure_unlinked, file_lock, loads_json, write_json
+from ..workspace import digest_file, ensure_unlinked, file_lock, loads_json, safe_relative, write_json
 from . import windows_runtime
 from .runner_common import MAX_ARTIFACT_BYTES, MAX_LOG_BYTES, _production_calls, _retain_observations, _safe_tree
 
@@ -672,17 +672,41 @@ class BrowserRunner:
                 "self_checks": {},
                 "recovery_scope": "registered private Job and original process identity; incomplete starting markers block"}
 
+    def _retain_self_check_failure(self, receipt: dict) -> dict:
+        root = safe_relative(self.supervisor_root, "self-check-failures/" + uuid.uuid4().hex)
+        root.mkdir(parents=True, exist_ok=False, mode=0o700)
+        artifacts = {}
+        for name, raw in (("raw-response.bin", receipt["raw_response"]),
+                          ("stderr-returned-text.txt", receipt["stderr"].encode("utf-8"))):
+            path = root / name
+            ensure_unlinked(path)
+            with path.open("xb") as stream:
+                stream.write(raw)
+                stream.flush()
+                os.fsync(stream.fileno())
+            artifacts[name] = {"path": path.relative_to(self.supervisor_root).as_posix(),
+                               "size": path.stat().st_size, "sha256": digest_file(path)}
+        path = root / "receipt.json"
+        write_json(path, {**receipt, "raw_response": artifacts["raw-response.bin"],
+                         "stderr_text_artifact": artifacts["stderr-returned-text.txt"],
+                         "stderr_scope": "Returned UTF-8 replace-decoded text, not original stderr bytes"})
+        return {"path": path.relative_to(self.supervisor_root).as_posix(),
+                "size": path.stat().st_size, "sha256": digest_file(path),
+                "retention_scope": "owned-supervisor-files"}
+
     def status(self) -> dict:
         result, prepared = self._status_fields(), False
         if os.name != "nt":
             result.update(reason="Chromium process supervision currently requires Windows", cleanup_confirmed=True)
             return result
         with self._probe_lock:
+            self_check, last_receipt = "owned_cleanup", None
             try:
                 with self._mutex:
                     prepared = self._prepare()
                     if not prepared:
                         raise ValueError("Owned worker cleanup remains unresolved")
+                self_check = "runtime_binding"
                 runtime = self._runtime()
                 source = 'const ctx=document.createElement("canvas").getContext("2d");window.J={measure(x){if(typeof process!=="undefined"||typeof require!=="undefined"||typeof readScientificInput!=="undefined")throw Error("host capability");if(x===null)throw Error("original rejection");return {value:x+1,width:ctx.measureText("가").width}}};'
                 code = '''export default async function run(){
@@ -702,7 +726,8 @@ class BrowserRunner:
                           "experiment_files": {"check.mjs": {"text": code, "sha256": _hash(code.encode())}},
                           "entrypoint": "check.mjs", "timeout_seconds": 10,
                           "scientific_inputs": {"supporting-document-000000000000": input_record}}
-                receipt = self._execute(packet, purpose="probe")
+                self_check = "canvas_and_held_call"
+                last_receipt = receipt = self._execute(packet, purpose="probe")
                 envelope = receipt.get("envelope") or {}
                 if receipt["reason"] or not receipt["cleanup_confirmed"] or receipt["exit_code"] != 0 or envelope.get("status") != "succeeded":
                     raise ValueError("Actual Chromium boundary self-check failed")
@@ -724,7 +749,8 @@ class BrowserRunner:
                     negative_code = "export default async function run(){" + body + ";return {caught:true}}"
                     negative_packet = {**packet, "experiment_files": {"check.mjs": {
                         "text": negative_code, "sha256": _hash(negative_code.encode())}}, "scientific_inputs": {}}
-                    negative = self._execute(negative_packet, purpose="probe")
+                    self_check, last_receipt = name, None
+                    last_receipt = negative = self._execute(negative_packet, purpose="probe")
                     failed = negative.get("envelope") or {}
                     if (negative["reason"] or not negative["cleanup_confirmed"] or negative["exit_code"] == 0
                             or failed.get("status") != "failed" or error not in str(failed.get("error", ""))):
@@ -735,7 +761,8 @@ class BrowserRunner:
                 kill_packet = {**packet, "experiment_files": {"check.mjs": {"text": kill_code, "sha256": _hash(kill_code.encode())}},
                                "scientific_inputs": {}, "timeout_seconds": 10}
                 kill_started = time.monotonic()
-                stopped = self._execute(kill_packet, purpose="probe", cancel=lambda: time.monotonic() - kill_started > 1)
+                self_check, last_receipt = "owned_tree_termination", None
+                last_receipt = stopped = self._execute(kill_packet, purpose="probe", cancel=lambda: time.monotonic() - kill_started > 1)
                 if stopped["reason"] != "cancelled" or not stopped["cleanup_confirmed"] or stopped["forced_stop_confirmed"] is not True:
                     raise ValueError("Owned Chromium termination self-check failed")
                 checks["owned_tree_termination"] = True
@@ -744,7 +771,20 @@ class BrowserRunner:
                               self_checks=checks)
             except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired) as exc:
                 result.update(reason="Configured Chromium runtime or owned boundary self-check is unavailable",
-                              diagnostic={"stage": "chromium-self-check", "exception_type": type(exc).__name__, "detail": str(exc)[:300]})
+                              diagnostic={"stage": "chromium-self-check", "self_check": self_check,
+                                          "exception_type": type(exc).__name__, "detail": str(exc)[:300]})
+                if last_receipt is not None:
+                    envelope = last_receipt.get("envelope") or {}
+                    worker_error = envelope.get("error")
+                    result["diagnostic"]["worker"] = {
+                        "exit_code": last_receipt.get("exit_code"), "reason": last_receipt.get("reason"),
+                        "cleanup_confirmed": last_receipt.get("cleanup_confirmed"),
+                        "envelope_status": envelope.get("status"),
+                        "envelope_error": worker_error[:1000] if isinstance(worker_error, str) else None}
+                    try:
+                        result["diagnostic"]["evidence"] = self._retain_self_check_failure(last_receipt)
+                    except (OSError, ValueError, KeyError, TypeError) as error:
+                        result["diagnostic"]["evidence_retention_error"] = type(error).__name__
             finally:
                 with self._mutex:
                     self._release()

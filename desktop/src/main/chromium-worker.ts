@@ -8,6 +8,8 @@ import { CHROMIUM_PROTOCOL, CHROMIUM_LIMITS, boundedJson, chromiumSourceURL, sha
 import { rendererAuthority } from './chromium-authority.js';
 
 const SCHEME = 'pf-science';
+// Closing the hidden renderers must not quit before the result flush owns exit.
+app.on('window-all-closed', () => {});
 type Remote = { type: string; objectId?: string; value?: unknown; unserializableValue?: string };
 type Realm = { window: BrowserWindow; session: Session; origin: string; authority: string; context: number;
   scripts: Map<string, { url: string }>; served: Set<string> };

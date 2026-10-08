@@ -1,6 +1,6 @@
 # 독립 앱 검증 기록
 
-갱신일: 2026-10-08 (Asia/Seoul). 현재 앱과 엔진 소스는 `0.14.18`이다. 최신 Windows 설치 파일·최종 release의 검증과 소스 변경·검사는 [0.14.18 기록](#01418-실행-환경-실패-기록과-windows-긴-경로-2026-10-08)에 있다. 0.14.18 실제 연구 재개 결과는 아직 미확인이다. 새 설치·OAuth·로그인 복원은 미검증이고 GitHub Releases에는 게시하지 않았다. 새 투고 준비도 기준을 통과한 실제 완료 원고는 아직 없다. 아래는 `0.13.0` 전환 작업의 시작 commit `ac22fdd95778572968e3227d271a0b9846cd7f8b`부터 보존한 실제 검사 이력이다. 0.13.1의 5단계 개선·새 패키지 검사는 [UI 검증 기록](standalone-ui-provenance.md)에 구분해 기록한다.
+갱신일: 2026-10-08 (Asia/Seoul). 현재 앱·엔진 소스와 최종 Windows release는 `0.14.19`다. 소스·패키지 검사는 [0.14.19 기록](#01419-본문-보완-경로와-브라우저-결과-전송-2026-10-08)에 있다. 0.14.18 실제 연구는 첫 제안 심사에서 보류되고 두 번째 제안의 환경 점검에서 종료됐다. 새 설치·OAuth·로그인 복원은 미검증이고 GitHub Releases에는 게시하지 않았다. 새 투고 준비도 기준을 통과한 실제 완료 원고는 아직 없다. 아래는 `0.13.0` 전환 작업의 시작 commit `ac22fdd95778572968e3227d271a0b9846cd7f8b`부터 보존한 실제 검사 이력이다. 0.13.1의 5단계 개선·새 패키지 검사는 [UI 검증 기록](standalone-ui-provenance.md)에 구분해 기록한다.
 
 0.14.6의 네 기준 승인과 독립 유한 수치·인용·파일 검수는 당시 생성 흐름과 보존 근거의 일치를 확인했다. 학술지 제출에 충분한 신규성·중요성이나 더 넓은 주장 범위를 입증한 검증은 아니었다. 당시 승인·생성 파일·감사 기록은 보존하며, 새 투고 준비도 승인으로 소급해 계산하지 않는다.
 
@@ -1177,4 +1177,47 @@ Windows runtime을 고정 wheel 19개로 다시 구성하고 실제 호스트 �
 | win-unpacked/resources/app.asar | 44,792,893 | 134d7d198117c36ed62e3240d124e42cd048ad4d6e1d61f639a156f96a2ad52e |
 | win-unpacked/Paper Factory.exe | 245,726,208 | 393d6eaf58b873393fb41086d5630dd676e208eec85b04403c870b445358d8c2 |
 
-0.14.18 실제 JIZURA 재개 결과는 아직 미확인이다. 0.14.17의 최초 runtime admission 실패 항목은 소급 확정하지 못했고, 성공한 SDK 요청만 있었으므로 실제 SDK 실패에서 HTTP 진단을 보존하는 경로도 미검증이다. 이번 합성 검사와 패키지 진단은 과학 승인이나 투고 준비도 평가가 아니며, 새 실제 SCI·완료 원고는 없다. 0.14.17의 확정 배포 해시와 모든 과거 연구 기록은 유지한다.
+실제 0.14.18은 `.paper-factory/j18/3b1c484ce801`에서 같은 JIZURA 연구를 재개해 06:48:43 UTC에 종료했다. 원래 저장소·목표·writer/reviewer와 source 166파일을 유지했다. 신규 SDK 요청 5개(파일 선택2·설계2·설계 심사1)는 모두 시작·완료 기록을 남겼고 실패·중단 요청은 없었다. 첫 제안의 runtime admission은 통과했고, 문헌 수집은 초록5·metadata1의 6자료만 확보했으며 본문은 없었다. 첫 심사는 직접 관련된 분할·정규화 및 최근접 배치 연구 본문, 비자명한 기여·중요성, 수동 경계 검증과 지표의 대조군 입력 영역이 부족해 반려됐다. 앱이 자동으로 두 번째 설계를 생성했지만 제안 등록의 Chromium 자체 검사에서 다시 거절됐다. 첫 제안·심사는 그대로 보존되고 native는 proposed/blocked/STUDY_REJECTED, 제안1·SCI0·논문0이다.
+
+이번에는 `runtime-admission-dff223a48925` 4,828 B/SHA256 `e50feb4cdedd2317f45dd09201545d14d1cbdd509f60127fa03c26d641630e4e`에 실패 시점의 상태가 동결됐다. 선택한 Chromium profile은 ready=false, 전체 cleanup은 true이며, 진단은 `Actual Chromium caught boundary violation self-check failed`다. 어느 negative control의 어떤 내부 결과가 실패했는지까지는 이 기록으로 확정할 수 없다. 앱에도 ISOLATION_UNAVAILABLE가 정확히 남았다. 이 진단을 과학 관측이나 논문 승인 근거로 사용하지 않는다. 0.14.17 최초 실패의 세부 항목을 소급 추정하지 않는다.
+
+종료 후 읽기 전용 감사 45항목과 별도 합성 helper 10항목을 통과했다. 현재 361파일/owned350/산출물88개, 재개 전 전체239 archive·불변234·기존20 산출물, original195/prior202 archive와 모든 기존 결과·SDK·감사·원본을 대조했다. 실제·평가·과거 자료와 제품59파일은 감사 전후 동일하며 SQLite는 immutable/query_only SELECT로만 읽었다. 작업자 기록과 활성 handle은 비었고 종료값은 shell/result 모두2다. `.paper-factory/runtime-admission-01418/post-completion-audit/closed-run-audit.json` 751,143 B/SHA256 `289c49930dd052c9ad45e765c721f691b7a09354b3bbda2db114179f22ba69fb`에 기록했다. 새 SDK 실패가 없어 실제 HTTP 실패 진단 경로는 여전히 미검증이며, 새 투고 준비도 승인이나 완료 원고는 없다.
+
+## 0.14.19 본문 보완 경로와 브라우저 결과 전송 (2026-10-08)
+
+실제 첫 제안은 질문·비교·표본은 통과했지만 직접 관련 본문 부족과 실행 가능성·검증 보류가 겹쳤다. 기존 문헌 보완 자격이 실행 가능성·검증 통과를 먼저 요구해 원문을 추가로 읽는 경로도 막혔다. 이 두 조건만 읽기 전용 수집 자격에서 제거했다. 질문·비교·표본, 현재 제안과 반려 심사의 결합, 실행 전 상태, 수집 3회 한도와 모든 승인 기준은 유지한다. 보완 계획은 본문이 필요한 판단과 측정 정의 자체의 결함을 구분하며, 후자는 설계 수정으로 진행한다. 새 본문을 확보해도 모든 실패 기준은 독립 재심 전까지 미해결이다.
+
+일반 방법 질의는 기존 정확한 전체 제목 조회가 정상적으로 일치 항목을 찾지 못했을 때 arXiv 후보를 탐색한다. 검색은 최대 2회·후보는 전체 2개이며, 실제 버전·제목·모든 저자·발행 및 갱신 날짜를 정확 조회로 재확인한다. 검색 원문과 별도 버전 조회 실패를 보존하고 PDF 읽기 기회를 초록 후보보다 먼저 제공한다. 모호하거나 잘못된 전체 제목 조회는 일반 검색으로 우회하지 않는다. 최종 PDF의 식별자·버전이 다르면 원문 응답을 보존하고 본문 승격을 거절한다. 기존 시간·요청 제한·취소·PDF 및 source 한도와 정확 DOI·arXiv 조회는 유지한다. 검색 순위와 초록은 관련성·신규성의 원문 근거가 아니다.
+
+숨겨진 worker의 모든 창을 닫은 뒤 stdout 전송 callback에서 종료값을 확정하는 구조에 `window-all-closed` 처리를 추가했다. Electron의 기본 자동 종료가 전송 callback보다 먼저 앱을 끝낼 수 있는 경합을 제거한다. 평가 전용 복사본에서 마지막 전송 callback의 종료를 250ms 지연한 비교는 이전 구현의 실패 frame+exit0, 수정 구현의 실패 frame+exit1을 확인했다. 제품에 지연이나 테스트 전용 설정을 추가하지 않았다. 실제 0.14.18 실패의 정확한 원인이 이 경합이었다고 확정하지 않는다.
+
+Chromium 자체 검사가 실패하면 어느 검사인지와 당시 worker의 종료값·원래 reason·응답 상태·정리 여부를 작은 진단으로 남긴다. 별도 고유한 supervisor 폴더에 stdout 원문 bytes, 기존 UTF-8 replace-decoded stderr 문자열, 원래 receipt와 해시·크기를 보존한다. stderr 원래 bytes까지 보존했다고 주장하지 않는다. 진단 저장 실패도 ready=false를 유지하고 준비 검사를 재시도하거나 SCI를 실행하지 않는다. supervisor에 보존한 파일이 기존 재현 ZIP에 자동으로 들어간다고 주장하지 않는다.
+
+| 0.14.19 제품 검사 | 결과 |
+| --- | --- |
+| Desktop build·typecheck | 통과 |
+| 전체 Desktop Node | 451 통과·실패·취소·skip 0 |
+| SDK | 48 통과·기존 Windows POSIX 권한 검사 1 skip |
+| Native 영향 회귀 | 571 통과·실패 0·기존 Windows symlink 권한 3 skip, 377.156초 |
+| 숨겨진 Chromium 통합 | 28 통과·실패·skip 0, 39.467초 |
+| 문헌 보완 개별 | Native 117·Desktop 74 통과. 전체 회귀와 겹치는 subset |
+| 원문 발견 개별 | 243 통과·기존 symlink 권한 3 skip. 전체 회귀와 겹치는 subset |
+| 브라우저 실패 보존 개별 | 19 통과. 전체 회귀와 겹치는 subset |
+
+최종 Native 동결 기록은 `.paper-factory/runtime-admission-01419/native-final-6c148c6d9f3a/final-source-freeze.json` 11,070 B/SHA256 `9b5d4c670728b5b14f871f7c560429902f4c6ab9338aa042d9affbe12bfadc70`이다. Desktop 동결은 `.paper-factory/runtime-admission-01419/desktop-source-freeze.json` 8,236 B/SHA256 `c20adc2b19f686a7d33ed807d8e07db976ef04e042d2bc87a4c203f0152f74d8`다. 해당 소스와 검사 임시 작업실·로그를 보존했다. 개별 검사 수를 전체 검사와 합산하지 않는다.
+
+Chromium 평가 wrapper는 Node exit0과 원문·해시 동결을 저장한 뒤 CP949 콘솔로 검사 표시를 재출력하다 UnicodeEncodeError로 종료했다. 이 실패를 수정하거나 검사를 반복하지 않고 `.paper-factory/is19/integration-156d37d87ad4/post-run-reconciliation.json` SHA256 `ca5f792c90cb663420589cb70e2a5c0e601e811bd4fde2b86808ceb0f70e9974`에 읽기 전용 확인을 남겼다. 원래 wrapper·stdout·stderr·run-freeze와 지연 비교를 모두 보존했으며 제품 소스·compiled worker·실행 파일·fixture는 검사 전후 동일하다.
+
+같은 JIZURA root의 새 재개 준비는 기존 361파일과 88개 동결 산출물, 이전 239·202·195 전체 archive를 보존한다. 준비 helper의 35개 합성 검사와 독립 prelaunch guard의 26개 합성 검사를 통과했다. proposed/blocked/STUDY_REJECTED, 제안1·SCI0, 첫 반려 심사·제안 해시, 원래 저장소·목표·source166을 고정한다. 실행 시 0.14.19 native API가 남은 preparation 재개를 허용해야만 진행한다. 새 root를 만들어 횟수를 초기화하지 않는다. 이 준비와 제품 검사는 실제 연구·논문 품질 승인이나 새 설치·OAuth 검사가 아니다. 실제 0.14.19 재개는 아직 수행하지 않았다.
+
+Windows runtime을 고정 wheel 19개로 다시 구성해 실제 호스트 진단을 통과했다. 2,219파일/473,803,709 B의 inventory SHA256은 `d06ce0f5d236784955fb1558c8f88de58fe433ea6373ec8513dac7ff56ee4b0b`다. `.paper-factory/standalone-runtime-builder/build-win32-x64-df0bce35-13ca-45f0-9df3-5aa11b0635e5/build-receipt.json` 4,827 B/SHA256 `d428f51abb288789b9f490f2dff1d061efb2bc869b618a53950fe8ad9032fdc8`에 기록했다.
+
+새 NSIS build와 ASAR 7,668항목·현재 source·SDK import·renderer·Pretendard·runtime 전체 해시 검사를 통과했다. 실제 포함 Python IPC와 패키지 worker로 두 profile 및 브라우저 자체 검사 7개, 정상 종료·같은 작업실 재시작 두 번을 확인했다. workflow·모델·SCI·계정 접근은 모두 0회다. 자원 불변·소유 engine 종료·빈 worker journal을 확인한 실행 receipt는 `.paper-factory/runtime-admission-01419/packaged-engine-e3d227b9-c92b-4249-9320-3080b703302e/receipt.json` 18,214 B/SHA256 `7d992256b99846356a7dbb34db86999d65ae6302fd822575e6ab31ba922c4fc6`다.
+
+기존 최종 0.14.18 배포의 3파일과 해당 경로의 실행 process 부재, 작업실 내부의 실제 경로를 확인하고 전체를 `.paper-factory/preserved-release-01418`에 보존했다. 새 전체 패키지를 `desktop/release`로 복사해 전수 정적 검증을 다시 통과했다. 새 설치·OAuth·로그인 복원·GitHub Releases 게시는 수행하지 않았다.
+
+| 최종 0.14.19 배포 파일 | 크기(B) | SHA256 |
+| --- | ---: | --- |
+| Paper Factory Setup 0.14.19.exe | 213,081,644 | d6b6ebb14ee3547def37d9dc604a210b0de31e590d918ede4f3a04fe43180e23 |
+| win-unpacked/resources/app.asar | 44,793,323 | f7a3cbc88638734b85f82eb1427dd6ac72ab94d252002e0cff6921eb53500eec |
+| win-unpacked/Paper Factory.exe | 245,726,208 | 4ae533b586eac17392a51a57dd5ef5182c706877d8e018dc8ba78613fa5c1e0a |

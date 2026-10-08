@@ -321,21 +321,78 @@ def test_ipc_declares_exact_api_fields_and_dispatches_native_method(setup, monke
             ipc.request(json.dumps({"id": "bad", "method": "workflow.collectStudyLiterature", "params": bad}).encode())
 
 
-@pytest.mark.parametrize("criterion", ["question", "comparison", "sampling", "feasibility", "validation"])
-def test_design_or_validation_failures_require_revision_not_evidence_only_resume(setup, criterion):
+@pytest.mark.parametrize("criterion", ["question", "comparison", "sampling"])
+def test_core_design_failures_require_revision_not_evidence_only_resume(setup, criterion):
     service, runner, research_id = setup
     service.submit_proposal(research_id, protocol())
     service.collect_literature(research_id)
     review = rejected()
-    if criterion == "validation":
-        review["publication_readiness"][criterion]["passed"] = False
-    else:
-        review[criterion]["passed"] = False
+    review[criterion]["passed"] = False
     state = service.submit_study_review(research_id, review)
     assert state["resume_kind"] is None
     assert_code("STUDY_LITERATURE_INELIGIBLE", lambda: service.collect_study_literature(research_id, QUERIES, REASON, []))
     assert_code("INVALID_STATE", lambda: service.resume(research_id))
     assert state["study_literature_attempt"] == 0 and runner.calls == 0
+
+
+@pytest.mark.parametrize("criteria", [("feasibility",), ("validation",), ("feasibility", "validation")])
+def test_evidence_deficit_with_failed_assessment_can_collect_but_fresh_rejection_still_blocks_science(setup, criteria):
+    service, runner, research_id = setup
+    service.submit_proposal(research_id, protocol())
+    service.collect_literature(research_id)
+    review = rejected()
+    review["literature"]["passed"] = False
+    for criterion in criteria:
+        target = review["publication_readiness"] if criterion == "validation" else review
+        target[criterion].update(passed=False, reason="Missing inspected primary methods prevent this synthetic assessment.")
+    old = service.submit_study_review(research_id, review)
+    kept = {key: service.artifact_path(research_id, key).read_bytes() for key in ("proposal", "study-review-1")}
+    assert old["resume_kind"] == "preparation"
+    service.resume(research_id)
+    service.collector = collector()
+    state = service.collect_study_literature(research_id, QUERIES, REASON, [])
+    assert state["study_literature_pending"] is True and state["study_literature_attempt"] == 1
+    source = next(source for source in state["literature"]["sources"] if source["id"] == "new-primary")
+    text_path = service._workspace(research_id).path("research") / source["text_path"]
+    assert source["scope"] == "full_text" and digest_file(text_path) == source["text_sha256"]
+    text = text_path.read_text(encoding="utf-8")
+    assert source["body_range"] == literature.full_text_body_range(text)
+    for excerpt, span in zip(source["excerpts"], source["excerpt_ranges"], strict=True):
+        assert text[span["start"]:span["end"]] == excerpt
+    assert source["text_sha256"] in {artifact["sha256"] for artifact in state["artifacts"].values()}
+    assert_code("STUDY_REVIEW_REQUIRED", lambda: service.collect_study_literature(research_id, QUERIES, REASON, []))
+    fresh = copy.deepcopy(review)
+    fresh["selected_sources"][0]["source_id"] = "new-primary"
+    fresh["publication_readiness"]["closest_work"][0]["source_id"] = "new-primary"
+    held = service.submit_study_review(research_id, fresh)
+    assert held["stage"] == "proposed" and held["status"] == "blocked" and held["code"] == "STUDY_REJECTED"
+    assert held["study_review"]["accepted"] is False and held["study_literature_pending"] is False
+    assert held["proposal_attempt"] == 1 and held["study_literature_attempt"] == 1
+    receipt = json.loads(service.artifact_path(research_id, "study-review-1-literature-1").read_bytes())
+    assert receipt["proposal_sha256"] == old["artifacts"]["proposal"]["sha256"]
+    assert receipt["prior_study_review_sha256"] == old["artifacts"]["study-review-1"]["sha256"]
+    assert receipt["literature_sha256"] == state["artifacts"]["literature"]["sha256"]
+    assert receipt["study_literature_collection_sha256"] == state["artifacts"]["study-literature-collection-1"]["sha256"]
+    for key, raw in kept.items():
+        assert service.artifact_path(research_id, key).read_bytes() == raw
+    assert_code("REVIEW_EVIDENCE_CONFLICT", lambda: service.submit_study_review(research_id, fresh))
+    assert held["execution_attempt"] == 0 and runner.calls == 0
+    assert not {"plan", "code", "observations", "analysis"}.intersection(held["artifacts"])
+
+
+def test_validation_failure_without_evidence_deficit_requires_revision(setup):
+    service, runner, research_id = setup
+    service.submit_proposal(research_id, protocol())
+    service.collect_literature(research_id)
+    review = copy.deepcopy(STUDY_REVIEW)
+    review.update(accepted=False, issues=["The synthetic metric domain requires a substantive operational definition."])
+    review["publication_readiness"]["validation"].update(passed=False, reason=review["issues"][0])
+    state = service.submit_study_review(research_id, review)
+    assert state["resume_kind"] is None
+    assert_code("STUDY_LITERATURE_INELIGIBLE", lambda: service.collect_study_literature(research_id, QUERIES, REASON, []))
+    assert_code("INVALID_STATE", lambda: service.resume(research_id))
+    assert state["study_literature_attempt"] == 0 and state["execution_attempt"] == 0 and runner.calls == 0
+    assert "plan" not in state["artifacts"]
 
 
 @pytest.mark.parametrize("defect,code", [("executed", "EXPERIMENT_ALREADY_DISPATCHED"),

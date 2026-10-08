@@ -524,8 +524,9 @@ async function fixture(responses = [], workflow = base(), transport = {}) {
   const publicWorkflow = (record = workflow) => {
     const rejectedPreparation = record.stage === 'proposed' && record.study_review?.accepted === false &&
       (record.study_literature_pending || (record.study_literature_attempt < 3 &&
-        ['question', 'comparison', 'sampling', 'feasibility'].every(key => record.study_review[key].passed) &&
-        record.study_review.publication_readiness?.validation.passed)) && record.code === 'STUDY_REJECTED';
+        ['question', 'comparison', 'sampling'].every(key => record.study_review[key].passed) &&
+        (!record.study_review.contribution.passed || !record.study_review.literature.passed ||
+          record.study_review.publication_readiness?.novelty.passed === false))) && record.code === 'STUDY_REJECTED';
     record.resume_kind = (['ready', 'cancelled'].includes(record.status) || (record.status === 'blocked' && rejectedPreparation)) && !record.cleanup_pending && !record.terminal_control_failure && record.code !== 'CLEANUP_UNCONFIRMED'
       ? ['created', 'proposed', 'planned', 'code_ready'].includes(record.stage) && record.execution_attempt === 0 ? 'preparation'
         : ['analyzed', 'manuscript'].includes(record.stage) && record.execution_attempt === 1 ? 'authoring' : null : null;
@@ -1270,56 +1271,58 @@ test('proposal, inspected literature and fresh suitability acceptance precede an
   } finally { await f.cleanup(); }
 });
 
-test('validation rejection repairs operational definitions using retained primary identities before fresh approval and science', async () => {
-  const primary = { id: 'synthetic-primary-fixture', doi: '10.5555/synthetic-fixture-only', version: 'synthetic-fixture-v2',
-    title: 'Synthetic Target Provenance Methods for Controller Fixtures', scope: 'full_text',
-    excerpts: ['Synthetic inspected primary body for orchestration only; it is not actual scientific literature.'] };
-  const unrelated = { id: 'synthetic-unrelated-fixture', title: 'Unrelated Synthetic Reading Fixture', scope: 'abstract', excerpts: [] };
-  const literature = { sources: [primary, unrelated], searches: [{ query: primary.doi, outcome: 'full_text' }] };
-  const ambiguous = { feasible: true, source_files: ['module.ts'], title: 'Synthetic ambiguous target measurement',
-    metrics: [{ name: 'origin_consistency', unit: 'count', description: 'Compare targets without a derivation.' }],
-    literature_queries: [primary.doi, primary.title] };
-  const rejected = { ...studyAccepted, accepted: false,
-    issues: ['Synthetic target origin and replacement or empty-boundary behavior are undefined.'],
-    comparison: { passed: false, reason: 'The synthetic oracle has no independent target-provenance rule.' },
-    publication_readiness: { ...publicationReadiness,
-      validation: { passed: false, reason: 'The synthetic metric domain, target mapping and boundary derivation are undefined.' } } };
-  const repaired = { ...ambiguous, title: 'Synthetic explicit target measurement',
-    metrics: [{ name: 'origin_consistency', unit: 'count', description: 'Count provenance-label mismatches over the supplied finite synthetic input list.' }],
-    parameters: { input_bound: 3 }, independent_oracle: 'Derive synthetic target labels from input operation records independently of observed production output.',
-    procedure: ['Enumerate three distinct synthetic inputs per seed.', 'Derive targets from each input operation record.',
-      'Plan ordinary and empty-boundary worked checks; their expected values are not observations.'],
-    research_claim: { validation_plan: 'Independently derive expected labels from synthetic records before comparing production outputs.' },
-    comparison_rationale: primary.doi + '; ' + primary.title + '; recorded version ' + primary.version + ' defines the needed synthetic provenance method.' };
-  const prior = { execution_attempt: 1, analysis: { 'synthetic.behavior.mean': 2, 'synthetic.correctness.mean': 0 } };
-  const workflow = { ...base(), stage: 'created', proposal_attempt: 0, study_review: null, plan: null,
-    literature, prior_study: prior };
-  const f = await fixture([ambiguous, rejected, repaired, studyAccepted, { files: [] }, accepted, { sections: [] }, manuscriptAccepted], workflow);
-  try {
-    await f.controller.initialize(); await f.controller.create(input);
-    const state = await settled(f.controller); assert.equal(state.jobs[0].pipeline, 'completed');
-    for (const prompt of f.prompts.slice(0, 4)) assertOperationalDesignPrompt(prompt.input[0].content);
-    const revision = f.prompts[2].input[0].content;
-    assert.match(revision, /For each failed validation or comparison issue, identify the repaired definition or derivation/);
-    assert.match(revision, /retain unchanged exact DOI\/arXiv identifier queries \(including supplied versions\) or complete exact-title queries/);
-    assert.match(revision, /recorded identifiers, versions and full titles/);
-    assert.match(revision, /Choose the relevant subset; do not blindly carry every source/);
-    assert.ok(revision.includes(JSON.stringify(literature))); assert.ok(revision.includes(JSON.stringify(rejected)));
-    assert.ok(revision.includes(JSON.stringify(prior)));
-    assert.match(revision, /Preserve every prior observed nonzero difference and every zero, negative or null finding separately/);
-    assert.match(f.prompts[1].input[0].content, /Do not invent missing definitions or repair the proposal on the author's behalf/);
-    assert.equal(f.studyRemediationPrompts.length, 0, 'Validation failure must revise design without a literature-only detour');
-    assert.deepEqual(workflow.plan.literature_queries, [primary.doi, primary.title]);
-    assert.deepEqual(workflow.prior_study, prior); assert.deepEqual(workflow.literature, literature);
-    const decisions = f.calls.filter(call => call.method === 'workflow.submitStudyReview');
-    assert.deepEqual(decisions.map(call => call.params.review.accepted), [false, true]);
-    const science = f.calls.findIndex(call => call.method === 'workflow.startExperiment');
-    const freshApproval = f.calls.findIndex(call => call.method === 'workflow.submitStudyReview' && call.params.review.accepted);
-    assert.ok(science > freshApproval);
-    assert.equal(f.calls.filter(call => call.method === 'workflow.startExperiment').length, 1);
-    assert.equal(workflow.proposal_attempt, 2); assert.equal(workflow.execution_attempt, 1);
-  } finally { await f.cleanup(); }
-});
+for (const comparisonFailed of [true, false]) {
+  test('validation rejection repairs operational definitions using retained primary identities before fresh approval and science; comparison failed: ' + comparisonFailed, async () => {
+    const primary = { id: 'synthetic-primary-fixture', doi: '10.5555/synthetic-fixture-only', version: 'synthetic-fixture-v2',
+      title: 'Synthetic Target Provenance Methods for Controller Fixtures', scope: 'full_text',
+      excerpts: ['Synthetic inspected primary body for orchestration only; it is not actual scientific literature.'] };
+    const unrelated = { id: 'synthetic-unrelated-fixture', title: 'Unrelated Synthetic Reading Fixture', scope: 'abstract', excerpts: [] };
+    const literature = { sources: [primary, unrelated], searches: [{ query: primary.doi, outcome: 'full_text' }] };
+    const ambiguous = { feasible: true, source_files: ['module.ts'], title: 'Synthetic ambiguous target measurement',
+      metrics: [{ name: 'origin_consistency', unit: 'count', description: 'Compare targets without a derivation.' }],
+      literature_queries: [primary.doi, primary.title] };
+    const rejected = { ...studyAccepted, accepted: false,
+      issues: ['Synthetic target origin and replacement or empty-boundary behavior are undefined.'],
+      ...(comparisonFailed ? { comparison: { passed: false, reason: 'The synthetic oracle has no independent target-provenance rule.' } } : {}),
+      publication_readiness: { ...publicationReadiness,
+        validation: { passed: false, reason: 'The synthetic metric domain, target mapping and boundary derivation are undefined.' } } };
+    const repaired = { ...ambiguous, title: 'Synthetic explicit target measurement',
+      metrics: [{ name: 'origin_consistency', unit: 'count', description: 'Count provenance-label mismatches over the supplied finite synthetic input list.' }],
+      parameters: { input_bound: 3 }, independent_oracle: 'Derive synthetic target labels from input operation records independently of observed production output.',
+      procedure: ['Enumerate three distinct synthetic inputs per seed.', 'Derive targets from each input operation record.',
+        'Plan ordinary and empty-boundary worked checks; their expected values are not observations.'],
+      research_claim: { validation_plan: 'Independently derive expected labels from synthetic records before comparing production outputs.' },
+      comparison_rationale: primary.doi + '; ' + primary.title + '; recorded version ' + primary.version + ' defines the needed synthetic provenance method.' };
+    const prior = { execution_attempt: 1, analysis: { 'synthetic.behavior.mean': 2, 'synthetic.correctness.mean': 0 } };
+    const workflow = { ...base(), stage: 'created', proposal_attempt: 0, study_review: null, plan: null,
+      literature, prior_study: prior };
+    const f = await fixture([ambiguous, rejected, repaired, studyAccepted, { files: [] }, accepted, { sections: [] }, manuscriptAccepted], workflow);
+    try {
+      await f.controller.initialize(); await f.controller.create(input);
+      const state = await settled(f.controller); assert.equal(state.jobs[0].pipeline, 'completed');
+      for (const prompt of f.prompts.slice(0, 4)) assertOperationalDesignPrompt(prompt.input[0].content);
+      const revision = f.prompts[2].input[0].content;
+      assert.match(revision, /For each failed validation or comparison issue, identify the repaired definition or derivation/);
+      assert.match(revision, /retain unchanged exact DOI\/arXiv identifier queries \(including supplied versions\) or complete exact-title queries/);
+      assert.match(revision, /recorded identifiers, versions and full titles/);
+      assert.match(revision, /Choose the relevant subset; do not blindly carry every source/);
+      assert.ok(revision.includes(JSON.stringify(literature))); assert.ok(revision.includes(JSON.stringify(rejected)));
+      assert.ok(revision.includes(JSON.stringify(prior)));
+      assert.match(revision, /Preserve every prior observed nonzero difference and every zero, negative or null finding separately/);
+      assert.match(f.prompts[1].input[0].content, /Do not invent missing definitions or repair the proposal on the author's behalf/);
+      assert.equal(f.studyRemediationPrompts.length, 0, 'Validation failure must revise design without a literature-only detour');
+      assert.deepEqual(workflow.plan.literature_queries, [primary.doi, primary.title]);
+      assert.deepEqual(workflow.prior_study, prior); assert.deepEqual(workflow.literature, literature);
+      const decisions = f.calls.filter(call => call.method === 'workflow.submitStudyReview');
+      assert.deepEqual(decisions.map(call => call.params.review.accepted), [false, true]);
+      const science = f.calls.findIndex(call => call.method === 'workflow.startExperiment');
+      const freshApproval = f.calls.findIndex(call => call.method === 'workflow.submitStudyReview' && call.params.review.accepted);
+      assert.ok(science > freshApproval);
+      assert.equal(f.calls.filter(call => call.method === 'workflow.startExperiment').length, 1);
+      assert.equal(workflow.proposal_attempt, 2); assert.equal(workflow.execution_attempt, 1);
+    } finally { await f.cleanup(); }
+  });
+}
 
 test('a literature deficit collects refined evidence and receives fresh approval before code or science', async () => {
   const missing = { sources: [], searches: [{ query: 'synthetic broad query', status: 'failed', error: 'HTTPStatusError', http_status: 503 }] };
@@ -1364,6 +1367,56 @@ const evidenceDeficitReview = () => ({ ...studyAccepted, accepted: false, issues
   publication_readiness: { ...publicationReadiness, novelty: { passed: false, reason: 'Synthetic absent method evidence cannot establish novelty.' } } });
 const retrievalRemediation = () => ({ action: 'retrieve_literature', queries: ['Synthetic closest method title'], pdfCandidates: [],
   reason: 'Collect a genuinely missing method passage without replacing the retained scientific proposal.' });
+
+test('mixed evidence and feasibility or validation failures retrieve before one fresh rejection without approving or executing', async () => {
+  const proposal = { feasible: true, source_files: ['module.ts'], literature_queries: ['Synthetic original method'] };
+  const missing = { sources: [], searches: [{ query: 'Synthetic original method', outcome: 'no_match' }] };
+  const inspected = { sources: [{ id: 'synthetic-source', scope: 'full_text',
+    excerpts: ['Synthetic newly retained primary rule body for controller orchestration only.'] }] };
+  const rejected = { ...evidenceDeficitReview(),
+    literature: { passed: false, reason: 'A directly related synthetic primary rule body is missing.' },
+    feasibility: { passed: false, reason: 'Missing inspected rule evidence prevents a synthetic feasibility assessment.' },
+    publication_readiness: { ...evidenceDeficitReview().publication_readiness,
+      validation: { passed: false, reason: 'Missing inspected rule evidence prevents a synthetic validation assessment.' } } };
+  const fresh = { ...rejected, issues: ['The newly retained synthetic passage still does not support the unchanged validation contract.'] };
+  const workflow = { ...base(), stage: 'proposed', status: 'blocked', code: 'STUDY_REJECTED',
+    proposal_attempt: 3, proposal, plan: null, literature: missing, study_review: rejected };
+  let remediations = 0;
+  const f = await fixture([fresh], workflow, {
+    studyRemediation: () => ++remediations === 1 ? retrievalRemediation() : { action: 'revise_design', queries: [], pdfCandidates: [],
+      reason: 'The inspected synthetic body still requires substantive operational design repair; the exhausted proposal must stay rejected.' },
+    request(method) {
+      if (method === 'workflow.collectStudyLiterature') {
+        assert.deepEqual(workflow.study_review, rejected);
+        assert.equal(workflow.plan, null); assert.equal(workflow.execution_attempt, 0);
+        workflow.literature = inspected;
+        workflow.instructions = 'Synthetic retrieved primary body evidence: ' + JSON.stringify(inspected);
+      }
+    } });
+  try {
+    await f.controller.initialize();
+    assert.equal(f.controller.snapshot().jobs[0].resumeKind, 'preparation');
+    await f.controller.resume(id, 'writer', 'reviewer');
+    const state = await settled(f.controller);
+    assert.equal(state.jobs[0].code, 'STUDY_REJECTED'); assert.deepEqual(state.jobs[0].studyReview, fresh);
+    assert.equal(workflow.status, 'blocked'); assert.equal(workflow.stage, 'proposed'); assert.equal(workflow.plan, null);
+    assert.deepEqual(workflow.proposal, proposal); assert.equal(workflow.proposal_attempt, 3);
+    assert.equal(workflow.study_literature_attempt, 1); assert.equal(workflow.study_literature_pending, false);
+    assert.equal(workflow.execution_attempt, 0);
+    const methods = f.calls.map(call => call.method);
+    assert.equal(methods.filter(method => method === 'workflow.collectStudyLiterature').length, 1);
+    assert.equal(methods.filter(method => method === 'workflow.submitStudyReview').length, 1);
+    assert.ok(methods.indexOf('workflow.collectStudyLiterature') < methods.indexOf('workflow.submitStudyReview'));
+    assert.equal(methods.some(method => ['workflow.submitProposal', 'workflow.submitCode', 'workflow.startExperiment', 'workflow.submitManuscript'].includes(method)), false);
+    assert.equal(f.prompts.length, 1); assert.ok(f.prompts[0].input[0].content.includes(JSON.stringify(inspected)));
+    const remediation = f.studyRemediationPrompts[0].input[0].content;
+    assert.match(remediation, /these failures alone do not forbid read-only evidence collection/);
+    assert.match(remediation, /Collection leaves every failed criterion unresolved until one fresh independent review/);
+    assert.match(remediation, /Ambiguous metric domains\/formulas, target provenance or boundary behavior require action=revise_design/);
+    assert.ok(remediation.includes(JSON.stringify(rejected))); assert.ok(remediation.includes(JSON.stringify(missing)));
+    assert.equal(remediations, 2);
+  } finally { await f.cleanup(); }
+});
 
 test('a previously rejected third proposal resumes bounded literature collection and fresh review without re-proposing', async () => {
   const proposal = { feasible: true, source_files: ['module.ts'], literature_queries: ['Synthetic original method'] };

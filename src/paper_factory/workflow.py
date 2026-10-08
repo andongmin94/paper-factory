@@ -880,8 +880,7 @@ class WorkflowService:
             return True
         readiness = review.get("publication_readiness") or {}
         return record.study_literature_attempt < 3 and all(
-            review[name]["passed"] for name in ("question", "comparison", "sampling", "feasibility")) and (
-                readiness.get("validation", {}).get("passed") is True) and (
+            review[name]["passed"] for name in ("question", "comparison", "sampling")) and (
                 not review["contribution"]["passed"] or not review["literature"]["passed"] or
                 readiness.get("novelty", {}).get("passed") is False)
 
