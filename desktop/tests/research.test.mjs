@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
+import { ChatGPTError } from '@siwc/local';
+import { apiError } from '../vendor/siwc-local/dist/errors.js';
 import { ResearchController, durableJson, parseModelObject, projectObservationEvidence } from '../dist/research.js';
 
 const id = 'research-abcdef123456';
@@ -3456,4 +3458,170 @@ test('startup reconciles a prepared revision after interruption to paused analyz
     assert.equal(f.prompts.length, 2); assert.equal(f.calls.some(call => call.method === 'workflow.reviseWriting'), false);
     assert.equal(workflow.execution_attempt, 1); assertWritingOnly(f);
   } finally { await f.cleanup(); }
+});
+
+for (const phase of ['source-selection', 'plan', 'redesign-plan', 'study-review', 'code', 'code-review', 'manuscript', 'manuscript-review']) {
+  test('research HTTP failure retains safe bound diagnostics for ' + phase + ' without credentials or scientific dispatch', async () => {
+    const marker = 'SYNTHETIC_PRIVATE_SERVER_CONTENT_NEVER_PERSIST';
+    const error = apiError({ error: { code: 'api_error', message: marker, param: 'input[0].content',
+      input: { access_token: marker }, ctx: { account_email: marker }, private_unknown_field: marker } }, 503, 'synthetic-request-01417');
+    error.toJSON = () => { throw new Error('Research must never serialize the SDK exception'); };
+    const workflow = ['source-selection', 'plan'].includes(phase) ? planningWorkflow({ 'module.ts': sourceText }) :
+      phase === 'redesign-plan' ? heldPreparation() : phase === 'study-review' ?
+      { ...base(), stage: 'proposed', study_review: null, proposal: { feasible: true, source_files: ['module.ts'] }, plan: undefined } :
+      phase.startsWith('manuscript') ? observed() : base();
+    const responses = phase === 'source-selection' ? [] : ['code-review', 'manuscript-review'].includes(phase) ?
+      [phase === 'code-review' ? { files: [] } : { sections: [] }, error] : [error];
+    const original = structuredClone(workflow);
+    const f = await fixture(responses, workflow, phase === 'source-selection' ? { sourceSelection: () => error } : {});
+    try {
+      await f.controller.initialize();
+      if (phase === 'redesign-plan') await f.controller.improveResearch(id, 'writer', 'reviewer');
+      else await f.controller.resume(id, 'writer', 'reviewer');
+      const state = await settled(f.controller);
+      assert.equal(state.jobs[0].code, 'api_error'); assert.match(state.jobs[0].message, /HTTP 503/);
+      assert.equal(state.error.action, 'retry'); assert.equal(state.jobs[0].pipeline, 'failed');
+      const receipts = f.calls.filter(call => call.method === 'workflow.recordInference').map(call => call.params.receipt);
+      const failed = receipts.find(receipt => receipt.phase === phase && receipt.outcome === 'failed');
+      assert.ok(failed); assert.equal(failed.model, phase.endsWith('review') ? 'reviewer' : 'writer');
+      assert.equal(failed.profileId, 'synthetic-profile'); assert.equal(failed.promptSha256, digest(failed.prompt));
+      assert.deepEqual(failed.diagnostics, { httpStatus: 503, requestId: 'synthetic-request-01417', param: 'input[0].content',
+        responseShape: '{error:{code:string,message:string,param:string,input:redacted,ctx:redacted,other:1}}' });
+      const started = receipts.find(receipt => receipt.id === failed.id && receipt.outcome === 'started');
+      assert.equal(started.prompt, failed.prompt); assert.equal(started.phase, phase); assert.equal(started.model, failed.model);
+      for (const receipt of receipts.filter(receipt => receipt.outcome !== 'failed')) assert.equal(Object.hasOwn(receipt, 'diagnostics'), false);
+      const saved = JSON.parse(await readFile(join(f.home, id, 'inference', failed.id + '-failed.json'), 'utf8'));
+      assert.deepEqual(saved, failed);
+      for (const value of [receipts, state, saved]) {
+        const serialized = JSON.stringify(value);
+        for (const privateValue of [marker, 'access_token', 'account_email', 'private_unknown_field']) assert.equal(serialized.includes(privateValue), false);
+      }
+      assert.equal(Object.hasOwn(state.error, 'diagnostics'), false);
+      assert.equal(JSON.stringify(state.error).includes('synthetic-request-01417'), false);
+      assert.equal(f.calls.filter(call => call.method === 'workflow.recordInference' && call.params.receipt.outcome === 'failed').length, 1);
+      assert.equal(f.calls.some(call => ['workflow.submitCode', 'workflow.submitManuscript', 'workflow.submitRedesignProposal', 'workflow.export'].includes(call.method)), false);
+      assert.deepEqual(workflow.artifacts, original.artifacts); assert.equal(workflow.execution_attempt, original.execution_attempt);
+      assertNoScientificDispatch(f);
+    } finally { await f.cleanup(); }
+  });
+}
+
+test('HTTP 200 streamed SDK failure remains a failed model receipt with sanitized diagnostics', async () => {
+  const error = apiError({ error: { code: 'subscription_sharing_usage_limit_exceeded', message: 'PRIVATE_STREAM_ERROR', param: 'model' } },
+    200, 'synthetic-stream-request');
+  const f = await fixture([], planningWorkflow({ 'module.ts': sourceText }), { sourceSelection: () => error });
+  try {
+    await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer');
+    const state = await settled(f.controller);
+    assert.equal(state.error.action, 'usage'); assert.equal(state.jobs[0].pipeline, 'failed');
+    const receipts = f.calls.filter(call => call.method === 'workflow.recordInference').map(call => call.params.receipt);
+    assert.deepEqual(receipts.map(receipt => receipt.outcome), ['started', 'failed']);
+    assert.deepEqual(receipts[1].diagnostics, { httpStatus: 200, requestId: 'synthetic-stream-request', param: 'model',
+      responseShape: '{error:{code:string,message:string,param:string}}' });
+    assert.equal(JSON.stringify([receipts, state]).includes('PRIVATE_STREAM_ERROR'), false);
+    assert.equal(f.prompts.length, 0); assert.equal(f.calls.some(call => call.method === 'workflow.readMaterial'), false); assertNoScientificDispatch(f);
+  } finally { await f.cleanup(); }
+});
+
+test('a failed model retains partial generated text and safe HTTP diagnostics as separate bound fields', async () => {
+  const partial = 'SYNTHETIC_PARTIAL_GENERATED_TEXT';
+  const f = await fixture([async options => {
+    options.onDelta(partial);
+    throw new ChatGPTError('api_error', 'PRIVATE_SERVER_BODY', true, 502,
+      { requestId: 'synthetic-partial-request', responseShape: '{detail:string}' });
+  }], base());
+  try {
+    await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer'); await settled(f.controller);
+    const failed = f.calls.find(call => call.method === 'workflow.recordInference' && call.params.receipt.outcome === 'failed').params.receipt;
+    assert.equal(failed.text, partial); assert.equal(failed.textSha256, digest(partial));
+    assert.deepEqual(failed.diagnostics, { httpStatus: 502, requestId: 'synthetic-partial-request', responseShape: '{detail:string}' });
+    assert.equal(JSON.stringify(failed).includes('PRIVATE_SERVER_BODY'), false); assertNoScientificDispatch(f);
+  } finally { await f.cleanup(); }
+});
+
+test('malformed SDK diagnostic values are omitted and cannot leak through research receipts or visible errors', async () => {
+  const error = new ChatGPTError('api_error', 'PRIVATE_ERROR_MESSAGE', false, NaN, {
+    requestId: 'https://callback/?code=PRIVATE_SECRET', param: 'input[0].access_token', responseShape: '{error:{message:"PRIVATE_BODY"}}' });
+  const f = await fixture([error], base());
+  try {
+    await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer'); const state = await settled(f.controller);
+    const receipts = f.calls.filter(call => call.method === 'workflow.recordInference').map(call => call.params.receipt);
+    assert.deepEqual(receipts.map(receipt => receipt.outcome), ['started', 'failed']);
+    assert.equal(Object.hasOwn(receipts[1], 'diagnostics'), false);
+    for (const value of ['PRIVATE_ERROR_MESSAGE', 'PRIVATE_SECRET', 'PRIVATE_BODY', 'access_token']) assert.equal(JSON.stringify([receipts, state]).includes(value), false);
+    assert.equal(state.error.message.includes('HTTP'), false); assertNoScientificDispatch(f);
+  } finally { await f.cleanup(); }
+});
+
+test('ordinary exceptions with diagnostic lookalikes and toJSON are never trusted or serialized by research', async () => {
+  let toJsonCalls = 0;
+  const error = Object.assign(new Error('PRIVATE_ORDINARY_EXCEPTION'), { status: 503, requestId: 'synthetic-lookalike',
+    param: 'model', responseShape: '{detail:string}', toJSON() { toJsonCalls++; return { access_token: 'PRIVATE_CREDENTIAL' }; } });
+  const f = await fixture([error], base());
+  try {
+    await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer'); const state = await settled(f.controller);
+    const failed = f.calls.find(call => call.method === 'workflow.recordInference' && call.params.receipt.outcome === 'failed').params.receipt;
+    assert.equal(state.error.code, 'connection_error'); assert.equal(Object.hasOwn(failed, 'diagnostics'), false); assert.equal(toJsonCalls, 0);
+    for (const value of ['PRIVATE_ORDINARY_EXCEPTION', 'PRIVATE_CREDENTIAL', 'synthetic-lookalike']) assert.equal(JSON.stringify([failed, state]).includes(value), false);
+    assertNoScientificDispatch(f);
+  } finally { await f.cleanup(); }
+});
+
+test('started and completed model receipts ignore response metadata and contain no SDK diagnostics', async () => {
+  const f = await fixture([async () => ({ text: JSON.stringify({ feasible: false }),
+    diagnostics: { httpStatus: 200, requestId: 'UNTRUSTED_RESPONSE_METADATA' } })], planningWorkflow({ 'module.ts': sourceText }));
+  try {
+    await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer'); await settled(f.controller);
+    const receipts = f.calls.filter(call => call.method === 'workflow.recordInference').map(call => call.params.receipt);
+    assert.deepEqual(receipts.map(receipt => receipt.outcome), ['started', 'completed', 'started', 'completed']);
+    for (const receipt of receipts) assert.equal(Object.hasOwn(receipt, 'diagnostics'), false);
+    assert.equal(JSON.stringify(receipts).includes('UNTRUSTED_RESPONSE_METADATA'), false); assertNoScientificDispatch(f);
+  } finally { await f.cleanup(); }
+});
+
+test('explicit cancellation omits HTTP metadata even when an SDK error arrives at abort', async () => {
+  const started = deferred(), workflow = planningWorkflow({ 'module.ts': sourceText });
+  const f = await fixture([], workflow, { sourceSelection: async options => {
+    options.onDelta('SYNTHETIC_CANCELLED_PARTIAL'); started.resolve();
+    await new Promise((_resolve, reject) => options.signal.addEventListener('abort', () => reject(new ChatGPTError('api_error', 'PRIVATE_ABORT_ERROR', true, 503,
+      { requestId: 'synthetic-abort-request', param: 'model', responseShape: '{detail:string}' })), { once: true }));
+  } });
+  try {
+    await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer'); await started.promise;
+    await f.controller.cancel(id); const state = await settled(f.controller);
+    const receipts = f.calls.filter(call => call.method === 'workflow.recordInference').map(call => call.params.receipt);
+    assert.deepEqual(receipts.map(receipt => receipt.outcome), ['started', 'interrupted']);
+    assert.equal(receipts[1].text, 'SYNTHETIC_CANCELLED_PARTIAL'); assert.equal(Object.hasOwn(receipts[1], 'diagnostics'), false);
+    assert.equal(state.jobs[0].code, 'CANCELLED'); assert.equal(f.calls.some(call => call.method === 'workflow.readMaterial'), false); assertNoScientificDispatch(f);
+  } finally { await f.cleanup(); }
+});
+
+test('an SDK cancellation code cannot attach HTTP diagnostics to a research failure', async () => {
+  const f = await fixture([new ChatGPTError('cancelled', 'PRIVATE_CANCEL_MESSAGE', false, 503,
+    { requestId: 'synthetic-cancel-request', param: 'model', responseShape: '{detail:string}' })], base());
+  try {
+    await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer'); await settled(f.controller);
+    const failed = f.calls.find(call => call.method === 'workflow.recordInference' && call.params.receipt.outcome === 'failed').params.receipt;
+    assert.equal(failed.code, 'cancelled'); assert.equal(Object.hasOwn(failed, 'diagnostics'), false); assertNoScientificDispatch(f);
+  } finally { await f.cleanup(); }
+});
+
+test('the model deadline wraps the error as a timeout and omits the arriving SDK HTTP metadata', async t => {
+  const started = deferred(), aborted = deferred();
+  const f = await fixture([async options => {
+    options.onDelta('SYNTHETIC_TIMED_OUT_PARTIAL'); started.resolve();
+    await new Promise((_resolve, reject) => options.signal.addEventListener('abort', () => {
+      aborted.resolve(); reject(new ChatGPTError('api_error', 'PRIVATE_TIMEOUT_ERROR', true, 503,
+        { requestId: 'synthetic-timeout-request', param: 'model', responseShape: '{detail:string}' }));
+    }, { once: true }));
+  }], base());
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer'); await started.promise;
+    t.mock.timers.tick(10 * 60_000); await aborted.promise; t.mock.timers.reset();
+    const state = await settled(f.controller);
+    const failed = f.calls.find(call => call.method === 'workflow.recordInference' && call.params.receipt.outcome === 'failed').params.receipt;
+    assert.equal(failed.code, 'REQUEST_TIMEOUT'); assert.equal(failed.text, 'SYNTHETIC_TIMED_OUT_PARTIAL');
+    assert.equal(Object.hasOwn(failed, 'diagnostics'), false); assert.equal(state.error.code, 'REQUEST_TIMEOUT'); assertNoScientificDispatch(f);
+  } finally { t.mock.timers.reset(); await f.cleanup(); }
 });

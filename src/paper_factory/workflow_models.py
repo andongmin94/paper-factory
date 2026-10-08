@@ -2,12 +2,113 @@
 
 from datetime import datetime
 import hashlib
+import re
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, StrictInt, StrictStr, field_validator, model_validator
 
 from .autonomous.models import FrozenArtifact
 from .models import Record, now, uid
+
+
+_REQUEST_PARAM_ROOTS = frozenset({
+    "model", "input", "instructions", "store", "stream", "tools", "additional_tools", "tool_choice", "reasoning", "text", "service_tier",
+    "background", "conversation", "max_output_tokens", "max_tool_calls", "metadata", "moderation", "multi_agent", "prompt",
+    "prompt_cache_retention", "safety_identifier", "temperature", "top_logprobs", "top_p", "truncation", "user", "previous_response_id",
+})
+_REQUEST_PARAM_FIELDS = frozenset({"type", "role", "content", "text", "name", "description", "parameters", "namespace", "strict", "format", "effort", "summary"})
+_SHAPE_FIELDS = frozenset({"error", "detail", "code", "message", "type", "param", "loc", "input", "ctx", "response", "status", "request_id"})
+_SHAPE_TYPES = frozenset({"null", "string", "number", "boolean", "undefined", "bigint", "symbol", "function", "object", "array", "redacted"})
+
+
+def _safe_diagnostic_shape(value: str) -> bool:
+    """Validate the desktop's field/type-only response grammar without values."""
+    position = 0
+
+    def word():
+        nonlocal position
+        match = re.match(r"[a-z_]+", value[position:])
+        if match is not None:
+            position += len(match[0])
+            return match[0]
+        return None
+
+    def parse(depth: int) -> bool:
+        nonlocal position
+        if value[position:position + 1] == "{":
+            if depth >= 3:
+                return False
+            position += 1
+            if value[position:position + 1] == "}":
+                position += 1
+                return True
+            for _ in range(13):
+                field = word()
+                if (field is None or (field != "other" and field not in _SHAPE_FIELDS) or
+                        value[position:position + 1] != ":"):
+                    return False
+                position += 1
+                if field == "other":
+                    count = re.match(r"(?:0|[1-9][0-9]{0,6})", value[position:])
+                    if count is None or int(count[0]) > 1_000_000:
+                        return False
+                    position += len(count[0])
+                elif not parse(depth + 1):
+                    return False
+                if value[position:position + 1] == "}":
+                    position += 1
+                    return True
+                if value[position:position + 1] != ",":
+                    return False
+                position += 1
+            return False
+        if value[position:position + 1] == "[":
+            if depth >= 3:
+                return False
+            position += 1
+            if value[position:position + 1] == "]":
+                position += 1
+                return True
+            if not parse(depth + 1) or value[position:position + 1] != "]":
+                return False
+            position += 1
+            return True
+        return word() in _SHAPE_TYPES
+
+    return parse(0) and position == len(value)
+
+
+class ModelEvidenceDiagnostics(Record):
+    """Bounded HTTP identifiers and response structure, never response values."""
+    httpStatus: StrictInt | None = Field(default=None, ge=100, le=599)
+    requestId: StrictStr | None = Field(default=None, min_length=1, max_length=160,
+                                      pattern=r"^[a-zA-Z0-9_][a-zA-Z0-9_.:\[\]-]*$")
+    param: StrictStr | None = Field(default=None, min_length=1, max_length=160)
+    responseShape: StrictStr | None = Field(default=None, min_length=1, max_length=2048)
+
+    @model_validator(mode="before")
+    @classmethod
+    def nonempty_fields(cls, value):
+        if not isinstance(value, dict) or not value or any(item is None for item in value.values()):
+            raise ValueError("Diagnostics require nonempty, non-null fields")
+        return value
+
+    @field_validator("param")
+    @classmethod
+    def safe_param(cls, value):
+        if not re.fullmatch(r"[a-z][a-z0-9_]*(?:\[[0-9]{1,5}\]|\.[a-z][a-z0-9_]*)*", value):
+            raise ValueError("Diagnostics parameter must be an allowlisted field path")
+        fields = re.findall(r"[a-z][a-z0-9_]*", value)
+        if fields[0] not in _REQUEST_PARAM_ROOTS or any(field not in _REQUEST_PARAM_FIELDS for field in fields[1:]):
+            raise ValueError("Diagnostics parameter must be an allowlisted field path")
+        return value
+
+    @field_validator("responseShape")
+    @classmethod
+    def safe_shape(cls, value):
+        if not _safe_diagnostic_shape(value):
+            raise ValueError("Diagnostics response shape must contain only allowlisted fields and types")
+        return value
 
 
 class ModelEvidenceReceipt(Record):
@@ -23,6 +124,14 @@ class ModelEvidenceReceipt(Record):
     textSha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     outcome: Literal["started", "completed", "failed", "interrupted"]
     code: str | None = Field(default=None, max_length=100)
+    diagnostics: ModelEvidenceDiagnostics | None = None
+
+    @field_validator("diagnostics", mode="before")
+    @classmethod
+    def supplied_diagnostics(cls, value):
+        if value is None:
+            raise ValueError("Supplied diagnostics must be a nonempty object")
+        return value
 
     @model_validator(mode="after")
     def verified_receipt(self):
@@ -36,6 +145,8 @@ class ModelEvidenceReceipt(Record):
             raise ValueError("Inference output hash differs from its text")
         if self.outcome == "completed" and self.text is None:
             raise ValueError("Completed inference receipt needs its original output")
+        if self.diagnostics is not None and self.outcome not in {"failed", "interrupted"}:
+            raise ValueError("Diagnostics may accompany only failed or interrupted inference")
         return self
 
 

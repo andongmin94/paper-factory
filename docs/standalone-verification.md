@@ -1109,3 +1109,36 @@ reporter를 바로 고쳐 이미 시작한 별도 보조 회수도 종료했으�
 종료 뒤 immutable SQLite SELECT와 전수 파일 대조의 30항목이 참이다. 현재 owned191파일·native 산출물11개·모델 원문/journal·현재 제품 결합59개를 대조했고 소유 worker·handle0·shutdownConfirmed=true를 확인했다. 실제 root202파일과 평가209파일은 감사 전후 동일했다. 앱 job의 artifact 목록7개는 마지막 갱신 시점의 projection이며, 최종 full native 기록11개와 물리 원문을 별도로 확인해 보존 누락이 없었다. audit `.paper-factory/source-selection-01416/post-completion-audit/closed-run-audit.json`은 195,103 B, SHA256 `247068c77018b2455da9864c254f7bf5a87c307f66572a894ff0d34c4c9e4717`다. 이 감사는 학술 품질 승인이나 개선된 실제 source-reading 흐름 성공의 증거가 아니다.
 
 실패 기록에는 HTTP 상태·request ID·응답 shape가 남지 않아 최초 api_error의 원인을 역복원할 수 없다. 별도 기존 앱의 ConnectionController.verify로 gpt-6-astra 짧은 연결 확인을 한 번 실행했다. 같은 공식 세션과 기존 제품을 사용했고 모델이 조회 목록에 있으며 요청이 완료됐다. 과학 연구·SCI·새 OAuth·UI window는 없고 제품 바이트 불변·정상 종료를 확인했다. `.paper-factory/source-inspection-01416/connection-probe-1aa549b2-ff1d-44bc-904f-05eb785545d3/receipt.json`에 기록했다. 이 뒤 요청의 성공으로 최초 오류 원인이 밝혀졌거나 전체 연구 요청이 성공한다고 판단하지 않는다. 다음 수정은 기존 연결 확인에서 이미 검증한 안전한 HTTP 진단 필드를 연구 실패 기록에도 보존하는 것이다. [공식 Sign in with ChatGPT 오류 문서](https://developers.openai.com/siwc/token-sharing-open-source/errors-and-recovery)의 HTTP 상태·코드·request ID·응답 shape 구분을 참고하며 원시 응답 메시지나 인증 정보는 저장하지 않는다.
+
+## 0.14.17 연구 실패의 안전한 HTTP 진단 보존
+
+기존 연결 확인의 필드 이름·응답 구조 검증을 `safeHttpDiagnostics`로 공유하고, 실제 SDK의 실패 진단을 연구 원문 receipt에도 보존한다. HTTP 상태는 정수 100–599, request ID는 제한된 ASCII 식별자, param은 허용된 요청 필드 경로, responseShape는 깊이·필드 수가 제한된 이름·타입 문법만 허용한다. 서버 메시지·응답 값·URL·인증 정보·임의 예외의 toJSON은 직렬화하지 않는다. 알려진 오류 안내는 유지하고, 일반 HTTP 400/422·429·5xx는 고정된 한국어 안내와 검증한 상태 번호를 표시한다.
+
+데스크톱은 실패 receipt에만 비어 있지 않은 진단을 붙인다. 시작·완료·사용자 취소·SDK 취소·앱 시간 제한에는 붙이지 않으며, HTTP 200의 실패 event도 성공으로 바꾸지 않는다. Native는 추가 필드 금지·엄격한 정수/문자열·빈 객체/명시적 null 금지·실패/중단 outcome 한정으로 다시 검증한다. 진단이 없는 기존 receipt는 exclude_none으로 이전 직렬화 바이트를 유지한다. 원래 prompt·부분 응답·해시·append-only journal·과학 심사·SCI 한도를 변경하지 않았고 자동 재시도나 모델·계정 변경 경로를 추가하지 않았다.
+
+| 최종 구현 검사 | 결과 |
+| --- | --- |
+| Desktop build·typecheck | 통과 |
+| 관련 controller 검사 | 393 통과, 실패·취소·skip 0 |
+| 전체 Desktop Node 검사 | 447 통과, 실패·취소·skip 0 |
+| SDK 검사 | 48 통과, Windows의 POSIX 권한 검사 1 skip |
+| Native 진단·기존 receipt 검사 | 84 통과, 276 미선택, 6.21초 |
+| 독립 읽기 검토 | TS/Native 문법·직렬화·기존 심사 경계·같은 연구 재개 스크립트에서 추가 결함 미발견 |
+
+Native 첫 검사의 66 통과/6 실패와 다음 83 통과/1 실패 로그는 보존했다. 새 테스트의 expected 바이트가 Windows의 기존 CRLF와 완료 receipt의 필드 순서를 잘못 가정한 문제였으며 expected fixture만 고쳤다. 제품 writer·기존 serializer·검증 조건은 완화하지 않았다. 최종 native freeze는 `.paper-factory/inference-diagnostics-01417/source-freeze.json` SHA256 `dd60efbcf5790b0c0e0bac3822741fc9aa69088432efdd1b43b6a65f97ef02d8`, Desktop freeze는 `.paper-factory/sdk-diagnostics-01417/desktop-sdk-diagnostics-freeze.json` SHA256 `7d5fe89f4a37a359a518c288c988d04339d1ca53df166ed4bdf065be6d6faf91`이다. Renderer·공개 UI 타입·Chromium worker는 동일하여 숨김 UI나 전체 worker 검사를 반복하지 않았다. 과거 해당 검사 기록을 현재 진단 검사의 새 결과로 합산하지 않는다.
+
+Windows runtime을 고정된 wheel 19개로 다시 구성하고 실제 호스트 진단을 통과했다. 최종 runtime 2,219파일/473,789,597 B의 inventory SHA256은 `3cc9fb364dcee42941bc0bdedd316d20d70950d71babd5ab3b669c4ec8218877`이며 `.paper-factory/standalone-runtime-builder/build-win32-x64-2ba9769c-a34a-4188-9556-224ea6167af6/build-receipt.json`에 기록했다. 새 `.paper-factory/p17-release`에서 정상 NSIS build를 완료했다. ASAR 7,668항목·SDK import·renderer·Pretendard·현재 엔진·전체 runtime 해시를 검증한 뒤, 실제 포함 Python IPC와 패키지 worker로 두 profile 준비·browser control 7개·정상 종료·같은 작업실 재시작 두 번을 확인했다. 새 workflow·모델·SCI·계정 접근은 0회이며 자원 불변·소유 engine/worker 종료를 확인했다. 이 패키지 진단은 실제 연구 재개와 별도다.
+
+패키지 실행 기록은 `.paper-factory/inference-diagnostics-01417/packaged-engine-23933f72-9ffb-4a05-b892-773609127644/receipt.json`이다. 기존 최종 0.14.16의 3파일 해시·크기와 해당 경로의 실행 process 부재를 확인하고 전체 배포본을 `.paper-factory/preserved-release-01416`에 보존했다. 새 전체 패키지를 `desktop/release`로 복사하고 정적 전수 검증을 다시 통과했다. 새 설치·OAuth·로그인 복원·GitHub Releases 게시를 수행하지 않았다.
+
+| 최종 0.14.17 배포 파일 | 크기(B) | SHA256 |
+| --- | ---: | --- |
+| Paper Factory Setup 0.14.17.exe | 213,079,471 | 12b407fb34a6ca8647aea85f41745dd1657ebb44e6f7603e69f9acb83f50ac11 |
+| win-unpacked/resources/app.asar | 44,792,840 | 057a254e8574d4226dbb405872bcd960ec6b2394baa04a2b58b4a71a8e1812ed |
+| win-unpacked/Paper Factory.exe | 245,726,208 | 9582e840d20ab729535d47f78904a4660f656bc8a1c9809429887e9fa920373f |
+
+실제 0.14.17은 `.paper-factory/j17/f06937e694ae`에서 같은 JIZURA `research-7fc481808695`를 재개했다. 소스 선택 `47a17e61-86f2-4f11-9d6d-a2e31f7bc1fc`가 05:48:48.229 UTC에 완료돼 원래 166파일 목록에서 12개를 골랐다. 설계 `18042e34-66bf-4760-969d-385f07c1c02a`에는 metadata 7개를 포함한 총 19파일의 전체 본문과 Unicode 페이지 23개의 원문·해시를 전달했다. 요청 564,551 UTF-8 B/SHA256 `8ed00771472972f91331633448d45c06cc1b4fc798df8d299afa5075d2f05d63`이며, 모델은 05:51:25.028 UTC에 feasible=true의 Chromium 연구안을 정상 완료했다. 같은 원래 저장소·목표·writer/reviewer를 사용했고 수동 selector·문헌·프로토콜·기대 결과를 입력하지 않았다. 원본 전체를 읽고 계획을 만드는 흐름의 실제 반영을 확인했지만, 신규성 심사나 논문 품질 통과는 확인한 상태가 아니다.
+
+이후 native `workflow.submitProposal`이 05:51:25.072–05:51:27.149 UTC에 `ISOLATION_UNAVAILABLE`로 거절됐다. 실행 전 동적 runtime admission의 실패이며, 이번 설계 JSON이나 SDK 응답 실패가 아니다. 별도 bundle을 불러오는 평가 도구에서 이 오류가 화면용 `connection_error`로 투영된 원인도 조사 중이다. 최초 runtime은 두 profile ready였지만, 제안 등록 시점의 개별 profile 진단은 generic error에 보존되지 않아 실패한 점검 항목을 소급 확정할 수 없다. Native는 created/ready, proposal·SCI·논문 0이며 종료를 확인했다. 새 SDK 실패가 없어 HTTP 실패 진단의 실제 보존 경로를 검증한 실행으로 계산하지 않는다.
+
+종료 후 읽기 전용 감사 37항목이 참이다. 같은 root의 현재 239파일/owned228파일/산출물20개, 재개 전 202파일 전체 archive, 불변197개·최초 불변190개·195파일 archive·기존 산출물11개·과거 기록을 전수 대조했다. SQLite는 immutable/query_only SELECT로만 읽고 감사 전후 바이트 불변을 확인했다. 산출물·원문·제품 결합59개·소유 handle/worker 종료·SCI 한도도 확인했다. `.paper-factory/inference-diagnostics-01417/post-completion-audit/closed-run-audit.json`은 389,606 B/SHA256 `15028850f5bba8bc4a73a2503a9c86d5b36fe20f2ecf51c5d052a50c87fec449`이며 코드 동결 기록은 같은 폴더의 `audit-source-freeze.json` SHA256 `d9c3884748c3be3f57318d391a8ecdac06e9be68596364ff7891ee327a3b3b7f`다. 실행 shell 종료값1과 결과 파일 exitCode2는 각각 보존하며 그 차이를 학술 실패나 추가 SDK 실패로 해석하지 않는다.

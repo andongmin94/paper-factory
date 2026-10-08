@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { isDeepStrictEqual } from 'node:util';
 import type { CreateResearchInput, ManuscriptReview, PublicationReadiness, ResearchItem, ResearchPhase, ResearchSnapshot, StudyReview, StudyRedesignReview, SupportingDocument } from '../shared/research.js';
-import { safeError } from './connection.js';
+import { safeError, safeHttpDiagnostics } from './connection.js';
 import { EngineBridge, EngineError } from './engine.js';
 import type { SupportingEvidenceFile } from './supporting-evidence.js';
 export { readSupportingEvidence } from './supporting-evidence.js';
@@ -30,7 +30,7 @@ type Workflow = { id: string; goal: string; stage: string; status: string; code:
 type StoredJob = ResearchItem & { experimentDispatched: boolean; cleanupRequired: boolean };
 type Receipt = { id: string; phase: ResearchPhase; at: string; model: string; profileId: string;
   prompt: string; promptSha256: string; outcome: 'started' | 'completed' | 'failed' | 'interrupted';
-  text?: string; textSha256?: string; code?: string };
+  text?: string; textSha256?: string; code?: string; diagnostics?: NonNullable<ReturnType<typeof safeHttpDiagnostics>> };
 
 const sha = (value: string) => createHash('sha256').update(value).digest('hex');
 type SourceFile = { name: string; sha256: string; size: number };
@@ -660,7 +660,10 @@ export class ResearchController {
       if (!result.text.trim()) throw new EngineError('EMPTY_MODEL_RESPONSE', '모델의 완료 응답이 비어 있습니다.');
     } catch (error) {
       const failure = timeout.signal.aborted && !signal.aborted ? new EngineError('REQUEST_TIMEOUT', '모델 응답 대기 시간이 만료됐습니다. 부분 응답은 실패 기록으로 보존했습니다.') : error;
-      await this.receipt(job, { ...receipt, at: new Date().toISOString(), outcome: signal.aborted ? 'interrupted' : 'failed', code: this.error(failure)!.code,
+      const code = this.error(failure)!.code;
+      const diagnostics = !signal.aborted && code !== 'cancelled' ? safeHttpDiagnostics(failure) : undefined;
+      await this.receipt(job, { ...receipt, at: new Date().toISOString(), outcome: signal.aborted ? 'interrupted' : 'failed', code,
+        ...(diagnostics ? { diagnostics } : {}),
         ...(partial ? { text: partial, textSha256: sha(partial) } : {}) });
       throw failure;
     } finally { clearTimeout(timer); }

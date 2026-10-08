@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { ChatGPTError } from '@siwc/local';
 import { apiError } from '../vendor/siwc-local/dist/errors.js';
-import { ConnectionController } from '../dist/connection.js';
+import { ConnectionController, safeError, safeHttpDiagnostics } from '../dist/connection.js';
 
 async function failureReceipt(t, error) {
   const parent = resolve(tmpdir());
@@ -120,4 +120,48 @@ test('ordinary exception diagnostic lookalikes are never trusted', async (t) => 
   assert.equal(receipt.code, 'connection_error');
   for (const key of ['param', 'responseShape', 'requestId', 'httpStatus']) assert.equal(Object.hasOwn(receipt, key), false);
   assert.equal(receiptText.includes('synthetic private exception'), false);
+});
+
+test('safe HTTP diagnostics reject invalid statuses and request IDs instead of persisting supplied values', () => {
+  for (const status of [99, 600, -1, 500.5, NaN, Infinity, '503', true]) {
+    const error = new ChatGPTError('api_error', 'PRIVATE_EXCEPTION_MUST_NOT_BE_READ', true, status);
+    assert.equal(safeHttpDiagnostics(error), undefined);
+    assert.equal(safeError(error).message.includes('HTTP'), false);
+  }
+  for (const requestId of ['', ':invalid-start', 'https://callback/?code=PRIVATE_SECRET', 'id\nPRIVATE_SECRET', 'x'.repeat(161)]) {
+    const error = new ChatGPTError('api_error', 'PRIVATE_EXCEPTION_MUST_NOT_BE_READ', true, 503, { requestId });
+    assert.deepEqual(safeHttpDiagnostics(error), { httpStatus: 503 });
+  }
+  assert.deepEqual(safeHttpDiagnostics(new ChatGPTError('api_error', '', true, 599, { requestId: 'x'.repeat(160) })),
+    { httpStatus: 599, requestId: 'x'.repeat(160) });
+});
+
+test('unknown HTTP failures use fixed local explanations and safe status suffixes', () => {
+  const checks = [[400, '요청 형식 또는 옵션', null], [422, '요청 형식 또는 옵션', null],
+    [401, '인증하지 못했습니다', 'sign-in'], [403, '권한 또는 정책', 'sign-in'],
+    [429, '사용량 또는 요청 빈도', 'usage'], [503, '서비스가 요청을 처리하지 못했습니다', 'retry']];
+  for (const [status, message, action] of checks) {
+    const error = new ChatGPTError('api_error', 'PRIVATE_SERVER_MESSAGE https://callback/?code=PRIVATE_SECRET', status >= 500, status,
+      { requestId: 'synthetic-safe-request-id', param: 'model', responseShape: '{detail:string}' });
+    error.toJSON = () => { throw new Error('toJSON must never be called at the public error boundary'); };
+    const result = safeError(error);
+    assert.equal(result.code, 'api_error'); assert.equal(result.action, action);
+    assert.ok(result.message.includes(message)); assert.ok(result.message.endsWith('(HTTP ' + status + ')'));
+    for (const marker of ['PRIVATE_SERVER_MESSAGE', 'PRIVATE_SECRET', 'synthetic-safe-request-id', 'responseShape', 'param']) {
+      assert.equal(JSON.stringify(result).includes(marker), false);
+    }
+  }
+  const streamError = safeError(new ChatGPTError('api_error', 'PRIVATE_BODY', false, 200));
+  assert.match(streamError.message, /요청을 완료하지 못했습니다/);
+  assert.match(streamError.message, /HTTP 200/);
+  assert.equal(streamError.action, null);
+});
+
+test('known SDK failure explanations remain stable while diagnostics are preserved separately', () => {
+  const error = new ChatGPTError('subscription_sharing_usage_limit_exceeded', 'PRIVATE_BODY', false, 200,
+    { requestId: 'synthetic-safe-request-id', responseShape: '{error:{code:string}}' });
+  assert.deepEqual(safeError(error), { code: 'subscription_sharing_usage_limit_exceeded',
+    message: 'ChatGPT 사용량 제한에 도달했습니다. 사용량과 앱 한도를 확인해 주세요.', action: 'usage' });
+  assert.deepEqual(safeHttpDiagnostics(error), { httpStatus: 200, requestId: 'synthetic-safe-request-id', responseShape: '{error:{code:string}}' });
+  assert.equal(safeHttpDiagnostics(Object.assign(new Error('PRIVATE_BODY'), error)), undefined);
 });

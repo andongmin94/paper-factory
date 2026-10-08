@@ -50,11 +50,18 @@ export function safeError(error: unknown): AppError {
     return { code: 'connection_error', message: messages.connection_error[0], action: 'retry' };
   }
   const known = messages[error.code];
-  const action = known?.[1] ?? (error.status === 429 ? 'usage' : error.status === 401 || error.status === 403 ? 'sign-in' : error.retryable ? 'retry' : null);
+  const status = safeHttpDiagnostics(error)?.httpStatus;
+  const action = known?.[1] ?? (status === 429 ? 'usage' : status === 401 || status === 403 ? 'sign-in' : error.retryable ? 'retry' : null);
+  const message = known?.[0] ?? (status === 403 ? '계정 권한 또는 정책으로 요청이 거부되었습니다.' :
+    status === 401 ? '이 연결로 요청을 인증하지 못했습니다.' :
+    status === 400 || status === 422 ? '앱이 보낸 요청 형식 또는 옵션이 거부되었습니다. 앱 오류 기록을 확인해 주세요.' :
+    status === 429 ? 'ChatGPT 사용량 또는 요청 빈도 제한에 도달했습니다. 사용량을 확인한 뒤 다시 시도해 주세요.' :
+    status !== undefined && status >= 500 ? 'ChatGPT 서비스가 요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.' :
+    '요청을 완료하지 못했습니다. 표시된 오류 코드를 확인해 주세요.');
   // Never forward arbitrary exception messages, URLs, response bodies, or credentials.
   return {
     code: /^[a-zA-Z0-9_]{1,100}$/.test(error.code) ? error.code : 'connection_error',
-    message: known?.[0] ?? (error.status === 403 ? '계정 권한 또는 정책으로 요청이 거부되었습니다.' : error.status === 401 ? '이 연결로 요청을 인증하지 못했습니다.' : '요청을 완료하지 못했습니다. 표시된 오류 코드를 확인해 주세요.'),
+    message: message + (!known?.[0] && status !== undefined ? ` (HTTP ${status})` : ''),
     action,
   };
 }
@@ -111,6 +118,17 @@ function safeDiagnosticShape(value: unknown): string | undefined {
     return type !== undefined && shapeTypes.has(type);
   };
   return parse(0) && position === value.length ? value : undefined;
+}
+
+export function safeHttpDiagnostics(error: unknown) {
+  if (!(error instanceof ChatGPTError)) return undefined;
+  const httpStatus = Number.isSafeInteger(error.status) && error.status! >= 100 && error.status! <= 599 ? error.status : undefined;
+  const requestId = typeof error.requestId === 'string' && /^[a-zA-Z0-9_][a-zA-Z0-9_.:[\]-]{0,159}$/.test(error.requestId) ? error.requestId : undefined;
+  const param = safeDiagnosticParam(error.param);
+  const responseShape = safeDiagnosticShape(error.responseShape);
+  const diagnostics = { ...(httpStatus !== undefined ? { httpStatus } : {}), ...(requestId ? { requestId } : {}),
+    ...(param ? { param } : {}), ...(responseShape ? { responseShape } : {}) };
+  return Object.keys(diagnostics).length ? diagnostics : undefined;
 }
 
 export class ConnectionController {
@@ -221,12 +239,8 @@ export class ConnectionController {
         try {
           // SDK shapes contain field/type labels only; validate that grammar again
           // at the evidence boundary rather than persisting a raw response body.
-          const param = error instanceof ChatGPTError ? safeDiagnosticParam(error.param) : undefined;
-          const responseShape = error instanceof ChatGPTError ? safeDiagnosticShape(error.responseShape) : undefined;
           await this.record({ event: 'request-failed', operation: busy, code: this.state.error.code,
-            ...(error instanceof ChatGPTError && error.status !== undefined ? { httpStatus: error.status } : {}),
-            ...(error instanceof ChatGPTError && error.requestId && /^[a-zA-Z0-9_.:[\]-]{1,160}$/.test(error.requestId) ? { requestId: error.requestId } : {}),
-            ...(param ? { param } : {}), ...(responseShape ? { responseShape } : {}) });
+            ...safeHttpDiagnostics(error) });
         }
         catch (writeError) { this.state.error = safeError(writeError); }
       }
