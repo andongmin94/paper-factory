@@ -1,6 +1,6 @@
 # 독립 앱 검증 기록
 
-갱신일: 2026-10-07 (Asia/Seoul). 현재 앱과 엔진 소스는 `0.14.12`이다. 최신 Windows 설치 파일 생성·정적 검증과 회귀 결과는 [0.14.12 기록](#01412-공식-공개-목록에서-원문-발견-2026-10-07)에 있다. 새 설치·OAuth·로그인 복원은 미검증이고 GitHub Releases에는 게시하지 않았다. 새 투고 준비도 기준을 통과한 실제 완료 원고는 아직 없다. 아래는 `0.13.0` 전환 작업의 시작 commit `ac22fdd95778572968e3227d271a0b9846cd7f8b`부터 보존한 실제 검사 이력이다. 0.13.1의 5단계 개선·새 패키지 검사는 [UI 검증 기록](standalone-ui-provenance.md)에 구분해 기록한다.
+갱신일: 2026-10-08 (Asia/Seoul). 현재 앱과 엔진 소스는 `0.14.13`이다. 최신 Windows 설치 파일 생성·정적 검증과 회귀 결과는 [0.14.13 기록](#01413-초기-원문-발견과-실행-전-재설계-준비-2026-10-08)에 있다. 새 설치·OAuth·로그인 복원은 미검증이고 GitHub Releases에는 게시하지 않았다. 새 실제 앱 평가는 진행 중이며, 새 투고 준비도 기준을 통과한 실제 완료 원고는 아직 없다. 아래는 `0.13.0` 전환 작업의 시작 commit `ac22fdd95778572968e3227d271a0b9846cd7f8b`부터 보존한 실제 검사 이력이다. 0.13.1의 5단계 개선·새 패키지 검사는 [UI 검증 기록](standalone-ui-provenance.md)에 구분해 기록한다.
 
 0.14.6의 네 기준 승인과 독립 유한 수치·인용·파일 검수는 당시 생성 흐름과 보존 근거의 일치를 확인했다. 학술지 제출에 충분한 신규성·중요성이나 더 넓은 주장 범위를 입증한 검증은 아니었다. 당시 승인·생성 파일·감사 기록은 보존하며, 새 투고 준비도 승인으로 소급해 계산하지 않는다.
 
@@ -939,3 +939,59 @@ reporter를 바로 고쳐 이미 시작한 별도 보조 회수도 종료했으�
 두 실제 planner의 설명에서 이전 900개 입력을 포괄적으로 "null 결과"라고 부른 문장은 부정확하다. 이전 분석에는 acceptance-set 차이의 production 평균 `0.7888888888888889`, insert_first의 생산 집합 거리 평균 `1.3333333333333333`과 구체적 비동등성 사례가 있다. 0은 비용 초과·끝점 실패의 제어 지표다. 원래 수치·결과·모델 응답을 수정하지 않고 이 서술 오류를 다음 설계/작성 개선 대상으로 기록한다. 본문 미확보와 신규성 보류 판단이 타당해도 설명의 정확성이 자동으로 보장되지는 않는다.
 
 이 구현·검사·별도 원문 확보는 투고 준비도를 통과한 논문 생성 성공으로 계산하지 않는다. 실제 앱의 마지막 문헌 회수는 필요한 본문을 얻지 못했고 새 기준을 통과한 완료 원고는 여전히 없다.
+
+## 0.14.13 초기 원문 발견과 실행 전 재설계 준비: 2026-10-08
+
+최초 문헌 수집에서 모델이 DOI·제목 후보를 별도로 제안하지 않아도, 실제 Crossref 검색과 정확한 서지 조회로 확인한 DOI·전체 제목을 기존 공식 저자 목록과 대조한다. 이미 다른 허용 경로로 full text를 확보한 서지는 건너뛴다. 목록의 실제 일치 항목에서 PDF를 찾았을 때만 수집당 최대 2건을 예약하며, DNS·GET 전에 예약하므로 실패·취소도 소모한다. 일치하지 않는 제목은 목록과 거부 proof를 보존하고 PDF 한도는 소모하지 않는다. 목록은 한 번만 조회하며 같은 90초·응답·PDF·이동·추출 한도를 적용한다. 명시적 빈 후보나 예약된 보완 후보에는 이 자동 경로를 적용하지 않는다. 새 provider나 의존성은 추가하지 않았다.
+
+실행 전 설계가 proposed/blocked/STUDY_REJECTED이고 SCI0·제안3·문헌보완3·새 본문 검토 대기 없음·정리 완료·재설계 한도 미도달일 때 한 개의 다른 연구안을 준비한다. 원래 제안과 문헌·반려 기록을 바꾸지 않고 `redesign-candidate`를 동결한 뒤, 별도 문맥에서 과학적 차이·이전 근거 보존·실행 가능성을 판단하는 `redesign-review`를 한 번 기록한다. 거부된 준비 검토는 그대로 보존하며 후보 교체나 검토 재요청으로 우회하지 않는다. 표현·검색어·시드만 바꾼 계획은 동일 설계로 거부한다. 구조 비교는 최소 경계이며 실제 과학적 차이는 별도 리뷰의 판단 대상이다.
+
+준비 검토를 통과한 후속은 proposed/ready·proposal1·SCI0으로 시작한다. 첫 제안의 SHA·크기·JSON은 부모의 동결 후보와 동일해야 하며, 새 문헌 수집·연구 적합성·코드 검토를 거쳐야 한 번의 SCI를 실행할 수 있다. 이전에 SCI를 실행한 원고 반려의 후속은 기존대로 created/ready·proposal0에서 시작한다. 두 경로 모두 최초 연구 뒤 후속 최대 2개, 연구당 SCI 최대 1회이며 이전 횟수·자료·관측·원고·검토를 보존한다. UI는 준비 검토를 투고 준비도와 구분하고, 공개 보완 API/IPC는 `improveResearch` / `research:improve`로 정리했다. 기존 관측의 0인 제어 지표와 실제로 차이가 있는 지표를 함께 보존하도록 설계·원고 지시도 보강했다.
+
+| 0.14.13 검사 | 결과와 범위 |
+| --- | --- |
+| 문헌 관련 6모듈 | 324 통과·3 Windows symlink 권한 건너뜀, 76.66초. 별도 집중 검사 111 통과는 겹치는 그룹 |
+| 데스크톱 최종 build·단위 검사 | typecheck/build 완료, 378 통과. 보류 상태·후보 SHA/JSON·계보·독립 준비 검토·새 SCI 전 심사·문맥 한도·재시작 시 캐시 대조 |
+| SDK | 48 통과·1 Windows 권한 검사 건너뜀 |
+| 숨김 Electron UI | 14 통과. 준비 검토의 세 기준과 제한된 승인 문구·일반 보완 IPC. 당시 controller SHA는 `a80590702e00f9ee93d5f5f9277a2c331837c7210c4e36979bb2159e8d3f6326`; 최종 renderer·preload·main IPC는 동일하지만 후속 controller 캐시·문맥 수정 뒤 UI 전체를 반복했다고 주장하지 않음 |
+| 앞선 네이티브 5모듈 실행 | 491 통과·37 실패, 492.19초. 최종 초기 origin·authoring 경계 보강 전의 검사 |
+| 네이티브 fixture 수정 영향 검사 | 앞선 실패 37개를 수정 후 37 통과, 54.72초. 오래된 schema 1·collector keyword 35·동일 조상 표집 fixture 1 |
+| 재개 경계 보강 전 네이티브 중요 4모듈 | 200 통과·1 실패, 220.9초. publication42·문헌보완115·준비재설계30·초기원문14의 총201개 실행 |
+| 당시 네이티브 실패 진단 | 아래 SQLite 쓰기 오류의 해당 검사를 당시 최종 소스의 새 시험 디렉터리에서 독립 실행 두 번 통과. 별도 진단 7항목 통과; 최초 원인 미확인 |
+| 재개 경계 추가 영향 검사 | 97 통과·221 미선택, 110.42초. 미완성 preexecution 후속의 직접 재개 거부·정확한 부모 후보 복구·postSCI 정상 재개 |
+| 최초 Windows 포함 runtime | Python 3.14.8·Node 24.21.0·QuickJS 실제 host probe, payload 2,218개·473,704,204 B 전수 대조 |
+| 재개 경계 포함 최신 runtime | payload 2,218개·473,704,406 B 전수 대조. 아래 최신 inventory·배포 파일 해시와 결합 |
+| 직접 EngineBridge 재시작 | runtime ready와 기존 두 연구의 보류 단계·SCI·횟수 확인. 과학실험·모델 요청 없음 |
+| Windows 패키지 | 새 출력과 최종 release 복사본의 ASAR 7,667항목·SDK·renderer·Pretendard·현재 엔진 소스·runtime 전수 정적 대조 |
+
+검사 그룹은 겹치므로 합산하지 않는다. 마지막 네이티브 실패는 인용문 결합 fixture에서 `collect_literature -> _save`의 SQLite `attempt to write a readonly database`로, study/claim review에 도달하기 전에 발생했다. 독립 재실행과 진단에서는 DB·부모 디렉터리의 존재, readonly attribute false, 실제 DB 쓰기, 조작한 인용 거부, SCI/runner0을 확인했다. 이 성공만으로 최초 쓰기 오류의 원인이 밝혀졌다고 주장하지 않는다. 원래 실패 로그를 보존했고 제품에 retry wrapper·fallback·DB migration을 추가하거나 quote gate를 낮추지 않았다. 네이티브 기록은 `verification/native-preexecution-01413-verification.json`, 진단 receipt는 `.paper-factory/db-probe-01413-daac6e34ff/diagnostic-receipt.json`(SHA256 `318178e40a9296876fbf7e516cc8e04f85251932405f7c2d3d93f9799c225efe`)이다. 데스크톱 기록은 `verification/preexecution-desktop-01413-final-verification.json`이다.
+
+처음 UI 전체 검사는 13 통과·1 실패였고, 통합된 보류 안내가 바뀐 뒤에도 fixture가 이전 STUDY_INFEASIBLE 문구를 기대한 경우였다. 현재 정확한 보류 안내와 fixture의 구체적 이유를 검사하도록 고친 후 위 14개가 통과했다. 최초 실패 로그 `preexecution-desktop-ui-all-01413-first.log`도 보존했다.
+
+개발 Python의 별도 실제 초기 수집 검사는 검색어 Supporting Selective Undo in a Code Editor와 limit1만 입력했다. DOI·PDF 후보·URL을 입력하지 않고 실제 서지 검색→정확한 Crossref 서지→공식 목록→서버의 실제 이동→원문 PDF·68,941자 본문을 확인했다. 18항목이 모두 참이며, 당시 실제 연구 1,449파일과 기존 runtime 2,219파일의 전후 전체 바이트가 같았다. arXiv의 두 ReadTimeout도 경고로 보존했다. receipt는 `.paper-factory/initial-author-discovery-01413/probe-802ef3b6b058/receipt.json`, SHA256 `63a37e5820fbef1f9498f1fe9975033e9835f8e8987e4dc31838b0779453f9c9`다. 이 수집 결과는 실제 연구의 모델·config·문헌 보완 입력에 주입하지 않았다.
+
+포함 Python의 별도 재대조는 `-I/-B`로 새 독립 Workspace에 이미 보존한 control의 raw/proof를 복사했다. 실제 포함 `_verified_author_pdf(..., None)`과 초기 metadata 예약 조건의 순수 재계산이 통과했고, 버전0.14.13·포함 module의 위치·최종 소스 SHA를 확인했다. 21항목이 참이며 원래 control 11파일과 runtime 전체 2,219파일이 불변이다. 새 네트워크·수집·PDF worker·실제 engine/profile/model/DB/SCI 접근은 없었다. `collect_literature`의 새 과학 연구 실행과 구분한다. receipt는 `.paper-factory/initial-author-discovery-01413/bundled-read-4acc8b647884/receipt.json`, SHA256 `60e38eb27bef787d3aa94320e0a313692c42df2186ea78256b6f5f7a78c10621`다.
+
+최초 0.14.13 runtime inventory SHA256은 `31237a241dde5818fed8a9f4c5e3840f61a1e0b10c81b92e87eb2f111bd397a9`다. 당시 포함 native workflow SHA는 `9dd51dde50c7dbfb065eaa7938f87deb7a4e464cc59e69334131a9984b2c37ca`, collector SHA는 `423854e245abee47408c836216f7d32f8b7d32e6b29e7dcdd0ccb2400d199a47`, 최종 desktop controller SHA는 `1119315fd720c0746698c53007a772d581b8ec20b9c8a03209e714b76393451f`다. 최초 package 출력은 `verification/windows-release-01413-preparation-redesign`이며, 검증된 0.14.12 전체 배포본을 `verification/preserved-windows-release-01412`에 보존한 뒤 `desktop/release` 복사본도 검증했다. 설치·실행·새 OAuth·로그인 복원·macOS 실행은 이 정적 패키지 검증에 포함하지 않으며 GitHub Releases에 게시하지 않았다.
+
+| 재개 경계 보강 전 0.14.13 배포 파일 | 크기(B) | SHA256 |
+| --- | ---: | --- |
+| Paper Factory Setup 0.14.13.exe | 213,129,822 | 8e352722f2a6e726eb75aaa2f416eefb45bec04a6acf193ff5c58c6cc0f05d77 |
+| win-unpacked/resources/app.asar | 44,779,949 | 48e5a702cc3162d3ae807262ce675e9ff69a601d70b8bd54bc0c544db3147700 |
+| win-unpacked/Paper Factory.exe | 245,726,720 | 7df1a8e73f95bc7542a11b95d982ae9450fd23f8c7bc3e6524dac0ada8afbb5c |
+
+독립 검토에서 실행 전 후속 생성이 첫 제안 제출 전에 중단되면 created/proposal0 상태의 자식을 직접 재개해 새 계획을 요청할 수 있는 경계를 발견했다. 이 경우 `resume_kind`를 제공하지 않고 직접 재개를 INVALID_STATE로 거부하도록 보강했다. 승인된 부모의 재설계 복구만 동일한 동결 후보를 proposal1에 복사할 수 있다. SCI를 이미 실행한 연구에서 만든 created/proposal0 후속의 정상 재개는 유지한다. 최초 의도된 회귀는 2 통과·1 실패(`resume_kind`가 preparation으로 반환됨)였고 tool transcript에 보존했으며 별도 실패 파일로 저장했다고 주장하지 않는다. 보강 후 관련 검사 97개가 통과했다. receipt `verification/native-resume-binding-01413-verification.json`의 SHA256은 `bab0e409a5cfcd60041f24625af2c278006475ad0be4607f34102d698a4a9241`이며, 새 native workflow SHA는 `eb901c1474f2102ae07d9ac171cbe7e4c1b3f609d11111d0ebdf5422730e2d8f`다. 앞선 전체 검사와 21항목 bundled replay는 이전 native SHA에 대한 이력으로 남기며 최신 guard 이후 반복한 검사로 계산하지 않는다.
+
+이 guard를 포함해 runtime을 다시 구성했으며 최신 inventory SHA256은 `51dd2e2c4b9f2c179be51a90b1327c17e8b9edc24a38654617cd8a48cb07a741`다. 최신 설치 파일과 `desktop/release` 복사본을 정적으로 검증했다. 앞선 0.14.13 전체 배포본은 `verification/preserved-windows-release-01413-before-resume-guard`에 보존했다.
+
+| 최신 재개 경계 포함 0.14.13 배포 파일 | 크기(B) | SHA256 |
+| --- | ---: | --- |
+| Paper Factory Setup 0.14.13.exe | 213,129,742 | 3f6014bba374b26012c3bdf382f4b93186d8318e9f9bcb623b6b16d2a317616a |
+| win-unpacked/resources/app.asar | 44,779,949 | 1b13602ec5095c5d160a029eae8fe3cdb7e9ca9dab3f3b1a614fb0c386e8e90b |
+| win-unpacked/Paper Factory.exe | 245,726,720 | 639eb85de24ba0e0cc344748bbe28b2e03cd3b80b760c1dc2768a959459b93e9 |
+
+실제 앱 평가 직전 읽기 전용 독립 preflight는 `mode=ro&immutable=1`로 DB를 대조했다. 37항목이 참이며 부모 artifact210·후속266의 합계476개 exact key/path/크기/SHA와 두 연구의 source928개 전체 바이트가 이전 실제 기록과 일치했다. 부모 SCI1·후속 SCI0·proposal3·문헌3·STUDY_REJECTED, 당시 문헌 SHA `dba58c5138146c6564b0ec41737ae1cadee840cbdd59443ccc479afcb477d3e6`를 확인했다. 처음 harness의 child476 조건은 root와 child의 합계를 잘못 적용한 것이므로 실행 전에 root210/child266/합계476과 각각의 원래 binding을 검사하도록 고쳤다. 당시 검토한 기본 harness SHA는 `d0e319dcfdee07c01543dc6a6fe6b13ac1ed25b410dfbeaccf674ca7db629b1b`, preflight receipt는 `verification/preparation-redesign-01413-readonly-preflight-final.json`(SHA256 `2c8b2fa2de097decc6ebf37b2670d47de089b06aca72235c1ddd2bce68317a5f`)이다.
+
+첫 실제 앱 실행 `qpos/2dd124a6459a/recovery-runs/60af1027cc3a`는 초기화가 진행되지 않아 소유 프로세스를 수동 종료했다. 새 모델·SCI·DB 바이트 변경은 없었고 소유 프로세스의 부재를 확인했지만 정상 engine shutdown acknowledgement는 얻지 못했다. 원인은 미확인이다. 원래 launch/harness와 `initialization-stall-before-cleanup.json`·`initialization-stall-after-cleanup.json`을 보존했다. 별도 Node controller와 숨김 Electron 초기화 probe는 각각 약4.5초·5초에 ready/정상 shutdown을 통과했으며 기록은 `verification/controller-initialization-probe-01413.jsonl`이다. 이 probe의 성공으로 최초 정체 원인이 해결됐다고 주장하지 않는다.
+
+관찰 로그만 보강한 traced harness의 SHA256은 `222085aded0e3c69cded5c903746394907758da5c78afdfc8d987c5dde06617a`다. 새 실제 실행 `qpos/2dd124a6459a/recovery-runs/9d31b7c1c921`에서 02:42:37 UTC / 11:42:37 KST에 `redesign-plan` 모델 요청 시작을 확인했다. 현재는 진행 중이며 새 후보·준비 검토 결과·SCI·완료 원고와 별도 학술 품질 평가는 미확인이다. 초기 수집 control·합성 심사 경계·패키지·preflight 성공을 실제 논문 품질 통과로 계산하지 않는다. 새 투고 준비도 기준을 통과한 실제 완료 원고는 아직 없다.

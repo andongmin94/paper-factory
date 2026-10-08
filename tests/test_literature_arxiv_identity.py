@@ -42,7 +42,7 @@ def direct(monkeypatch, content=None, *, pdf_status=200):
 def test_explicit_arxiv_resolves_actual_version_and_retains_all_evidence(tmp_path, monkeypatch, query):
     raw = feed(extra="<arxiv:doi>10.1016/j.entcs.2013.09.018</arxiv:doi>")
     requests = direct(monkeypatch, raw)
-    result = literature.collect([query], tmp_path, limit=1)
+    result = literature.collect([query], tmp_path, limit=1, pdf_candidates=[])
     source, = result["sources"]
     assert len(requests) == 2 and not result["warnings"]
     assert source["id"] == "source-" + hashlib.sha256(("arxiv:" + ID).encode()).hexdigest()[:20]
@@ -65,7 +65,7 @@ def test_explicit_arxiv_resolves_actual_version_and_retains_all_evidence(tmp_pat
 def test_alias_queries_share_one_canonical_source_and_original_requests(tmp_path, monkeypatch):
     requests = direct(monkeypatch)
     queries = ["arxiv:1311.3903", "10.48550/arxiv.1311.3903"]
-    result = literature.collect(queries, tmp_path)
+    result = literature.collect(queries, tmp_path, pdf_candidates=[])
     source, = result["sources"]
     assert len(requests) == 2 and source["queries"] == queries
     assert all(search["resolved_ids"] == [source["id"]] for search in result["searches"])
@@ -82,7 +82,7 @@ def test_direct_candidate_precedes_abstracts_when_source_limit_is_full(tmp_path,
         return httpx.Response(200, json={"status": "ok", "message": {"items": [{"DOI": "10.1234/unrelated"}]}})
     requests = mocked(monkeypatch, handler)
     monkeypatch.setattr(literature, "_pdf_text", lambda raw: TEXT)
-    result = literature.collect(["broad patch application", "arxiv:1311.3903"], tmp_path, limit=1)
+    result = literature.collect(["broad patch application", "arxiv:1311.3903"], tmp_path, limit=1, pdf_candidates=[])
     source, = result["sources"]
     assert source["arxiv_id"] == ID and source["scope"] == "full_text"
     assert requests[0].url.host == "export.arxiv.org" and len(requests) == 3
@@ -94,7 +94,7 @@ def test_direct_candidate_precedes_abstracts_when_source_limit_is_full(tmp_path,
                                     "arxiv:1311.3903 extra", "10.48550/arxiv.1311.3903/private", "10.48550/arxiv.1311.3903v0"])
 def test_malformed_explicit_identifiers_never_reach_http(tmp_path, monkeypatch, query):
     requests = mocked(monkeypatch, lambda request: pytest.fail("Malformed identity reached HTTP"))
-    result = literature.collect([query], tmp_path)
+    result = literature.collect([query], tmp_path, pdf_candidates=[])
     assert not requests and not result["sources"] and result["searches"][0]["error"] == "ValueError"
 
 
@@ -111,7 +111,7 @@ def test_malformed_explicit_identifiers_never_reach_http(tmp_path, monkeypatch, 
         "duplicate-abstract", "duplicate-entry", "empty-feed"])
 def test_missing_ambiguous_or_wrong_version_metadata_cannot_become_source(tmp_path, monkeypatch, raw):
     requests = direct(monkeypatch, raw)
-    result = literature.collect(["arxiv:1311.3903v1"], tmp_path)
+    result = literature.collect(["arxiv:1311.3903v1"], tmp_path, pdf_candidates=[])
     assert len(requests) == 1 and not result["sources"] and result["searches"][0]["status"] == "failed"
     search = result["searches"][0]
     assert (tmp_path / search["raw_path"]).read_bytes() == raw
@@ -124,13 +124,13 @@ def test_missing_ambiguous_or_wrong_version_metadata_cannot_become_source(tmp_pa
                          ids=["doctype", "utf16-doctype", "utf16", "invalid-xml", "oversize"])
 def test_untrusted_xml_is_refused_without_a_pdf_request(tmp_path, monkeypatch, raw):
     requests = direct(monkeypatch, raw)
-    result = literature.collect(["arxiv:1311.3903"], tmp_path)
+    result = literature.collect(["arxiv:1311.3903"], tmp_path, pdf_candidates=[])
     assert len(requests) == 1 and not result["sources"] and result["searches"][0]["status"] == "failed"
 
 
 def test_missing_optional_abstract_or_journal_doi_still_allows_actual_body(tmp_path, monkeypatch):
     direct(monkeypatch, feed(summary=None))
-    result = literature.collect(["arxiv:1311.3903"], tmp_path)
+    result = literature.collect(["arxiv:1311.3903"], tmp_path, pdf_candidates=[])
     source, = result["sources"]
     assert source["scope"] == "full_text" and "doi" not in source
 
@@ -148,7 +148,7 @@ def test_failed_full_text_preserves_verified_preprint_metadata(tmp_path, monkeyp
         return httpx.Response(404 if failure == "http" else 200, content=PDF, headers={"content-type": "application/pdf"})
     mocked(monkeypatch, handler)
     monkeypatch.setattr(literature, "_pdf_text", lambda raw: (_ for _ in ()).throw(ValueError("Extraction refused")) if failure == "extraction" else pytest.fail("Failed/cancelled/deadline PDF reached extraction"))
-    result = literature.collect(["arxiv:1311.3903"], tmp_path, cancel=lambda: failure == "cancel" and clock.value >= 1)
+    result = literature.collect(["arxiv:1311.3903"], tmp_path, cancel=lambda: failure == "cancel" and clock.value >= 1, pdf_candidates=[])
     source, = result["sources"]
     assert source["scope"] == "abstract" and source["arxiv_id"] == ID and "text_path" not in source
     assert source["raw_path"] == source["metadata_path"] and source["sha256"] == hashlib.sha256(feed()).hexdigest()
@@ -168,11 +168,11 @@ def test_shared_arxiv_spacing_and_cancellation_before_second_request(tmp_path, m
         return httpx.Response(200, content=PDF, headers={"content-type": "application/pdf"})
     mocked(monkeypatch, handler)
     monkeypatch.setattr(literature, "_pdf_text", lambda raw: TEXT)
-    result = literature.collect(["arxiv:1311.3903", "arxiv:2401.12345"], tmp_path)
+    result = literature.collect(["arxiv:1311.3903", "arxiv:2401.12345"], tmp_path, pdf_candidates=[])
     assert len(result["sources"]) == 2 and starts[1] - starts[0] >= 3
     clock.value = 0
     starts.clear()
-    result = literature.collect(["arxiv:1311.3903", "arxiv:2401.12345"], tmp_path / "cancelled", cancel=lambda: clock.value >= 1)
+    result = literature.collect(["arxiv:1311.3903", "arxiv:2401.12345"], tmp_path / "cancelled", cancel=lambda: clock.value >= 1, pdf_candidates=[])
     assert len(starts) == 1 and result["cancelled"] is True
     assert result["searches"][1]["attempted"] is False and result["searches"][1]["status"] == "not_attempted"
     first = result["searches"][0]
@@ -187,7 +187,7 @@ def test_legacy_arxiv_identifier_and_distinct_versions(tmp_path, monkeypatch):
         return httpx.Response(200, content=PDF, headers={"content-type": "application/pdf"})
     mocked(monkeypatch, handler)
     monkeypatch.setattr(literature, "_pdf_text", lambda raw: TEXT)
-    result = literature.collect(["arxiv:cs/0211001v1", "arxiv:cs/0211001v2"], tmp_path)
+    result = literature.collect(["arxiv:cs/0211001v1", "arxiv:cs/0211001v2"], tmp_path, pdf_candidates=[])
     assert {source["arxiv_id"] for source in result["sources"]} == {"cs/0211001v1", "cs/0211001v2"}
     assert len({source["id"] for source in result["sources"]}) == 2
 
@@ -300,7 +300,7 @@ def title_transport(monkeypatch, raw=None, *, exact_only=False):
 def test_unique_normalized_full_title_recovers_preprint_without_guessing_doi(tmp_path, monkeypatch, query):
     raw = title_feed()
     requests = title_transport(monkeypatch, raw, exact_only=True)
-    result = literature.collect([query], tmp_path, limit=1)
+    result = literature.collect([query], tmp_path, limit=1, pdf_candidates=[])
     source, = result["sources"]
     assert len(requests) == 2 and not result["warnings"]
     assert source["scope"] == "full_text" and source["arxiv_id"] == ID and "doi" not in source
@@ -314,7 +314,7 @@ def test_unique_normalized_full_title_recovers_preprint_without_guessing_doi(tmp
 
 def test_complete_title_feed_can_contain_one_exact_and_one_similar_candidate(tmp_path, monkeypatch):
     requests = title_transport(monkeypatch, title_feed([feed(), feed(identifier="2401.12345v2", title=TITLE + " Extended")]), exact_only=True)
-    result = literature.collect([TITLE], tmp_path)
+    result = literature.collect([TITLE], tmp_path, pdf_candidates=[])
     source, = result["sources"]
     assert len(requests) == 2 and source["arxiv_id"] == ID and source["scope"] == "full_text"
 
@@ -333,7 +333,7 @@ def test_complete_title_feed_can_contain_one_exact_and_one_similar_candidate(tmp
                               "nonmatching-nested-title", "matching-nested-title", "empty-neighbor-title"])
 def test_ambiguous_truncated_or_invalid_title_retains_attempt_and_separate_crossref_identity(tmp_path, monkeypatch, raw):
     requests = title_transport(monkeypatch, raw)
-    result = literature.collect([TITLE], tmp_path)
+    result = literature.collect([TITLE], tmp_path, pdf_candidates=[])
     source, = result["sources"]
     assert len(requests) == 3 and source["doi"] == "10.1234/fallback" and "arxiv_id" not in source
     arxiv_search, = [search for search in result["searches"] if search["provider"] == "arXiv"]
@@ -348,7 +348,7 @@ def test_ambiguous_truncated_or_invalid_title_retains_attempt_and_separate_cross
 @pytest.mark.parametrize("raw", [title_feed([]), title_feed([feed(title=TITLE + " Extended")])], ids=["empty-feed", "similar-title"])
 def test_no_exact_title_preserves_negative_search_without_claiming_literature_absence(tmp_path, monkeypatch, raw):
     title_transport(monkeypatch, raw)
-    result = literature.collect([TITLE], tmp_path)
+    result = literature.collect([TITLE], tmp_path, pdf_candidates=[])
     source, = result["sources"]
     arxiv_search, = [search for search in result["searches"] if search["provider"] == "arXiv"]
     assert arxiv_search["status"] == "succeeded" and not arxiv_search["resolved_ids"]
@@ -360,7 +360,7 @@ def test_no_exact_title_preserves_negative_search_without_claiming_literature_ab
                          ids=["doctype", "utf16"])
 def test_unsafe_title_xml_never_promotes_a_preprint(tmp_path, monkeypatch, raw):
     title_transport(monkeypatch, raw)
-    result = literature.collect([TITLE], tmp_path)
+    result = literature.collect([TITLE], tmp_path, pdf_candidates=[])
     assert all("arxiv_id" not in source for source in result["sources"])
     assert any(search["provider"] == "arXiv" and search["status"] == "failed" for search in result["searches"])
 
@@ -368,7 +368,7 @@ def test_unsafe_title_xml_never_promotes_a_preprint(tmp_path, monkeypatch, raw):
 def test_exact_title_is_a_single_sanitized_phrase_not_raw_lucene_operators(tmp_path, monkeypatch):
     query = 'A "Precise" Study: (Patches AND Tests)'
     requests = title_transport(monkeypatch, title_feed([feed(title=query)]), exact_only=True)
-    result = literature.collect([query], tmp_path)
+    result = literature.collect([query], tmp_path, pdf_candidates=[])
     assert result["sources"][0]["scope"] == "full_text"
     assert requests[0].url.params["search_query"] == 'ti:"A Precise Study Patches AND Tests"'
 
@@ -384,7 +384,7 @@ def test_exact_title_candidate_precedes_earlier_generic_abstracts(tmp_path, monk
         return httpx.Response(200, json={"status": "ok", "message": {"items": [{"DOI": "10.1234/noise"}]}})
     mocked(monkeypatch, handler, title_discovery=True)
     monkeypatch.setattr(literature, "_pdf_text", lambda raw: TEXT)
-    result = literature.collect(["generic patch methods", "other unrelated query", TITLE], tmp_path, limit=1)
+    result = literature.collect(["generic patch methods", "other unrelated query", TITLE], tmp_path, limit=1, pdf_candidates=[])
     source, = result["sources"]
     assert source["arxiv_id"] == ID and source["scope"] == "full_text"
     assert len([search for search in result["searches"] if search["provider"] == "arXiv"]) == 3
@@ -397,7 +397,7 @@ def test_title_lookup_uses_shared_spacing_and_preserves_cancelled_attempt(tmp_pa
         starts.append(clock.value)
         return httpx.Response(200, content=title_feed(), headers={"content-type": "application/atom+xml"})
     mocked(monkeypatch, handler, title_discovery=True)
-    result = literature.collect([TITLE, TITLE.upper()], tmp_path, cancel=lambda: clock.value >= 1)
+    result = literature.collect([TITLE, TITLE.upper()], tmp_path, cancel=lambda: clock.value >= 1, pdf_candidates=[])
     assert starts == [0] and result["cancelled"] is True
     first, second = result["searches"]
     assert first["status"] == "succeeded" and (tmp_path / first["raw_path"]).read_bytes() == title_feed()
@@ -406,7 +406,7 @@ def test_title_lookup_uses_shared_spacing_and_preserves_cancelled_attempt(tmp_pa
 
 def test_title_lookup_long_rate_limit_stops_before_crossref_fallback(tmp_path, monkeypatch, clock):
     requests = mocked(monkeypatch, lambda request: httpx.Response(429, headers={"retry-after": "11"}), title_discovery=True)
-    result = literature.collect([TITLE], tmp_path)
+    result = literature.collect([TITLE], tmp_path, pdf_candidates=[])
     assert len(requests) == 1 and result["rate_limited"] is True and not result["sources"]
     search, = result["searches"]
     assert search["provider"] == "arXiv" and search["http_status"] == 429
@@ -424,7 +424,7 @@ def test_title_lookup_retry_uses_same_three_second_provider_budget(tmp_path, mon
         return httpx.Response(200, content=PDF, headers={"content-type": "application/pdf"})
     mocked(monkeypatch, handler, title_discovery=True)
     monkeypatch.setattr(literature, "_pdf_text", lambda raw: TEXT)
-    result = literature.collect([TITLE], tmp_path)
+    result = literature.collect([TITLE], tmp_path, pdf_candidates=[])
     assert len(starts) == 2 and starts[1] - starts[0] >= 3
     assert result["sources"][0]["scope"] == "full_text" and not result.get("rate_limited")
 
@@ -439,7 +439,7 @@ def test_title_pdf_deadline_preserves_original_identity_without_dispatching_work
         return httpx.Response(200, content=PDF, headers={"content-type": "application/pdf"})
     mocked(monkeypatch, handler, title_discovery=True)
     monkeypatch.setattr(literature, "_pdf_text", lambda raw: pytest.fail("Insufficient extraction/cleanup budget started worker"))
-    result = literature.collect([TITLE], tmp_path)
+    result = literature.collect([TITLE], tmp_path, pdf_candidates=[])
     source, = result["sources"]
     assert result["timed_out"] is True and source["scope"] == "abstract" and "text_path" not in source
     assert source["arxiv_id"] == ID and (tmp_path / source["metadata_path"]).read_bytes() == raw
@@ -454,7 +454,7 @@ def test_title_and_explicit_id_aliases_keep_one_fixed_version_and_every_raw_sear
         return httpx.Response(200, content=PDF, headers={"content-type": "application/pdf"})
     requests = mocked(monkeypatch, handler, title_discovery=True)
     monkeypatch.setattr(literature, "_pdf_text", lambda raw: TEXT)
-    result = literature.collect([TITLE, "arxiv:1311.3903v1", "10.48550/arxiv.1311.3903v1"], tmp_path)
+    result = literature.collect([TITLE, "arxiv:1311.3903v1", "10.48550/arxiv.1311.3903v1"], tmp_path, pdf_candidates=[])
     source, = result["sources"]
     assert len(requests) == 3 and source["arxiv_id"] == ID
     assert len(source["queries"]) == 3 and len(result["searches"]) == 3

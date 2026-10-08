@@ -75,7 +75,7 @@ def test_collection_paces_search_and_doi_requests(tmp_path, monkeypatch, clock):
         return httpx.Response(200, json=record(doi, abstract="A verified literal passage."))
 
     mocked(monkeypatch, handler)
-    result = literature.collect(["first", "second"], tmp_path)
+    result = literature.collect(["first", "second"], tmp_path, pdf_candidates=[])
     assert len(result["sources"]) == 2 and len(starts) == 4
     assert all(right - left >= 0.5 - 1e-9 for left, right in zip(starts, starts[1:]))
 
@@ -97,7 +97,7 @@ def test_429_retries_same_get_once_then_retains_success(tmp_path, monkeypatch, c
         return httpx.Response(200, json=record(abstract="Literal evidence after the same GET was retried."))
 
     requests = mocked(monkeypatch, handler)
-    result = literature.collect(["query"], tmp_path)
+    result = literature.collect(["query"], tmp_path, pdf_candidates=[])
     assert len(requests) == 3 and requests[0].url == requests[1].url
     assert requests[0].method == requests[1].method == "GET"
     assert starts[1] - starts[0] >= expected_delay - 1e-9
@@ -110,7 +110,7 @@ def test_429_retries_same_get_once_then_retains_success(tmp_path, monkeypatch, c
 def test_429_retry_budget_is_shared_across_all_queries(tmp_path, monkeypatch, clock):
     requests = mocked(monkeypatch, lambda request: httpx.Response(429))
     queries = [f"query-{index}" for index in range(8)]
-    result = literature.collect(queries, tmp_path, limit=0)
+    result = literature.collect(queries, tmp_path, limit=0, pdf_candidates=[])
     assert len(requests) == len(queries) + 3
     assert all(sum(request.url.params["query.bibliographic"] == query for request in requests) <= 2 for query in queries)
     assert all(search["http_status"] == 429 and search["status"] == "failed" for search in result["searches"])
@@ -126,7 +126,7 @@ def test_429_retry_after_over_wait_or_collection_budget_is_not_retried(tmp_path,
         return httpx.Response(429, headers={"retry-after": value})
 
     requests = mocked(monkeypatch, handler)
-    result = literature.collect(["query", "unattempted"], tmp_path, limit=0)
+    result = literature.collect(["query", "unattempted"], tmp_path, limit=0, pdf_candidates=[])
     assert len(requests) == 1 and result["searches"][0]["http_status"] == 429
     assert result["rate_limited"] is True and not result.get("timed_out") and not result.get("cancelled")
     assert "raw_path" not in result["searches"][0]
@@ -143,7 +143,7 @@ def test_repeated_429_observes_cooldown_before_next_query(tmp_path, monkeypatch,
         return httpx.Response(200, json={"status": "ok", "message": {"items": []}})
 
     requests = mocked(monkeypatch, handler)
-    result = literature.collect(["throttled", "next"], tmp_path, limit=0)
+    result = literature.collect(["throttled", "next"], tmp_path, limit=0, pdf_candidates=[])
     assert len(requests) == 3 and starts == [0, 1, 2]
     assert result["searches"][0]["http_status"] == 429
     assert result["searches"][1]["status"] == "succeeded"
@@ -156,7 +156,7 @@ def test_long_cooldown_retains_prior_raw_search_without_dispatching_next(tmp_pat
         return httpx.Response(200, json={"status": "ok", "message": {"items": []}})
 
     requests = mocked(monkeypatch, handler)
-    result = literature.collect(["first", "throttled", "unattempted"], tmp_path, limit=0)
+    result = literature.collect(["first", "throttled", "unattempted"], tmp_path, limit=0, pdf_candidates=[])
     assert len(requests) == 2 and result["rate_limited"] is True
     assert not result.get("cancelled") and not result.get("timed_out")
     first, failed, unattempted = result["searches"]
@@ -176,7 +176,7 @@ def test_long_cooldown_during_doi_resolution_preserves_verified_abstract(tmp_pat
         return httpx.Response(200, json=record("10.1234/first", abstract="Verified evidence retained before cooldown."))
 
     requests = mocked(monkeypatch, handler)
-    result = literature.collect(["query"], tmp_path)
+    result = literature.collect(["query"], tmp_path, pdf_candidates=[])
     assert len(requests) == 3 and result["rate_limited"] is True
     source, = result["sources"]
     assert source["doi"] == "10.1234/first" and source["scope"] == "abstract"
@@ -186,14 +186,14 @@ def test_long_cooldown_during_doi_resolution_preserves_verified_abstract(tmp_pat
 @pytest.mark.parametrize("status", [404, 503])
 def test_non_429_http_status_is_not_retried(tmp_path, monkeypatch, clock, status):
     requests = mocked(monkeypatch, lambda request: httpx.Response(status))
-    result = literature.collect(["query"], tmp_path)
+    result = literature.collect(["query"], tmp_path, pdf_candidates=[])
     assert len(requests) == 1 and result["searches"][0]["http_status"] == status
     assert result["sources"] == []
 
 
 def test_cancel_during_pacing_preserves_search_without_dispatching_next(tmp_path, monkeypatch, clock):
     requests = mocked(monkeypatch, lambda request: httpx.Response(200, json={"status": "ok", "message": {"items": []}}))
-    result = literature.collect(["first", "second"], tmp_path, limit=0, cancel=lambda: clock.value >= 0.2)
+    result = literature.collect(["first", "second"], tmp_path, limit=0, cancel=lambda: clock.value >= 0.2, pdf_candidates=[])
     assert len(requests) == 1 and result["cancelled"] is True and not result.get("timed_out")
     first, second = result["searches"]
     assert first["status"] == "succeeded" and (tmp_path / first["raw_path"]).is_file()
@@ -203,7 +203,7 @@ def test_cancel_during_pacing_preserves_search_without_dispatching_next(tmp_path
 
 def test_cancel_during_429_wait_does_not_retry(tmp_path, monkeypatch, clock):
     requests = mocked(monkeypatch, lambda request: httpx.Response(429, headers={"retry-after": "10"}))
-    result = literature.collect(["query"], tmp_path, cancel=lambda: clock.value >= 0.3)
+    result = literature.collect(["query"], tmp_path, cancel=lambda: clock.value >= 0.3, pdf_candidates=[])
     assert len(requests) == 1 and result["cancelled"] is True and not result.get("timed_out")
     assert result["searches"][0]["attempted"] is True
     assert clock.value < 1
@@ -216,7 +216,7 @@ def test_deadline_stops_undispatched_queries_without_user_cancellation(tmp_path,
         return httpx.Response(200, json={"status": "ok", "message": {"items": []}})
 
     requests = mocked(monkeypatch, handler)
-    result = literature.collect(["first", "second", "third"], tmp_path, limit=0)
+    result = literature.collect(["first", "second", "third"], tmp_path, limit=0, pdf_candidates=[])
     assert len(requests) == 2 and result["timed_out"] is True and not result.get("cancelled")
     assert clock.value <= 90
     assert result["searches"][2]["attempted"] is False
@@ -236,7 +236,7 @@ def test_deadline_during_doi_resolution_preserves_verified_partial_abstract(tmp_
                                              abstract="Already fetched and verified literal evidence."))
 
     requests = mocked(monkeypatch, handler)
-    result = literature.collect(["query"], tmp_path)
+    result = literature.collect(["query"], tmp_path, pdf_candidates=[])
     assert len(requests) == 3 and result["timed_out"] is True and not result.get("cancelled")
     assert result["searches"][0]["attempted"] is True
     source, = result["sources"]
@@ -255,7 +255,7 @@ def test_deadline_before_pdf_upgrade_retains_verified_abstract(tmp_path, monkeyp
 
     mocked(monkeypatch, handler)
     monkeypatch.setattr(literature, "_pdf_text", lambda content: pytest.fail("Insufficient cleanup budget dispatched a PDF child"))
-    result = literature.collect(["query"], tmp_path)
+    result = literature.collect(["query"], tmp_path, pdf_candidates=[])
     assert result["timed_out"] is True and not result.get("cancelled")
     source, = result["sources"]
     assert source["scope"] == "abstract" and source["excerpts"] == ["A preserved abstract before optional PDF reading."]
@@ -270,7 +270,7 @@ def test_verified_abstract_has_literal_passage_and_raw_hash(tmp_path, monkeypatc
         return httpx.Response(200, json=record(abstract="<jats:p>Measured <i>reproducibility</i> was studied.</jats:p>"))
 
     requests = mocked(monkeypatch, handler)
-    result = literature.collect(["reproducibility"], tmp_path)
+    result = literature.collect(["reproducibility"], tmp_path, pdf_candidates=[])
     assert len(requests) == 2
     assert dict(requests[0].url.params) == {"query.bibliographic": "reproducibility", "rows": "6"}
     source = result["sources"][0]
@@ -288,7 +288,7 @@ def test_metadata_never_becomes_a_finding(tmp_path, monkeypatch):
     requests = mocked(monkeypatch, lambda request: httpx.Response(200, json={"status": "ok", "message": {"items": [
         {"DOI": "10.1234/test", "abstract": "Unverified search abstract must never become a reading excerpt."}]}})
            if request.url.path == "/works" else httpx.Response(200, json=record()))
-    result = literature.collect(["query"], tmp_path)
+    result = literature.collect(["query"], tmp_path, pdf_candidates=[])
     assert len(requests) == 2 and "filter" not in requests[0].url.params
     assert result["sources"][0]["scope"] == "metadata_only"
     assert result["sources"][0]["excerpts"] == []
@@ -301,7 +301,7 @@ def test_metadata_never_becomes_a_finding(tmp_path, monkeypatch):
 def test_different_resolved_doi_is_omitted(tmp_path, monkeypatch):
     mocked(monkeypatch, lambda request: httpx.Response(200, json={"status": "ok", "message": {"items": [{"DOI": "10.1234/test"}]}})
            if request.url.path == "/works" else httpx.Response(200, json=record("10.1234/other", abstract="Not the requested work")))
-    result = literature.collect(["query"], tmp_path)
+    result = literature.collect(["query"], tmp_path, pdf_candidates=[])
     assert result["sources"] == []
     assert any("verification failed" in warning for warning in result["warnings"])
 
@@ -316,7 +316,7 @@ def test_different_resolved_doi_is_omitted(tmp_path, monkeypatch):
 def test_untrusted_pdf_link_never_reaches_transport(tmp_path, monkeypatch, url):
     requests = mocked(monkeypatch, lambda request: httpx.Response(200, json={"status": "ok", "message": {"items": [{"DOI": "10.1234/test"}]}})
                       if request.url.path == "/works" else httpx.Response(200, json=record(abstract="Inspected abstract", links=[{"URL": url, "content-type": "application/pdf"}])))
-    result = literature.collect(["query"], tmp_path)
+    result = literature.collect(["query"], tmp_path, pdf_candidates=[])
     assert len(requests) == 2
     assert result["sources"][0]["scope"] == "abstract"
     assert any("scope was not upgraded" in warning for warning in result["warnings"])
@@ -325,14 +325,14 @@ def test_untrusted_pdf_link_never_reaches_transport(tmp_path, monkeypatch, url):
 def test_private_dns_answer_blocks_fetch(tmp_path, monkeypatch):
     requests = mocked(monkeypatch, lambda request: pytest.fail("Private DNS address reached HTTP"))
     monkeypatch.setattr(literature.socket, "getaddrinfo", lambda *args, **kwargs: [(2, 1, 6, "", ("127.0.0.1", 443))])
-    result = literature.collect(["query"], tmp_path)
+    result = literature.collect(["query"], tmp_path, pdf_candidates=[])
     assert result["sources"] == [] and requests == []
     assert result["searches"][0]["status"] == "failed"
 
 
 def test_crossref_redirect_is_not_followed(tmp_path, monkeypatch):
     requests = mocked(monkeypatch, lambda request: httpx.Response(302, headers={"location": "https://127.0.0.1/private"}))
-    result = literature.collect(["query"], tmp_path)
+    result = literature.collect(["query"], tmp_path, pdf_candidates=[])
     assert len(requests) == 1 and result["sources"] == []
 
 
@@ -343,7 +343,7 @@ def test_crossref_redirect_is_not_followed(tmp_path, monkeypatch):
 ])
 def test_network_and_format_failures_return_no_inferred_sources(tmp_path, monkeypatch, response):
     mocked(monkeypatch, lambda request: response)
-    result = literature.collect(["query"], tmp_path)
+    result = literature.collect(["query"], tmp_path, pdf_candidates=[])
     assert result["sources"] == []
     assert result["searches"][0]["status"] == "failed"
 
@@ -363,7 +363,7 @@ def test_http_search_failure_retains_only_status_and_continues(tmp_path, monkeyp
         return httpx.Response(200, json=record(abstract="A later query returned an actually inspected passage."))
 
     requests = mocked(monkeypatch, handler)
-    result = literature.collect(["failed query", "successful query"], tmp_path)
+    result = literature.collect(["failed query", "successful query"], tmp_path, pdf_candidates=[])
     assert len(requests) == 3
     failed, succeeded = result["searches"]
     assert failed == {"query": "failed query", "provider": "Crossref", "status": "failed",
@@ -380,7 +380,7 @@ def test_http_search_failure_retains_only_status_and_continues(tmp_path, monkeyp
 def test_streamed_size_bound_without_content_length(tmp_path, monkeypatch):
     monkeypatch.setattr(literature, "MAX_JSON_BYTES", 10)
     mocked(monkeypatch, lambda request: httpx.Response(200, content=b"x" * 100))
-    result = literature.collect(["query"], tmp_path)
+    result = literature.collect(["query"], tmp_path, pdf_candidates=[])
     assert result["sources"] == []
 
 
@@ -388,7 +388,7 @@ def test_cancel_preserves_verified_partial_evidence(tmp_path, monkeypatch):
     mocked(monkeypatch, lambda request: httpx.Response(200, json={"status": "ok", "message": {"items": [{"DOI": "10.1234/test"}, {"DOI": "10.1234/second"}]}})
            if request.url.path == "/works" else httpx.Response(200, json=record(abstract="Inspected abstract")))
     # The source metadata artifact appears before the next candidate begins.
-    result = literature.collect(["query"], tmp_path, cancel=lambda: any((tmp_path / "literature").glob("source-*")))
+    result = literature.collect(["query"], tmp_path, cancel=lambda: any((tmp_path / "literature").glob("source-*")), pdf_candidates=[])
     assert result["cancelled"] is True
     assert len(result["sources"]) == 1
 
@@ -401,12 +401,12 @@ def test_symbolic_links_are_rejected(tmp_path, monkeypatch, location):
     if location == "root":
         symlink(root, other, directory=True)
         with pytest.raises(ValueError, match="symbolic links"):
-            literature.collect(["query"], root)
+            literature.collect(["query"], root, pdf_candidates=[])
     elif location == "directory":
         root.mkdir()
         symlink(root / "literature", other, directory=True)
         with pytest.raises(ValueError, match="symbolic link"):
-            literature.collect(["query"], root)
+            literature.collect(["query"], root, pdf_candidates=[])
     else:
         root.mkdir()
         (root / "literature").mkdir()
@@ -472,14 +472,14 @@ def test_windows_junctions_are_rejected(tmp_path, monkeypatch, location):
         if location == "replaced_directory":
             literature._save(root, "source", "json", b"evidence")
         else:
-            literature.collect(["query"], root)
+            literature.collect(["query"], root, pdf_candidates=[])
     assert list(other.iterdir()) == []
 
 
 def test_duplicate_doi_is_resolved_only_once(tmp_path, monkeypatch):
     requests = mocked(monkeypatch, lambda request: httpx.Response(200, json={"status": "ok", "message": {"items": [{"DOI": "10.1234/test"}, {"DOI": "10.1234/TEST"}]}})
                       if request.url.path == "/works" else httpx.Response(200, json=record(abstract="Inspected abstract")))
-    result = literature.collect(["query", "query"], tmp_path)
+    result = literature.collect(["query", "query"], tmp_path, pdf_candidates=[])
     assert len(result["sources"]) == 1 and len(requests) == 2
 
 
@@ -493,7 +493,7 @@ def test_full_text_scope_requires_successful_bounded_extraction(tmp_path, monkey
 
     requests = mocked(monkeypatch, handler)
     monkeypatch.setattr(literature, "_pdf_text", lambda content: "[Page 1]\nLiteral primary-source passage.")
-    result = literature.collect(["query"], tmp_path)
+    result = literature.collect(["query"], tmp_path, pdf_candidates=[])
     source = result["sources"][0]
     assert len(requests) == 3 and source["scope"] == "full_text"
     assert source["url"] == "https://joss.theoj.org/papers/10.21105/joss.01234.pdf"
@@ -510,7 +510,7 @@ def test_malformed_pdf_does_not_escape_or_upgrade_reading_scope(tmp_path, monkey
         return httpx.Response(200, json=record("10.21105/joss.01234", abstract="Inspected abstract"))
 
     mocked(monkeypatch, handler)
-    result = literature.collect(["query"], tmp_path)
+    result = literature.collect(["query"], tmp_path, pdf_candidates=[])
     assert result["sources"][0]["scope"] == "abstract"
     assert any("not upgraded" in warning for warning in result["warnings"])
 
@@ -519,13 +519,13 @@ def test_malformed_pdf_does_not_escape_or_upgrade_reading_scope(tmp_path, monkey
 def test_invalid_inputs_fail_before_network(tmp_path, monkeypatch, queries, limit):
     monkeypatch.setattr(literature.httpx, "Client", lambda **kwargs: pytest.fail("Invalid inputs reached network"))
     with pytest.raises(ValueError):
-        literature.collect(queries, tmp_path, limit=limit)
+        literature.collect(queries, tmp_path, limit=limit, pdf_candidates=[])
 
 
 @pytest.mark.parametrize("candidate", [{"DOI": None}, {"DOI": 123}, {}, None])
 def test_malformed_candidate_doi_is_omitted(tmp_path, monkeypatch, candidate):
     requests = mocked(monkeypatch, lambda request: httpx.Response(200, json={"status": "ok", "message": {"items": [candidate]}}))
-    result = literature.collect(["query"], tmp_path)
+    result = literature.collect(["query"], tmp_path, pdf_candidates=[])
     assert result["sources"] == [] and len(requests) == 1
 
 
@@ -696,7 +696,7 @@ def test_later_query_can_replace_metadata_with_inspected_abstract(tmp_path, monk
             return httpx.Response(200, json=record("10.1234/metadata"))
         return httpx.Response(200, json=record("10.1234/abstract", abstract="Actually inspected passage"))
     requests = mocked(monkeypatch, handler)
-    result = literature.collect(["first", "second"], tmp_path, limit=1)
+    result = literature.collect(["first", "second"], tmp_path, limit=1, pdf_candidates=[])
     assert len(requests) == 4
     assert len(result["sources"]) == 1
     assert result["sources"][0]["doi"] == "10.1234/abstract"
@@ -711,7 +711,7 @@ def test_full_source_budget_still_retains_second_frozen_query_search(tmp_path, m
         return httpx.Response(200, json=record("10.1234/" + request.url.path.rsplit("/", 1)[-1],
                                              abstract="Inspected literal passage"))
     requests = mocked(monkeypatch, handler)
-    result = literature.collect(["first query", "second query"], tmp_path, limit=2)
+    result = literature.collect(["first query", "second query"], tmp_path, limit=2, pdf_candidates=[])
     assert len(result["sources"]) == 2 and len(requests) == 4
     assert [item["query"] for item in result["searches"]] == ["first query", "second query"]
     assert all(item["status"] == "succeeded" and item["attempted"] is True for item in result["searches"])
@@ -730,7 +730,7 @@ def test_zero_remaining_source_budget_records_search_success_and_failure(tmp_pat
             return httpx.Response(503)
         return httpx.Response(200, json={"status": "ok", "message": {"items": [{"DOI": "10.1234/not-resolved"}]}})
     requests = mocked(monkeypatch, handler)
-    result = literature.collect(["successful query", "failed query"], tmp_path, limit=0)
+    result = literature.collect(["successful query", "failed query"], tmp_path, limit=0, pdf_candidates=[])
     assert len(requests) == 2 and result["sources"] == []
     assert [item["status"] for item in result["searches"]] == ["succeeded", "failed"]
     assert all(item["attempted"] is True for item in result["searches"])
@@ -742,7 +742,7 @@ def test_client_initialization_failure_records_each_unattempted_query(tmp_path, 
     def unavailable(**kwargs):
         raise OSError("Mock client initialization failure")
     monkeypatch.setattr(literature.httpx, "Client", unavailable)
-    result = literature.collect(["first", "second"], tmp_path, limit=0)
+    result = literature.collect(["first", "second"], tmp_path, limit=0, pdf_candidates=[])
     assert [search["query"] for search in result["searches"]] == ["first", "second"]
     assert all(search["status"] == "failed" and search["attempted"] is False and search["error"] == "OSError"
                for search in result["searches"])
@@ -758,7 +758,7 @@ def test_candidates_are_resolved_fairly_after_every_query_is_searched(tmp_path, 
         return httpx.Response(200, json=record(doi, abstract="An actually retrieved literal passage."))
 
     requests = mocked(monkeypatch, handler)
-    result = literature.collect(["ambiguous", "domain"], tmp_path)
+    result = literature.collect(["ambiguous", "domain"], tmp_path, pdf_candidates=[])
     assert len(result["sources"]) == 6
     assert [source["doi"] for source in result["sources"]] == [
         "10.1234/ambiguous-0", "10.1234/domain-0", "10.1234/ambiguous-1",
@@ -781,7 +781,7 @@ def test_explicit_doi_uses_exact_lookup_and_preserves_metadata_evidence(tmp_path
         return httpx.Response(200, json=record(abstract="Exact DOI record with an inspected abstract."))
 
     requests = mocked(monkeypatch, handler)
-    result = literature.collect([query], tmp_path)
+    result = literature.collect([query], tmp_path, pdf_candidates=[])
     assert len(requests) == 1
     source = result["sources"][0]
     search = result["searches"][0]
@@ -803,7 +803,7 @@ def test_explicit_doi_without_crossref_abstract_can_use_verified_open_access_tex
 
     requests = mocked(monkeypatch, handler)
     monkeypatch.setattr(literature, "_pdf_text", lambda content: "[Page 1]\nRetrieved primary-source passage.")
-    result = literature.collect(["10.21105/joss.01234"], tmp_path)
+    result = literature.collect(["10.21105/joss.01234"], tmp_path, pdf_candidates=[])
     source = result["sources"][0]
     assert len(requests) == 2
     assert source["scope"] == "full_text" and source["excerpts"] == ["[Page 1]\nRetrieved primary-source passage."]
@@ -820,7 +820,7 @@ def test_exact_and_bibliographic_queries_share_verified_source_provenance(tmp_pa
         return httpx.Response(200, json=record(abstract="Exact lookup also matches the bibliographic search."))
 
     requests = mocked(monkeypatch, handler)
-    result = literature.collect(["topic", "10.1234/test", "DOI:10.1234/TEST"], tmp_path, limit=1)
+    result = literature.collect(["topic", "10.1234/test", "DOI:10.1234/TEST"], tmp_path, limit=1, pdf_candidates=[])
     assert len(requests) == 2 and len(result["sources"]) == 1
     source = result["sources"][0]
     assert source["queries"] == ["topic", "10.1234/test", "DOI:10.1234/TEST"]
@@ -829,7 +829,7 @@ def test_exact_and_bibliographic_queries_share_verified_source_provenance(tmp_pa
 
 def test_explicit_doi_mismatch_is_a_failed_exact_lookup(tmp_path, monkeypatch):
     requests = mocked(monkeypatch, lambda request: httpx.Response(200, json=record("10.1234/other", abstract="Wrong record.")))
-    result = literature.collect(["10.1234/test"], tmp_path)
+    result = literature.collect(["10.1234/test"], tmp_path, pdf_candidates=[])
     assert len(requests) == 1 and result["sources"] == []
     search = result["searches"][0]
     assert search["lookup"] == "doi" and search["status"] == "failed"
@@ -839,7 +839,7 @@ def test_explicit_doi_mismatch_is_a_failed_exact_lookup(tmp_path, monkeypatch):
 
 def test_exact_lookup_with_no_remaining_source_budget_still_records_attempt(tmp_path, monkeypatch):
     requests = mocked(monkeypatch, lambda request: httpx.Response(200, json=record()))
-    result = literature.collect(["10.1234/test"], tmp_path, limit=0)
+    result = literature.collect(["10.1234/test"], tmp_path, limit=0, pdf_candidates=[])
     assert len(requests) == 1 and result["sources"] == []
     assert result["searches"][0]["status"] == "succeeded"
     assert result["searches"][0]["attempted"] is True
@@ -857,7 +857,7 @@ def test_metadata_only_candidates_do_not_consume_inspected_source_budget(tmp_pat
         return httpx.Response(200, json=record(doi, abstract=abstract))
 
     requests = mocked(monkeypatch, handler)
-    result = literature.collect(["metadata", "abstract"], tmp_path, limit=2)
+    result = literature.collect(["metadata", "abstract"], tmp_path, limit=2, pdf_candidates=[])
     assert len(requests) == 6
     assert [source["doi"] for source in result["sources"]] == ["10.1234/abstract-1", "10.1234/abstract-0"]
     assert all(source["scope"] == "abstract" for source in result["sources"])
@@ -866,7 +866,7 @@ def test_metadata_only_candidates_do_not_consume_inspected_source_budget(tmp_pat
 def test_cancellation_during_query_discovery_keeps_completed_search_receipt(tmp_path, monkeypatch):
     requests = mocked(monkeypatch, lambda request: httpx.Response(200, json={"status": "ok", "message": {"items": [{"DOI": "10.1234/test"}]}}))
     result = literature.collect(["first", "second"], tmp_path,
-                                cancel=lambda: any((tmp_path / "literature").glob("search-*")))
+                                cancel=lambda: any((tmp_path / "literature").glob("search-*")), pdf_candidates=[])
     assert len(requests) == 1 and result["cancelled"] is True and result["sources"] == []
     assert result["searches"][0]["status"] == "succeeded"
     assert result["searches"][1]["status"] == "not_attempted"

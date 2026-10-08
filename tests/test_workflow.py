@@ -128,7 +128,7 @@ BUNDLE = {"runtime": "quickjs", "entrypoint": "experiment.mjs", "files": [
     "explanation": "Controlled experiment fixture for deterministic workflow orchestration checks."}
 
 
-def collect(queries, root, *, limit, cancel):
+def collect(queries, root, *, limit, cancel, pdf_candidates=None):
     assert queries and limit in {3, 6}
     text = SYNTHETIC_PASSAGE
     raw = Path(root) / "literature" / "fixture-source.json"
@@ -149,7 +149,7 @@ def collect(queries, root, *, limit, cancel):
                           "resolved_ids": [source["id"]]} for query in queries]}
 
 
-def collect_arxiv_preprint(queries, root, *, limit, cancel, arxiv_id="1311.3903v1"):
+def collect_arxiv_preprint(queries, root, *, limit, cancel, pdf_candidates=None, arxiv_id="1311.3903v1"):
     """Synthetic collector output: identity/byte plumbing, not actual literature."""
     evidence = collect(queries, root, limit=limit, cancel=cancel)
     source = evidence["sources"][0]
@@ -260,9 +260,14 @@ def setup(tmp_path):
 
 def approve_study(service, research_id):
     """Simulate an accepted model decision; the fixture is not meaningful research."""
-    service.submit_proposal(research_id, protocol())
+    plan = protocol()
+    attempt = service.status(research_id, include_materials=False)["redesign_attempt"]
+    if attempt:
+        plan["parameters"]["fixture_size"] += attempt
+    service.submit_proposal(research_id, plan)
     service.collect_literature(research_id)
-    return service.submit_study_review(research_id, copy.deepcopy(STUDY_REVIEW))
+    review = copy.deepcopy(STUDY_REVIEW)
+    return service.submit_study_review(research_id, review)
 
 
 def prepare(service, research_id):
@@ -440,7 +445,7 @@ def finished(service, research_id):
 
 def test_native_submissions_analyze_actual_runner_artifacts(setup):
     service, runner, research_id = setup
-    assert set(service.status(research_id)["schemas"]) == {"plan", "code", "review", "manuscript", "study_review", "manuscript_review"}
+    assert set(service.status(research_id)["schemas"]) == {"plan", "code", "review", "manuscript", "study_review", "study_redesign_review", "manuscript_review"}
     prepare(service, research_id)
     started = service.start_experiment(research_id)
     assert started["status"] == "running" and "active_handle" not in started
@@ -602,7 +607,7 @@ def test_revised_proposal_gets_fresh_literature_budget_and_retries_old_failed_qu
     service.submit_proposal(research_id, proposal)
     calls = []
 
-    def revised_search(queries, root, *, limit, cancel):
+    def revised_search(queries, root, *, limit, cancel, pdf_candidates=None):
         calls.append((list(queries), limit))
         evidence = collect(queries, root, limit=limit, cancel=cancel)
         source = evidence["sources"][0]
@@ -2817,7 +2822,7 @@ def test_partial_literature_completes_missing_query_without_changing_retained_by
     service.submit_proposal(research_id, plan)
     calls = []
 
-    def partial_then_complete(queries, root, *, limit, cancel):
+    def partial_then_complete(queries, root, *, limit, cancel, pdf_candidates=None):
         calls.append((queries, limit))
         if len(calls) == 1:
             evidence = collect(queries[:1], root, limit=limit, cancel=cancel)
@@ -2863,7 +2868,7 @@ def test_metadata_only_partial_collection_does_not_exhaust_later_inspected_sourc
     proposal["literature_queries"] = ["metadata query", "readable query"]
     service.submit_proposal(research_id, proposal)
     calls = []
-    def metadata_then_readable(queries, root, *, limit, cancel):
+    def metadata_then_readable(queries, root, *, limit, cancel, pdf_candidates=None):
         calls.append((queries, limit))
         evidence = collect(queries[:1], root, limit=limit, cancel=cancel)
         if len(calls) == 1:
@@ -2904,7 +2909,7 @@ def test_same_source_recovery_upgrades_reading_without_downgrading_or_overwritin
     service.submit_proposal(research_id, proposal)
     calls = []
 
-    def recover_reading(queries, root, *, limit, cancel):
+    def recover_reading(queries, root, *, limit, cancel, pdf_candidates=None):
         calls.append((list(queries), limit))
         evidence = collect(queries if incomplete_flag or len(calls) > 1 else queries[:1], root, limit=6, cancel=cancel)
         source = evidence["sources"][0]
@@ -2989,7 +2994,7 @@ def test_same_source_upgrade_requires_substantive_reading_and_matching_artifact_
     service.submit_proposal(research_id, proposal)
     calls = []
 
-    def unverified_upgrade(queries, root, *, limit, cancel):
+    def unverified_upgrade(queries, root, *, limit, cancel, pdf_candidates=None):
         calls.append(list(queries))
         evidence = collect(queries[:1] if len(calls) == 1 else queries, root, limit=6, cancel=cancel)
         if len(calls) == 1:
@@ -3025,7 +3030,7 @@ def test_failed_attempt_completes_query_but_unattempted_error_remains_missing(se
     service.submit_proposal(research_id, plan)
     calls = []
 
-    def collector(queries, root, *, limit, cancel):
+    def collector(queries, root, *, limit, cancel, pdf_candidates=None):
         calls.append(queries)
         if len(calls) == 1:
             evidence = collect(queries[:1], root, limit=limit, cancel=cancel)

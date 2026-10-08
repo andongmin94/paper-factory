@@ -30,7 +30,8 @@ const approvedManuscriptReview: ManuscriptReview = {
   literature: syntheticQualityCriterion, interpretation: syntheticQualityCriterion, presentation: syntheticQualityCriterion,
 };
 function researchFixture(id: string) {
-  return { parentResearchId: null, rootResearchId: id, redesignAttempt: 0, followupResearchId: null, improvementAvailable: false };
+  return { parentResearchId: null, rootResearchId: id, redesignAttempt: 0, followupResearchId: null, improvementAvailable: false,
+    preparationRedesignReview: null };
 }
 const workspacePanels = { 연결: "connection", "새 연구": "research", 결과: "results" } as const;
 type WorkspaceView = keyof typeof workspacePanels;
@@ -158,7 +159,7 @@ test("connection window uses genuine components and exposes only limited, token-
     expect(rendererSurface.process).toBe("undefined");
     expect(rendererSurface.require).toBe("undefined");
     expect(rendererSurface.api).toEqual([
-      "addResearchEvidence", "cancel", "cancelResearch", "checkRuntime", "createResearch", "disconnect", "improveResearchWriting", "listPublicRepositories", "onResearchSnapshot", "onSnapshot",
+      "addResearchEvidence", "cancel", "cancelResearch", "checkRuntime", "createResearch", "disconnect", "improveResearch", "listPublicRepositories", "onResearchSnapshot", "onSnapshot",
       "openArtifact", "openUsage", "refreshModels", "researchSnapshot", "resumeResearch", "reviseResearchWriting", "saveArtifact", "selectProfile", "showArtifactFolder", "signIn", "snapshot", "verify",
     ]);
     expect(rendererSurface.csp).toContain("script-src 'self'");
@@ -171,7 +172,7 @@ test("connection window uses genuine components and exposes only limited, token-
       }, request);
       expect(denied).toBe(true);
       expect(await page.evaluate(async ({ id, model }) => {
-        try { await window.paperFactory.improveResearchWriting(id, model, "fixture-reviewer"); return false; }
+        try { await window.paperFactory.improveResearch(id, model, "fixture-reviewer"); return false; }
         catch { return true; }
       }, request)).toBe(true);
     }
@@ -818,7 +819,7 @@ print(record.model_dump_json())
         () => window.paperFactory.refreshModels(), () => window.paperFactory.verify("fixture-never-requested"),
         () => window.paperFactory.createResearch({ source: "https://github.com/fixture-owner/never-fetched", goal: "This operation must be rejected before any account or research request.", model: "fixture", reviewerModel: "fixture" }),
         () => window.paperFactory.resumeResearch(id, "fixture", "fixture"), () => window.paperFactory.reviseResearchWriting(id, "fixture", "fixture"),
-        () => window.paperFactory.improveResearchWriting(id, "fixture", "fixture"),
+        () => window.paperFactory.improveResearch(id, "fixture", "fixture"),
         () => window.paperFactory.saveArtifact(id, "export-pdf"),
       ];
       const failures: string[] = [];
@@ -1072,7 +1073,7 @@ async function installGateFixture(electronApp: ElectronApplication, connection: 
     };
     for (const channel of ["connection:snapshot", "research:snapshot", "research:cancel", "research:runtime",
       "connection:sign-in", "connection:select-profile", "connection:disconnect", "connection:models", "connection:verify",
-      "research:create", "research:resume", "research:revise-writing", "research:improve-writing", "research:add-evidence"]) ipcMain.removeHandler(channel);
+      "research:create", "research:resume", "research:revise-writing", "research:improve", "research:add-evidence"]) ipcMain.removeHandler(channel);
     ipcMain.handle("connection:snapshot", () => fixture.connection);
     ipcMain.handle("research:snapshot", () => fixture.research);
     ipcMain.handle("research:runtime", () => fixture.research);
@@ -1087,7 +1088,7 @@ async function installGateFixture(electronApp: ElectronApplication, connection: 
       return fixture.research;
     });
     for (const channel of ["connection:sign-in", "connection:select-profile", "connection:disconnect", "connection:models", "connection:verify",
-      "research:create", "research:resume", "research:revise-writing", "research:improve-writing", "research:add-evidence"]) {
+      "research:create", "research:resume", "research:revise-writing", "research:improve", "research:add-evidence"]) {
       ipcMain.handle(channel, () => { fixture.forbiddenCalls.push(channel); throw new Error("A locked fixture action was invoked"); });
     }
     publish();
@@ -1319,8 +1320,8 @@ test("held manuscript improvement uses selected models and respects authorizatio
       const gate = (globalThis as typeof globalThis & { __paperFactoryGateFixture: GateFixture }).__paperFactoryGateFixture;
       const improvement: ImprovementFixture = { calls: [] };
       (globalThis as typeof globalThis & { __paperFactoryImprovementFixture: ImprovementFixture }).__paperFactoryImprovementFixture = improvement;
-      ipcMain.removeHandler("research:improve-writing");
-      ipcMain.handle("research:improve-writing", async (_event, id: string, model: string, reviewerModel: string) => {
+      ipcMain.removeHandler("research:improve");
+      ipcMain.handle("research:improve", async (_event, id: string, model: string, reviewerModel: string) => {
         const job = gate.research.jobs.find(job => job.id === id);
         if (!job?.improvementAvailable || gate.research.busy || !gate.connection.session.connected || !gate.connection.session.sharing
             || model !== "fixture-writer" || reviewerModel !== "fixture-reviewer") throw new Error("Unexpected synthetic improvement request");
@@ -1390,6 +1391,85 @@ test("held manuscript improvement uses selected models and respects authorizatio
       BrowserWindow.getAllWindows()[0]?.webContents.send("research:changed", gate.research);
     }, id);
     await expect.poll(async () => (await page.evaluate(() => window.paperFactory.researchSnapshot())).busy).toBe(false);
+  } finally {
+    if (electronApp) await electronApp.close();
+    await removeOwnedTemp(dataDir);
+  }
+});
+
+test("preexecution preparation shows its limited approval and uses the generic improvement IPC", async ({}, testInfo) => {
+  const dataDir = await mkdtemp(join(tmpdir(), "paper-factory-electron-"));
+  let electronApp: ElectronApplication | undefined;
+  const id = "research-abcdef123456", rejectedId = "research-111111111111";
+  const connection: AppSnapshot = { version: "fixture", session: { connected: true, sharing: true, profileId: "fixture-a" },
+    profiles: [{ id: "fixture-a", label: "Synthetic account", connected: true, sharing: true }],
+    models: [{ slug: "fixture-model", displayName: "Synthetic model" }], busy: null, error: null, verification: null };
+  const preparation = { accepted: true, issues: [] as string[], scientific_difference: syntheticQualityCriterion,
+    prior_evidence: syntheticQualityCriterion, feasibility: syntheticQualityCriterion };
+  const base: ResearchSnapshot["jobs"][number] = { ...researchFixture(id), id,
+    source: "https://github.com/fixture-owner/preparation-approved", goal: "준비 검토와 실험 승인을 구분하는 합성 UI fixture입니다.",
+    model: "fixture-model", reviewerModel: "fixture-model", phase: "idle", pipeline: "paused", stage: "proposed", status: "blocked",
+    code: "STUDY_REJECTED", message: "원 설계는 실행하지 않았으며 새 후보의 준비만 검토했습니다.",
+    resumeKind: null, improvementAvailable: true, updatedAt: "2026-01-01T00:00:00.000Z",
+    artifacts: [], supportingDocuments: [], studyReview: null, manuscriptReview: null, preparationRedesignReview: preparation };
+  const research: ResearchSnapshot = { runtime: { state: "ready", message: "합성 준비 검토 fixture" }, busy: false,
+    cleanupResearchIds: [], error: null, jobs: [base, { ...base, ...researchFixture(rejectedId), id: rejectedId,
+      source: "https://github.com/fixture-owner/preparation-rejected", phase: "redesign-review", pipeline: "failed",
+      code: "STUDY_REDESIGN_REJECTED", preparationRedesignReview: { ...preparation, accepted: false,
+        issues: ["합성 검토: 이전 설계와 과학적 차이가 없습니다."],
+        scientific_difference: { passed: false, reason: "합성 준비 검토는 단순히 문구를 바꾼 같은 연구의 반복을 허용하지 않습니다." } } }] };
+  try {
+    electronApp = await launch(dataDir);
+    const page = await electronApp.firstWindow();
+    await expect.poll(async () => (await page.evaluate(() => window.paperFactory.researchSnapshot())).runtime.state).not.toBe("checking");
+    await installGateFixture(electronApp, connection, research);
+    await electronApp.evaluate(({ BrowserWindow, ipcMain }) => {
+      const gate = (globalThis as typeof globalThis & { __paperFactoryGateFixture: GateFixture }).__paperFactoryGateFixture;
+      ipcMain.removeHandler("research:improve");
+      ipcMain.handle("research:improve", (_event, id: string, model: string, reviewerModel: string) => {
+        if (id !== "research-abcdef123456" || model !== "fixture-model" || reviewerModel !== "fixture-model") {
+          throw new Error("Unexpected synthetic preparation request");
+        }
+        (globalThis as typeof globalThis & { __preparationCalls: string[][] }).__preparationCalls ??= [];
+        (globalThis as typeof globalThis & { __preparationCalls: string[][] }).__preparationCalls.push([id, model, reviewerModel]);
+        gate.research = { ...gate.research, busy: true, jobs: gate.research.jobs.map(job => job.id === id
+          ? { ...job, pipeline: "running", phase: "redesign-plan", improvementAvailable: false } : job) };
+        BrowserWindow.getAllWindows()[0]?.webContents.send("research:changed", gate.research);
+        return gate.research;
+      });
+    });
+    await selectView(page, "결과");
+    const approved = page.getByRole("article", { name: "preparation-approved", exact: true });
+    await approved.getByText("새 연구안 준비 검토 · 통과", { exact: true }).click();
+    await expect(approved.getByText("이전 연구와의 과학적 차이 · 충족", { exact: true })).toBeVisible();
+    await expect(approved.getByText("이전 결과와 근거의 보존 · 충족", { exact: true })).toBeVisible();
+    await expect(approved.getByText("실행 가능성과 주장 범위 · 충족", { exact: true })).toBeVisible();
+    await expect(approved.getByText("새 연구안을 준비할 수 있는지 검토한 기록입니다. 문헌 수집·연구 적합성·실험 코드 검토를 거쳐야 실험을 실행할 수 있습니다. 투고 준비도는 원고에서 따로 평가합니다.", { exact: true })).toBeVisible();
+    await expect(approved.getByRole("region", { name: "투고 준비도 평가", exact: true })).toHaveCount(0);
+    await expect(approved.getByText("원고 생성 완료", { exact: true })).toHaveCount(0);
+    await expect(approved.getByRole("button", { name: "원고 작성 재개", exact: true })).toHaveCount(0);
+    await expect(approved.getByRole("button", { name: "연구 준비 재개", exact: true })).toHaveCount(0);
+    const rejected = page.getByRole("article", { name: "preparation-rejected", exact: true });
+    await expect(rejected.getByText("연구 보류", { exact: true })).toBeVisible();
+    await expect(rejected.getByText("새 연구안 준비 검토 · 보완 필요", { exact: true })).toBeVisible();
+    await expect(rejected.getByText("이전 연구와의 과학적 차이 · 미충족", { exact: true })).toBeVisible();
+    await expect(rejected.getByText("합성 검토: 이전 설계와 과학적 차이가 없습니다.", { exact: true })).toBeVisible();
+    await expect(rejected.getByRole("button")).toHaveCount(0);
+    await approved.evaluate(element => element.scrollIntoView({ block: "start" }));
+    await page.evaluate(() => document.fonts.ready.then(() => undefined));
+    const captureWindow = await electronApp.browserWindow(page);
+    const png = await captureWindow.evaluate(async window => {
+      const image = await window.webContents.capturePage(undefined, { stayHidden: true });
+      if (window.isVisible() || image.isEmpty()) throw new Error("Preparation fixture must remain offscreen.");
+      return image.toPNG().toString("base64");
+    });
+    await writeFile(testInfo.outputPath("preexecution-preparation-review.png"), Buffer.from(png, "base64"));
+    await approved.getByRole("button", { name: "심사·보완 이어가기", exact: true }).click();
+    await expect(approved).toContainText("새 연구안 준비 (redesign-plan)");
+    await expect.poll(() => electronApp!.evaluate(() =>
+      (globalThis as typeof globalThis & { __preparationCalls: string[][] }).__preparationCalls)).toEqual([[id, "fixture-model", "fixture-model"]]);
+    expect(await electronApp.evaluate(() =>
+      (globalThis as typeof globalThis & { __paperFactoryGateFixture: GateFixture }).__paperFactoryGateFixture.forbiddenCalls)).toEqual([]);
   } finally {
     if (electronApp) await electronApp.close();
     await removeOwnedTemp(dataDir);
@@ -1558,7 +1638,8 @@ test("research and manuscript quality rejections show reasons without presenting
     const infeasibleStudy = page.getByRole("article", { name: "infeasible-study", exact: true });
     await expect(infeasibleStudy.getByText("연구 보류", { exact: true })).toBeVisible();
     await expect(infeasibleStudy.getByText("실패", { exact: true })).toHaveCount(0);
-    await expect(infeasibleStudy.getByText("현재 실행 환경과 확보한 근거로 연구 기준을 충족하는 설계를 마련하지 못해", { exact: false })).toBeVisible();
+    await expect(infeasibleStudy.getByText("현재 설계의 근거가 부족해 실험과 원고 생성을 진행하지 않았습니다. 검토 이유와 이어갈 수 있는 보완 작업을 확인하세요.", { exact: true })).toBeVisible();
+    await expect(infeasibleStudy.getByText("합성 연구 실행 가능성 보류", { exact: true })).toBeVisible();
     await expect(infeasibleStudy.getByRole("button")).toHaveCount(0);
     const rejectedManuscript = page.getByRole("article", { name: "manuscript-rejected", exact: true });
     await expect(rejectedManuscript.getByText("원고 보류", { exact: true })).toBeVisible();

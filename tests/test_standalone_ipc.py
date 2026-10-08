@@ -474,7 +474,7 @@ def test_cancel_interrupts_blocked_collection_before_serial_cancel(runtime, tmp_
     runtime.service.submit_proposal(research_id, protocol())
     entered = threading.Event()
     cancelled = threading.Event()
-    def blocked_collector(queries, root, *, limit, cancel):
+    def blocked_collector(queries, root, *, limit, cancel, pdf_candidates=None):
         entered.set()
         deadline = time.monotonic() + 5
         while not cancel() and time.monotonic() < deadline:

@@ -1,7 +1,14 @@
-export type ResearchPhase = 'idle' | 'plan' | 'redesign' | 'literature-plan' | 'literature' | 'study-review' | 'code' | 'code-review' | 'experiment' | 'evidence-selection' | 'manuscript' | 'manuscript-review' | 'export';
+export type ResearchPhase = 'idle' | 'plan' | 'redesign' | 'redesign-plan' | 'redesign-review' | 'literature-plan' | 'literature' | 'study-review' | 'code' | 'code-review' | 'experiment' | 'evidence-selection' | 'manuscript' | 'manuscript-review' | 'export';
 export interface SupportingDocument { id: string; name: string; sha256: string; size: number }
 export interface ReviewCriterion { passed: boolean; reason: string }
 export interface LiteratureSelection { source_id: string; excerpt_index: number; relevance: string }
+export interface StudyRedesignReview {
+  accepted: boolean;
+  issues: string[];
+  scientific_difference: ReviewCriterion;
+  prior_evidence: ReviewCriterion;
+  feasibility: ReviewCriterion;
+}
 export interface PublicationReadiness {
   novelty: ReviewCriterion;
   significance: ReviewCriterion;
@@ -62,6 +69,7 @@ export interface ResearchItem {
   supportingDocuments: SupportingDocument[];
   studyReview: StudyReview | null;
   manuscriptReview: ManuscriptReview | null;
+  preparationRedesignReview: StudyRedesignReview | null;
   parentResearchId: string | null;
   rootResearchId: string;
   redesignAttempt: number;
@@ -84,7 +92,7 @@ export interface ResearchApi {
   createResearch(input: CreateResearchInput): Promise<ResearchSnapshot>;
   resumeResearch(id: string, model: string, reviewerModel: string): Promise<ResearchSnapshot>;
   reviseResearchWriting(id: string, model: string, reviewerModel: string): Promise<ResearchSnapshot>;
-  improveResearchWriting(id: string, model: string, reviewerModel: string): Promise<ResearchSnapshot>;
+  improveResearch(id: string, model: string, reviewerModel: string): Promise<ResearchSnapshot>;
   cancelResearch(id: string): Promise<ResearchSnapshot>;
   addResearchEvidence(id: string): Promise<ResearchSnapshot | false>;
   saveArtifact(id: string, artifactId: string): Promise<boolean>;

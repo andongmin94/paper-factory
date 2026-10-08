@@ -144,6 +144,23 @@ class QualityCriterion(Record):
         return value
 
 
+class StudyRedesignReview(Record):
+    """Permission to prepare a distinct successor, never scientific approval."""
+    accepted: bool
+    issues: list[Annotated[str, Field(min_length=1, max_length=2000)]] = Field(max_length=12)
+    scientific_difference: QualityCriterion
+    prior_evidence: QualityCriterion
+    feasibility: QualityCriterion
+
+    @model_validator(mode="after")
+    def consistent_decision(self):
+        eligible = all(item.passed for item in (
+            self.scientific_difference, self.prior_evidence, self.feasibility)) and not self.issues
+        if self.accepted != eligible or (not self.accepted and not self.issues) or any(not item.strip() for item in self.issues):
+            raise ValueError("Redesign preparation must agree with every criterion and record rejection issues")
+        return self
+
+
 class LiteratureSelection(Record):
     source_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.-]+$")
     excerpt_index: int = Field(ge=0)

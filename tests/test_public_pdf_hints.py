@@ -199,9 +199,9 @@ def test_private_hint_dns_is_rejected_without_proxy_exception(tmp_path, monkeypa
     assert "raw_path" not in result["pdf_hint_attempts"][0]
 
 
-def test_cmu_link_without_typed_hint_cannot_bypass_identity_check(tmp_path, monkeypatch):
+def test_explicit_empty_candidates_do_not_follow_cmu_metadata_links(tmp_path, monkeypatch):
     requests = mocked(monkeypatch, lambda request: httpx.Response(200, json=record(links=[{"URL": URL, "content-type": "application/pdf"}])))
-    result = literature.collect([DOI], tmp_path, limit=1)
+    result = literature.collect([DOI], tmp_path, limit=1, pdf_candidates=[])
     assert len(requests) == 1 and result["sources"][0]["scope"] == "metadata_only"
     assert "pdf_hint_attempts" not in result
 

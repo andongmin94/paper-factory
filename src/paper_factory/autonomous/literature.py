@@ -947,7 +947,11 @@ def _promote_hinted_pdf(client: httpx.Client, source: dict, hints: list[PdfCandi
                                         if key in {"raw_path", "sha256", "retrieved_url", "content_type", "http_status"}}
             discovered = discover_author_pdf(listing_bytes, hint)
             attempt["discovery"].update(discovered)
-            source.update(discovery_path=attempt["discovery"]["raw_path"], discovery_sha256=attempt["discovery"]["sha256"])
+            if sum(previous.get("pdf_attempted") is True for previous in attempts) >= 2:
+                raise ValueError("Public author PDF attempt budget was exhausted")
+            # Reserve before DNS, cancellation checks or GET. A matched URL
+            # consumes one attempt even when retrieval or identity fails.
+            attempt["pdf_attempted"] = True
             raw, url, content_type = _fetch(client, discovered["url"], pdf=True, author_pdf=True,
                                            redirects=attempt["redirects"], retain_response=retain, cancel=cancel, budget=budget)
             if attempt["http_status"] != 200:
@@ -963,7 +967,12 @@ def _promote_hinted_pdf(client: httpx.Client, source: dict, hints: list[PdfCandi
             budget.wait(0, cancel)
             attempt["identity"] = author_pdf_identity(text, source)
             _retain_full_text(source, root, text, url, attempt["raw_path"], attempt["sha256"])
-            source.update(copy_type="author_copy", publication_version="unknown")
+            source.update(copy_type="author_copy", publication_version="unknown",
+                          discovery_path=attempt["discovery"]["raw_path"], discovery_sha256=attempt["discovery"]["sha256"],
+                          discovery_url=AUTHOR_PUBLICATIONS)
+            # A failed arXiv PDF may have preceded this separate author copy.
+            # Its discovery bytes remain retained, but do not describe this PDF.
+            source.pop("arxiv_id", None)
             attempt["status"] = "verified"
         except (_Cancelled, _DeadlineExceeded, _RateLimited) as error:
             attempt.update(status="interrupted", error=type(error).__name__)
@@ -1031,6 +1040,10 @@ def collect(
     bibliographic searches do not exclude records without Crossref abstracts.
     Explicit DOI-bound author PDF hints precede generic candidates and use their
     strict identity route exclusively, retaining completed rejected responses.
+    A fresh collection (``pdf_candidates=None``) can also discover exact Crossref
+    records in the fixed official author list after generic full text fails.
+    At most two matched author PDFs are attempted; unmatched titles consume no
+    PDF attempt. Explicit empty or reserved candidate lists disable this route.
     Cancellation and the shared 90-second deadline preserve partial evidence,
     with distinct ``cancelled`` and ``timed_out`` flags. A provider cooldown
     beyond the remaining wait budget sets ``rate_limited``. Query provenance is not relevance.
@@ -1049,12 +1062,14 @@ def collect(
          "status": "not_attempted", "attempted": False, "resolved_ids": []}
         for query in sorted(queries, key=lambda query: not _is_arxiv_query(query))], "warnings": []}
     seen: set[str] = set()
-    if hints:
+    if hints or pdf_candidates is None:
         result["pdf_hint_attempts"] = []
     listing = {"record": {"provider": "CMU publications", "listing_url": AUTHOR_PUBLICATIONS,
                           "attempted": False, "status": "not_attempted"}}
-    if hints:
+    if hints or pdf_candidates is None:
         result["pdf_listing"] = listing["record"]
+    if pdf_candidates is None:
+        result["pdf_discovery_mode"] = "initial_metadata"
     candidates: list[list[str]] = []
     candidate_queries: dict[str, list[dict]] = {}
     exact_metadata: dict[str, tuple[bytes, str]] = {}
@@ -1224,6 +1239,11 @@ def collect(
                                 except (ValueError, OSError, httpx.HTTPError) as error:
                                     result["warnings"].append(f"arXiv identity-bound discovery unavailable for {source_id} ({type(error).__name__}); reading scope was not upgraded")
                             _promote_full_text(client, source, pdf_urls, root, budget=budget, cancel=cancel, warnings=result["warnings"])
+                            if (pdf_candidates is None and document is not None and source["scope"] != "full_text"
+                                    and sum(attempt.get("pdf_attempted") is True for attempt in result["pdf_hint_attempts"]) < 2):
+                                _promote_hinted_pdf(client, source, [{"doi": source["doi"], "title": source["title"]}], root,
+                                                    listing=listing, budget=budget, cancel=cancel,
+                                                    warnings=result["warnings"], attempts=result["pdf_hint_attempts"])
                         finally:
                             seen.add(candidate)
                             if len(result["sources"]) < limit:

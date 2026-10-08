@@ -36,6 +36,8 @@ METHODS = {
     "workflow.selectAuthoringLiterature": {"researchId", "selectedSources"},
     "workflow.cancel": {"researchId"}, "workflow.resume": {"researchId"}, "workflow.reviseWriting": {"researchId"},
     "workflow.redesignStudy": {"researchId"},
+    "workflow.submitRedesignProposal": {"researchId", "value"},
+    "workflow.submitRedesignReview": {"researchId", "review"},
     "workflow.improveWriting": {"researchId"},
     "workflow.submitManuscript": {"researchId", "value", "review"},
     "workflow.export": {"researchId"}, "artifact.resolve": {"researchId", "artifactId"}, "shutdown": set(),
@@ -223,6 +225,10 @@ class Dispatcher:
             return self.service.collect_authoring_literature(p["researchId"], p["queries"])
         if method == "workflow.collectStudyLiterature":
             return self.service.collect_study_literature(p["researchId"], p["queries"], p["reason"], p["pdfCandidates"])
+        if method == "workflow.submitRedesignProposal":
+            return self.service.submit_redesign_proposal(p["researchId"], p["value"])
+        if method == "workflow.submitRedesignReview":
+            return self.service.submit_redesign_review(p["researchId"], p["review"])
         if method == "workflow.selectAuthoringLiterature":
             return self.service.select_authoring_literature(p["researchId"], p["selectedSources"])
         if method == "workflow.submitCode":

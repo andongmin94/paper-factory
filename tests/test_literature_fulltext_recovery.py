@@ -42,7 +42,7 @@ def test_exact_journal_identity_recovers_and_hashes_public_full_text(tmp_path, m
 
     requests = mocked(monkeypatch, handler)
     monkeypatch.setattr(literature, "_pdf_text", lambda content: text)
-    result = literature.collect([DOI], tmp_path)
+    result = literature.collect([DOI], tmp_path, pdf_candidates=[])
     source, = result["sources"]
     assert len(requests) == 3 and not result["warnings"] and source["scope"] == "full_text"
     assert source["arxiv_id"] == "1902.02467v4" and source["url"] == PDF_URL
@@ -100,7 +100,7 @@ def test_title_similarity_or_ambiguous_identity_never_upgrades_scope(tmp_path, m
         return httpx.Response(200, json=journal())
 
     requests = mocked(monkeypatch, handler)
-    result = literature.collect([DOI], tmp_path)
+    result = literature.collect([DOI], tmp_path, pdf_candidates=[])
     source, = result["sources"]
     assert len(requests) == 2 and source["scope"] == "abstract" and "text_path" not in source
     assert "discovery_path" in source and "arxiv_id" not in source
@@ -115,7 +115,7 @@ def test_title_similarity_or_ambiguous_identity_never_upgrades_scope(tmp_path, m
 def test_untrusted_discovery_content_preserves_only_original_reading(tmp_path, monkeypatch, content, content_type):
     requests = mocked(monkeypatch, lambda request: httpx.Response(200, content=content, headers={"content-type": content_type})
                       if request.url.host == "export.arxiv.org" else httpx.Response(200, json=journal()))
-    result = literature.collect([DOI], tmp_path)
+    result = literature.collect([DOI], tmp_path, pdf_candidates=[])
     source, = result["sources"]
     assert len(requests) == 2 and source["scope"] == "abstract" and "arxiv_id" not in source
     assert any("not upgraded" in warning for warning in result["warnings"])
@@ -135,7 +135,7 @@ def test_discovery_boundary_refuses_unrecognized_authorities_or_paths(monkeypatc
 def test_discovery_private_dns_and_redirect_are_refused(tmp_path, monkeypatch):
     requests = mocked(monkeypatch, lambda request: httpx.Response(302, headers={"location": "https://private.invalid/api/query"})
                       if request.url.host == "export.arxiv.org" else httpx.Response(200, json=journal()))
-    result = literature.collect([DOI], tmp_path)
+    result = literature.collect([DOI], tmp_path, pdf_candidates=[])
     assert len(requests) == 2 and result["sources"][0]["scope"] == "abstract"
     monkeypatch.setattr(literature.socket, "getaddrinfo", lambda *args, **kwargs: [(2, 1, 6, "", ("127.0.0.1", 443))])
     with pytest.raises(ValueError, match="non-public"):
@@ -153,12 +153,12 @@ def test_discovery_spacing_has_shared_cancel_and_deadline_budget(tmp_path, monke
         return httpx.Response(200, json=journal(doi=request.url.path.removeprefix("/works/")))
 
     mocked(monkeypatch, handler)
-    result = literature.collect([DOI, "10.1234/second"], tmp_path)
+    result = literature.collect([DOI, "10.1234/second"], tmp_path, pdf_candidates=[])
     assert len(starts) == 2 and starts[1] - starts[0] >= 3
     assert len(result["sources"]) == 2
     clock.value = 0
     starts.clear()
-    result = literature.collect([DOI, "10.1234/second"], tmp_path / "cancelled", cancel=lambda: clock.value >= 1)
+    result = literature.collect([DOI, "10.1234/second"], tmp_path / "cancelled", cancel=lambda: clock.value >= 1, pdf_candidates=[])
     assert len(starts) == 1 and result["cancelled"] is True
     assert len(result["sources"]) == 2 and all(source["scope"] == "abstract" for source in result["sources"])
 
@@ -190,5 +190,5 @@ def test_discovery_does_not_replace_a_known_supported_pdf(tmp_path, monkeypatch)
 
     requests = mocked(monkeypatch, handler)
     monkeypatch.setattr(literature, "_pdf_text", lambda content: "[Page 1]\n" + "Retained open source text. " * 20)
-    result = literature.collect(["10.21105/joss.01234"], tmp_path)
+    result = literature.collect(["10.21105/joss.01234"], tmp_path, pdf_candidates=[])
     assert len(requests) == 2 and result["sources"][0]["scope"] == "full_text"

@@ -24,7 +24,7 @@ import zipfile
 from . import conversion, project
 from .author import load_author
 from .autonomous import literature, science
-from .autonomous.models import CodeBundle, FrozenArtifact, LiteratureSelection, ManuscriptDraft, ManuscriptReview, PublicationReadiness, ResearchPlan, ScientificReview, StudyReview
+from .autonomous.models import CodeBundle, FrozenArtifact, LiteratureSelection, ManuscriptDraft, ManuscriptReview, PublicationReadiness, ResearchPlan, ScientificReview, StudyRedesignReview, StudyReview
 from .models import Project, now, uid
 from .workflow_models import ModelEvidenceReceipt, Workflow
 from .workspace import Workspace, digest_file, ensure_unlinked, loads_json, safe_relative, write_json
@@ -37,10 +37,12 @@ CANCEL_CLEANUP_SECONDS = 30
 CANCEL_STOP_SECONDS = 10  # Owned job stop and process wait each allow five seconds.
 SHUTDOWN_CLEANUP_SECONDS = 30
 SCHEMAS = {"plan": ResearchPlan.model_json_schema(), "study_review": StudyReview.model_json_schema(),
+           "study_redesign_review": StudyRedesignReview.model_json_schema(),
            "code": CodeBundle.model_json_schema(), "review": ScientificReview.model_json_schema(),
            "manuscript": ManuscriptDraft.model_json_schema(), "manuscript_review": ManuscriptReview.model_json_schema()}
 READABLE_EVIDENCE = {"proposal", "plan", "study-review", "selected-literature", "observations", "analysis",
-                     "literature", "authoring-selected-literature", "manuscript", "canonical", "runtime-manifest", "prior-study", "redesign-origin"}
+                     "literature", "authoring-selected-literature", "manuscript", "canonical", "runtime-manifest", "prior-study", "redesign-origin",
+                     "redesign-candidate", "redesign-preparation", "redesign-review"}
 PUBLIC_EXECUTION_FIELDS = ("status", "code", "backend", "simulation", "exit_code", "coverage_mechanism", "coverage_truncated",
                            "production_calls", "cleanup_confirmed", "duration_seconds", "limits", "source_digest",
                            "protocol_sha256", "bundle_sha256")
@@ -270,6 +272,30 @@ def _verify_artifacts(ws: Workspace, record: Workflow) -> None:
                 raise WorkflowError("ARTIFACT_CHANGED", "Frozen experiment source changed")
 
 
+def _design_identity(plan: ResearchPlan) -> dict:
+    """A conservative structural guard; independent review decides scientific meaning."""
+    return {"runtime": plan.runtime, "source_files": sorted(plan.source_files),
+            "production_entrypoint": plan.production_entrypoint, "conditions": sorted(plan.conditions),
+            "metrics": sorted(({"name": item.name, "unit": item.unit} for item in plan.metrics), key=lambda item: (item["name"], item["unit"])),
+            "units_per_seed": plan.units_per_seed,
+            "parameters": {key: value for key, value in plan.parameters.items()
+                           if key != "execution_instrumentation" and not re.search(r"(?:^|_)seeds?(?:_|$)", key, re.I)},
+            "claim_mode": plan.research_claim.mode if plan.research_claim is not None else "finite_enumeration"}
+
+
+def _require_distinct_redesign(ws: Workspace, record: Workflow, plan: ResearchPlan, *, ancestors_only: bool = False) -> None:
+    identity = _design_identity(plan)
+    inspected = set()
+    for key, frozen in record.artifacts.items():
+        own = key == "plan" or re.fullmatch(r"proposal(?:-[1-3])?", key)
+        ancestor = key.startswith("prior-study-") and re.search(r"-(?:plan|proposal(?:-[1-3])?)$", key)
+        if (not ancestor and (ancestors_only or not own)) or frozen.sha256 in inspected:
+            continue
+        inspected.add(frozen.sha256)
+        if identity == _design_identity(ResearchPlan.model_validate(_read(ws, record, key))):
+            raise WorkflowError("REDESIGN_UNCHANGED", "A successor must change the scientific design, not wording, literature queries or seeds")
+
+
 def _verify_lineage(ws: Workspace, record: Workflow) -> None:
     if record.redesign_attempt == 0:
         if "redesign-origin" in record.artifacts or "prior-study" in record.artifacts:
@@ -278,7 +304,7 @@ def _verify_lineage(ws: Workspace, record: Workflow) -> None:
     origin = _read(ws, record, "redesign-origin")
     summary = _read(ws, record, "prior-study")
     imported = ws.latest("project", Project)
-    if (origin.get("event") != "study-redesign" or origin.get("child_id") != record.id or
+    if (origin.get("event") not in {"study-redesign", "preexecution-study-redesign"} or origin.get("child_id") != record.id or
             origin.get("parent_id") != record.parent_research_id or
             origin.get("root_id") != record.root_research_id or
             origin.get("redesign_attempt") != record.redesign_attempt or
@@ -295,26 +321,51 @@ def _verify_lineage(ws: Workspace, record: Workflow) -> None:
             summary.get("bindings") != origin.get("parent_evidence")):
         raise WorkflowError("ARTIFACT_CHANGED", "Redesign lineage differs from its immutable scientific origin")
     for key, expected in origin["parent_evidence"].items():
-        retained = record.artifacts.get("prior-study-" + record.parent_research_id + "-" + key)
+        inherited = key in {"context", "source-collection"} or re.fullmatch(r"supporting-document-(?:import-)?[a-f0-9]{12}", key)
+        retained = record.artifacts.get(key if key.startswith("prior-study-") or inherited else "prior-study-" + record.parent_research_id + "-" + key)
         if retained is None or {"sha256": retained.sha256, "size": retained.size} != expected:
             raise WorkflowError("ARTIFACT_CHANGED", "Prior-study evidence differs from its redesign origin")
     prefix = "prior-study-" + record.parent_research_id + "-"
-    reviews = [key for key in origin["parent_evidence"] if re.fullmatch(r"manuscript-review-[1-9][0-9]*", key)]
-    if len(reviews) != 1:
-        raise WorkflowError("ARTIFACT_CHANGED", "Redesign origin must identify one current parent manuscript review")
-    execution = _read(ws, record, prefix + "execution")
-    review = ManuscriptReview.model_validate(_read(ws, record, prefix + reviews[0])["review"])
-    if (summary.get("protocol") != _read(ws, record, prefix + "plan") or
-            summary.get("analysis") != _read(ws, record, prefix + "analysis") or
-            summary.get("execution") != {key: value for key, value in execution.items() if key in PUBLIC_EXECUTION_FIELDS} or
-            summary.get("review") != review.model_dump(mode="json") or
-            review.accepted or review.remediation is None or review.remediation.strategy != "redesign_study"):
-        raise WorkflowError("ARTIFACT_CHANGED", "Prior-study summary differs from its retained scientific evidence")
+    if origin["event"] == "preexecution-study-redesign":
+        preparation = _read(ws, record, prefix + "redesign-preparation")
+        candidate = _read(ws, record, prefix + "redesign-candidate")
+        receipt = _read(ws, record, prefix + "redesign-review")
+        assessment = StudyRedesignReview.model_validate(receipt["review"])
+        old_review = _read(ws, record, prefix + "study-review")
+        if (not assessment.accepted or receipt.get("origin") != "native_host_submission" or
+                receipt.get("candidate_sha256") != origin["parent_evidence"]["redesign-candidate"]["sha256"] or
+                receipt.get("parent_basis") != preparation or
+                any(origin["parent_evidence"].get(key) != expected for key, expected in preparation["bindings"].items()) or
+                old_review["review"]["accepted"] or
+                old_review.get("proposal_sha256") != origin["parent_evidence"]["proposal"]["sha256"] or
+                summary.get("proposal") != _read(ws, record, prefix + "proposal") or
+                summary.get("review") != old_review["review"] or
+                summary.get("execution_attempt") != 0 or
+                any(key in summary for key in ("protocol", "analysis", "execution", "observations")) or
+                summary.get("redesign_candidate") != candidate or
+                summary.get("redesign_review") != assessment.model_dump(mode="json")):
+            raise WorkflowError("ARTIFACT_CHANGED", "Unexecuted prior-study preparation differs from its retained evidence")
+        if record.proposal_attempt:
+            first = record.artifacts.get("proposal-1")
+            if first is None or {"sha256": first.sha256, "size": first.size} != origin["parent_evidence"]["redesign-candidate"]:
+                raise WorkflowError("ARTIFACT_CHANGED", "The first successor proposal must retain its exact independently reviewed candidate bytes")
+    else:
+        reviews = [key for key in origin["parent_evidence"] if re.fullmatch(r"manuscript-review-[1-9][0-9]*", key)]
+        if len(reviews) != 1:
+            raise WorkflowError("ARTIFACT_CHANGED", "Redesign origin must identify one current parent manuscript review")
+        execution = _read(ws, record, prefix + "execution")
+        review = ManuscriptReview.model_validate(_read(ws, record, prefix + reviews[0])["review"])
+        if (summary.get("protocol") != _read(ws, record, prefix + "plan") or
+                summary.get("analysis") != _read(ws, record, prefix + "analysis") or
+                summary.get("execution") != {key: value for key, value in execution.items() if key in PUBLIC_EXECUTION_FIELDS} or
+                summary.get("review") != review.model_dump(mode="json") or
+                review.accepted or review.remediation is None or review.remediation.strategy != "redesign_study"):
+            raise WorkflowError("ARTIFACT_CHANGED", "Prior-study summary differs from its retained scientific evidence")
     earlier = summary.get("earlier_study")
     if ((record.redesign_attempt == 1 and earlier is not None) or
             (record.redesign_attempt == 2 and (not isinstance(earlier, dict) or
              earlier != _read(ws, record, "prior-study-" + str(earlier.get("parent_id")) + "-summary")))):
-        raise WorkflowError("ARTIFACT_CHANGED", "Earlier negative studies must remain bound to the complete redesign history")
+        raise WorkflowError("ARTIFACT_CHANGED", "Earlier studies and their positive, zero and negative findings must remain bound to the complete history")
 
 
 def _copy_retained(source: Path, destination: Path, expected: FrozenArtifact, staging_root: Path) -> None:
@@ -486,6 +537,9 @@ class WorkflowService:
         _verify_lineage(ws, record)
         data["followup_research_id"], data["redesign_pending"] = self._followup_state(ws, record)
         data["prior_study"] = _read(ws, record, "prior-study") if "prior-study" in record.artifacts else None
+        data["preparation_redesign_available"] = self._preparation_redesign_available(ws, record) and data["followup_research_id"] is None
+        data["redesign_candidate"] = _read(ws, record, "redesign-candidate") if "redesign-candidate" in record.artifacts else None
+        data["redesign_review"] = _read(ws, record, "redesign-review")["review"] if "redesign-review" in record.artifacts else None
         # Execution exceptions may contain private host paths. Keep diagnostics
         # local; public state describes the actionable failure category.
         if record.status in {"blocked", "failed"}:
@@ -578,7 +632,7 @@ class WorkflowService:
             if record.stage == "created":
                 data["planning_instructions"] = data["instructions"]
             history = ("\n\nRetained prior-study evidence is exploratory history, not observations from this study. "
-                       "Preserve its negative/null findings and rejection reasons. A redesigned question must address the stated "
+                       "Preserve all positive/nonzero, zero, negative and null findings and rejection reasons. Distinguish each metric and condition; zero correctness controls do not erase nonzero behavioral findings. A redesigned question must address the stated "
                        "evidence gaps through a substantively different preregistered design, fresh literature and all quality gates. "
                        "Do not repeat the same design, change seeds or select outcomes to obtain a favorable result. "
                        "Do not count prior and current observations as independent validation without a justified new sampling design.\n")
@@ -626,6 +680,9 @@ class WorkflowService:
         if (self._closing or self._closed or (record.status not in {"ready", "cancelled"} and not (record.status == "blocked" and rejected)) or
                 record.active_handle or record.code == "CLEANUP_UNCONFIRMED" or record.terminal_control_failure or
                 (future is not None and not future.done())):
+            return None
+        if (record.redesign_attempt > 0 and record.proposal_attempt == 0 and
+                _read(ws, record, "redesign-origin").get("event") == "preexecution-study-redesign"):
             return None
         if record.stage == "proposed" and "study-review" in record.artifacts:
             if not self._study_literature_available(ws, record):
@@ -859,6 +916,26 @@ class WorkflowService:
                     "total_chars": total_chars, "next_offset": end if end < total_chars else None,
                     "sha256": actual_digest, "text": "".join(fragments), "is_untrusted_data": True}
 
+    def _validate_proposal(self, ws: Workspace, plan: ResearchPlan) -> None:
+        if plan.research_claim is None:
+            raise WorkflowError("RESEARCH_CLAIM_REQUIRED", "A new proposal must identify its claim, scope, importance and validation strategy")
+        science.validate_plan(plan, ws.path("source"))
+        if any(not safe_relative(ws.path("source"), path).is_file() for path in plan.source_files):
+            raise WorkflowError("PLAN_SOURCE_MISSING", "Protocol refers to absent source files")
+        runtime = self.runner.status()
+        if not runtime.get("ready") or plan.runtime not in runtime.get("runtimes", []):
+            raise WorkflowError("ISOLATION_UNAVAILABLE", "The required isolated runtime is unavailable")
+        missing = set(plan.dependencies) - set(runtime.get("dependencies", []))
+        if missing:
+            raise WorkflowError("RUNTIME_DEPENDENCY_UNAVAILABLE", "Unprovisioned dependencies: " + ", ".join(sorted(missing)))
+        plan.parameters["execution_instrumentation"] = "Controller-held QuickJS production-call gate; timings include guest and bridge overhead"
+        limitation = "Production-call instrumentation affects execution overhead; measurements cannot establish uninstrumented production performance."
+        if not any(limitation in text for text in plan.limitations):
+            if len(plan.limitations) == 12:
+                plan.limitations[-1] += " " + limitation
+            else:
+                plan.limitations.append(limitation)
+
     def submit_proposal(self, research_id: str, value: dict) -> dict:
         plan = ResearchPlan.model_validate(value)
         if plan.research_claim is None:
@@ -874,22 +951,13 @@ class WorkflowService:
                     raise WorkflowError("INVALID_STATE", "Assess the retained proposal before replacing it")
             if self._study_literature_pending(ws, record):
                 raise WorkflowError("STUDY_REVIEW_REQUIRED", "Review the new literal literature before revising the retained proposal")
-            science.validate_plan(plan, ws.path("source"))
-            if any(not safe_relative(ws.path("source"), path).is_file() for path in plan.source_files):
-                raise WorkflowError("PLAN_SOURCE_MISSING", "Protocol refers to absent source files")
-            runtime = self.runner.status()
-            if not runtime.get("ready") or plan.runtime not in runtime.get("runtimes", []):
-                raise WorkflowError("ISOLATION_UNAVAILABLE", "The required isolated runtime is unavailable")
-            missing = set(plan.dependencies) - set(runtime.get("dependencies", []))
-            if missing:
-                raise WorkflowError("RUNTIME_DEPENDENCY_UNAVAILABLE", "Unprovisioned dependencies: " + ", ".join(sorted(missing)))
-            plan.parameters["execution_instrumentation"] = "Controller-held QuickJS production-call gate; timings include guest and bridge overhead"
-            limitation = "Production-call instrumentation affects execution overhead; measurements cannot establish uninstrumented production performance."
-            if not any(limitation in text for text in plan.limitations):
-                if len(plan.limitations) == 12:
-                    plan.limitations[-1] += " " + limitation
-                else:
-                    plan.limitations.append(limitation)
+            self._validate_proposal(ws, plan)
+            if record.redesign_attempt and _read(ws, record, "redesign-origin")["event"] == "preexecution-study-redesign":
+                candidate = _read(ws, record, "prior-study-" + record.parent_research_id + "-redesign-candidate")
+                if record.proposal_attempt == 0 and plan.model_dump(mode="json") != candidate:
+                    raise WorkflowError("REDESIGN_EVIDENCE_CONFLICT", "The successor's first proposal must be its exact reviewed preparation candidate")
+            if record.redesign_attempt:
+                _require_distinct_redesign(ws, record, plan, ancestors_only=True)
             if "proposal" in record.artifacts and _read(ws, record, "proposal") == plan.model_dump(mode="json"):
                 raise WorkflowError("PROPOSAL_UNCHANGED", "A rejected proposal must be substantively revised before a new review")
             if "literature" in record.artifacts:
@@ -1315,15 +1383,35 @@ class WorkflowService:
                 collection_root = ws.path("research")
                 previous_files = {path.relative_to(collection_root).as_posix() for path in _literature_files(collection_root)}
                 try:
-                    supplement = self.collector(missing, ws.path("research"), limit=remaining, cancel=lambda: False)
+                    fresh = not previous and record.stage == "proposed" and not record.execution_attempt and not record.study_literature_attempt
+                    supplement = self.collector(missing, ws.path("research"), limit=remaining, cancel=lambda: False,
+                                                pdf_candidates=None if fresh else [])
                 finally:
                     _freeze_literature_files(ws, record, collection_root, previous_files)
                     self._save(ws, record)
+                if fresh and any(source.get("scope") == "full_text" and source.get("copy_type") == "author_copy"
+                                 for source in supplement.get("sources", [])) and supplement.get("pdf_discovery_mode") != "initial_metadata":
+                    raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Initial author-copy bodies require the explicit metadata-discovery reservation contract")
+                if fresh and supplement.get("pdf_discovery_mode") == "initial_metadata":
+                    attempts = supplement.get("pdf_hint_attempts")
+                    if (not isinstance(attempts, list) or any(not isinstance(item, dict) for item in attempts) or
+                            sum(item.get("pdf_attempted") is True for item in attempts) > 2 or
+                            any(item.get("status") == "verified" and item.get("pdf_attempted") is not True for item in attempts)):
+                        raise WorkflowError("LITERATURE_SOURCE_LIMIT", "Initial discovery permits at most two reserved author PDF attempts")
+                    if any(source.get("scope") == "full_text" and source.get("copy_type") == "author_copy" and not any(
+                            item.get("status") == "verified" and item.get("pdf_attempted") is True and
+                            item.get("source_id") == source.get("id") and
+                            item.get("identity_path") == source.get("identity_path") and
+                            item.get("identity_sha256") == source.get("identity_sha256") for item in attempts)
+                           for source in supplement.get("sources", [])):
+                        raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Initial author-copy bodies must bind their reserved verified PDF attempts")
                 candidates = list(existing_sources)
                 positions = {source.get("id"): index for index, source in enumerate(candidates)}
                 reading_scopes = {"abstract": 1, "full_text": 2}
                 additions = []
                 for source in supplement.get("sources", []):
+                    if source.get("scope") == "full_text" and source.get("copy_type") == "author_copy" and not _verified_author_pdf(ws, source, None if fresh else []):
+                        raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Initial author PDF evidence must bind exact metadata, the retained official listing and verified identity")
                     identifier = source.get("id")
                     if identifier not in positions:
                         positions[identifier] = len(candidates)
@@ -1400,7 +1488,7 @@ class WorkflowService:
             root.mkdir(parents=True, exist_ok=False)
             previous_files = {path.relative_to(root).as_posix() for path in _literature_files(root)}
             try:
-                evidence = self.collector(queries, root, limit=3, cancel=lambda: False)
+                evidence = self.collector(queries, root, limit=3, cancel=lambda: False, pdf_candidates=[])
             finally:
                 _freeze_literature_files(ws, record, root, previous_files)
                 self._save(ws, record)
@@ -1412,6 +1500,8 @@ class WorkflowService:
             sources = evidence.get("sources", [])
             if not isinstance(sources, list) or len(sources) > 3:
                 raise WorkflowError("LITERATURE_SOURCE_LIMIT", "One authoring collection may retrieve at most three sources")
+            if any(source.get("scope") == "full_text" and source.get("copy_type") == "author_copy" for source in sources):
+                raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "A new authoring collection has no reserved author PDF candidates")
             # Collector paths are relative to its owned root. Store workflow-relative
             # research paths so raw files can use the same frozen-evidence checks.
             for source in sources:
@@ -1556,6 +1646,8 @@ class WorkflowService:
                 raise WorkflowError("EXPERIMENT_ALREADY_DISPATCHED", "A scientific execution was already dispatched; retained evidence cannot be replaced or rerun")
             self._require(ws, record, {"code_ready"})
             self._require_study_review(ws, record)
+            if record.redesign_attempt:
+                _require_distinct_redesign(ws, record, ResearchPlan.model_validate(_read(ws, record, "plan")), ancestors_only=True)
             if not self.runner.status().get("ready"):
                 raise WorkflowError("ISOLATION_UNAVAILABLE", "The isolated research worker is unavailable")
             lease = ws.lock("execution")
@@ -1724,11 +1816,120 @@ class WorkflowService:
                 analysis.get("controls") != controls):
             raise WorkflowError("ARTIFACT_CHANGED", "Retained analysis does not bind the frozen raw observations, protocol and controls")
 
+    def _preparation_redesign_basis(self, ws: Workspace, record: Workflow) -> dict:
+        """Bind the exhausted, unexecuted parent; this is no scientific approval."""
+        future = self._jobs.get(record.id)
+        if (self._closing or self._closed or record.stage != "proposed" or record.status != "blocked" or
+                record.code != "STUDY_REJECTED" or record.execution_attempt != 0 or
+                record.proposal_attempt != 3 or record.study_literature_attempt != 3 or record.redesign_attempt >= 2 or
+                (future is not None and not future.done()) or
+                any(key in {"plan", "bundle", "execution", "observations", "analysis", "runtime-manifest", "manuscript", "canonical"} or
+                    key.startswith(("execution-", "observations-", "analysis-", "cleanup-")) for key in record.artifacts)):
+            raise WorkflowError("STUDY_REDESIGN_NOT_ALLOWED", "Only a safely closed, exhausted, unexecuted rejected design can prepare one successor")
+        self._require(ws, record, {"proposed"})
+        if self._study_literature_pending(ws, record):
+            raise WorkflowError("STUDY_REVIEW_REQUIRED", "Review the genuinely new body evidence before considering a successor")
+        receipt = _read(ws, record, "study-review")
+        review = StudyReview.model_validate(receipt["review"])
+        if (review.accepted or receipt.get("origin") != "native_host_submission" or
+                receipt.get("proposal_sha256") != record.artifacts["proposal"].sha256):
+            raise WorkflowError("ARTIFACT_CHANGED", "Preparation must bind the current rejected proposal and review")
+        intent_key, collection_key = "study-literature-intent-3", "study-literature-collection-3"
+        intent, collection = _read(ws, record, intent_key), _read(ws, record, collection_key)
+        evidence = _read(ws, record, "literature")
+        latest = evidence.get("study_literature", {})
+        reviewed_final = (receipt.get("study_literature_collection_sha256") == record.artifacts[collection_key].sha256 and
+                          receipt.get("prior_study_review_sha256") == intent.get("prior_study_review_sha256") and
+                          receipt.get("literature_sha256") == record.artifacts["literature"].sha256)
+        if (intent.get("event") != "study-literature-followup" or intent.get("attempt") != 3 or
+                intent.get("proposal_sha256") != record.artifacts["proposal"].sha256 or
+                (intent.get("prior_study_review_sha256") != record.artifacts["study-review"].sha256 and not reviewed_final) or
+                collection.get("queries") != intent.get("queries") or
+                any(latest.get(key) != value for key, value in intent.items()) or
+                latest.get("collection_sha256") != record.artifacts[collection_key].sha256):
+            raise WorkflowError("ARTIFACT_CHANGED", "Preparation must preserve the final bounded retrieval chain and its actual reading scope")
+        review_literature = next((key for key, frozen in record.artifacts.items()
+                                 if (key == "literature" or key.startswith("literature-history-")) and
+                                 frozen.sha256 == receipt.get("literature_sha256")), None)
+        prior_literature = next((key for key, frozen in record.artifacts.items()
+                                if (key == "literature" or key.startswith("literature-history-")) and
+                                frozen.sha256 == intent.get("prior_literature_sha256")), None)
+        if review_literature is None or prior_literature is None:
+            raise WorkflowError("ARTIFACT_CHANGED", "Preparation cannot discard literature inspected by an earlier review")
+        keys = {key for key in record.artifacts if not key.startswith("model-") and
+                key not in {"redesign-preparation", "redesign-candidate", "redesign-review", "redesign-intent"}}
+        imported = ws.latest("project", Project)
+        if Project.model_validate(loads_json(ws.path("project.json").read_bytes())) != imported:
+            raise WorkflowError("ARTIFACT_CHANGED", "Preparation source provenance differs from its frozen project")
+        return {"event": "preexecution-redesign-preparation", "parent_id": record.id,
+                "root_id": record.root_research_id or record.id, "redesign_attempt": record.redesign_attempt,
+                "goal": record.goal, "execution_attempt": 0, "proposal_attempt": 3, "study_literature_attempt": 3,
+                "source_commit": imported.source_commit, "snapshot_digest": imported.snapshot_digest,
+                "supporting_documents": _supporting_documents(ws, record),
+                "bindings": {key: {"sha256": record.artifacts[key].sha256, "size": record.artifacts[key].size} for key in sorted(keys)}}
+
+    def _preparation_redesign_available(self, ws: Workspace, record: Workflow) -> bool:
+        if "redesign-review" in record.artifacts and not _read(ws, record, "redesign-review")["review"]["accepted"]:
+            return False
+        try:
+            basis = self._preparation_redesign_basis(ws, record)
+            if "redesign-preparation" in record.artifacts and _read(ws, record, "redesign-preparation") != basis:
+                raise WorkflowError("ARTIFACT_CHANGED", "Redesign preparation no longer binds the current parent")
+            return True
+        except (ValueError, OSError, KeyError):
+            return False
+
+    def submit_redesign_proposal(self, research_id: str, value: dict) -> dict:
+        candidate = ResearchPlan.model_validate(value)
+        with self._operation(research_id) as (ws, record):
+            basis = self._preparation_redesign_basis(ws, record)
+            self._validate_proposal(ws, candidate)
+            if not candidate.feasible or candidate.research_claim is None:
+                raise WorkflowError("STUDY_REDESIGN_NOT_ALLOWED", "A successor candidate must describe a feasible distinct scientific design")
+            _require_distinct_redesign(ws, record, candidate)
+            if "redesign-candidate" in record.artifacts:
+                if (_read(ws, record, "redesign-candidate") != candidate.model_dump(mode="json") or
+                        _read(ws, record, "redesign-preparation") != basis):
+                    raise WorkflowError("REDESIGN_EVIDENCE_CONFLICT", "One parent may retain only one immutable preparation candidate")
+                return self._public(ws, record)
+            for key, content in (("redesign-preparation", basis), ("redesign-candidate", candidate)):
+                path = ws.path("research/redesign/" + key + ".json")
+                if path.exists():
+                    raise WorkflowError("REDESIGN_EVIDENCE_CONFLICT", "Preparation cannot overwrite an unregistered retained file")
+                write_json(path, content)
+                _freeze(ws, record, key, path)
+            self._save(ws, record)
+            return self._public(ws, record)
+
+    def submit_redesign_review(self, research_id: str, value: dict) -> dict:
+        review = StudyRedesignReview.model_validate(value)
+        with self._operation(research_id) as (ws, record):
+            basis = self._preparation_redesign_basis(ws, record)
+            if "redesign-candidate" not in record.artifacts:
+                raise WorkflowError("STUDY_REDESIGN_REVIEW_REQUIRED", "Freeze a distinct candidate before its independent preparation review")
+            if _read(ws, record, "redesign-preparation") != basis:
+                raise WorkflowError("ARTIFACT_CHANGED", "The preparation review must inspect the unchanged parent evidence")
+            _require_distinct_redesign(ws, record, ResearchPlan.model_validate(_read(ws, record, "redesign-candidate")))
+            receipt = {"origin": "native_host_submission", "scope": "Preparation only; not novelty, protocol or scientific execution approval",
+                       "candidate_sha256": record.artifacts["redesign-candidate"].sha256, "parent_basis": basis,
+                       "review": review.model_dump(mode="json")}
+            if "redesign-review" in record.artifacts:
+                if _read(ws, record, "redesign-review") != receipt:
+                    raise WorkflowError("REDESIGN_EVIDENCE_CONFLICT", "A preparation decision cannot be replaced or repeated to seek acceptance")
+                return self._public(ws, record)
+            path = ws.path("research/redesign/redesign-review.json")
+            if path.exists():
+                raise WorkflowError("REDESIGN_EVIDENCE_CONFLICT", "Preparation cannot overwrite an unregistered review")
+            write_json(path, receipt)
+            _freeze(ws, record, "redesign-review", path)
+            self._save(ws, record)
+            return self._public(ws, record)
+
     def _followup_state(self, ws: Workspace, record: Workflow) -> tuple[str | None, bool]:
         if "redesign-intent" not in record.artifacts:
             return None, False
         intent = _read(ws, record, "redesign-intent")
-        if (intent.get("event") != "study-redesign" or intent.get("parent_id") != record.id or
+        if (intent.get("event") not in {"study-redesign", "preexecution-study-redesign"} or intent.get("parent_id") != record.id or
                 intent.get("root_id") != (record.root_research_id or record.id) or
                 intent.get("redesign_attempt") != record.redesign_attempt + 1 or
                 not isinstance(intent.get("child_id"), str) or
@@ -1746,7 +1947,22 @@ class WorkflowService:
                     _verify_artifacts(child_ws, records[0])
                     if _read(child_ws, records[0], "redesign-origin") != intent:
                         raise WorkflowError("REDESIGN_EVIDENCE_CONFLICT", "Committed follow-up differs from its retained parent intent")
+                    if intent["event"] == "preexecution-study-redesign" and records[0].proposal_attempt == 0:
+                        return None, self._preparation_redesign_available(ws, record)
                     return records[0].id, False
+        if intent["event"] == "preexecution-study-redesign":
+            try:
+                basis = self._preparation_redesign_basis(ws, record)
+                receipt = _read(ws, record, "redesign-review")
+                review = StudyRedesignReview.model_validate(receipt["review"])
+                return None, bool(review.accepted and receipt.get("origin") == "native_host_submission" and
+                                  receipt.get("parent_basis") == basis and
+                                  receipt.get("candidate_sha256") == record.artifacts["redesign-candidate"].sha256 and
+                                  intent.get("parent_evidence") == {**basis["bindings"], **{
+                                      key: {"sha256": record.artifacts[key].sha256, "size": record.artifacts[key].size}
+                                      for key in ("redesign-preparation", "redesign-candidate", "redesign-review")}})
+            except (ValueError, OSError, KeyError):
+                return None, False
         future = self._jobs.get(record.id)
         if (self._closing or self._closed or (future is not None and not future.done()) or
                 record.status != "blocked" or record.stage != "analyzed" or record.code != "MANUSCRIPT_REJECTED" or
@@ -1821,35 +2037,50 @@ class WorkflowService:
             return self._public(ws, record)
 
     def redesign_study(self, research_id: str) -> dict:
-        """Create one bounded follow-up from a rejected, successfully measured study."""
+        """Create one bounded successor from a verified scientific or preparation decision."""
         with self._operation(research_id) as (ws, parent):
-            self._require(ws, parent, {"analyzed"})
-            self._require_successful_analysis(ws, parent)
-            if parent.execution_attempt != 1 or parent.status != "blocked" or parent.code != "MANUSCRIPT_REJECTED":
-                raise WorkflowError("STUDY_REDESIGN_NOT_ALLOWED", "Only a rejected manuscript with one verified successful study may be redesigned")
             if parent.redesign_attempt >= 2:
                 raise WorkflowError("STUDY_REDESIGN_LIMIT", "Automatic improvement is limited to three studies including the original")
-            review_key = "manuscript-review-" + str(parent.draft_attempt)
-            review_receipt = _read(ws, parent, review_key)
-            assessment = ManuscriptReview.model_validate(review_receipt.get("review", {}))
-            if (assessment.accepted or assessment.remediation is None or
-                    assessment.remediation.strategy != "redesign_study"):
-                raise WorkflowError("STUDY_REDESIGN_NOT_ALLOWED", "A retained review must identify substantive evidence gaps requiring a new study")
-            if (review_receipt.get("origin") != "native_host_submission" or any(
-                    review_receipt.get(field + "_sha256") != parent.artifacts[key].sha256
-                    for field, key in (("protocol", "plan"), ("analysis", "analysis"), ("literature", "literature"),
-                                       ("draft", "draft-" + str(parent.draft_attempt)))) or
-                    parent.artifacts.get("manuscript-review") != parent.artifacts[review_key]):
-                raise WorkflowError("ARTIFACT_CHANGED", "Redesign must bind the current draft review to its actual scientific evidence")
+            preparation = parent.stage == "proposed" and parent.execution_attempt == 0
+            if preparation:
+                basis = self._preparation_redesign_basis(ws, parent)
+                if not all(key in parent.artifacts for key in ("redesign-preparation", "redesign-candidate", "redesign-review")):
+                    raise WorkflowError("STUDY_REDESIGN_REVIEW_REQUIRED", "A frozen distinct candidate and independent preparation decision are required")
+                review_receipt = _read(ws, parent, "redesign-review")
+                assessment = StudyRedesignReview.model_validate(review_receipt.get("review", {}))
+                candidate = ResearchPlan.model_validate(_read(ws, parent, "redesign-candidate"))
+                _require_distinct_redesign(ws, parent, candidate)
+                if (not assessment.accepted or review_receipt.get("origin") != "native_host_submission" or
+                        review_receipt.get("parent_basis") != basis or _read(ws, parent, "redesign-preparation") != basis or
+                        review_receipt.get("candidate_sha256") != parent.artifacts["redesign-candidate"].sha256):
+                    raise WorkflowError("STUDY_REDESIGN_NOT_ALLOWED", "A successor requires an accepted decision bound to the exact distinct candidate and unchanged prior evidence")
+                bindings = {**basis["bindings"], **{key: {"sha256": parent.artifacts[key].sha256, "size": parent.artifacts[key].size}
+                            for key in ("redesign-preparation", "redesign-candidate", "redesign-review")}}
+            else:
+                self._require(ws, parent, {"analyzed"})
+                self._require_successful_analysis(ws, parent)
+                if parent.execution_attempt != 1 or parent.status != "blocked" or parent.code != "MANUSCRIPT_REJECTED":
+                    raise WorkflowError("STUDY_REDESIGN_NOT_ALLOWED", "Only a rejected manuscript with one verified successful study may be redesigned")
+                review_key = "manuscript-review-" + str(parent.draft_attempt)
+                review_receipt = _read(ws, parent, review_key)
+                assessment = ManuscriptReview.model_validate(review_receipt.get("review", {}))
+                if (assessment.accepted or assessment.remediation is None or assessment.remediation.strategy != "redesign_study"):
+                    raise WorkflowError("STUDY_REDESIGN_NOT_ALLOWED", "A retained review must identify substantive evidence gaps requiring a new study")
+                if (review_receipt.get("origin") != "native_host_submission" or any(
+                        review_receipt.get(field + "_sha256") != parent.artifacts[key].sha256
+                        for field, key in (("protocol", "plan"), ("analysis", "analysis"), ("literature", "literature"),
+                                           ("draft", "draft-" + str(parent.draft_attempt)))) or
+                        parent.artifacts.get("manuscript-review") != parent.artifacts[review_key]):
+                    raise WorkflowError("ARTIFACT_CHANGED", "Redesign must bind the current draft review to its actual scientific evidence")
+                bound_keys = ("plan", "execution", "observations", "analysis", "study-review", "selected-literature", "literature", review_key)
+                bindings = {key: {"sha256": parent.artifacts[key].sha256, "size": parent.artifacts[key].size} for key in bound_keys}
             imported = ws.latest("project", Project)
             project_file = ws.path("project.json")
             if Project.model_validate(loads_json(project_file.read_bytes())) != imported:
                 raise WorkflowError("ARTIFACT_CHANGED", "Original project provenance differs from its retained project record")
             identifier = "research-" + hashlib.sha256(("paper-factory-redesign\0" + parent.id).encode()).hexdigest()[:12]
             root_id = parent.root_research_id or parent.id
-            bound_keys = ("plan", "execution", "observations", "analysis", "study-review", "selected-literature", "literature", review_key)
-            bindings = {key: {"sha256": parent.artifacts[key].sha256, "size": parent.artifacts[key].size} for key in bound_keys}
-            intent = {"event": "study-redesign", "child_id": identifier, "parent_id": parent.id,
+            intent = {"event": "preexecution-study-redesign" if preparation else "study-redesign", "child_id": identifier, "parent_id": parent.id,
                       "root_id": root_id, "redesign_attempt": parent.redesign_attempt + 1,
                       "snapshot_digest": imported.snapshot_digest, "source_commit": imported.source_commit,
                       "supporting_documents": _supporting_documents(ws, parent),
@@ -1877,7 +2108,10 @@ class WorkflowService:
                     _verify_artifacts(child_ws, child)
                     if _read(child_ws, child, "redesign-origin") != intent:
                         raise WorkflowError("REDESIGN_EVIDENCE_CONFLICT", "Retained follow-up origin differs from its parent intent")
-                    return self._public(child_ws, child, context=True)
+                    submit_first = preparation and child.proposal_attempt == 0
+                    if not submit_first:
+                        return self._public(child_ws, child, context=True)
+                return self.submit_proposal(child.id, candidate.model_dump(mode="json"))
             child = Workflow(id=identifier, project_id=imported.id, goal=parent.goal,
                              parent_research_id=parent.id, root_research_id=root_id,
                              redesign_attempt=parent.redesign_attempt + 1)
@@ -1896,13 +2130,10 @@ class WorkflowService:
                 _copy_retained(original, target, parent.artifacts[key], child_ws.root)
                 _freeze(child_ws, child, key, target)
             _supporting_documents(child_ws, child)
-            retained_keys = {"proposal", "plan", "study-review", "selected-literature", "literature", "execution",
-                             "observations", "analysis", "runtime-manifest", "bundle"}
             for key, frozen in parent.artifacts.items():
                 if key.startswith("prior-study-"):
                     relative, retained_key = frozen.path, key
-                elif (key in retained_keys or key.startswith(("analysis-", "authoring-literature", "authoring-selected-literature", "literature-", "study-literature-", "study-review-")) or
-                      re.fullmatch(r"(?:draft|manuscript-review|code-review|cleanup)-[1-9][0-9]*", key)):
+                elif key not in {*inherited, "redesign-intent"}:
                     relative = "research/prior-studies/" + parent.id + "/" + frozen.path
                     retained_key = "prior-study-" + parent.id + "-" + key
                 else:
@@ -1925,11 +2156,16 @@ class WorkflowService:
                        "source_commit": imported.source_commit, "snapshot_digest": imported.snapshot_digest,
                        "supporting_documents": intent["supporting_documents"],
                        "supporting_document_scope": INHERITED_DOCUMENT_SCOPE,
-                       "bindings": bindings, "protocol": _read(ws, parent, "plan"),
-                       "analysis": _read(ws, parent, "analysis"),
-                       "execution": {key: value for key, value in _read(ws, parent, "execution").items() if key in PUBLIC_EXECUTION_FIELDS},
-                       "review": assessment.model_dump(mode="json"),
+                       "bindings": bindings,
                        "earlier_study": _read(ws, parent, "prior-study") if "prior-study" in parent.artifacts else None}
+            if preparation:
+                summary.update(proposal=_read(ws, parent, "proposal"), review=_read(ws, parent, "study-review")["review"],
+                               execution_attempt=0, redesign_candidate=candidate.model_dump(mode="json"),
+                               redesign_review=assessment.model_dump(mode="json"))
+            else:
+                summary.update(protocol=_read(ws, parent, "plan"), analysis=_read(ws, parent, "analysis"),
+                               execution={key: value for key, value in _read(ws, parent, "execution").items() if key in PUBLIC_EXECUTION_FIELDS},
+                               review=assessment.model_dump(mode="json"))
             summary_path = child_ws.path("research/prior-studies/" + parent.id + "/summary.json")
             if summary_path.exists() and loads_json(summary_path.read_bytes()) != summary:
                 raise WorkflowError("REDESIGN_EVIDENCE_CONFLICT", "A prior-study summary cannot replace retained findings")
@@ -1943,6 +2179,11 @@ class WorkflowService:
             _verify_artifacts(ws, parent)
             _verify_artifacts(child_ws, child)
             self._save(child_ws, child)
+            if preparation:
+                submitted = self.submit_proposal(child.id, candidate.model_dump(mode="json"))
+                if any(submitted["artifacts"]["proposal"][key] != getattr(parent.artifacts["redesign-candidate"], key) for key in ("sha256", "size")):
+                    raise WorkflowError("REDESIGN_EVIDENCE_CONFLICT", "The successor proposal differs from its exact reviewed candidate bytes")
+                return submitted
             return self._public(child_ws, child, context=True)
 
     def revise_writing(self, research_id: str) -> dict:
@@ -2320,7 +2561,7 @@ class WorkflowService:
                 "The final verification journal and validation are separate frozen artifacts produced after this archive; they are not archive members.\n"
                 "Reviews are native host submissions; reviewer independence is not attested by this controller.\n"
                 "Explicit authoring revisions retain prior drafts, approvals and exports in authoring/. Revision receipts preserve the full prior frozen artifact inventory. Prior reproduction ZIPs remain separate frozen artifacts and are excluded here to avoid nested archives.\n"
-                "Redesigned studies retain negative/null exploratory history, its raw observations, analysis and review under prior-studies/. These are not current observations or independent validation; redesign-origin.json binds the unchanged source snapshot and parent evidence.\n"
+                "Redesigned studies retain positive/nonzero, zero, negative and null exploratory findings, available raw observations, analysis, rejected proposals and reviews under prior-studies/. These are not current observations or independent validation; redesign-origin.json binds the unchanged source snapshot and parent evidence.\n"
                 "Source license authorization has not been assessed. Author review is required; no submission occurred.\n")
             output.writestr("inventory.json", json.dumps({name: {"sha256": digest_file(path), "size": path.stat().st_size}
                                                           for name, path in selection.items()}, indent=2))

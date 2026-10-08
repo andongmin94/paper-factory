@@ -8,12 +8,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
 
 const phaseLabels: Record<ResearchPhase, string> = {
-  idle: "대기", plan: "연구 설계", redesign: "연구 설계 보완", "literature-plan": "투고 근거 보완 계획", literature: "문헌 수집", "study-review": "연구 적합성 검토", code: "실험 코드 작성",
+  idle: "대기", plan: "연구 설계", redesign: "연구 설계 보완", "redesign-plan": "새 연구안 준비", "redesign-review": "재설계 준비 검토", "literature-plan": "투고 근거 보완 계획", literature: "문헌 수집", "study-review": "연구 적합성 검토", code: "실험 코드 작성",
   "code-review": "실험 코드 리뷰", experiment: "과학실험", "evidence-selection": "설명 근거 확인", manuscript: "원고 작성",
   "manuscript-review": "원고 품질 검토", export: "결과 파일 생성",
 };
 const pipelineLabels = { idle: "대기", running: "진행 중", paused: "중단됨", failed: "실패", completed: "원고 생성 완료" };
-const studyHoldCodes = ["STUDY_REJECTED", "STUDY_INFEASIBLE"];
+const studyHoldCodes = ["STUDY_REJECTED", "STUDY_INFEASIBLE", "STUDY_REDESIGN_REJECTED"];
 const outputLabels: Record<string, string> = {
   "export-pdf": "PDF", "export-docx": "Word", "export-md": "Markdown",
   "export-tex": "LaTeX", reproducibility: "재현 패키지 ZIP",
@@ -44,9 +44,9 @@ function ManuscriptRecovery({ remediation }: { remediation: NonNullable<Manuscri
   </section>;
 }
 
-function QualityReview({ title, review, criteria, selectedSources }: {
+function QualityReview({ title, review, criteria, selectedSources, preparation = false }: {
   title: string; review: { accepted: boolean; issues: string[]; publication_readiness?: PublicationReadiness | null };
-  criteria: Array<{ label: string; judgment: ReviewCriterion }>; selectedSources?: number;
+  criteria: Array<{ label: string; judgment: ReviewCriterion }>; selectedSources?: number; preparation?: boolean;
 }) {
   return (
     <details className="rounded-base border-2 border-border p-3 text-sm" open={!review.accepted}>
@@ -58,7 +58,7 @@ function QualityReview({ title, review, criteria, selectedSources }: {
         </div>)}
       </dl>
       {selectedSources !== undefined && <p className="detail-note mt-3">선정한 문헌 근거 {selectedSources}개</p>}
-      {review.publication_readiness ? <section className="mt-4 space-y-3" aria-label="투고 준비도 평가">
+      {preparation ? <p className="detail-note mt-3">새 연구안을 준비할 수 있는지 검토한 기록입니다. 문헌 수집·연구 적합성·실험 코드 검토를 거쳐야 실험을 실행할 수 있습니다. 투고 준비도는 원고에서 따로 평가합니다.</p> : review.publication_readiness ? <section className="mt-4 space-y-3" aria-label="투고 준비도 평가">
         <h4 className="font-semibold">투고 준비도 평가</h4>
         <dl className="space-y-3">
           {[
@@ -335,6 +335,11 @@ export function ResearchPane({ connection, connectionBusy, onBusyChange, view, o
                 </nav>}
                 {job.message && <p className="detail-note">{job.message}</p>}
                 {job.code && <p className="detail-note">상태 코드: {job.code}</p>}
+                {job.preparationRedesignReview && <QualityReview title="새 연구안 준비 검토" review={job.preparationRedesignReview} preparation criteria={[
+                  { label: "이전 연구와의 과학적 차이", judgment: job.preparationRedesignReview.scientific_difference },
+                  { label: "이전 결과와 근거의 보존", judgment: job.preparationRedesignReview.prior_evidence },
+                  { label: "실행 가능성과 주장 범위", judgment: job.preparationRedesignReview.feasibility },
+                ]} />}
                 {job.studyReview && <QualityReview title="연구 적합성 검토" review={job.studyReview}
                   selectedSources={job.studyReview.selected_sources.length} criteria={[
                     { label: "연구 질문", judgment: job.studyReview.question },
@@ -353,7 +358,9 @@ export function ResearchPane({ connection, connectionBusy, onBusyChange, view, o
                 {job.manuscriptReview?.remediation && <ManuscriptRecovery remediation={job.manuscriptReview.remediation} />}
                 {job.pipeline === "completed" && !job.studyReview && <p className="detail-note">이 결과에는 현재 기준의 연구 적합성 검토 기록이 없습니다.</p>}
                 {job.pipeline === "completed" && !job.manuscriptReview && <p className="detail-note">이 결과에는 현재 기준의 원고 품질 검토 기록이 없습니다.</p>}
-                {studyHoldCodes.includes(job.code ?? "") && job.pipeline !== "running" && <p className="detail-note" role="status">현재 실행 환경과 확보한 근거로 연구 기준을 충족하는 설계를 마련하지 못해 실험과 원고 생성을 진행하지 않았습니다. 검토 이유를 참고해 목표와 비교 방법을 바꾼 새 연구를 시작하세요.</p>}
+                {studyHoldCodes.includes(job.code ?? "") && job.pipeline !== "running" && <p className="detail-note" role="status">{job.followupResearchId
+                  ? "이 연구의 설계와 검토 기록을 보존하고 별도 후속 연구를 만들었습니다. 후속 연구에서 새 설계의 적합성을 검토합니다."
+                  : "현재 설계의 근거가 부족해 실험과 원고 생성을 진행하지 않았습니다. 검토 이유와 이어갈 수 있는 보완 작업을 확인하세요."}</p>}
                 {job.code === "MANUSCRIPT_REJECTED" && job.pipeline !== "running" && <p className="detail-note" role="status">{job.followupResearchId
                   ? "원고와 실험 결과를 보존하고, 검토 내용에 따라 별도 후속 연구를 만들었습니다. 후속 연구에서 설계를 보완하며 이전 실험 결과는 변경하지 않습니다."
                   : "원고가 품질 검토를 통과하지 못해 결과 파일을 생성하지 않았습니다. 보완 방향과 검토 이유를 확인하세요. 이전 실험 결과는 보존됩니다."}</p>}
@@ -373,7 +380,7 @@ export function ResearchPane({ connection, connectionBusy, onBusyChange, view, o
                   )}
                   {job.improvementAvailable && ["idle", "paused", "failed"].includes(job.pipeline) && (
                     <Button variant="outline" disabled={!canRun}
-                      onClick={() => void runAction("improve", () => window.paperFactory.improveResearchWriting(job.id, model, reviewerModel))}>
+                      onClick={() => void runAction("improve", () => window.paperFactory.improveResearch(job.id, model, reviewerModel))}>
                       심사·보완 이어가기
                     </Button>
                   )}
