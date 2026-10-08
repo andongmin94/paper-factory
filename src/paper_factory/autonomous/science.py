@@ -23,7 +23,7 @@ from typing import Any
 from ..author import AuthorProfile
 from ..project import _secret
 from ..workspace import digest_file, ensure_unlinked, loads_json, safe_relative, write_json
-from .literature import _abstract as _bibliographic_title
+from .literature import _abstract as _bibliographic_title, _unicode_url
 from .models import ManuscriptDraft, ResearchPlan
 
 
@@ -1076,6 +1076,29 @@ def _citation_evidence(source: dict) -> dict:
     for key in ("arxiv_id", "url", "passage_provenance"):
         if source.get(key):
             evidence[key] = source[key]
+    if source.get("publication_type") == "technical_standard":
+        report = source.get("report_id")
+        if (source.get("document_format") != "html" or source.get("provider") != "Unicode" or
+                source.get("publisher") != "Unicode Consortium" or source.get("scope") != "full_text" or
+                source.get("doi") or source.get("arxiv_id") or
+                not isinstance(report, str) or not re.fullmatch(r"(?:UAX|UTS)[1-9]\d{0,2}", report) or
+                not isinstance(source.get("standard_version"), str) or
+                not re.fullmatch(r"[1-9]\d?\.\d{1,2}\.\d{1,2}", source["standard_version"]) or
+                type(source.get("revision")) is not int or not 1 <= source["revision"] <= 9999 or
+                source.get("author_role") not in {"editor", "author"} or
+                not isinstance(source.get("issue_date"), str) or
+                not re.fullmatch(r"\d{4}-\d{2}-\d{2}", source["issue_date"]) or
+                not source.get("section_ranges") or not source.get("identity_path") or not source.get("identity_sha256")):
+            raise ValueError("Standard citation lacks its retained version, contributor role or anchored body proof")
+        number = re.search(r"\d+$", report)[0]
+        expected = f"https://www.unicode.org/reports/tr{number}/tr{number}-{source['revision']}.html"
+        if _unicode_url(source.get("url", "")) != expected:
+            raise ValueError("Standard citation URL disagrees with its report and revision")
+        for key in ("document_format", "publication_type", "provider", "publisher", "report_id", "standard_version",
+                    "revision", "issue_date", "authors", "author_role", "year", "section_ranges", "body_range",
+                    "metadata_path", "metadata_sha256", "text_path", "text_sha256", "discovery_path", "discovery_sha256",
+                    "identity_path", "identity_sha256"):
+            evidence[key] = source.get(key)
     return evidence
 
 
@@ -1239,6 +1262,10 @@ def validate_and_render(
         title = source.get("title")
         title = _bibliographic_title(unescape(title) if isinstance(title, str) else title)
         citation = ". ".join(str(item) for item in (authors_text, title, source.get("year")) if item)
+        if source.get("publication_type") == "technical_standard":
+            citation += (f". {source['publisher']}, {source['report_id']}, Unicode {source['standard_version']}, "
+                         f"revision {source['revision']}, issued {source['issue_date']}; "
+                         f"contributors recorded as {source['author_role']}. {source['url']}")
         doi = source.get("doi")
         parts += [label + _literal_text(citation + (f". DOI: {doi}" if doi else "")) + f". Reading scope: {scope}.", ""]
     parts += ["## Reproducibility and assistance disclosure", "",

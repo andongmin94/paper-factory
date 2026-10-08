@@ -1,7 +1,7 @@
 """Bounded literature retrieval with an explicit distinction between metadata and reading.
 
-Only Crossref records, Crossref-provided abstracts, identity-bound arXiv metadata,
-and allowlisted public PDFs are fetched. Bibliographic candidates resolve by DOI;
+Only Crossref records/abstracts, identity-bound arXiv metadata, allowlisted public
+PDFs and version-bound official Unicode reports are fetched. Bibliographic candidates resolve by DOI;
 explicit arXiv identifiers resolve to a fixed preprint version before reading.
 Method queries can discover two version-bound preprints through the same API.
 The collector does not infer a finding from a title or identifier.
@@ -32,7 +32,7 @@ from urllib.request import getproxies_environment, proxy_bypass_environment
 from uuid import uuid4
 
 import httpx
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Comment
 
 from ..literature import _doi, _metadata
 from ..workspace import is_link, safe_relative
@@ -44,6 +44,7 @@ ARXIV = "https://export.arxiv.org/api/query"
 PDF_HOSTS = frozenset({"arxiv.org", "export.arxiv.org", "joss.theoj.org"})
 AUTHOR_PDF_HOST = "www.cs.cmu.edu"
 AUTHOR_PUBLICATIONS = "https://www.cs.cmu.edu/~bam/resume.html"
+UNICODE_REPORTS = "https://www.unicode.org/reports/"
 MAX_JSON_BYTES = 2 * 1024 * 1024
 MAX_PDF_BYTES = 8 * 1024 * 1024
 MAX_PDF_PAGES = 40
@@ -148,11 +149,32 @@ def author_pdf_redirect(url: str, location: str) -> str:
     return _author_pdf_url(following)
 
 
-def _checked_url(url: str, *, pdf: bool = False, author_pdf: bool = False, author_listing: bool = False) -> str:
+def _unicode_url(url: str) -> str:
+    """Only the fixed catalog, report alias and permanent revision endpoints."""
+    if not isinstance(url, str) or len(url) > 2048 or any(ord(c) < 32 for c in url):
+        raise ValueError("Invalid Unicode report URL")
+    parts = urlsplit(url)
+    try:
+        port = parts.port
+    except ValueError as error:
+        raise ValueError("Invalid Unicode report URL port") from error
+    if (parts.scheme != "https" or parts.netloc != "www.unicode.org" or port not in (None, 443)
+            or parts.query or parts.fragment or parts.username or parts.password
+            or not re.fullmatch(r"/reports/(?:tr([1-9]\d{0,2})/(?:tr\1-[1-9]\d{0,3}\.html)?)?", parts.path)):
+        raise ValueError("Unicode report URL is outside the fixed publisher boundary")
+    return url
+
+
+def _checked_url(url: str, *, pdf: bool = False, author_pdf: bool = False, author_listing: bool = False,
+                 standard_html: bool = False) -> str:
     """Reject untrusted authorities before DNS or HTTP and private DNS answers."""
     if not isinstance(url, str) or len(url) > 2048 or any(ord(c) < 32 for c in url):
         raise ValueError("Invalid literature URL")
     parts = urlsplit(url)
+    if standard_html:
+        if pdf or author_pdf or author_listing:
+            raise ValueError("Unicode HTML cannot use a PDF or author-list route")
+        _unicode_url(url)
     if author_listing and (pdf or author_pdf or url != AUTHOR_PUBLICATIONS):
         raise ValueError("Only the fixed official author publication list is allowed")
     if author_pdf:
@@ -160,7 +182,8 @@ def _checked_url(url: str, *, pdf: bool = False, author_pdf: bool = False, autho
             raise ValueError("Author-paper requests must be bounded PDF requests")
         url = _author_pdf_url(url)
         parts = urlsplit(url)
-    hosts = frozenset({AUTHOR_PDF_HOST}) if author_pdf or author_listing else PDF_HOSTS if pdf else frozenset({"api.crossref.org", "export.arxiv.org"})
+    hosts = (frozenset({"www.unicode.org"}) if standard_html else frozenset({AUTHOR_PDF_HOST})
+             if author_pdf or author_listing else PDF_HOSTS if pdf else frozenset({"api.crossref.org", "export.arxiv.org"}))
     try:
         port = parts.port
     except ValueError as error:
@@ -172,7 +195,7 @@ def _checked_url(url: str, *, pdf: bool = False, author_pdf: bool = False, autho
         raise ValueError("Literature URL is outside the allowed provider boundary")
     if parts.query and pdf:
         raise ValueError("Open-access PDF URLs cannot contain credentials or query parameters")
-    if author_pdf or author_listing:
+    if author_pdf or author_listing or standard_html:
         pass  # The fixed author directory/listing boundary was checked above.
     elif pdf:
         if parts.hostname in {"arxiv.org", "export.arxiv.org"}:
@@ -192,7 +215,7 @@ def _checked_url(url: str, *, pdf: bool = False, author_pdf: bool = False, autho
         # This exception applies only to the fixed provider allowlist above,
         # never to arbitrary publisher hosts, addresses, or redirects.
         proxies = getproxies_environment()
-        if not (author_pdf or author_listing) and proxies.get("https") and not proxy_bypass_environment(parts.hostname, proxies):
+        if not (author_pdf or author_listing or standard_html) and proxies.get("https") and not proxy_bypass_environment(parts.hostname, proxies):
             return url
         raise ValueError("Literature provider DNS lookup failed") from error
     if not addresses or any(not ipaddress.ip_address(record[4][0]).is_global for record in addresses):
@@ -204,6 +227,7 @@ def _fetch(
     client: httpx.Client, url: str, *, budget: _CollectionBudget, pdf: bool = False,
     params: dict[str, object] | None = None, cancel: Callable[[], bool] | None = None,
     author_pdf: bool = False, author_listing: bool = False,
+    standard_html: bool = False,
     retain_response: Callable[[bytes, str, str, int], None] | None = None,
     redirects: list[dict] | None = None,
 ) -> tuple[bytes, str, str]:
@@ -212,18 +236,21 @@ def _fetch(
     redirect, retried = 0, False
     while True:
         _check_cancel(cancel)
-        url = _checked_url(url, pdf=pdf, author_pdf=author_pdf, author_listing=author_listing)
+        url = _checked_url(url, pdf=pdf, author_pdf=author_pdf, author_listing=author_listing, standard_html=standard_html)
         timeout = budget.request_timeout(pdf=pdf, arxiv=not pdf and urlsplit(url).hostname == "export.arxiv.org", cancel=cancel)
         budget.requests += 1
         with client.stream("GET", url, params=params, follow_redirects=False, timeout=timeout) as response:
             budget.wait(0, cancel)
-            hosts = {AUTHOR_PDF_HOST} if author_pdf or author_listing else PDF_HOSTS if pdf else {"api.crossref.org", "export.arxiv.org"}
+            hosts = ({"www.unicode.org"} if standard_html else {AUTHOR_PDF_HOST}
+                     if author_pdf or author_listing else PDF_HOSTS if pdf else {"api.crossref.org", "export.arxiv.org"})
             if response.url.scheme != "https" or response.url.host not in hosts:
                 raise ValueError("Literature response escaped its allowed provider boundary")
             if author_pdf:
                 _author_pdf_url(str(response.url))
             if author_listing and str(response.url) != AUTHOR_PUBLICATIONS:
                 raise ValueError("Author publication-list response escaped its fixed endpoint")
+            if standard_html and _unicode_url(str(response.url)) != url:
+                raise ValueError("Unicode response escaped its exact requested endpoint")
 
             def content() -> bytes:
                 length = response.headers.get("content-length")
@@ -245,7 +272,7 @@ def _fetch(
                              "location": location, "next_url": None}
                     redirects.append(trace)
                 try:
-                    if author_pdf or author_listing:
+                    if author_pdf or author_listing or standard_html:
                         raw = content()
                         if retain_response is not None:
                             retain_response(raw, str(response.url), response.headers.get("content-type", "").lower(), response.status_code)
@@ -262,6 +289,8 @@ def _fetch(
                 redirect, retried = redirect + 1, False
                 continue
             if response.status_code == 429 and not pdf and not author_listing:
+                if standard_html and retain_response is not None:
+                    retain_response(content(), str(response.url), response.headers.get("content-type", "").lower(), 429)
                 delay = budget.rate_delay(response.headers.get("retry-after"))
                 response.close()
                 budget.wait(delay, cancel)
@@ -418,6 +447,221 @@ def full_text_body_range(text: str) -> dict[str, int] | None:
 
 def _title_key(title: str) -> str:
     return " ".join(re.findall(r"\w+", unicodedata.normalize("NFKC", title).casefold()))
+
+
+def _unicode_document(content: bytes) -> BeautifulSoup:
+    if not isinstance(content, bytes) or not content or len(content) > MAX_JSON_BYTES:
+        raise ValueError("Unicode HTML exceeds its bounded document contract")
+    soup = BeautifulSoup(content.decode("utf-8", errors="strict"), "html.parser")
+    if len(soup.find_all(True)) > 20_000:
+        raise ValueError("Unicode HTML exceeds its bounded element count")
+    for element in soup.find_all(["script", "style", "template", "noscript"]):
+        element.decompose()
+    return soup
+
+
+def _unicode_label(element) -> str:
+    # HTML whitespace is collapsed; Unicode text is never normalized.
+    return re.sub(r"[ \t\r\n\f]+", " ", element.get_text()).strip()
+
+
+def _unicode_query_versions(queries: list[str]) -> set[str]:
+    """Keep explicit literal versions; never fill omitted components or suffixes."""
+    return {version for query in queries for version in re.findall(
+        r"(?i)\bUnicode\s*(?:version\s*|v\s*)?([0-9][A-Za-z0-9]*(?:[.\-][A-Za-z0-9]+)*)(?!\w)", query)}
+
+
+def discover_unicode_reports(content: bytes, queries: list[str]) -> list[dict]:
+    """Bind literal whole titles/report tokens to active publisher catalog rows."""
+    soup = _unicode_document(content)
+    anchors = [soup.find_all("a", attrs={"name": name}) for name in ("annexes", "standards")]
+    if any(len(items) != 1 for items in anchors):
+        raise ValueError("Unicode catalog lacks unique active report groups")
+    table = anchors[0][0].find_parent("table")
+    if table is None or anchors[1][0].find_parent("table") is not table:
+        raise ValueError("Unicode catalog active groups have an unknown layout")
+    active, entries = None, []
+    for row in table.find_all("tr"):
+        if row.find_parent("table") is not table:
+            continue
+        headers = row.find_all("th", recursive=False)
+        if headers:
+            labels = {a.get("name") for header in headers for a in header.find_all("a")}
+            active = "UAX" if "annexes" in labels else "UTS" if "standards" in labels else None
+            continue
+        cells = row.find_all("td", recursive=False)
+        if active is None or len(cells) != 3 or _unicode_label(cells[0]) != active:
+            continue
+        number = _unicode_label(cells[1])
+        if not re.fullmatch(r"[1-9]\d{0,2}", number):
+            raise ValueError("Unicode catalog report identity is ambiguous")
+        alias = UNICODE_REPORTS + "tr" + number + "/"
+        links = [link for link in cells[2].find_all("a", href=True) if urljoin(UNICODE_REPORTS, link["href"]) == alias]
+        if len(links) != 1:
+            raise ValueError("Unicode catalog report lacks one matching official alias link")
+        title = _unicode_label(links[0])
+        url = _unicode_url(urljoin(UNICODE_REPORTS, links[0]["href"]))
+        if not title or len(title) > 500 or url != alias:
+            raise ValueError("Unicode catalog report link does not match its literal number")
+        entry = {"report_id": active + number, "title": title, "url": url, "queries": []}
+        if any(old["report_id"] == entry["report_id"] for old in entries):
+            raise ValueError("Unicode catalog repeats an active report identity")
+        entries.append(entry)
+    matches = []
+    for entry in entries:
+        for query in queries:
+            tokens = [kind.upper() + number for kind, number in re.findall(
+                r"(?i)(?<!\w)(UAX|UTS)\s*#?\s*([1-9]\d{0,2})(?!\w)", query)]
+            if entry["report_id"] in tokens or _title_key(query) == _title_key(entry["title"]):
+                entry["queries"].append(query)
+        if entry["queries"]:
+            matches.append(entry)
+    # Preserve query priority, with publisher row order as a deterministic tie-break.
+    matches.sort(key=lambda entry: min(queries.index(query) for query in entry["queries"]))
+    return matches[:2]
+
+
+def unicode_report_identity(content: bytes, url: str) -> dict:
+    """Read one approved header and its publisher-declared permanent self-link."""
+    _unicode_url(url)
+    soup = _unicode_document(content)
+    bodies = soup.select("div.body")
+    if len(bodies) != 1:
+        raise ValueError("Unicode report lacks one known report body")
+    body = bodies[0]
+    labels, titles, statuses = body.select("h2.uaxtitle"), body.find_all("h1"), body.select("h4.status")
+    if len(labels) != 1 or len(titles) != 1 or len(statuses) != 1:
+        raise ValueError("Unicode report has ambiguous title or approval header")
+    match = re.fullmatch(r"Unicode®? (Standard Annex|Technical Standard) #([1-9]\d{0,2})", _unicode_label(labels[0]))
+    if match is None:
+        raise ValueError("Unicode report is not a supported UAX or UTS")
+    kind, number = ("UAX" if match[1] == "Standard Annex" else "UTS"), match[2]
+    title = _unicode_label(titles[0])
+    tables = body.find_all("table", recursive=False)
+    if not title or len(title) > 500 or not tables:
+        raise ValueError("Unicode report lacks its bounded metadata table")
+    fields = {}
+    for row in tables[0].find_all("tr"):
+        if row.find_parent("table") is not tables[0]:
+            continue
+        cells = row.find_all("td", recursive=False)
+        if len(cells) != 2:
+            raise ValueError("Unicode report metadata row is malformed")
+        key = _unicode_label(cells[0])
+        if key in fields:
+            raise ValueError("Unicode report repeats a metadata field")
+        fields[key] = cells[1]
+    if any(key not in fields for key in ("Version", "Date", "This Version", "Revision")):
+        raise ValueError("Unicode report lacks permanent version metadata")
+    roles = [key for key in ("Editor", "Editors", "Author", "Authors") if key in fields]
+    if len(roles) != 1:
+        raise ValueError("Unicode report contributor roles are ambiguous")
+    version = re.fullmatch(r"Unicode ([1-9]\d?\.\d{1,2}\.\d{1,2})", _unicode_label(fields["Version"]))
+    revision = _unicode_label(fields["Revision"])
+    date = _unicode_label(fields["Date"])
+    if version is None or not re.fullmatch(r"[1-9]\d{0,3}", revision) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
+        raise ValueError("Unicode report version, revision or date is not explicit")
+    datetime.strptime(date, "%Y-%m-%d")
+    names = re.sub(r"\([^)]*\)", "", fields[roles[0]].get_text("\n"))
+    authors = [re.sub(r"[ \t\r\f]+", " ", name).strip() for name in re.split(r"[\n;,]", names)]
+    authors = [name for name in authors if name]
+    if not 1 <= len(authors) <= 12 or any(len(name) > 250 or "@" in name for name in authors) or len(set(authors)) != len(authors):
+        raise ValueError("Unicode report has invalid contributor names")
+    links = fields["This Version"].find_all("a", href=True)
+    if len(links) != 1:
+        raise ValueError("Unicode report has no unique permanent self-link")
+    canonical = _unicode_url(urljoin(url, links[0]["href"]))
+    expected = UNICODE_REPORTS + "tr" + number + "/tr" + number + "-" + revision + ".html"
+    if canonical != expected or url not in {UNICODE_REPORTS + "tr" + number + "/", canonical}:
+        raise ValueError("Unicode report permanent identity conflicts with its endpoint")
+    status = []
+    for element in statuses[0].next_siblings:
+        if getattr(element, "name", None) in {"h2", "h3", "h4", "h5", "h6"}:
+            break
+        if getattr(element, "name", None):
+            status.append(_unicode_label(element))
+    status = " ".join(status)
+    if ("has been approved for publication by the Unicode Consortium" not in status
+            or "This is a stable document" not in status
+            or re.search(r"\b(?:draft|proposed)\b|not a stable document|inappropriate to cite", status, re.I)):
+        raise ValueError("Unicode report is not an approved stable publication")
+    return {"document_format": "html", "publication_type": "technical_standard", "provider": "Unicode",
+            "publisher": "Unicode Consortium", "report_id": kind + number, "title": title,
+            "standard_version": version[1], "revision": int(revision), "issue_date": date,
+            "authors": authors, "author_role": "editor" if roles[0].startswith("Editor") else "author",
+            "year": int(date[:4]), "url": canonical}
+
+
+def unicode_report_text(content: bytes) -> dict:
+    """Extract actual anchored sections, never a flattened TOC/header/footer."""
+    soup = _unicode_document(content)
+    bodies = soup.select("div.body")
+    if len(bodies) != 1:
+        raise ValueError("Unicode report lacks one known report body")
+    body = bodies[0]
+    contents = body.select("h4.contents")
+    if len(contents) != 1:
+        raise ValueError("Unicode report lacks a unique table-of-contents boundary")
+    toc = contents[0].find_next_sibling("ul")
+    if toc is None or "toc" not in toc.get("class", []):
+        raise ValueError("Unicode report has an unknown table-of-contents layout")
+    nodes = list(body.descendants)
+    start = next((node for node in nodes[nodes.index(toc) + 1:] if getattr(node, "name", None) == "h2"
+                  and re.match(r"^1[ \u00a0]+", _unicode_label(node))), None)
+    if start is None or start.find_parent("ul") is not None:
+        raise ValueError("Unicode report lacks a real first numbered section")
+    stop = next((node for node in nodes[nodes.index(start) + 1:] if getattr(node, "name", None) in {"h2", "h3", "h4"}
+                 and re.search(r"^(?:Acknowledg(?:e)?ments|References|Modifications|Appendix.*Intellectual Property)$",
+                               _unicode_label(node), re.I)), None)
+    if stop is None:
+        raise ValueError("Unicode report lacks a bounded body ending")
+    blocks, sections, length = [], [], 0
+    eligible = {"h2", "h3", "h4", "h5", "h6", "p", "li", "pre", "tr"}
+    seen_anchors = set()
+    for node in nodes[nodes.index(start):nodes.index(stop)]:
+        if getattr(node, "name", None) not in eligible or any(
+                getattr(parent, "name", None) in {"p", "pre", "tr"} for parent in node.parents if parent is not body):
+            continue
+        if node.name in {"h2", "h3", "h4", "h5", "h6"}:
+            heading = _unicode_label(node)
+            if re.match(r"^\d+(?:\.\d+)*[ \u00a0]+", heading):
+                anchors = {node.get("id")} - {None}
+                # Historical empty alias anchors may precede the displayed heading.
+                # Only its actual labeled anchor establishes a section identity.
+                anchors.update(value for a in node.find_all("a") if _unicode_label(a)
+                               for value in (a.get("id"), a.get("name")) if value)
+                if len(anchors) != 1:
+                    raise ValueError("Unicode report section lacks one literal anchor")
+                anchor = next(iter(anchors))
+                if (not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,149}", anchor) or anchor in seen_anchors
+                        or len({id(element) for element in [*body.find_all(attrs={"id": anchor}),
+                                                           *body.find_all("a", attrs={"name": anchor})]}) != 1):
+                    raise ValueError("Unicode report section anchor is duplicated or malformed")
+                seen_anchors.add(anchor)
+                if sections:
+                    sections[-1]["end"] = length
+                sections.append({"id": anchor, "heading": heading, "start": length})
+            value = heading
+        elif node.name == "tr":
+            value = "\t".join(_unicode_label(cell) for cell in node.find_all(["td", "th"], recursive=False))
+        elif node.name == "pre":
+            value = node.get_text().replace("\r\n", "\n").strip("\n")
+        elif node.name == "li" and node.find(["p", "li", "pre", "table"]):
+            value = "".join(str(text) for text in node.find_all(string=True)
+                            if not isinstance(text, Comment) and next((parent for parent in text.parents if parent.name in eligible), None) is node)
+            value = re.sub(r"[ \t\r\n\f]+", " ", value).strip()
+        else:
+            value = _unicode_label(node)
+        if value:
+            blocks.append(value + "\n")
+            length += len(value) + 1
+            if length > MAX_TEXT_CHARS:
+                raise ValueError("Unicode report text exceeds its extraction limit")
+    if not sections or length < 200:
+        raise ValueError("Unicode report has insufficient substantive body text")
+    sections[-1]["end"] = length
+    text = "".join(blocks)
+    return {"text": text, "body_range": {"start": 0, "end": length}, "section_ranges": sections}
 
 
 def _arxiv_entries(content: bytes) -> list[ET.Element]:
@@ -1110,6 +1354,128 @@ def _promote_full_text(client: httpx.Client, source: dict, pdf_urls: list[str], 
             warnings.append(f"Open-access text unavailable for {source['id']} ({type(error).__name__}); reading scope was not upgraded")
 
 
+def _collect_unicode(client: httpx.Client, queries: list[str], root: Path, result: dict, *, limit: int,
+                     budget: _CollectionBudget, cancel: Callable[[], bool] | None) -> set[str]:
+    """One publisher catalog and at most two alias/permanent document pairs."""
+    semantic = []
+    for query in queries:
+        try:
+            if not _is_arxiv_query(query) and _query_doi(query) is None:
+                semantic.append(query)
+        except ValueError:
+            continue  # The existing per-query DOI route retains its own failure.
+    if not semantic or not limit:
+        return set()
+    searches = [{"query": query, "provider": "Unicode", "lookup": "official_report_catalog",
+                 "attempted": False, "status": "not_attempted", "resolved_ids": []} for query in semantic]
+    result["searches"].extend(searches)
+    discovery = {}
+
+    def retain_catalog(raw: bytes, url: str, content_type: str, status: int) -> None:
+        path, digest = _save(root, "unicode-catalog", "html", raw)
+        discovery.update(raw_path=path, sha256=digest, retrieved_url=url, content_type=content_type, http_status=status)
+        for search in searches:
+            search.update(url=url, raw_path=path, sha256=digest)
+
+    initial = budget.requests
+    try:
+        raw, _, _ = _fetch(client, UNICODE_REPORTS, standard_html=True, budget=budget,
+                            cancel=cancel, retain_response=retain_catalog)
+        if discovery["http_status"] != 200 or discovery["content_type"].split(";", 1)[0].strip() != "text/html":
+            raise ValueError("Unicode catalog did not return complete HTML")
+        candidates = discover_unicode_reports(raw, semantic)[:min(2, limit)]
+        for search in searches:
+            search.update(attempted=True, status="succeeded")
+    except (_Cancelled, _DeadlineExceeded, _RateLimited):
+        for search in searches:
+            search.update(attempted=budget.requests > initial, status="failed" if budget.requests > initial else "not_attempted")
+        raise
+    except (ValueError, OSError, httpx.HTTPError) as error:
+        for search in searches:
+            search.update(attempted=budget.requests > initial, status="failed", error=type(error).__name__)
+        result["warnings"].append(f"Unicode catalog unavailable ({type(error).__name__}); no standard identity was inferred")
+        return set()
+    matched_queries = set()
+    for candidate in candidates:
+        budget.wait(0, cancel)
+        identifier = "source-" + hashlib.sha256(candidate["url"].encode()).hexdigest()[:20]
+        source = {"id": identifier, "title": candidate["title"], "url": candidate["url"],
+                  "report_id": candidate["report_id"], "document_format": "html", "publication_type": "technical_standard",
+                  "provider": "Unicode", "publisher": "Unicode Consortium", "scope": "metadata_only", "excerpts": [],
+                  "queries": candidate["queries"], "discovery_path": discovery["raw_path"],
+                  "discovery_sha256": discovery["sha256"], "discovery_url": UNICODE_REPORTS}
+        proof = {"status": "rejected", "source_id": identifier, "discovery": dict(discovery), "metadata_url": candidate["url"]}
+
+        def retain_alias(raw: bytes, url: str, content_type: str, status: int) -> None:
+            path, digest = _save(root, identifier + "-unicode-alias", "html", raw)
+            source.update(metadata_path=path, metadata_sha256=digest, raw_path=path, sha256=digest)
+            proof.update(metadata_path=path, metadata_sha256=digest, metadata_url=url,
+                         metadata_content_type=content_type, metadata_http_status=status)
+
+        def retain_fixed(raw: bytes, url: str, content_type: str, status: int) -> None:
+            path, digest = _save(root, identifier + "-unicode-fixed", "html", raw)
+            proof.update(raw_path=path, sha256=digest, retrieved_url=url, content_type=content_type, http_status=status)
+
+        try:
+            alias, alias_url, _ = _fetch(client, candidate["url"], standard_html=True, budget=budget,
+                                       cancel=cancel, retain_response=retain_alias)
+            if proof["metadata_http_status"] != 200 or proof["metadata_content_type"].split(";", 1)[0].strip() != "text/html":
+                raise ValueError("Unicode alias did not return complete HTML")
+            identity = unicode_report_identity(alias, alias_url)
+            if (identity["report_id"] != candidate["report_id"] or identity["title"] != candidate["title"]):
+                raise ValueError("Unicode alias differs from its literal catalog entry")
+            matched_queries.update(candidate["queries"])
+            source.update(identity)
+            requested_versions = _unicode_query_versions(candidate["queries"])
+            if requested_versions and requested_versions != {identity["standard_version"]}:
+                raise ValueError("Unicode report differs from the explicitly requested standard version")
+            fixed, fixed_url, _ = _fetch(client, identity["url"], standard_html=True, budget=budget,
+                                       cancel=cancel, retain_response=retain_fixed)
+            if proof["http_status"] != 200 or proof["content_type"].split(";", 1)[0].strip() != "text/html":
+                raise ValueError("Unicode permanent report did not return complete HTML")
+            if unicode_report_identity(fixed, fixed_url) != identity:
+                raise ValueError("Unicode permanent report differs from its alias version header")
+            extracted = unicode_report_text(fixed)
+            source["id"] = "source-" + hashlib.sha256((fixed_url + "\n" + proof["sha256"]).encode()).hexdigest()[:20]
+            text_path, text_digest = _save(root, source["id"] + "-text", "txt", extracted["text"].encode())
+            budget.wait(0, cancel)
+            excerpts, ranges = [], []
+            _, windows = _full_text_excerpts(extracted["text"], candidate["queries"])
+            for window in windows:
+                start = window["start"]
+                section = next(item for item in extracted["section_ranges"] if item["start"] <= start < item["end"])
+                end = min(section["end"], window["end"])
+                if len(extracted["text"][start:end].strip()) >= 80:
+                    excerpts.append(extracted["text"][start:end]); ranges.append({"start": start, "end": end})
+            if not excerpts:
+                raise ValueError("Unicode report lacks substantive anchored section excerpts")
+            source.update(scope="full_text", raw_path=proof["raw_path"], sha256=proof["sha256"],
+                          text_path=text_path, text_sha256=text_digest, text_chars=len(extracted["text"]),
+                          body_range=extracted["body_range"], section_ranges=extracted["section_ranges"],
+                          excerpts=excerpts, excerpt_ranges=ranges,
+                          reading_scope="Only the literal anchored body excerpts were inspected; the original HTML and deterministic body text are retained")
+            proof.update(status="verified", source_id=source["id"], identity=identity,
+                         text_path=text_path, text_sha256=text_digest,
+                         body_range=extracted["body_range"], section_ranges=extracted["section_ranges"])
+        except (_Cancelled, _DeadlineExceeded, _RateLimited) as error:
+            proof.update(status="interrupted", error=type(error).__name__)
+            raise
+        except (ValueError, OSError, httpx.HTTPError) as error:
+            proof.update(error=type(error).__name__, note=str(error)[:300] if isinstance(error, ValueError) else "Official HTML retrieval failed")
+            result["warnings"].append(f"Unicode primary body unavailable for {candidate['report_id']} ({type(error).__name__}); reading scope was not upgraded")
+        finally:
+            proof_path, proof_digest = _save(root, identifier + "-unicode-identity", "json",
+                                            json.dumps(proof, ensure_ascii=False, sort_keys=True).encode())
+            if proof["status"] == "verified":
+                source.update(identity_path=proof_path, identity_sha256=proof_digest)
+            if source.get("raw_path"):
+                result["sources"].append(source)
+                for search in searches:
+                    if search["query"] in candidate["queries"]:
+                        search["resolved_ids"].append(source["id"])
+    return matched_queries
+
+
 def collect(
     queries: list[str], root: Path, *, limit: int = 6,
     cancel: Callable[[], bool] | None = None,
@@ -1118,7 +1484,10 @@ def collect(
     """Collect actual fetched evidence; no network failure becomes a fake source.
 
     ``raw_path`` is relative to ``root`` and points to the artifact supporting
-    the declared reading scope. Metadata remains separately recorded when an
+    the declared reading scope. Literal Unicode report tokens/whole titles bind
+    the fixed publisher catalog and approved permanent HTML before abstract slots.
+    These known standards leave the two method searches for other queries.
+    Metadata remains separately recorded when an
     allowed full text is fetched. All queries are attempted before candidates
     are resolved in round-robin order. Explicit and unique exact-title arXiv
     lookups bind the actual preprint version and precede bibliographic candidates.
@@ -1170,7 +1539,10 @@ def collect(
     try:
         with httpx.Client(timeout=httpx.Timeout(15.0, connect=5.0), follow_redirects=False,
                           headers={"User-Agent": "PaperFactory/0.6 (bounded literature collector)"}) as client:
+            standard_queries = _collect_unicode(client, queries, root, result, limit=limit, budget=budget, cancel=cancel)
             for search in list(result["searches"]):
+                if search["provider"] == "Unicode":
+                    continue
                 budget.wait(0, cancel)
                 query = search["query"]
                 search.update(status="failed", attempted=True)
@@ -1212,7 +1584,7 @@ def collect(
                                 query_candidates.append(key)
                                 candidate_queries.setdefault(key, []).append(search)
                             continue
-                        method_eligible = search["provider"] != "arXiv" or search["status"] == "succeeded"
+                        method_eligible = query not in standard_queries and (search["provider"] != "arXiv" or search["status"] == "succeeded")
                         if search["provider"] == "arXiv":
                             # Retain negative discovery separately before the
                             # original query continues as a Crossref search.

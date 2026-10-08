@@ -70,10 +70,16 @@ function canRedesign(workflow: Workflow) {
     workflow.cleanup_pending === false && workflow.execution_attempt === 1 && workflow.study_review?.accepted === true &&
     workflow.redesign_attempt < 2 && workflow.followup_research_id === null;
 }
+function hasPreparationLiteratureBasis(workflow: Workflow) {
+  const review = workflow.study_review;
+  return workflow.study_literature_attempt === 3 ||
+    ([0, 1, 2].includes(workflow.study_literature_attempt) && review?.accepted === false &&
+      [review.question, review.comparison, review.sampling].some(criterion => criterion.passed === false));
+}
 function canPrepareRedesign(workflow: Workflow) {
   return workflow.preparation_redesign_available === true && workflow.stage === 'proposed' &&
     workflow.status === 'blocked' && workflow.code === 'STUDY_REJECTED' && workflow.execution_attempt === 0 &&
-    workflow.proposal_attempt === 3 && workflow.study_literature_attempt === 3 && !workflow.study_literature_pending &&
+    workflow.proposal_attempt === 3 && hasPreparationLiteratureBasis(workflow) && !workflow.study_literature_pending &&
     workflow.cleanup_pending === false && !workflow.terminal_control_failure && workflow.redesign_attempt < 2 &&
     workflow.followup_research_id === null && workflow.study_review?.accepted === false;
 }
@@ -96,7 +102,8 @@ function validateRedesignReview(review: Record<string, unknown>) {
 function verifyHeldDesign(before: Workflow, after: Workflow, childId: string | null = null) {
   if (after.id !== before.id || after.goal !== before.goal || after.stage !== 'proposed' ||
       after.status !== 'blocked' || after.code !== 'STUDY_REJECTED' || after.execution_attempt !== 0 ||
-      after.proposal_attempt !== 3 || after.study_literature_attempt !== 3 || after.study_literature_pending ||
+      after.proposal_attempt !== 3 || after.study_literature_attempt !== before.study_literature_attempt ||
+      !hasPreparationLiteratureBasis(after) || after.study_literature_pending ||
       after.cleanup_pending !== false || after.terminal_control_failure ||
       after.parent_research_id !== before.parent_research_id || after.root_research_id !== before.root_research_id ||
       after.redesign_attempt !== before.redesign_attempt || after.followup_research_id !== childId ||

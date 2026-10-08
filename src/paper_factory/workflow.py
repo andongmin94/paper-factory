@@ -178,6 +178,75 @@ def _verified_author_pdf(ws: Workspace, source: dict, candidates: list[dict] | N
     return True
 
 
+def _verified_unicode_report(ws: Workspace, source: dict, record: Workflow | None = None) -> dict:
+    """Reparse the frozen catalog, alias and permanent official report bytes."""
+    try:
+        if (source.get("document_format") != "html" or source.get("publication_type") != "technical_standard" or
+                source.get("scope") != "full_text" or source.get("doi") or source.get("arxiv_id")):
+            raise ValueError("A Unicode report requires its explicit official HTML identity")
+        paths = {}
+        for field, digest_field in (("raw_path", "sha256"), ("metadata_path", "metadata_sha256"),
+                                    ("text_path", "text_sha256"), ("discovery_path", "discovery_sha256"),
+                                    ("identity_path", "identity_sha256")):
+            path = safe_relative(ws.path("research"), source[field])
+            if digest_file(path) != source[digest_field]:
+                raise ValueError("Unicode report differs from its retained response digest")
+            if record is not None:
+                relative = path.relative_to(ws.root).as_posix()
+                key = next((key for key, frozen in record.artifacts.items() if key.startswith("literature-") and
+                            frozen.path == relative and frozen.sha256 == source[digest_field]), None)
+                if key is None:
+                    raise ValueError("Unicode report lacks an original native frozen binding")
+                _artifact(ws, record, key)
+            paths[field] = path
+        proof = loads_json(paths["identity_path"].read_bytes())
+        origin = paths["identity_path"].parent.parent
+        if (proof["status"] != "verified" or proof["source_id"] != source["id"] or
+                proof["retrieved_url"] != source["url"] or proof["http_status"] != 200 or
+                proof["metadata_http_status"] != 200 or
+                any(proof[key].split(";", 1)[0].strip().lower() != "text/html"
+                    for key in ("content_type", "metadata_content_type"))):
+            raise ValueError("Unicode report lacks complete verified HTML responses")
+        for field, digest_field in (("raw_path", "sha256"), ("metadata_path", "metadata_sha256"), ("text_path", "text_sha256")):
+            if safe_relative(origin, proof[field]) != paths[field] or proof[digest_field] != source[digest_field]:
+                raise ValueError("Unicode proof differs from the retained original paths")
+        discovery = proof["discovery"]
+        if (discovery["retrieved_url"] != literature.UNICODE_REPORTS or discovery["http_status"] != 200 or
+                discovery["content_type"].split(";", 1)[0].strip().lower() != "text/html" or
+                safe_relative(origin, discovery["raw_path"]) != paths["discovery_path"] or
+                discovery["sha256"] != source["discovery_sha256"]):
+            raise ValueError("Unicode discovery differs from the official catalog response")
+        queries = source["queries"]
+        if not isinstance(queries, list) or not queries or any(not isinstance(query, str) for query in queries):
+            raise ValueError("Unicode report lacks its literal discovery queries")
+        candidates = literature.discover_unicode_reports(paths["discovery_path"].read_bytes(), queries)
+        candidate = next((entry for entry in candidates if entry["report_id"] == source["report_id"] and
+                          entry["url"] == proof["metadata_url"] and entry["title"] == source["title"]), None)
+        if candidate is None or set(candidate["queries"]) != set(queries):
+            raise ValueError("Unicode report is not the retained catalog entry requested by these queries")
+        identity = literature.unicode_report_identity(paths["raw_path"].read_bytes(), proof["retrieved_url"])
+        if (identity != proof["identity"] or
+                literature.unicode_report_identity(paths["metadata_path"].read_bytes(), proof["metadata_url"]) != identity or
+                any(source.get(key) != value for key, value in identity.items())):
+            raise ValueError("Unicode report header, permanent self-link and retained source disagree")
+        requested = literature._unicode_query_versions(queries)
+        if requested and requested != {identity["standard_version"]}:
+            raise ValueError("Unicode report differs from the explicitly requested version")
+        extracted = literature.unicode_report_text(paths["raw_path"].read_bytes())
+        if (paths["text_path"].read_bytes() != extracted["text"].encode("utf-8") or
+                any(source.get(key) != extracted[key] or proof.get(key) != extracted[key]
+                    for key in ("body_range", "section_ranges"))):
+            raise ValueError("Unicode report text and section ranges do not rederive from its original DOM")
+        expected_id = "source-" + hashlib.sha256((source["url"] + "\n" + source["sha256"]).encode()).hexdigest()[:20]
+        if source["id"] != expected_id:
+            raise ValueError("Unicode source identity does not preserve its permanent URL and exact original bytes")
+        return extracted
+    except WorkflowError:
+        raise
+    except (KeyError, TypeError, ValueError) as error:
+        raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", str(error)) from None
+
+
 def _literature_passages(ws: Workspace, evidence: dict) -> set[str]:
     """Only retained literal body reading can justify another study decision."""
     passages = set()
@@ -190,7 +259,8 @@ def _literature_passages(ws: Workspace, evidence: dict) -> set[str]:
         if digest_file(retained) != source["text_sha256"]:
             raise WorkflowError("ARTIFACT_CHANGED", "Study literature text differs from its retained digest")
         text = retained.read_bytes().decode("utf-8")
-        body = literature.full_text_body_range(text)
+        standard = _verified_unicode_report(ws, source) if source.get("publication_type") == "technical_standard" else None
+        body = standard["body_range"] if standard else literature.full_text_body_range(text)
         if body is None or source.get("body_range") != body:
             continue
         ranges = source.get("excerpt_ranges", [])
@@ -203,6 +273,8 @@ def _literature_passages(ws: Workspace, evidence: dict) -> set[str]:
             start, end = location.get("start"), location.get("end")
             if (type(start) is not int or type(end) is not int or
                     not body["start"] <= start < end <= body["end"] or text[start:end] != passage):
+                continue
+            if standard and not any(section["start"] <= start < end <= section["end"] for section in standard["section_ranges"]):
                 continue
             passages.add(" ".join(unicodedata.normalize("NFKC", passage).split()))
     return passages
@@ -254,11 +326,14 @@ def _retained_primary_body(ws: Workspace, record: Workflow, source: dict, packet
             raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Retained primary bytes lack their original frozen artifact binding")
         _artifact(ws, record, key)
     raw = safe_relative(ws.path("research"), source["raw_path"]).read_bytes()
-    if not raw.startswith(b"%PDF-"):
+    standard = _verified_unicode_report(ws, source, record) if source.get("publication_type") == "technical_standard" else None
+    if not standard and not raw.startswith(b"%PDF-"):
         return False
     metadata = safe_relative(ws.path("research"), source["metadata_path"]).read_bytes()
     try:
-        if source.get("copy_type") == "author_copy":
+        if standard:
+            pass  # Official catalog/header/body proof was rederived above.
+        elif source.get("copy_type") == "author_copy":
             if source.get("year") != literature._metadata(loads_json(metadata))[3]:
                 return False
             if not any(attempt.get("status") == "verified" and attempt.get("pdf_attempted") is True and
@@ -291,7 +366,7 @@ def _retained_primary_body(ws: Workspace, record: Workflow, source: dict, packet
                 return False
         science._citation_evidence(source)
         text = safe_relative(ws.path("research"), source["text_path"]).read_bytes().decode("utf-8")
-        body = literature.full_text_body_range(text)
+        body = standard["body_range"] if standard else literature.full_text_body_range(text)
         ranges = source.get("excerpt_ranges")
         if body is None or source.get("body_range") != body or not isinstance(ranges, list) or len(ranges) != len(source["excerpts"]):
             return False
@@ -301,6 +376,8 @@ def _retained_primary_body(ws: Workspace, record: Workflow, source: dict, packet
             start, end = location.get("start"), location.get("end")
             if (type(start) is not int or type(end) is not int or not body["start"] <= start < end <= body["end"] or
                     text[start:end] != passage):
+                return False
+            if standard and not any(section["start"] <= start < end <= section["end"] for section in standard["section_ranges"]):
                 return False
     except WorkflowError:
         raise
@@ -360,7 +437,8 @@ def _completed_literature_queries(ws: Workspace, record: Workflow, evidence: dic
         if (source is None or current is None or not _retained_source_matches(source, receipt["query"]) or
                 not _retained_source_matches(current, receipt["query"]) or
                 any(source.get(key) != current.get(key) for key in
-                    ("doi", "arxiv_id", "title", "authors", "year", "published", "updated", "provider", "publication_type", "publication_version", "copy_type")) or
+                    ("doi", "arxiv_id", "title", "authors", "year", "published", "updated", "provider", "publication_type", "publication_version", "copy_type",
+                     "document_format", "publisher", "report_id", "standard_version", "revision", "issue_date", "author_role", "section_ranges")) or
                 not _retained_primary_body(ws, record, source, packet) or
                 not _literature_passages(ws, {"sources": [current]})):
             raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Retained query lacks its exact identity and inspected frozen primary body")
@@ -1496,7 +1574,9 @@ class WorkflowService:
                     location = (source.get("excerpt_ranges") or [{}] * len(source["excerpts"]))[position]
                     provenance = {key: source.get(key) for key in ("id", "doi", "title", "authors", "scope", "text_path", "text_sha256", "raw_path", "sha256",
                                   "metadata_path", "metadata_sha256", "url", "arxiv_id", "body_range",
-                                  "identity_path", "identity_sha256", "discovery_path", "discovery_sha256", "copy_type", "publication_version")}
+                                  "identity_path", "identity_sha256", "discovery_path", "discovery_sha256", "copy_type", "publication_version",
+                                  "document_format", "publication_type", "provider", "publisher", "report_id", "standard_version", "revision",
+                                  "issue_date", "author_role", "year", "section_ranges", "queries")}
                     provenance.update(excerpt_index=indices[position], excerpt_range=location)
                     identity = (indices[position], source.get("text_sha256") or source["sha256"],
                                 hashlib.sha256(passage.encode()).hexdigest(), location.get("start"), location.get("end"))
@@ -1571,12 +1651,16 @@ class WorkflowService:
                 raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Closest-work excerpt is not literal retained source text")
             if work.quote not in passage or len(work.quote.strip()) < 80:
                 raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Closest-work quote must identify an inspected literal passage")
-            body = literature.full_text_body_range(text)
+            standard = (_verified_unicode_report(ws, provenance, record)
+                        if provenance.get("publication_type") == "technical_standard" else None)
+            body = standard["body_range"] if standard else literature.full_text_body_range(text)
             if body is None or provenance.get("body_range") != body:
                 raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Closest work lacks a recognizable retained paper-body boundary")
             quote_start = start + passage.index(work.quote)
             if not body["start"] <= quote_start or quote_start + len(work.quote) > body["end"]:
                 raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Closest-work comparison must use paper-body text rather than abstract or bibliography")
+            if standard and not any(section["start"] <= start < end <= section["end"] for section in standard["section_ranges"]):
+                raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Closest standard excerpt must remain within one actual anchored body section")
         if draft is None:
             if readiness.analysis_keys or readiness.fixture_labels or readiness.proof_section is not None:
                 raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Pre-execution assessment cannot claim observed or completed proof evidence")
@@ -2089,7 +2173,7 @@ class WorkflowService:
         future = self._jobs.get(record.id)
         if (self._closing or self._closed or record.stage != "proposed" or record.status != "blocked" or
                 record.code != "STUDY_REJECTED" or record.execution_attempt != 0 or
-                record.proposal_attempt != 3 or record.study_literature_attempt != 3 or record.redesign_attempt >= 2 or
+                record.proposal_attempt != 3 or record.redesign_attempt >= 2 or
                 (future is not None and not future.done()) or
                 any(key in {"plan", "bundle", "execution", "observations", "analysis", "runtime-manifest", "manuscript", "canonical"} or
                     key.startswith(("execution-", "observations-", "analysis-", "cleanup-")) for key in record.artifacts)):
@@ -2102,27 +2186,53 @@ class WorkflowService:
         if (review.accepted or receipt.get("origin") != "native_host_submission" or
                 receipt.get("proposal_sha256") != record.artifacts["proposal"].sha256):
             raise WorkflowError("ARTIFACT_CHANGED", "Preparation must bind the current rejected proposal and review")
-        intent_key, collection_key = "study-literature-intent-3", "study-literature-collection-3"
-        intent, collection = _read(ws, record, intent_key), _read(ws, record, collection_key)
-        evidence = _read(ws, record, "literature")
-        latest = evidence.get("study_literature", {})
-        reviewed_final = (receipt.get("study_literature_collection_sha256") == record.artifacts[collection_key].sha256 and
-                          receipt.get("prior_study_review_sha256") == intent.get("prior_study_review_sha256") and
-                          receipt.get("literature_sha256") == record.artifacts["literature"].sha256)
-        if (intent.get("event") != "study-literature-followup" or intent.get("attempt") != 3 or
-                intent.get("proposal_sha256") != record.artifacts["proposal"].sha256 or
-                (intent.get("prior_study_review_sha256") != record.artifacts["study-review"].sha256 and not reviewed_final) or
-                collection.get("queries") != intent.get("queries") or
-                any(latest.get(key) != value for key, value in intent.items()) or
-                latest.get("collection_sha256") != record.artifacts[collection_key].sha256):
-            raise WorkflowError("ARTIFACT_CHANGED", "Preparation must preserve the final bounded retrieval chain and its actual reading scope")
+        attempts = record.study_literature_attempt
+        actual_collections = {key for key in record.artifacts
+                              if re.fullmatch(r"study-literature-(?:intent|collection)-[1-3]", key)}
+        expected_collections = {f"study-literature-{kind}-{number}" for number in range(1, attempts + 1)
+                                for kind in ("intent", "collection")}
+        if actual_collections != expected_collections:
+            raise WorkflowError("ARTIFACT_CHANGED", "Preparation must preserve actual literature attempts without resetting or inventing them")
+        literature_digests = {frozen.sha256 for key, frozen in record.artifacts.items()
+                              if key == "literature" or key.startswith("literature-history-")}
+        if attempts < 3:
+            if all(getattr(review, name).passed for name in ("question", "comparison", "sampling")):
+                raise WorkflowError("STUDY_REDESIGN_NOT_ALLOWED", "The available literature route must be completed before preparing a successor")
+            if receipt.get("literature_sha256") != record.artifacts["literature"].sha256:
+                raise WorkflowError("STUDY_REVIEW_REQUIRED", "Structural rejection must review the current retained literature")
+            proposal_digests = {frozen.sha256 for key, frozen in record.artifacts.items()
+                                if re.fullmatch(r"proposal-[1-3]", key)}
+            review_digests = {frozen.sha256 for key, frozen in record.artifacts.items()
+                              if key == "study-review" or key.startswith("study-review-")}
+            for number in range(1, attempts + 1):
+                intent = _read(ws, record, f"study-literature-intent-{number}")
+                collection = _read(ws, record, f"study-literature-collection-{number}")
+                if (intent.get("event") != "study-literature-followup" or intent.get("attempt") != number or
+                        intent.get("proposal_sha256") not in proposal_digests or
+                        intent.get("prior_study_review_sha256") not in review_digests or
+                        intent.get("prior_literature_sha256") not in literature_digests or
+                        collection.get("queries") != intent.get("queries")):
+                    raise WorkflowError("ARTIFACT_CHANGED", "Preparation cannot discard the partial literature retrieval chain")
+        else:
+            intent_key, collection_key = "study-literature-intent-3", "study-literature-collection-3"
+            intent, collection = _read(ws, record, intent_key), _read(ws, record, collection_key)
+            evidence = _read(ws, record, "literature")
+            latest = evidence.get("study_literature", {})
+            reviewed_final = (receipt.get("study_literature_collection_sha256") == record.artifacts[collection_key].sha256 and
+                              receipt.get("prior_study_review_sha256") == intent.get("prior_study_review_sha256") and
+                              receipt.get("literature_sha256") == record.artifacts["literature"].sha256)
+            if (intent.get("event") != "study-literature-followup" or intent.get("attempt") != 3 or
+                    intent.get("proposal_sha256") != record.artifacts["proposal"].sha256 or
+                    (intent.get("prior_study_review_sha256") != record.artifacts["study-review"].sha256 and not reviewed_final) or
+                    collection.get("queries") != intent.get("queries") or
+                    any(latest.get(key) != value for key, value in intent.items()) or
+                    latest.get("collection_sha256") != record.artifacts[collection_key].sha256 or
+                    intent.get("prior_literature_sha256") not in literature_digests):
+                raise WorkflowError("ARTIFACT_CHANGED", "Preparation must preserve the final bounded retrieval chain and its actual reading scope")
         review_literature = next((key for key, frozen in record.artifacts.items()
                                  if (key == "literature" or key.startswith("literature-history-")) and
                                  frozen.sha256 == receipt.get("literature_sha256")), None)
-        prior_literature = next((key for key, frozen in record.artifacts.items()
-                                if (key == "literature" or key.startswith("literature-history-")) and
-                                frozen.sha256 == intent.get("prior_literature_sha256")), None)
-        if review_literature is None or prior_literature is None:
+        if review_literature is None:
             raise WorkflowError("ARTIFACT_CHANGED", "Preparation cannot discard literature inspected by an earlier review")
         keys = {key for key in record.artifacts if not key.startswith(("model-", "runtime-admission-")) and
                 key not in {"redesign-preparation", "redesign-candidate", "redesign-review", "redesign-intent"}}
@@ -2131,7 +2241,7 @@ class WorkflowService:
             raise WorkflowError("ARTIFACT_CHANGED", "Preparation source provenance differs from its frozen project")
         return {"event": "preexecution-redesign-preparation", "parent_id": record.id,
                 "root_id": record.root_research_id or record.id, "redesign_attempt": record.redesign_attempt,
-                "goal": record.goal, "execution_attempt": 0, "proposal_attempt": 3, "study_literature_attempt": 3,
+                "goal": record.goal, "execution_attempt": 0, "proposal_attempt": 3, "study_literature_attempt": attempts,
                 "source_commit": imported.source_commit, "snapshot_digest": imported.snapshot_digest,
                 "supporting_documents": _supporting_documents(ws, record),
                 "bindings": {key: {"sha256": record.artifacts[key].sha256, "size": record.artifacts[key].size} for key in sorted(keys)}}

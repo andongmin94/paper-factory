@@ -34,13 +34,17 @@ def record(doi="10.1234/test", *, abstract=None, links=None):
     return {"status": "ok", "message": message}
 
 
-def mocked(monkeypatch, handler, *, title_discovery=False, method_discovery=False):
+def mocked(monkeypatch, handler, *, title_discovery=False, method_discovery=False, standard_discovery=False):
     # Most fixtures target Crossref or explicit-ID/discovery behavior. Exact-title
     # provider tests opt into the complete multi-provider flow separately.
     if not title_discovery:
         monkeypatch.setattr(literature, "_arxiv_title_lookup", lambda *args, **kwargs: None)
     if not method_discovery:
         monkeypatch.setattr(literature, "MAX_METHOD_CANDIDATES", 0)
+    if not standard_discovery:
+        # These fixtures describe the existing PDF/Crossref providers only.
+        # Unicode's complete catalog-to-primary flow has its own mock fixtures.
+        monkeypatch.setattr(literature, "_collect_unicode", lambda *args, **kwargs: set())
     original = httpx.Client
     requests = []
 

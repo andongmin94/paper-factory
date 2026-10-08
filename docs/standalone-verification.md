@@ -1208,7 +1208,7 @@ Chromium 자체 검사가 실패하면 어느 검사인지와 당시 worker의 �
 
 Chromium 평가 wrapper는 Node exit0과 원문·해시 동결을 저장한 뒤 CP949 콘솔로 검사 표시를 재출력하다 UnicodeEncodeError로 종료했다. 이 실패를 수정하거나 검사를 반복하지 않고 `.paper-factory/is19/integration-156d37d87ad4/post-run-reconciliation.json` SHA256 `ca5f792c90cb663420589cb70e2a5c0e601e811bd4fde2b86808ceb0f70e9974`에 읽기 전용 확인을 남겼다. 원래 wrapper·stdout·stderr·run-freeze와 지연 비교를 모두 보존했으며 제품 소스·compiled worker·실행 파일·fixture는 검사 전후 동일하다.
 
-같은 JIZURA root의 새 재개 준비는 기존 361파일과 88개 동결 산출물, 이전 239·202·195 전체 archive를 보존한다. 준비 helper의 35개 합성 검사와 독립 prelaunch guard의 26개 합성 검사를 통과했다. proposed/blocked/STUDY_REJECTED, 제안1·SCI0, 첫 반려 심사·제안 해시, 원래 저장소·목표·source166을 고정한다. 실행 시 0.14.19 native API가 남은 preparation 재개를 허용해야만 진행한다. 새 root를 만들어 횟수를 초기화하지 않는다. 이 준비와 제품 검사는 실제 연구·논문 품질 승인이나 새 설치·OAuth 검사가 아니다. 실제 0.14.19 재개는 아직 수행하지 않았다.
+같은 JIZURA root의 새 재개 준비는 기존 361파일과 88개 동결 산출물, 이전 239·202·195 전체 archive를 보존한다. 준비 helper의 35개 합성 검사와 독립 prelaunch guard의 26개 합성 검사를 통과했다. proposed/blocked/STUDY_REJECTED, 제안1·SCI0, 첫 반려 심사·제안 해시, 원래 저장소·목표·source166을 고정한다. 실행 시 0.14.19 native API가 남은 preparation 재개를 허용해야만 진행한다. 새 root를 만들어 횟수를 초기화하지 않는다. 이 준비와 제품 검사는 실제 연구·논문 품질 승인이나 새 설치·OAuth 검사가 아니다. 이 준비 이후 실제 재개 결과는 아래에 별도로 기록했다.
 
 Windows runtime을 고정 wheel 19개로 다시 구성해 실제 호스트 진단을 통과했다. 2,219파일/473,803,709 B의 inventory SHA256은 `d06ce0f5d236784955fb1558c8f88de58fe433ea6373ec8513dac7ff56ee4b0b`다. `.paper-factory/standalone-runtime-builder/build-win32-x64-df0bce35-13ca-45f0-9df3-5aa11b0635e5/build-receipt.json` 4,827 B/SHA256 `d428f51abb288789b9f490f2dff1d061efb2bc869b618a53950fe8ad9032fdc8`에 기록했다.
 
@@ -1221,3 +1221,39 @@ Windows runtime을 고정 wheel 19개로 다시 구성해 실제 호스트 진�
 | Paper Factory Setup 0.14.19.exe | 213,081,644 | d6b6ebb14ee3547def37d9dc604a210b0de31e590d918ede4f3a04fe43180e23 |
 | win-unpacked/resources/app.asar | 44,793,323 | f7a3cbc88638734b85f82eb1427dd6ac72ab94d252002e0cff6921eb53500eec |
 | win-unpacked/Paper Factory.exe | 245,726,208 | 4ae533b586eac17392a51a57dd5ef5182c706877d8e018dc8ba78613fa5c1e0a |
+
+### 0.14.19 실제 연구 재개 결과
+
+위 준비 단계 뒤 같은 JIZURA `research-7fc481808695`를 실제로 재개했다. 최초 v2 helper는 native 공개 artifact에 내부 `path` 필드가 있다고 가정해 재개 요청 전에 멈췄다. 모델·SCI 요청은 없었으며 원래 오류·실행 폴더와 읽기 전용 진단을 보존했다. 공개 `{id, size, sha256}` 바인딩에 실제 artifact.resolve와 원본 파일 대조를 연결한 새 v3 helper는 3개 양성·5개 음성 합성 검사와 독립 검토를 거쳤다. 바이트가 같은 다른 경로, raw 파일만 남은 자료, 동결 ID·해시 불일치는 거절하며 기존 오류 결과를 덮어쓰지 않았다.
+
+실제 v3 실행 `.paper-factory/j19/d30d3537ed06`은 08:00:53–08:15:47 UTC에 같은 원래 저장소·목표·계정·작성/검토 모델로 진행됐다. 새로운 공식 모델 요청 7개가 모두 시작·완료됐고, 앱이 파일을 선택하고 두 새 설계를 생성했다. 두 제안의 Chromium 실행 환경 점검은 통과했다. 마지막 설계는 배치 레코드와 문자 단위 보존을 추가했지만 표준 버전에 연결된 경계·정규화 근거, 일반적인 군집 배치 계산 규칙과 독립 검증, 기여의 중요성과 최근접 연구 본문이 충분하지 않아 심사에서 반려됐다. 현재 문헌은 초록 4개·메타데이터 2개이며 본문은 없다. 제안 3회·문헌 보완 0회·SCI 0회·후속 연구 0개·원고 0개다. 종료값2는 보류 결과이며, 새 runtime admission 실패나 모델 요청 실패는 없었다.
+
+종료 후 독립 읽기 전용 감사 58항목을 통과했다. 같은 root의 현재 518파일·owned507·동결 산출물231개, 기존 불변356파일·산출물88개·원본166파일, 이전 전체 archive와 모델·심사·실패 기록을 대조했다. SQLite는 immutable/query_only SELECT로만 읽었고 실제 실행·평가·과거 자료 및 제품과 runtime의 해시는 감사 전후 같았다. 소유 프로세스는 종료됐고 두 worker journal은 비었다. `.paper-factory/runtime-admission-01419/post-completion-audit-v3/closed-run-audit.json`은 3,089,458 B/SHA256 `ec8fb9c268b29437d01dcc169985add3bc91e678c7edb340bed651e2139c619d`, 완료 코드 동결은 `completed-source-freeze.json` SHA256 `14fa0e8eb5ec2d502a0e74a6465d068ae71726bf158c6de01c4d99e8e97f24b6`이다. 감사의 설명용 문헌 카운터에서 실제 필드명과 달랐던 부분은 별도 `literature-observer-note.json`의 원래 필드 요약으로 보충했고 감사 파일은 바꾸지 않았다. 무결성 통과를 학술 품질 승인으로 계산하지 않는다.
+
+## 0.14.20 공식 표준 본문과 구조적 반려 후 재설계
+
+실제 0.14.19에서 확인된 두 제품 문제를 수정한다. 공식 Unicode 표준을 DOI 논문으로 검색해 HTML 본문을 확보하지 못했고, 마지막 설계의 비교 기준이 반려돼 문헌 보완이 불가능한데도 재설계 준비가 문헌 3회 소진을 요구했다. 공식 발행자 목록의 literal 제목·보고서 식별자에서 승인 UAX·UTS를 찾고, 실제 헤더의 버전·개정 번호·발행일·기여자 역할·영구 self-link를 별도 원문과 대조한다. HTML은 실행하지 않으며 실제 anchored numbered sections만 본문으로 추출한다. 목차·요약·상태·참고문헌·감사의 말·수정 목록은 본문에서 제외한다. native는 목록·alias·영구 HTML·identity·텍스트의 동결 해시와 원문을 다시 파싱해 동일성을 확인한다. 인용 및 선정된 발췌의 출처에도 버전·절의 실제 구간과 편집자 역할을 보존한다. W3C·임의 HTML·표준 데이터 파일·외부 하위 자료는 새 경로에서 수집하지 않는다. 기존 PDF·DOI·arXiv identity 규칙과 마지막 직접 PDF 회수 계약은 유지한다.
+
+미실행·제안3·반려 상태에서 현재 질문·비교·표본 중 결함 때문에 문헌-only 보완이 불가능하면 기존 엄격한 재설계 준비 검토를 열 수 있다. 실제 문헌 0/1/2회와 그 부분 수집의 intent·collection·이전 본문·심사를 보존하며 문헌3회로 꾸미거나 횟수를 초기화하지 않는다. 문헌-only 보완이 가능한 설계는 남은 보완을 먼저 마쳐야 한다. 원문·실험·심사·준비 후보의 불변 조건, root당 후속2개 및 연구당 SCI1회 한도는 유지한다. 한 번의 독립 준비 심사와 이후 새 연구의 문헌·설계·코드·원고 심사를 건너뛰지 않는다.
+
+### 0.14.20 제품 검사
+
+Desktop 전체 478개 검사가 통과했고, native 영향 범위 12개 모듈에서는 고유 검사 1,065개가 통과했으며 기존 Windows symlink 권한 검사 3개는 건너뛰었다. 첫 native 실행은 1,035 통과·30 실패·3 건너뜀이었다. 평가 helper가 `PYTHONUTF8=1`을 설정했지만 부모 Python의 `-I`가 환경 변수를 무시해 CP949 부모와 UTF-8 자식의 오류 출력 인코딩이 달랐다. `-I -X utf8`로 평가 실행만 수정하고 같은 실패 30개를 다시 실행해 모두 통과했다. 제품 소스·검사 코드·심사 기준은 바뀌지 않았으며 이미 통과한 1,035개는 반복하지 않았다. 원래 로그·helper·실패 기록은 그대로 보존하고, 이후 읽기 대조를 당시 종료 receipt로 가장하지 않았다. 최종 조합 기록은 `.paper-factory/runtime-admission-01420/native-final-reconciled-freeze.json` 12,411 B/SHA256 `7bc31c34f4ef22709751d35d6cbf0e7312a099558d6125efb823719bfd8bbd99`이다. 겹치는 Unicode·준비 검토 개별 검사 묶음은 합산하지 않는다.
+
+변경하지 않은 SDK와 Chromium worker는 0.14.19의 SDK 48 통과·기존 Windows 권한 1 건너뜀, 숨김 Chromium 28 통과 기록을 유지한다. 새 제품 코드에 대한 Desktop 478개 및 native 영향 검사와 이 이전 기록을 구별한다. Unicode 원문 수집·본문 변조 거절·인용 및 원고 근거 검사는 합성 자료로 수행했으며 실제 연구나 학술적 품질 승인을 의미하지 않는다.
+
+### 0.14.20 설치 파일과 포함 엔진
+
+기존 고정 wheel로 Windows runtime을 한 번 구성하고 정상 NSIS 설치 파일을 한 번 만들었다. Runtime은 2,219파일/473,838,433 B이며 inventory SHA256은 `68cbf93633a0567f56623ee8c3e49231a6f6b3392ed49768a672710be17a6ead`이다. 기존 runtime 2,220개 물리 파일도 보존했다. 첫 보존 확인 helper는 일반 Windows 경로 열거에서 긴 경로의 lxml XSL 한 파일을 빠뜨려 멈췄다. 실제 파일은 존재하며 확장 경로로 이전 2,220파일 전체의 해시를 대조했다. Runtime 구성이나 제품 코드를 다시 실행·변경한 것은 아니다.
+
+기존 정적 검증과 별도 ASAR 읽기 대조에서 동봉 dependency·SDK·renderer·provenance 7,247파일의 실제 바이트를 확인했다. 설치된 electron-builder가 기본적으로 제외하는 SDK 타입 선언 7개는 별도 목록과 원본을 보존했으며, package metadata는 같은 설치된 builder의 실제 transformer로 계산했다. 원문 타입 선언까지 모두 ASAR에 들어 있다고 주장하지 않는다. 최초 보조 helper의 Windows 구분자·builder 변환 가정 오류, 실패 출력과 수정 전 소스를 보존하고 패키지를 다시 빌드하지 않았다. 포함 Python IPC와 패키지 Chromium worker의 숨김 검사 한 번에서 동일한 작업실의 시작 두 번, 두 runtime 준비·browser control 7개·종료·재시작·두 worker journal 비움과 자원 해시 불변을 확인했다. 새 workflow·모델·SCI·계정 접근은 0회다. 이 패키지 검사는 실제 연구나 원고 품질 승인과 별도다. 실행 receipt는 `.paper-factory/runtime-admission-01420/packaged-engine-dd6f1721-7031-47bf-a0ea-ff920631e065/receipt.json` 18,493 B/SHA256 `8cae5d5636485ea80eb99dbe92a33f2c8eef30c4904e7b8c5060a40646323a13`이다.
+
+현재 0.14.20의 실제 연구 실행은 아직 수행하지 않았다. 이 소스 변경과 제품 검사로 실제 논문 품질이나 학술지 투고 준비가 확인됐다고 주장하지 않는다. 0.14.19 배포본·실행 원자료·모든 실패 helper·검사 로그는 보존한다.
+
+### 2026-10-08 중단과 다른 PC 인계
+
+사용자의 중단 요청으로 실제 연구 실행 전에 멈췄다. 평가 준비는 `ready=false`이며 최종 launch binding·preparation freeze를 생성하지 않았다. 공개 native review와 원본 receipt envelope의 차이, freeze helper의 가상 executable 키를 실제 경로로 매핑하지 않은 오류는 별도 평가 도구 수정으로 보존했고 독립 읽기 검토를 마쳤다. 제품 심사나 실제 연구 결과를 수정한 것은 아니다. 준비 원본 helper·성공한 순수 검사·실패한 realm fixture·잘못된 첫 peer JSON·유효한 별도 중단 기록도 보존했다.
+
+기본 배포 폴더 전환 helper는 확장 경로 prefix를 이중으로 붙여 preflight에서 실패했다. 실제 rename·copy·기본 배포 검증은 시작하지 않았고 `desktop/release/`는 0.14.19 그대로이며 `.paper-factory/preserved-release-01419`도 생성하지 않았다. 사용자 중단 이후 이를 재시도하지 않았다. 새 설치 파일은 `.paper-factory/p20-release/Paper Factory Setup 0.14.20.exe` 213,088,042 B/SHA256 `6867264e779b9b1faaf720725f7266c3e4fcf1a3ef764be0fb5b0a6d9907e9df`이다. 실행한 두 engine PID와 scratch worker·새/기본 배포 경로의 process가 없는지 확인했다. 패키지 중단 기록은 `.paper-factory/runtime-admission-01420/package-build-71a340e4db25/stop-final-freeze.json` 4,517 B/SHA256 `55064b6a122e60d736e2b3985e9cde2bebd8d39ea2144cea0792696b4b0da742`이며 평가 중단 기록은 `.paper-factory/runtime-admission-01420/evaluator-stop-773349b92cdd/checkpoint.json`이다.
+
+다음 작업과 새 PC의 자료·경로·계정·runtime 확인 지시는 [재개 지시문](next-session.md)에 기록했다. Git에는 소스와 문서만 올리고 실제 연구 원자료는 별도 로컬 인계 ZIP과 SHA256 manifest로 전달한다. 다른 PC 설치·같은 연구 재개가 완료됐다고 주장하지 않으며 기존 심사·후보·계보·SCI 횟수를 보존해야 한다.

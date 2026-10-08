@@ -887,6 +887,14 @@ const heldPreparation = () => {
       'production_set_distance.insert_first.mean': 1.3333333333333333, 'cost_excess.production.mean': 0,
       'endpoint_failure.production.mean': 0 } } };
 };
+const heldStructuralPreparation = (core, attempt) => {
+  const parent = heldPreparation();
+  parent.study_literature_attempt = attempt;
+  parent.study_review = { ...parent.study_review, [core]: { passed: false,
+    reason: 'Synthetic core design failure prevents body retrieval from repairing this held proposal.' } };
+  parent.artifacts['study-review'] = jsonArtifact('study-review', parent.study_review);
+  return parent;
+};
 const stagePreparation = (parent, candidate = preparationCandidate(), review = null) => {
   parent.redesign_candidate = structuredClone(candidate);
   parent.artifacts['redesign-candidate'] = jsonArtifact('redesign-candidate', candidate);
@@ -958,6 +966,101 @@ test('preexecution preparation independently reviews a frozen candidate before a
     assert.deepEqual(f.calls.filter(call => call.method === 'workflow.startExperiment').map(call => call.params.researchId), [child.id]);
     assert.equal(f.records.get(child.id).execution_attempt, 1);
     assert.deepEqual(f.records.get(child.id).proposal, original.redesign_candidate);
+  } finally { await f.cleanup(); }
+});
+
+for (const core of ['question', 'comparison', 'sampling']) {
+  for (const attempt of [0, 1, 2]) {
+    test(`structural preparation preserves body${attempt}/${core} through independent review and a fully gated successor`, async () => {
+      const original = heldStructuralPreparation(core, attempt), frozen = structuredClone(original);
+      const f = await fixture(completePreparation(), original);
+      try {
+        await f.controller.initialize();
+        assert.equal(f.controller.snapshot().jobs[0].improvementAvailable, true);
+        await f.controller.improveResearch(id, 'writer', 'reviewer');
+        const state = await settled(f.controller), child = state.jobs.find(job => job.parentResearchId === id);
+        assert.ok(child, JSON.stringify(state.error)); assert.equal(child.pipeline, 'completed');
+        assert.equal(original.proposal_attempt, 3); assert.equal(original.study_literature_attempt, attempt);
+        assert.equal(original.execution_attempt, 0); assert.deepEqual(original.study_review, frozen.study_review);
+        assert.deepEqual(original.proposal, frozen.proposal); assert.deepEqual(original.literature, frozen.literature);
+        for (const [key, artifact] of Object.entries(frozen.artifacts)) assert.deepEqual(original.artifacts[key], artifact);
+        const parentCalls = f.calls.filter(call => call.params.researchId === id).map(call => call.method);
+        assert.equal(parentCalls.filter(method => method === 'workflow.submitRedesignProposal').length, 1);
+        assert.equal(parentCalls.filter(method => method === 'workflow.submitRedesignReview').length, 1);
+        assert.equal(parentCalls.some(method => ['workflow.submitProposal', 'workflow.collectStudyLiterature',
+          'workflow.submitCode', 'workflow.startExperiment'].includes(method)), false);
+        const childCalls = f.calls.filter(call => call.params.researchId === child.id).map(call => call.method);
+        for (const [before, after] of [['workflow.collectLiterature', 'workflow.submitStudyReview'],
+          ['workflow.submitStudyReview', 'workflow.submitCode'], ['workflow.submitCode', 'workflow.startExperiment']]) {
+          assert.ok(childCalls.includes(before)); assert.ok(childCalls.indexOf(before) < childCalls.indexOf(after));
+        }
+        assert.deepEqual(f.calls.filter(call => call.method === 'workflow.startExperiment').map(call => call.params.researchId), [child.id]);
+        assert.equal(f.records.get(child.id).execution_attempt, 1);
+      } finally { await f.cleanup(); }
+    });
+  }
+}
+
+for (const patch of [
+  { preparation_redesign_available: false }, { study_literature_pending: true },
+  { terminal_control_failure: true }, { cleanup_pending: true }, { redesign_attempt: 2 }, { execution_attempt: 1 },
+  ...[-1, 0.5, 4, '0'].map(study_literature_attempt => ({ study_literature_attempt })),
+]) {
+  test('unsafe structural preparation prevents model requests and successor dispatch: ' + JSON.stringify(patch), async () => {
+    const f = await fixture([], { ...heldStructuralPreparation('comparison', 0), ...patch });
+    try {
+      await f.controller.initialize();
+      await assert.rejects(f.controller.improveResearch(id, 'writer', 'reviewer'));
+      assert.equal(f.prompts.length, 0);
+      assert.equal(f.calls.some(call => ['workflow.submitRedesignProposal', 'workflow.submitRedesignReview',
+        'workflow.redesignStudy', 'workflow.startExperiment'].includes(call.method)), false);
+    } finally { await f.cleanup(); }
+  });
+}
+
+for (const attempt of [0, 1, 2]) {
+  test(`structural preparation cannot skip eligible remaining body retrieval at attempt ${attempt}`, async () => {
+    const f = await fixture([], { ...heldPreparation(), study_literature_attempt: attempt });
+    try {
+      await f.controller.initialize();
+      await assert.rejects(f.controller.improveResearch(id, 'writer', 'reviewer'));
+      assert.equal(f.prompts.length, 0);
+      assert.equal(f.calls.some(call => ['workflow.submitRedesignProposal', 'workflow.redesignStudy', 'workflow.startExperiment'].includes(call.method)), false);
+    } finally { await f.cleanup(); }
+  });
+}
+
+for (const phase of ['candidate', 'review']) {
+  for (const [before, after] of [[0, 3], [2, 0]]) {
+    test(`changed structural preparation counter ${before}->${after} in ${phase} acknowledgment stops follow-up`, async () => {
+      const original = heldStructuralPreparation('comparison', before);
+      const f = await fixture([preparationCandidate(), preparationAccepted()], original, { request(method) {
+        if (method !== (phase === 'candidate' ? 'workflow.submitRedesignProposal' : 'workflow.submitRedesignReview')) return undefined;
+        const value = stagePreparation(structuredClone(original), preparationCandidate(), phase === 'review' ? preparationAccepted() : null);
+        value.study_literature_attempt = after; return value;
+      } });
+      try {
+        await f.controller.initialize(); await f.controller.improveResearch(id, 'writer', 'reviewer');
+        assert.equal((await settled(f.controller)).jobs[0].code, 'RESEARCH_STATE_INVALID');
+        assert.equal(original.study_literature_attempt, before); assert.equal(original.execution_attempt, 0);
+        assert.equal(f.calls.some(call => ['workflow.redesignStudy', 'workflow.startExperiment'].includes(call.method)), false);
+      } finally { await f.cleanup(); }
+    });
+  }
+}
+
+test('rejected structural preparation retains real body0 and independent rejection without successor or science', async () => {
+  const original = heldStructuralPreparation('comparison', 0), frozen = structuredClone(original);
+  const f = await fixture([preparationCandidate(), preparationRejected()], original);
+  try {
+    await f.controller.initialize(); await f.controller.improveResearch(id, 'writer', 'reviewer');
+    const state = await settled(f.controller);
+    assert.equal(state.jobs.length, 1); assert.equal(state.jobs[0].pipeline, 'failed');
+    assert.deepEqual(state.jobs[0].preparationRedesignReview, preparationRejected());
+    assert.equal(state.jobs[0].improvementAvailable, false);
+    assert.equal(original.study_literature_attempt, 0); assert.equal(original.proposal_attempt, 3);
+    assert.equal(original.execution_attempt, 0); assert.deepEqual(original.study_review, frozen.study_review);
+    assert.equal(f.calls.some(call => ['workflow.redesignStudy', 'workflow.startExperiment', 'workflow.collectStudyLiterature'].includes(call.method)), false);
   } finally { await f.cleanup(); }
 });
 
