@@ -13,7 +13,7 @@ from .models import Record, now, uid
 class ModelEvidenceReceipt(Record):
     """Main-process SDK evidence; no credentials or execution authority."""
     id: str = Field(pattern=r"^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$")
-    phase: Literal["plan", "study-review", "redesign-plan", "redesign-review", "code", "code-review", "literature-plan", "evidence-selection", "manuscript", "manuscript-review"]
+    phase: Literal["source-selection", "plan", "study-review", "redesign-plan", "redesign-review", "code", "code-review", "literature-plan", "evidence-selection", "manuscript", "manuscript-review"]
     at: str = Field(max_length=40)
     model: str = Field(min_length=1, max_length=100)
     profileId: str = Field(min_length=1, max_length=128)

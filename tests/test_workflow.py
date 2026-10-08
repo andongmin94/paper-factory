@@ -286,12 +286,14 @@ def evidence_selection_receipt():
             "text": text, "textSha256": hashlib.sha256(text.encode()).hexdigest(), "outcome": "completed"}
 
 
-def test_evidence_selection_receipt_is_original_hash_bound_and_append_only(setup):
+@pytest.mark.parametrize("phase", ["evidence-selection", "source-selection"])
+def test_evidence_selection_receipt_is_original_hash_bound_and_append_only(setup, phase):
     from paper_factory import ipc
 
     service, runner, research_id = setup
     initial = service.status(research_id, include_materials=False)
     completed = evidence_selection_receipt()
+    completed["phase"] = phase
     started = {key: value for key, value in completed.items() if key not in {"text", "textSha256"}}
     started["outcome"] = "started"
     retained = {}
@@ -305,7 +307,7 @@ def test_evidence_selection_receipt_is_original_hash_bound_and_append_only(setup
         journal = service.artifact_path(research_id, f'model-journal-{value["id"]}-{value["outcome"]}')
         assert json.loads(journal.read_bytes()) == {
             "event": "model-inference", "id": value["id"], "at": value["at"],
-            "phase": "evidence-selection", "outcome": value["outcome"], "receipt_sha256": result["sha256"],
+            "phase": phase, "outcome": value["outcome"], "receipt_sha256": result["sha256"],
         }
         retained[original], retained[journal] = original.read_bytes(), journal.read_bytes()
         assert service.record_inference(research_id, value) == result

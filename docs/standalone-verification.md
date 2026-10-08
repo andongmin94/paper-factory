@@ -1074,3 +1074,30 @@ reporter를 바로 고쳐 이미 시작한 별도 보조 회수도 종료했으�
 실제 JIZURA 평가에는 저장소 `https://github.com/andongmin94/JIZURA`와 목표 `다양한 문자의 배치와 자동 크기 조절이 어떤 조건에서 안정적으로 동작하는지 연구해 주세요.`만 입력했다. DOI·논문 제목·코드 entrypoint·oracle·기대 결과·승인을 주입하지 않았다. `.paper-factory/j15/73b3b723c72b`의 `research-7fc481808695`는 모델 계획 요청 한 번 뒤 STUDY_INFEASIBLE로 끝났으며 native created/proposal0·문헌0·SCI0·원고0이다. 모델은 브라우저 준비를 인정했지만 실제 배치 구현 본문을 확인하지 못해 callable·의존성·출력을 발명할 수 없다고 판단했다.
 
 초기 prefix 발췌는 96,000자 한도에 도달한 README·번역 파일 등 10개였고 `src/` 본문은 0개였다. 전체 동결 목록에는 배치 구현이 포함됐다. 이는 초기 자료 선택 문제이며 저장소 전체가 실행·연구 불가능하다는 결론이 아니다. 초기 harness의 SOURCE_CHANGED 오류는 간략 `workflow.list` 결과로 전체 manifest를 덮어쓴 검증 helper의 오류였다. 결과 원본을 수정하지 않고 immutable SQLite SELECT와 전수 파일 해시로 독립 감사했다. 16항목이 참이며 실제 root 195파일·원본166개·동결 산출물6개·제품 결합59개가 그대로다. audit SHA256은 `94d097dd11e1d0da6d903d28c1b91eca2a0b95e4e3a289c35094dbab263c2223`이며 `.paper-factory/chromium-ordinary-jizura-01415/diagnosis-7fc481808695/readonly-diagnosis.json`에 있다. 다음 개선은 계획 전에 전체 목록에서 목표에 필요한 원본을 선택하고 검증된 본문을 읽게 하는 것이다. 기존 연구를 보존해 이어가며 SCI를 재실행하거나 새 root로 같은 연구를 반복하지 않는다. 투고 준비도를 통과한 실제 완료 원고는 아직 없다.
+
+## 0.14.16 설계 전에 목표에 필요한 원본 읽기: 2026-10-08
+
+일반 목표가 파일 이름을 포함하지 않으면 prefix 발췌만 전달하던 경로를 제거했다. 처음 설계·설계 보완·새 연구안 준비에서 작성 모델이 전체 동결 목록의 정확한 파일 이름을 최대 20개 선택한다. 선택은 읽기 범위만 정하며 callable·문헌 질의·기대 결과·실행 가능성·승인을 정하지 않는다. 선택 이유는 원래 모델 receipt에 남기고 설계자에게 과학 근거로 전달하지 않는다. 관련 README·라이선스와 선택한 전체 본문을 읽고, 읽지 않은 파일 목록도 전달한다.
+
+기존 native 계획 지침은 각 요청에 한 번 유지해 원래 목표·심사 규칙·동결한 runtime 사실·이전 연구 이력을 보존한다. material JSON의 중복 prefix 본문을 제거했다. 원래 context artifact는 변경하지 않는다. 각 본문 페이지는 연구 ID·area·파일 이름·offset·limit·고정 total_chars·Unicode codepoint 길이·마지막 페이지를 확인하고, UTF-8 원본의 페이지 및 전체 SHA·byte size를 대조한다. BOM·CRLF·비 BMP 문자는 원래 바이트 그대로 유지한다. 취소·부분 읽기·변조·문맥 초과는 계획 요청이나 제출 전에 중단한다. 기존 500,000자 직렬화 material·700,000자 최종 요청 한도와 과학 심사·제안·SCI·후속 연구 한도는 유지한다. 새로운 dependency·native material API·문맥 delimiter parser·fallback을 추가하지 않았다.
+
+| 검사 | 결과와 범위 |
+| --- | --- |
+| Desktop build·typecheck | 통과. 연구 소스 확인 단계의 shared phase·UI 표시 포함 |
+| 연구 controller 전체 | 349 통과·0 실패·0 건너뜀, 15.92초. 전체 목록·잘못된 선택·페이지 echo·Unicode·EOF·해시·취소·JSON escaping·최종 요청 한도·기존 심사와 재개 경계 |
+| Desktop 전체·SDK | Desktop 428 통과, SDK 48 통과·Windows 권한 1 건너뜀·실패0. 위 349개와 겹치므로 합산하지 않음 |
+| Native 모델 기록 | 25 통과·277 미선택, 2.45초. 새 phase의 append-only 원문·journal 보존과 알 수 없는 phase·변조·추가 필드 거절. 실제 연구·계정·모델·SCI0 |
+| 독립 코드 검토 | 최종 동결 controller에 추가 지적 없음. 읽기 검토이며 모델이나 연구 실행 검사가 아님 |
+| 포함 Windows runtime | 2,219파일·473,784,523 B, 실제 host 검사 통과. inventory SHA256 `25335e2e6d3c7ed74989d24c862f4246c6b7a9935ad7a5b1e7ac5dfcc9a99783` |
+
+최종 controller SHA256은 `262d5a5185d9091c57359c63650e07130b1e68f13453e3f75095de0a2940c43c`, native phase 모델은 `26e0ecf14c82118fa274a3b211f5ed09ec73b4afd6bb1ba9fcbc7ec7dd4e3fd4`다. Desktop freeze `.paper-factory/source-inspection-01416/desktop-source-inspection-freeze.json`의 SHA256은 `ac3cac0078cb8e1ddfc102095d2cdf8df114b16b1c97c17043ed105c56f2dffa`, native phase freeze `.paper-factory/source-selection-01416/native-phase/final-source-freeze.json`은 `0913287c550beb1602b4437b9f17829b380790e88a0623e3aba9d9c1e22b433e`다. Chromium worker는 0.14.15 최종 `9d922a1b468773ec8211ef3e65f67175e2c502dc3c604b964a9a7a1423c0c08c`와 동일하며 이전 27개 실제 worker 검사를 새 버전에서 반복한 것으로 계산하지 않는다. 이 검사는 실제 투고 준비도를 통과한 원고 생성의 증거가 아니다.
+
+현재 소스의 일반 Windows packaging으로 새 NSIS를 생성했다. 이번 extraction과 rename은 성공했으며, 이전 0.14.15 EPERM의 원인이 밝혀지거나 해결됐다고 주장하지 않는다. 새 `.paper-factory/p16-release`와 최종 `desktop/release`의 ASAR 7,668항목·SDK·renderer·Pretendard·원본 소스·외부 worker·포함 runtime 전수 대조를 통과했다. 이전 0.14.15 설치 파일·ASAR·실행 파일을 동결 SHA와 먼저 비교하고 활성 process 참조가 없음을 확인한 뒤 전체 배포 폴더를 `.paper-factory/preserved-release-01415`에 보존했다.
+
+실제 패키지의 포함 Python IPC와 app bootstrap·외부 Chromium worker로 두 실행 profile 준비·browser control7개·종료를 같은 작업실에서 두 번 확인했다. 자원 바이트가 같고 소유 engine/worker가 종료됐다. 새 workflow·모델 요청·SCI·계정 접근은 0회다. 기록은 `.paper-factory/source-inspection-01416/packaged-engine-ffc29abe-428f-4a88-bf37-29be9367d97c/receipt.json`이며, 정적 로그는 같은 부모의 `package-static.log`와 `package-default-static.log`다. 설치·새 OAuth·로그인 복원·GitHub Release 게시는 수행하지 않았다.
+
+| 최종 0.14.16 배포 파일 | 크기(B) | SHA256 |
+| --- | ---: | --- |
+| Paper Factory Setup 0.14.16.exe | 213,077,795 | f55c1497e70a278a25c431a7b42a014dd4f6cc842c3a3f49b3f0a63f8f779103 |
+| win-unpacked/resources/app.asar | 44,791,616 | 53c479c816091a460a13f6f0419febfbddd4f03e07220d4ba848849e975bc347 |
+| win-unpacked/Paper Factory.exe | 245,726,208 | d35bcbc95cdab6168670dc582eaa42340a94b4fd07e32f72ca03a52119c20196 |

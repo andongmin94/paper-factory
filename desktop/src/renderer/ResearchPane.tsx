@@ -8,7 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
 
 const phaseLabels: Record<ResearchPhase, string> = {
-  idle: "대기", plan: "연구 설계", redesign: "연구 설계 보완", "redesign-plan": "새 연구안 준비", "redesign-review": "재설계 준비 검토", "literature-plan": "투고 근거 보완 계획", literature: "문헌 수집", "study-review": "연구 적합성 검토", code: "실험 코드 작성",
+  idle: "대기", "source-selection": "연구 소스 확인", plan: "연구 설계", redesign: "연구 설계 보완", "redesign-plan": "새 연구안 준비", "redesign-review": "재설계 준비 검토", "literature-plan": "투고 근거 보완 계획", literature: "문헌 수집", "study-review": "연구 적합성 검토", code: "실험 코드 작성",
   "code-review": "실험 코드 리뷰", experiment: "과학실험", "evidence-selection": "설명 근거 확인", manuscript: "원고 작성",
   "manuscript-review": "원고 품질 검토", export: "결과 파일 생성",
 };

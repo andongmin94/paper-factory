@@ -526,7 +526,7 @@ function fakeEngineError(code) {
 
 async function fixture(responses = [], workflow = base(), transport = {}) {
   const home = await mkdtemp(join(tmpdir(), 'paper-factory-research-test-'));
-  const calls = []; const prompts = []; const selectionPrompts = []; const literaturePlanPrompts = []; const literatureSelectionPrompts = []; const studyRemediationPrompts = [];
+  const calls = []; const prompts = []; const sourceSelectionPrompts = []; const selectionPrompts = []; const literaturePlanPrompts = []; const literatureSelectionPrompts = []; const studyRemediationPrompts = [];
   const events = []; const published = []; let responseIndex = 0; let starts = 0;
   const records = new Map([[workflow.id, workflow]]);
   const publicWorkflow = (record = workflow) => {
@@ -553,7 +553,8 @@ async function fixture(responses = [], workflow = base(), transport = {}) {
       if (method === 'workflow.create' || method === 'workflow.status') return publicWorkflow();
       if (method === 'workflow.readMaterial') return { text: params.area === 'source'
         ? sourceText : params.name === 'authoring-selected-literature' ? workflow.authoringSelectedText : retainedMaterials[params.name], next_offset: null,
-        ...(params.area === 'source' ? { sha256: digest(sourceText) } : params.name === 'observations' ? { sha256: digest(retainedMaterials.observations) }
+        ...(params.area === 'source' ? { sha256: digest(sourceText), research_id: params.researchId, area: params.area, name: params.name,
+          offset: params.offset, limit: params.limit, total_chars: [...sourceText].length, is_untrusted_data: true } : params.name === 'observations' ? { sha256: digest(retainedMaterials.observations) }
           : params.name === 'authoring-selected-literature' ? { sha256: digest(workflow.authoringSelectedText) } : {}) };
       if (method === 'workflow.recordInference') return { retained: true };
       if (method === 'workflow.submitProposal') {
@@ -633,6 +634,13 @@ async function fixture(responses = [], workflow = base(), transport = {}) {
     async listModels() { events.push('client.listModels'); return [{ slug: 'writer' }, { slug: 'reviewer' }]; },
     async streamResponse(options) {
       events.push('client.streamResponse');
+      if (options.input[0].content.startsWith('Select frozen repository files to inspect completely before designing this study.')) {
+        sourceSelectionPrompts.push(options);
+        const result = transport.sourceSelection ? await transport.sourceSelection(options)
+          : { files: [{ name: workflow.material_manifest.source[0].name, reason: 'Synthetic reading scope only; this fixture does not claim scientific feasibility or approval.' }] };
+        if (result instanceof Error) throw result;
+        return { text: typeof result === 'string' ? result : JSON.stringify(result) };
+      }
       if (options.input[0].content.startsWith('Plan remediation for a rejected study before execution.')) {
         studyRemediationPrompts.push(options);
         const result = transport.studyRemediation ? await transport.studyRemediation(options)
@@ -670,7 +678,7 @@ async function fixture(responses = [], workflow = base(), transport = {}) {
     },
   };
   const controller = new ResearchController(client, engine, home, snapshot => published.push(snapshot));
-  return { home, controller, calls, prompts, selectionPrompts, literaturePlanPrompts, literatureSelectionPrompts, studyRemediationPrompts, events, published, engine, client, workflow, records, get starts() { return starts; },
+  return { home, controller, calls, prompts, sourceSelectionPrompts, selectionPrompts, literaturePlanPrompts, literatureSelectionPrompts, studyRemediationPrompts, events, published, engine, client, workflow, records, get starts() { return starts; },
     async cleanup() { await controller.shutdown(); await rm(home, { recursive: true, force: true }); } };
 }
 
@@ -929,7 +937,7 @@ test('preexecution preparation independently reviews a frozen candidate before a
     for (const [name, artifact] of Object.entries(frozen.artifacts)) assert.deepEqual(original.artifacts[name], artifact);
     assert.deepEqual(f.prompts.map(prompt => prompt.model), ['writer', 'reviewer', 'reviewer', 'writer', 'reviewer', 'writer', 'reviewer']);
     assert.ok(f.prompts[0].input[0].content.includes(JSON.stringify(frozen.prior_study)));
-    assert.equal(f.prompts[0].input[0].content.includes(sourceText), false);
+    assert.equal(f.prompts[0].input[0].content.includes(sourceText), true);
     assert.ok(f.prompts[1].input[0].content.includes(JSON.stringify(preparationCandidate())));
     assert.ok(f.prompts[1].input[0].content.includes(JSON.stringify(frozen.study_review)));
     for (const prompt of f.prompts.slice(0, 3)) assertOperationalDesignPrompt(prompt.input[0].content);
@@ -939,8 +947,8 @@ test('preexecution preparation independently reviews a frozen candidate before a
     assert.deepEqual(promptMaterials(f.prompts[1].input[0].content).productionSource, { 'module.ts': sourceText });
     assert.match(f.prompts[1].input[0].content, /selected production files and accompanying source notices below are complete/);
     const completedReceipts = f.calls.filter(call => call.method === 'workflow.recordInference' && call.params.receipt.outcome === 'completed');
-    assert.deepEqual([...new Map(completedReceipts.map(call => [call.params.receipt.id, call.params.receipt.phase])).values()].slice(0, 3),
-      ['redesign-plan', 'redesign-review', 'study-review']);
+    assert.deepEqual([...new Map(completedReceipts.map(call => [call.params.receipt.id, call.params.receipt.phase])).values()].slice(0, 4),
+      ['source-selection', 'redesign-plan', 'redesign-review', 'study-review']);
     const parentCalls = f.calls.filter(call => call.params.researchId === id).map(call => call.method);
     assert.equal(parentCalls.filter(method => method === 'workflow.submitRedesignProposal').length, 1);
     assert.equal(parentCalls.filter(method => method === 'workflow.submitRedesignReview').length, 1);
@@ -1113,8 +1121,10 @@ test('preparation acceptance never bypasses the fresh independent code gate', as
 });
 
 test('preparation reviewer requires the complete frozen named source bytes', async () => {
+  let reads = 0;
   const f = await fixture([preparationCandidate(), preparationAccepted()], heldPreparation(), { request(method, params) {
     if (method !== 'workflow.readMaterial' || params.researchId !== id || params.area !== 'source') return undefined;
+    if (++reads === 1) return undefined; // Planning reads valid bytes; independently tamper with the later reviewer read.
     return { text: sourceText + ' /* substituted bytes */', next_offset: null, sha256: digest(sourceText) };
   } });
   try {
@@ -1147,7 +1157,7 @@ test('preparation material loading exposes its phase and cancellation preserves 
   } });
   try {
     await f.controller.initialize(); await f.controller.improveResearch(id, 'writer', 'reviewer'); await reading.promise;
-    assert.equal(f.controller.snapshot().jobs[0].phase, 'redesign-plan');
+    assert.equal(f.controller.snapshot().jobs[0].phase, 'source-selection');
     const cancelling = f.controller.cancel(id);
     while (!f.calls.some(call => call.method === 'workflow.cancel')) await delay(1);
     release.resolve(); await cancelling;
@@ -1220,7 +1230,7 @@ test('proposal, inspected literature and fresh suitability acceptance precede an
     assert.equal(f.prompts[1].model, 'reviewer');
     const phases = [...new Map(f.calls.filter(call => call.method === 'workflow.recordInference' && call.params.receipt.outcome === 'completed')
       .map(call => [call.params.receipt.id, call.params.receipt.phase])).values()];
-    assert.deepEqual(phases, ['plan', 'study-review', 'code', 'code-review', 'evidence-selection', 'manuscript', 'manuscript-review']);
+    assert.deepEqual(phases, ['source-selection', 'plan', 'study-review', 'code', 'code-review', 'evidence-selection', 'manuscript', 'manuscript-review']);
     assert.deepEqual(state.jobs[0].studyReview, studyAccepted);
     const codePrompt = f.prompts[2].input[0].content;
     assert.ok(codePrompt.includes('this request only implements the frozen plan as CodeBundle JSON'));
@@ -2295,7 +2305,9 @@ const sourceRead = texts => (method, params) => {
   const text = texts[params.name];
   const characters = Array.from(text);
   const end = Math.min(params.offset + params.limit, characters.length);
-  return { text: characters.slice(params.offset, end).join(''), next_offset: end < characters.length ? end : null, sha256: digest(text) };
+  return { text: characters.slice(params.offset, end).join(''), next_offset: end < characters.length ? end : null, sha256: digest(text),
+    research_id: params.researchId, area: params.area, name: params.name, offset: params.offset, limit: params.limit,
+    total_chars: characters.length, is_untrusted_data: true };
 };
 const planningWorkflow = (texts, goal = 'Inspect this synthetic repository.') => {
   const workflow = { ...base(), goal, stage: 'created', proposal_attempt: 0, study_review: null, material_manifest: { source: sourceInventory(texts), experiment: [] } };
@@ -2304,6 +2316,144 @@ const planningWorkflow = (texts, goal = 'Inspect this synthetic repository.') =>
 };
 const promptMaterials = prompt => JSON.parse(prompt.slice(prompt.indexOf('{"productionSource":')).split('\n', 1)[0]);
 const assertNoScientificDispatch = f => assert.equal(f.calls.some(call => call.method === 'workflow.startExperiment'), false);
+const fileSelection = names => ({ files: names.map(name => ({ name, reason: 'Synthetic bounded source inspection only; no scientific procedure, outcome or approval is supplied.' })) });
+
+test('source inspection preserves one native context and verifies an inventory-only whole Unicode file before planning', async () => {
+  const core = '\ufeff/* SYNTHETIC FULL BODY */\r\n' + '한😀x'.repeat(14000) + '\r\nFULL_PRODUCTION_TAIL';
+  const texts = Object.fromEntries(Array.from({ length: 165 }, (_, i) => ['translations/lang-' + i + '.json', 'UNREAD_SYNTHETIC_TRANSLATION_' + i]));
+  texts['core/measure.js'] = core;
+  const workflow = planningWorkflow(texts, '다양한 문자의 배치와 크기를 연구해 주세요.');
+  workflow.source_context = 'SYNTHETIC_INITIAL_EXCERPT_ONLY\nController runtime capabilities: {"chromium":{"ready":true,"json_projection_only":true}}';
+  workflow.planning_instructions = 'SYNTHETIC_FROZEN_NATIVE_RULES\n' + workflow.source_context + '\nSYNTHETIC_PRIOR_HISTORY_CLAUSE';
+  const original = structuredClone(workflow), reason = 'SYNTHETIC_SELECTOR_REASON_MUST_NOT_BECOME_SCIENCE_OR_LITERATURE';
+  const f = await fixture([{ feasible: false, reason: 'Synthetic stop after verified delivery; scientific contribution remains unassessed.' }], workflow, {
+    request: sourceRead(texts), sourceSelection: options => {
+      assert.ok(options.input[0].content.includes(JSON.stringify(sourceInventory(texts))));
+      return { files: [{ name: 'core/measure.js', reason }] };
+    } });
+  try {
+    await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer');
+    assert.equal((await settled(f.controller)).jobs[0].code, 'STUDY_INFEASIBLE');
+    assert.equal(f.sourceSelectionPrompts.length, 1); assert.equal(f.prompts.length, 1);
+    for (const options of [f.sourceSelectionPrompts[0], f.prompts[0]]) {
+      assert.equal(options.input[0].content.split(workflow.planning_instructions).length - 1, 1);
+      assert.equal(options.input[0].content.split(workflow.source_context).length - 1, 1);
+    }
+    const prompt = f.prompts[0].input[0].content, material = promptMaterials(prompt);
+    assert.equal(prompt.includes(reason), false);
+    assert.deepEqual(material.productionSource, { 'core/measure.js': core });
+    assert.deepEqual(material.sourceInventory, sourceInventory(texts));
+    assert.deepEqual(material.uninspectedSourceFiles, Object.keys(texts).slice(0, 165));
+    assert.equal(Object.hasOwn(material, 'planningSourceExcerpts'), false);
+    assert.match(prompt, /initial bounded reading, not whole-file inspection/);
+    assert.match(prompt, /do not establish feasibility, novelty or approval/);
+    assert.equal(material.sourceReads.length, 1);
+    const receipt = material.sourceReads[0], points = [...core];
+    assert.equal(receipt.name, 'core/measure.js'); assert.equal(receipt.sha256, digest(core));
+    assert.equal(receipt.size, Buffer.byteLength(core)); assert.equal(receipt.totalChars, points.length);
+    assert.deepEqual(receipt.pages, [0, 32000].map(offset => {
+      const text = points.slice(offset, offset + 32000).join('');
+      return { offset, limit: 32000, chars: [...text].length, size: Buffer.byteLength(text), sha256: digest(text),
+        nextOffset: offset + [...text].length < points.length ? offset + [...text].length : null };
+    }));
+    assert.deepEqual(f.calls.filter(call => call.method === 'workflow.readMaterial').map(call => [call.params.name, call.params.offset]),
+      [['core/measure.js', 0], ['core/measure.js', 32000]]);
+    const evidence = f.calls.filter(call => call.method === 'workflow.recordInference').map(call => call.params.receipt);
+    assert.deepEqual(evidence.map(receipt => [receipt.phase, receipt.outcome]),
+      [['source-selection', 'started'], ['source-selection', 'completed'], ['plan', 'started'], ['plan', 'completed']]);
+    assert.equal(evidence[1].textSha256, digest(evidence[1].text));
+    assert.ok(evidence[1].text.includes(reason));
+    assert.equal(evidence[2].prompt, prompt); assert.equal(evidence[2].promptSha256, digest(prompt));
+    assert.deepEqual(workflow.material_manifest, original.material_manifest); assert.equal(workflow.source_context, original.source_context);
+    assert.equal(workflow.proposal_attempt, 0); assert.equal(workflow.execution_attempt, 0);
+    assert.equal(f.calls.some(call => call.method === 'workflow.submitProposal'), false); assertNoScientificDispatch(f);
+  } finally { await f.cleanup(); }
+});
+
+for (const defect of ['unknown-name', 'renamed-name', 'duplicate', 'empty', 'too-many', 'no-reason', 'short-reason', 'control-reason', 'extra-file-field', 'protocol', 'callable', 'doi', 'expected-outcome', 'approval', 'partial-json']) {
+  test('source selection fails closed before reads and design when the retained selection has ' + defect, async () => {
+    const texts = Object.fromEntries(Array.from({ length: 21 }, (_, i) => ['module-' + i + '.js', 'SYNTHETIC_MODULE_' + i]));
+    let selection = fileSelection(['module-0.js']);
+    if (defect === 'unknown-name') selection.files[0].name = 'unretained.js';
+    if (defect === 'renamed-name') selection.files[0].name = './module-0.js';
+    if (defect === 'duplicate') selection.files.push({ ...selection.files[0] });
+    if (defect === 'empty') selection.files = [];
+    if (defect === 'too-many') selection = fileSelection(Object.keys(texts));
+    if (defect === 'no-reason') delete selection.files[0].reason;
+    if (defect === 'short-reason') selection.files[0].reason = 'Too short';
+    if (defect === 'control-reason') selection.files[0].reason += '\u0000';
+    if (defect === 'extra-file-field') selection.files[0].source_order = 0;
+    if (['protocol', 'callable', 'doi', 'expected-outcome', 'approval'].includes(defect)) selection[defect] = 'MODEL_OUTPUT_CANNOT_EXTEND_READING_AUTHORITY';
+    if (defect === 'partial-json') selection = '{"files":[';
+    const workflow = planningWorkflow(texts), original = structuredClone(workflow);
+    const f = await fixture([], workflow, { sourceSelection: () => selection });
+    try {
+      await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer');
+      assert.equal((await settled(f.controller)).jobs[0].code, defect === 'partial-json' ? 'MODEL_JSON_INVALID' : 'SOURCE_SELECTION_INVALID');
+      assert.equal(f.sourceSelectionPrompts.length, 1); assert.equal(f.prompts.length, 0);
+      const receipt = f.calls.find(call => call.method === 'workflow.recordInference' && call.params.receipt.phase === 'source-selection' && call.params.receipt.outcome === 'completed').params.receipt;
+      assert.equal(receipt.text, typeof selection === 'string' ? selection : JSON.stringify(selection));
+      assert.equal(receipt.textSha256, digest(receipt.text));
+      assert.equal(f.calls.some(call => call.method === 'workflow.readMaterial'), false);
+      assert.equal(f.calls.some(call => ['workflow.submitProposal', 'workflow.submitRedesignProposal', 'workflow.submitStudyReview'].includes(call.method)), false);
+      assert.deepEqual(workflow.material_manifest, original.material_manifest); assert.deepEqual(workflow.artifacts, original.artifacts);
+      assert.equal(workflow.execution_attempt, 0); assert.equal(workflow.proposal_attempt, 0); assertNoScientificDispatch(f);
+    } finally { await f.cleanup(); }
+  });
+}
+
+for (const defect of ['research-id', 'area', 'name', 'offset', 'limit', 'total-chars', 'changing-total', 'early-eof', 'missing-eof', 'missing-trust', 'same-length-substitution', 'forged-short-eof']) {
+  test('source inspection rejects ' + defect + ' page evidence before the design model', async () => {
+    const texts = { 'module.ts': '한😀x'.repeat(14000) + '\r\nEXACT_TAIL' }, original = sourceRead(texts);
+    const f = await fixture([], planningWorkflow(texts), { request(method, params) {
+      const reply = original(method, params);
+      if (!reply) return undefined;
+      if (defect === 'research-id') reply.research_id = 'research-999999999999';
+      if (defect === 'area') reply.area = 'experiment';
+      if (defect === 'name') reply.name = 'other.ts';
+      if (defect === 'offset') reply.offset++;
+      if (defect === 'limit') reply.limit--;
+      if (defect === 'total-chars') reply.total_chars = -1;
+      if (defect === 'changing-total' && params.offset > 0) reply.total_chars++;
+      if (defect === 'early-eof') reply.next_offset = null;
+      if (defect === 'missing-eof') delete reply.next_offset;
+      if (defect === 'missing-trust') delete reply.is_untrusted_data;
+      if (defect === 'same-length-substitution') reply.text = 'X' + reply.text.slice(1);
+      if (defect === 'forged-short-eof') { reply.total_chars = [...reply.text].length; reply.next_offset = null; }
+      return reply;
+    } });
+    try {
+      await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer');
+      assert.equal((await settled(f.controller)).jobs[0].code, ['same-length-substitution', 'forged-short-eof'].includes(defect) ? 'ARTIFACT_CHANGED' : 'MATERIAL_INVALID');
+      assert.equal(f.sourceSelectionPrompts.length, 1); assert.equal(f.prompts.length, 0);
+      assert.equal(f.calls.some(call => call.method === 'workflow.submitProposal'), false);
+      assert.equal(f.workflow.execution_attempt, 0); assert.equal(f.workflow.proposal_attempt, 0); assertNoScientificDispatch(f);
+    } finally { await f.cleanup(); }
+  });
+}
+
+for (const text of ['SYNTHETIC\u0000BINARY', 'SYNTHETIC_UNPAIRED_SURROGATE_\ud800']) {
+  test('source inspection rejects a non-text or malformed Unicode page without a partial planning fallback', async () => {
+    const texts = { 'module.ts': text }, f = await fixture([], planningWorkflow(texts), { request: sourceRead(texts) });
+    try {
+      await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer');
+      assert.equal((await settled(f.controller)).jobs[0].code, 'MATERIAL_INVALID');
+      assert.equal(f.prompts.length, 0); assert.equal(f.workflow.execution_attempt, 0); assertNoScientificDispatch(f);
+    } finally { await f.cleanup(); }
+  });
+}
+
+test('source inspection rejects an oversized selected scope after retaining selection and before design or protocol submission', async () => {
+  const texts = { 'first.js': 'x'.repeat(300000), 'second.js': 'y'.repeat(200001) };
+  const f = await fixture([], planningWorkflow(texts), { request: sourceRead(texts), sourceSelection: () => fileSelection(Object.keys(texts)) });
+  try {
+    await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer');
+    assert.equal((await settled(f.controller)).jobs[0].code, 'REVIEW_CONTEXT_TOO_LARGE');
+    assert.equal(f.sourceSelectionPrompts.length, 1); assert.equal(f.prompts.length, 0);
+    assert.equal(f.calls.some(call => call.method === 'workflow.recordInference' && call.params.receipt.phase === 'plan'), false);
+    assert.equal(f.calls.some(call => call.method === 'workflow.submitProposal'), false); assertNoScientificDispatch(f);
+  } finally { await f.cleanup(); }
+});
 
 for (const stage of ['created', 'planned', 'analyzed']) {
   test('Source12 ' + stage + ' author and fresh reviewer receive exact root metadata and nested original notices', async () => {
@@ -2381,7 +2531,8 @@ for (const stage of ['created', 'planned', 'analyzed']) {
       } });
       try {
         await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer');
-        assert.equal((await settled(f.controller)).jobs[0].code, defect === 'skipped-page' ? 'MATERIAL_INVALID' : 'ARTIFACT_CHANGED');
+        assert.equal((await settled(f.controller)).jobs[0].code,
+          defect === 'skipped-page' || (stage === 'created' && defect === 'incomplete-text') ? 'MATERIAL_INVALID' : 'ARTIFACT_CHANGED');
         assert.equal(f.prompts.length, 0); assertNoScientificDispatch(f);
         assert.equal(workflow.execution_attempt, stage === 'analyzed' ? 1 : 0);
       } finally { await f.cleanup(); }
@@ -2433,7 +2584,9 @@ test('initial plan receives full paged source, its named consumer and available 
   const workflow = planningWorkflow(texts, 'Inspect `plugin/lib/planner.js:approveCandidates` and plugin/lib/consumer.js using synthetic fixtures.');
   workflow.source_context = '<source-file path="unrelated.ts">UNTRUSTED_HEADING_IS_NOT_A_SELECTION_REQUEST</source-file>';
   const originalManifest = structuredClone(workflow.material_manifest);
-  const f = await fixture([{ feasible: false, reason: 'Synthetic stop after complete planning delivery' }], workflow, { request: sourceRead(texts) });
+  const f = await fixture([{ feasible: false, reason: 'Synthetic stop after complete planning delivery' }], workflow, {
+    request: sourceRead(texts), sourceSelection: () => ({ files: ['plugin/lib/planner.js', 'plugin/lib/consumer.js'].map(name =>
+      ({ name, reason: 'Synthetic whole-file inspection fixture; no feasibility or approval is claimed.' })) }) });
   try {
     await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer');
     assert.equal((await settled(f.controller)).jobs[0].code, 'STUDY_INFEASIBLE');
@@ -2450,7 +2603,7 @@ test('initial plan receives full paged source, its named consumer and available 
   } finally { await f.cleanup(); }
 });
 
-test('generic planning uses frozen bounded excerpts and does not pretend to inspect whole files', async () => {
+test('ordinary planning selects whole files from the complete inventory without filename instructions', async () => {
   const texts = { 'module.ts': sourceText, 'style.css': 'SYNTHETIC CSS', 'index.html': 'SYNTHETIC HTML',
     'config.yml': 'SYNTHETIC YAML', 'other.yaml': 'SYNTHETIC YAML LONG SUFFIX', COPYING: 'SYNTHETIC COPYING',
     'image.png': 'SYNTHETIC binary', 'data.bin': 'SYNTHETIC binary' };
@@ -2458,22 +2611,28 @@ test('generic planning uses frozen bounded excerpts and does not pretend to insp
   try {
     await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer'); await settled(f.controller);
     const material = promptMaterials(f.prompts[0].input[0].content);
-    assert.deepEqual(material.productionSource, {});
-    assert.equal(material.planningSourceExcerpts, f.workflow.source_context);
-    assert.match(f.prompts[0].input[0].content, /Omitted code has not been inspected/);
-    assert.equal(f.calls.some(call => call.method === 'workflow.readMaterial'), false);
+    assert.deepEqual(material.productionSource, { 'module.ts': sourceText, COPYING: texts.COPYING });
+    assert.equal(Object.hasOwn(material, 'planningSourceExcerpts'), false);
+    assert.deepEqual(material.sourceInventory, sourceInventory(texts));
+    assert.deepEqual(material.uninspectedSourceFiles, Object.keys(texts).filter(name => !['module.ts', 'COPYING'].includes(name)));
+    assert.match(f.prompts[0].input[0].content, /all uninspectedSourceFiles remain unread/);
+    assert.equal(f.sourceSelectionPrompts.length, 1);
+    assert.ok(f.sourceSelectionPrompts[0].input[0].content.includes(JSON.stringify(sourceInventory(texts))));
+    assert.deepEqual(f.calls.filter(call => call.method === 'workflow.readMaterial').map(call => call.params.name), ['module.ts', 'COPYING']);
     assertNoScientificDispatch(f);
   } finally { await f.cleanup(); }
 });
 
-for (const goal of ['prefix/module.ts', 'module.ts.backup', 'module.ts-extra', 'module.ts\\nested', 'xmodule.ts', 'x'.repeat(4000) + ' module.ts']) {
-  test('planning exact-path boundaries use the bounded goal, not a partial token: ' + goal.slice(0, 40), async () => {
+for (const goal of ['Inspect this repository.', 'Inspect module.ts.', 'prefix/module.ts module.ts.backup ' + 'x'.repeat(4000) + ' module.ts']) {
+  test('planning reading scope follows the recorded selection rather than goal filename matching: ' + goal.slice(0, 40), async () => {
     const texts = { 'module.ts': sourceText, 'other.ts': 'SYNTHETIC other complete source' };
-    const f = await fixture([{ feasible: false }], planningWorkflow(texts, goal), { request: sourceRead(texts) });
+    const f = await fixture([{ feasible: false }], planningWorkflow(texts, goal), { request: sourceRead(texts),
+      sourceSelection: () => ({ files: [{ name: 'other.ts', reason: 'Synthetic model-selected reading scope only, independent of any filename mentioned in the goal.' }] }) });
     try {
       await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer'); await settled(f.controller);
-      assert.deepEqual(promptMaterials(f.prompts[0].input[0].content).productionSource, {});
-      assert.equal(f.calls.some(call => call.method === 'workflow.readMaterial'), false);
+      assert.deepEqual(promptMaterials(f.prompts[0].input[0].content).productionSource, { 'other.ts': texts['other.ts'] });
+      assert.deepEqual(f.calls.filter(call => call.method === 'workflow.readMaterial').map(call => call.params.name), ['other.ts']);
+      assert.ok(f.sourceSelectionPrompts[0].input[0].content.includes(JSON.stringify(goal)));
       assertNoScientificDispatch(f);
     } finally { await f.cleanup(); }
   });
@@ -2517,14 +2676,18 @@ for (const stage of ['created', 'planned', 'analyzed']) {
     test(stage + ' authoring verifies both source reply SHA and the complete original text: ' + defect, async () => {
       const workflow = stage === 'created' ? planningWorkflow({ 'module.ts': sourceText }, 'Inspect module.ts.') : stage === 'analyzed' ? observed() : base();
       if (defect === 'manifest-size-mismatch') workflow.material_manifest.source[0].size++;
+      const original = sourceRead({ 'module.ts': sourceText });
       const f = await fixture([], workflow, { request(method, params) {
-        if (method !== 'workflow.readMaterial' || params.area !== 'source') return undefined;
-        return { text: defect === 'incomplete-text' ? sourceText.slice(0, -1) : sourceText, next_offset: null,
-          ...(defect === 'reply-sha-missing' ? {} : { sha256: defect === 'reply-sha-mismatch' ? '0'.repeat(64) : digest(sourceText) }) };
+        const reply = original(method, params);
+        if (!reply) return undefined;
+        if (defect === 'reply-sha-missing') delete reply.sha256;
+        if (defect === 'reply-sha-mismatch') reply.sha256 = '0'.repeat(64);
+        if (defect === 'incomplete-text') reply.text = sourceText.slice(0, -1);
+        return reply;
       } });
       try {
         await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer');
-        assert.equal((await settled(f.controller)).jobs[0].code, 'ARTIFACT_CHANGED');
+        assert.equal((await settled(f.controller)).jobs[0].code, stage === 'created' && defect === 'incomplete-text' ? 'MATERIAL_INVALID' : 'ARTIFACT_CHANGED');
         assert.equal(f.prompts.length, 0); assertNoScientificDispatch(f);
         assert.equal(workflow.execution_attempt, stage === 'analyzed' ? 1 : 0);
       } finally { await f.cleanup(); }
@@ -2546,27 +2709,31 @@ test('planning rejects a skipped source page even when its advertised full-file 
   } finally { await f.cleanup(); }
 });
 
-test('a repository exceeding the full-material cap can be explored through bounded planning excerpts', async () => {
+test('a large repository can select complete files within the material cap while omitted files remain uninspected', async () => {
   const texts = { 'first.js': 'x'.repeat(300000), 'second.js': 'y'.repeat(200001) };
   const f = await fixture([{ feasible: false }], planningWorkflow(texts), { request: sourceRead(texts) });
   try {
     await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer');
     assert.equal((await settled(f.controller)).jobs[0].code, 'STUDY_INFEASIBLE');
     assert.equal(f.prompts.length, 1);
-    assert.equal(f.calls.some(call => call.method === 'workflow.readMaterial'), false);
+    const material = promptMaterials(f.prompts[0].input[0].content);
+    assert.deepEqual(material.productionSource, { 'first.js': texts['first.js'] });
+    assert.deepEqual(material.uninspectedSourceFiles, ['second.js']);
+    assert.equal(material.sourceReads[0].size, 300000);
+    assert.equal(f.calls.some(call => call.method === 'workflow.readMaterial' && call.params.name === 'second.js'), false);
     assert.equal(f.calls.some(call => call.method === 'workflow.submitProposal'), false);
     assertNoScientificDispatch(f);
   } finally { await f.cleanup(); }
 });
 
-test('generic planning requires retained bounded source excerpts before inference', async () => {
+test('planning requires preserved native scientific instructions before file selection', async () => {
   const workflow = planningWorkflow({ 'module.ts': sourceText });
-  delete workflow.source_context;
+  workflow.instructions = '';
   const f = await fixture([], workflow);
   try {
     await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer');
     assert.equal((await settled(f.controller)).jobs[0].code, 'MATERIAL_INVALID');
-    assert.equal(f.prompts.length, 0); assertNoScientificDispatch(f);
+    assert.equal(f.prompts.length, 0); assert.equal(f.sourceSelectionPrompts.length, 0); assertNoScientificDispatch(f);
   } finally { await f.cleanup(); }
 });
 
@@ -2624,7 +2791,7 @@ test('a newly generated proposal is not frozen until literature and a fresh suit
     await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer');
     assert.equal((await settled(f.controller)).jobs[0].pipeline, 'failed');
     assert.equal(f.prompts.length, 2);
-    assert.deepEqual(promptMaterials(f.prompts[0].input[0].content).productionSource, {});
+    assert.deepEqual(promptMaterials(f.prompts[0].input[0].content).productionSource, { 'module.ts': sourceText });
     assert.deepEqual(promptMaterials(f.prompts[1].input[0].content).productionSource, { 'module.ts': sourceText });
     const submission = f.calls.findIndex(call => call.method === 'workflow.submitProposal');
     assert.ok(submission >= 0);
@@ -2650,6 +2817,87 @@ const pendingModel = (started, aborted, cleanup) => async options => {
   }, { once: true }));
   throw new Error('Synthetic pending model unexpectedly completed');
 };
+
+test('cancelling source selection preserves its partial receipt and cannot read files or submit a scientific design', async () => {
+  const started = deferred(), aborted = deferred(), cleanup = deferred();
+  const workflow = planningWorkflow({ 'module.ts': sourceText }), original = structuredClone(workflow);
+  const f = await fixture([], workflow, { sourceSelection: pendingModel(started, aborted, cleanup) });
+  let cancellation;
+  try {
+    await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer'); await started.promise;
+    assert.equal(f.controller.snapshot().jobs[0].phase, 'source-selection');
+    cancellation = f.controller.cancel(id); await aborted.promise;
+    assert.equal(f.controller.snapshot().busy, true); cleanup.resolve(); await cancellation;
+    const state = await settled(f.controller);
+    assert.equal(state.jobs[0].pipeline, 'paused'); assert.equal(state.jobs[0].code, 'CANCELLED');
+    const receipts = f.calls.filter(call => call.method === 'workflow.recordInference').map(call => call.params.receipt);
+    assert.deepEqual(receipts.map(receipt => [receipt.phase, receipt.outcome]), [['source-selection', 'started'], ['source-selection', 'interrupted']]);
+    assert.equal(receipts[1].text, '{"synthetic":"partial'); assert.equal(receipts[1].textSha256, digest(receipts[1].text));
+    assert.equal(f.calls.some(call => call.method === 'workflow.readMaterial'), false); assert.equal(f.prompts.length, 0);
+    assert.equal(f.calls.some(call => call.method === 'workflow.submitProposal'), false);
+    assert.deepEqual(workflow.material_manifest, original.material_manifest); assert.deepEqual(workflow.artifacts, original.artifacts);
+    assert.equal(workflow.execution_attempt, 0); assert.equal(workflow.proposal_attempt, 0); assertNoScientificDispatch(f);
+  } finally { cleanup.resolve(); await Promise.allSettled(cancellation ? [cancellation] : []); await f.cleanup(); }
+});
+
+test('cancelling a whole-source page prevents the next page and the planning request', async () => {
+  const texts = { 'module.ts': '한😀x'.repeat(14000) }, original = sourceRead(texts);
+  const reading = deferred(), release = deferred(), workflow = planningWorkflow(texts), frozen = structuredClone(workflow);
+  const f = await fixture([], workflow, { async request(method, params) {
+    const reply = original(method, params);
+    if (!reply) return undefined;
+    assert.equal(params.offset, 0); reading.resolve(); await release.promise; return reply;
+  } });
+  let cancellation;
+  try {
+    await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer'); await reading.promise;
+    cancellation = f.controller.cancel(id); await waitFor(() => f.calls.some(call => call.method === 'workflow.cancel'));
+    release.resolve(); await cancellation; const state = await settled(f.controller);
+    assert.equal(state.jobs[0].pipeline, 'paused'); assert.equal(state.jobs[0].code, 'CANCELLED');
+    assert.equal(f.prompts.length, 0); assert.equal(f.sourceSelectionPrompts.length, 1);
+    assert.deepEqual(f.calls.filter(call => call.method === 'workflow.readMaterial').map(call => call.params.offset), [0]);
+    assert.equal(f.calls.some(call => call.method === 'workflow.recordInference' && call.params.receipt.phase === 'plan'), false);
+    assert.deepEqual(workflow.material_manifest, frozen.material_manifest); assert.deepEqual(workflow.artifacts, frozen.artifacts);
+    assert.equal(workflow.execution_attempt, 0); assert.equal(workflow.proposal_attempt, 0); assertNoScientificDispatch(f);
+  } finally { release.resolve(); await Promise.allSettled(cancellation ? [cancellation] : []); await f.cleanup(); }
+});
+
+test('known oversized native instructions plus complete prior history stop before source selection or receipts', async () => {
+  const workflow = planningWorkflow({ 'module.ts': sourceText });
+  workflow.instructions = 'SYNTHETIC_NATIVE_CONTEXT_' + 'x'.repeat(610000);
+  workflow.prior_study = { findings: 'SYNTHETIC_COMPLETE_PRIOR_' + 'y'.repeat(95000) };
+  const f = await fixture([], workflow);
+  try {
+    await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer');
+    assert.equal((await settled(f.controller)).jobs[0].code, 'REVIEW_CONTEXT_TOO_LARGE');
+    assert.equal(f.sourceSelectionPrompts.length, 0); assert.equal(f.prompts.length, 0);
+    assert.equal(f.calls.some(call => ['workflow.recordInference', 'workflow.readMaterial', 'workflow.submitProposal'].includes(call.method)), false);
+    assert.equal(workflow.execution_attempt, 0); assert.equal(workflow.proposal_attempt, 0); assertNoScientificDispatch(f);
+  } finally { await f.cleanup(); }
+});
+
+test('whole selected texts are not submitted when JSON escaping exceeds the final material cap', async () => {
+  const texts = { 'module.ts': '\\'.repeat(250001) }, f = await fixture([], planningWorkflow(texts), { request: sourceRead(texts) });
+  try {
+    await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer');
+    assert.equal((await settled(f.controller)).jobs[0].code, 'REVIEW_CONTEXT_TOO_LARGE');
+    assert.equal(f.sourceSelectionPrompts.length, 1); assert.equal(f.prompts.length, 0);
+    assert.equal(f.calls.some(call => call.method === 'workflow.recordInference' && call.params.receipt.phase === 'plan'), false); assertNoScientificDispatch(f);
+  } finally { await f.cleanup(); }
+});
+
+test('verified selected files cannot exceed the final request budget when combined with the preserved native context', async () => {
+  const texts = { 'module.ts': 'y'.repeat(400000) }, workflow = planningWorkflow(texts);
+  workflow.instructions = 'SYNTHETIC_INITIAL_NATIVE_CONTEXT_' + 'x'.repeat(400000);
+  const f = await fixture([], workflow, { request: sourceRead(texts) });
+  try {
+    await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer');
+    assert.equal((await settled(f.controller)).jobs[0].code, 'REVIEW_CONTEXT_TOO_LARGE');
+    assert.equal(f.sourceSelectionPrompts.length, 1); assert.equal(f.prompts.length, 0);
+    assert.equal(f.calls.some(call => call.method === 'workflow.recordInference' && call.params.receipt.phase === 'plan'), false);
+    assert.equal(f.calls.some(call => call.method === 'workflow.submitProposal'), false); assertNoScientificDispatch(f);
+  } finally { await f.cleanup(); }
+});
 
 test('cancel holds the lease through model cleanup and verified engine cancellation, then returns the published cancelled state', async () => {
   const started = deferred(), aborted = deferred(), cleanup = deferred(), cancelling = deferred(), cancelled = deferred();
