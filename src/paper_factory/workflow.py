@@ -172,7 +172,162 @@ def _has_new_literature(ws: Workspace, evidence: dict, previous: dict) -> bool:
     return any(not any(passage in known for known in inspected) for passage in _literature_passages(ws, evidence))
 
 
-def _require_complete_literature(plan: ResearchPlan, evidence: dict) -> None:
+def _retained_source_matches(source: dict, query: str) -> bool:
+    """An explicit identity or whole title can request a retained reading."""
+    if literature._is_arxiv_query(query):
+        if not re.fullmatch(r"(?:arxiv\s*:\s*\S+|(?:https?://(?:dx\.)?doi\.org/|doi:\s*)?10\.48550/arxiv\.\S+)", query, re.I):
+            return False
+        try:
+            identifier = literature._query_arxiv(query)
+        except ValueError:
+            return False
+        return bool(re.search(r"v[1-9]\d*$", identifier) and source.get("arxiv_id") == identifier)
+    try:
+        doi = literature._query_doi(query) if re.fullmatch(r"(?:https?://(?:dx\.)?doi\.org/|doi:\s*)?10\.\d{4,9}/\S+", query, re.I) else None
+    except ValueError:
+        return False
+    if doi is not None:
+        return isinstance(source.get("doi"), str) and source["doi"].lower() == doi
+    title = source.get("title")
+    return isinstance(title, str) and bool(literature._title_key(title)) and literature._title_key(query) == literature._title_key(title)
+
+
+def _retained_primary_body(ws: Workspace, record: Workflow, source: dict, packet: dict) -> bool:
+    """Recheck native-frozen primary bytes, identity and every literal body range."""
+    if source.get("scope") != "full_text" or not source.get("excerpts"):
+        return False
+    if source.get("copy_type") == "author_copy" and not _verified_author_pdf(ws, source):
+        return False
+    for field, digest_field in (("raw_path", "sha256"), ("metadata_path", "metadata_sha256"),
+                                ("text_path", "text_sha256"), ("discovery_path", "discovery_sha256"),
+                                ("identity_path", "identity_sha256")):
+        if not source.get(field):
+            if field in {"raw_path", "metadata_path", "text_path"}:
+                return False
+            continue
+        original = safe_relative(ws.path("research"), source[field])
+        relative = original.relative_to(ws.root).as_posix()
+        key = next((key for key, frozen in record.artifacts.items() if key.startswith("literature-") and
+                    frozen.path == relative and frozen.sha256 == source.get(digest_field)), None)
+        if key is None:
+            raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Retained primary bytes lack their original frozen artifact binding")
+        _artifact(ws, record, key)
+    raw = safe_relative(ws.path("research"), source["raw_path"]).read_bytes()
+    if not raw.startswith(b"%PDF-"):
+        return False
+    metadata = safe_relative(ws.path("research"), source["metadata_path"]).read_bytes()
+    try:
+        if source.get("copy_type") == "author_copy":
+            if source.get("year") != literature._metadata(loads_json(metadata))[3]:
+                return False
+            if not any(attempt.get("status") == "verified" and attempt.get("pdf_attempted") is True and
+                       attempt.get("source_id") == source.get("id") and
+                       attempt.get("identity_path") == source.get("identity_path") and
+                       attempt.get("identity_sha256") == source.get("identity_sha256")
+                       for attempt in packet.get("pdf_hint_attempts", [])):
+                return False
+        elif source.get("publication_type") == "preprint":
+            identifier = source.get("arxiv_id", "")
+            if not re.search(r"v[1-9]\d*$", identifier):
+                return False
+            details = literature._arxiv_metadata(metadata, identifier)
+            if (any(source.get(key) != details[key] for key in
+                    ("arxiv_id", "title", "authors", "year", "published", "updated", "provider", "publication_type")) or
+                    source.get("url") != "https://arxiv.org/pdf/" + identifier):
+                return False
+        else:
+            document = loads_json(metadata)
+            doi, title, authors, year = literature._metadata(document)
+            if (source.get("doi"), source.get("title"), source.get("authors"), source.get("year")) != (doi, title, authors, year):
+                return False
+            if source.get("arxiv_id"):
+                if not source.get("discovery_path"):
+                    return False
+                discovery = safe_relative(ws.path("research"), source["discovery_path"]).read_bytes()
+                if literature._arxiv_match(discovery, doi, title) != (source.get("url"), source["arxiv_id"]):
+                    return False
+            elif source.get("url") not in literature._pdf_links(document["message"]):
+                return False
+        science._citation_evidence(source)
+        text = safe_relative(ws.path("research"), source["text_path"]).read_bytes().decode("utf-8")
+        body = literature.full_text_body_range(text)
+        ranges = source.get("excerpt_ranges")
+        if body is None or source.get("body_range") != body or not isinstance(ranges, list) or len(ranges) != len(source["excerpts"]):
+            return False
+        for passage, location in zip(source["excerpts"], ranges):
+            if not isinstance(passage, str) or len(passage.strip()) < 80 or not isinstance(location, dict):
+                return False
+            start, end = location.get("start"), location.get("end")
+            if (type(start) is not int or type(end) is not int or not body["start"] <= start < end <= body["end"] or
+                    text[start:end] != passage):
+                return False
+    except WorkflowError:
+        raise
+    except (KeyError, TypeError, ValueError):
+        return False
+    return True
+
+
+def _reuse_primary_literature(ws: Workspace, record: Workflow, queries: list[str]) -> dict:
+    histories = [(key, _read(ws, record, key)) for key in reversed(record.artifacts)
+                 if re.fullmatch(r"literature-history-[a-f0-9]{64}", key)]
+    sources, retained = {}, []
+    for query in queries:
+        matches = {}
+        for key, packet in histories:
+            for source in packet.get("sources", []):
+                if source.get("scope") == "full_text" and _retained_source_matches(source, query):
+                    identity = (source.get("id"), source.get("sha256"), source.get("text_sha256"))
+                    if identity not in matches and _retained_primary_body(ws, record, source, packet):
+                        matches[identity] = (key, source)
+        # Different versions or body bytes with the same title are ambiguous.
+        if len(matches) != 1:
+            continue
+        key, source = next(iter(matches.values()))
+        identifier = source["id"]
+        if identifier not in sources and len(sources) >= 6:
+            continue
+        if identifier in sources and sources[identifier] != source:
+            continue
+        sources[identifier] = source
+        artifact = record.artifacts[key]
+        retained.append({"query": query, "source_id": identifier, "artifact_id": key,
+                         "sha256": artifact.sha256, "size": artifact.size,
+                         "proposal_sha256": record.artifacts["proposal"].sha256})
+    return {"sources": list(sources.values()), "retained_queries": retained} if retained else {}
+
+
+def _completed_literature_queries(ws: Workspace, record: Workflow, evidence: dict) -> set[str]:
+    """Retained bindings resolve exact identities; they do not attest new retrieval."""
+    completed = _attempted_literature_queries(evidence)
+    retained = evidence.get("retained_queries", [])
+    if not isinstance(retained, list) or len(retained) > 8:
+        raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Retained query bindings exceed the proposal query contract")
+    for receipt in retained:
+        if (not isinstance(receipt, dict) or set(receipt) != {"query", "source_id", "artifact_id", "sha256", "size", "proposal_sha256"} or
+                not isinstance(receipt["query"], str) or
+                not isinstance(receipt["artifact_id"], str) or
+                not re.fullmatch(r"literature-history-[a-f0-9]{64}", receipt["artifact_id"]) or
+                receipt["proposal_sha256"] != record.artifacts["proposal"].sha256):
+            raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Retained queries must bind this proposal and its own frozen literature history")
+        artifact = record.artifacts.get(receipt["artifact_id"])
+        if artifact is None or (artifact.sha256, artifact.size) != (receipt["sha256"], receipt["size"]):
+            raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Retained query origin differs from the frozen literature packet")
+        packet = _read(ws, record, receipt["artifact_id"])
+        source = next((source for source in packet.get("sources", []) if source.get("id") == receipt["source_id"]), None)
+        current = next((source for source in evidence.get("sources", []) if source.get("id") == receipt["source_id"]), None)
+        if (source is None or current is None or not _retained_source_matches(source, receipt["query"]) or
+                not _retained_source_matches(current, receipt["query"]) or
+                any(source.get(key) != current.get(key) for key in
+                    ("doi", "arxiv_id", "title", "authors", "year", "published", "updated", "provider", "publication_type", "publication_version", "copy_type")) or
+                not _retained_primary_body(ws, record, source, packet) or
+                not _literature_passages(ws, {"sources": [current]})):
+            raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Retained query lacks its exact identity and inspected frozen primary body")
+        completed.add(receipt["query"])
+    return completed
+
+
+def _require_complete_literature(plan: ResearchPlan, evidence: dict, ws: Workspace, record: Workflow) -> None:
     if evidence.get("cancelled"):
         raise WorkflowError("LITERATURE_EVIDENCE_INSUFFICIENT", "Complete the cancelled literature collection before study approval")
     if evidence.get("timed_out"):
@@ -182,7 +337,7 @@ def _require_complete_literature(plan: ResearchPlan, evidence: dict) -> None:
     if evidence.get("study_literature", {}).get("quality_status") == "incomplete":
         raise WorkflowError("LITERATURE_QUERIES_INCOMPLETE", "The targeted literature attempt is incomplete; study approval requires all retrieval attempts")
     queries = {query.strip() for query in plan.literature_queries}
-    if queries - _attempted_literature_queries(evidence):
+    if queries - _completed_literature_queries(ws, record, evidence):
         raise WorkflowError("LITERATURE_QUERIES_INCOMPLETE", "Some proposed literature queries were not attempted; study approval requires complete retrieval attempts")
 
 
@@ -999,7 +1154,7 @@ class WorkflowService:
                     raise WorkflowError("REVIEW_EVIDENCE_CONFLICT", "Each literature follow-up permits one bound study decision")
             evidence = _read(ws, record, "literature")
             if review.accepted:
-                _require_complete_literature(ResearchPlan.model_validate(_read(ws, record, "proposal")), evidence)
+                _require_complete_literature(ResearchPlan.model_validate(_read(ws, record, "proposal")), evidence, ws, record)
             selected = self._selected_literature(evidence, review.selected_sources)
             if review.accepted:
                 self._publication_gate(ws, record, ResearchPlan.model_validate(_read(ws, record, "proposal")),
@@ -1152,7 +1307,7 @@ class WorkflowService:
             original = record.artifacts["literature"]
             history_key = "literature-history-" + original.sha256
             record.artifacts[history_key] = original
-            packet = {**previous, **{key: value for key, value in evidence.items() if key not in {"sources", "searches", "warnings", "queries", "history", "quality_status"}},
+            packet = {**previous, **{key: value for key, value in evidence.items() if key not in {"sources", "searches", "warnings", "queries", "history", "quality_status", "retained_queries"}},
                       "sources": merged, "searches": previous.get("searches", []) + evidence.get("searches", []),
                       "warnings": previous.get("warnings", []) + evidence.get("warnings", []),
                       "cancelled": evidence.get("cancelled", False), "timed_out": evidence.get("timed_out", False),
@@ -1358,7 +1513,7 @@ class WorkflowService:
                 receipt.get("selected_literature_sha256") != record.artifacts["selected-literature"].sha256 or
                 _read(ws, record, "selected-literature") != self._selected_literature(evidence, review.selected_sources)):
             raise WorkflowError("ARTIFACT_CHANGED", "Study approval does not bind the retained protocol and selected literature")
-        _require_complete_literature(ResearchPlan.model_validate(_read(ws, record, "plan")), evidence)
+        _require_complete_literature(ResearchPlan.model_validate(_read(ws, record, "plan")), evidence, ws, record)
 
     def collect_literature(self, research_id: str) -> dict:
         with self._operation(research_id) as (ws, record):
@@ -1366,29 +1521,34 @@ class WorkflowService:
             plan = ResearchPlan.model_validate(_read(ws, record, "proposal" if record.stage == "proposed" else "plan"))
             previous = _read(ws, record, "literature") if "literature" in record.artifacts else {}
             queries = list(dict.fromkeys(query.strip() for query in plan.literature_queries))
+            retained = (_reuse_primary_literature(ws, record, queries) if not previous and record.stage == "proposed" and
+                        record.proposal_attempt > 1 and not record.execution_attempt else {})
+            seed = previous or retained
 
             # Cancellation, timeout or rate limiting can interrupt DOI resolution
             # after every search was attempted.
             # A fresh collection must complete before approval;
             # the partial receipt is retained as history rather than cleared.
             missing = queries if any(previous.get(flag) for flag in ("cancelled", "timed_out", "rate_limited")) else [
-                query for query in queries if query not in _attempted_literature_queries(previous)]
+                query for query in queries if query not in _completed_literature_queries(ws, record, seed)]
             if missing and record.stage == "proposed" and "study-review" in record.artifacts:
                 raise WorkflowError("STUDY_LITERATURE_REQUIRED", "A rejected proposal must use its bounded targeted literature attempts")
-            evidence = previous
-            if missing:
-                existing_sources = previous.get("sources", [])
+            evidence = seed
+            if missing or retained:
+                existing_sources = seed.get("sources", [])
                 remaining = max(0, 6 - sum(source.get("scope") in {"abstract", "full_text"} and bool(source.get("excerpts"))
                                          for source in existing_sources))
                 collection_root = ws.path("research")
                 previous_files = {path.relative_to(collection_root).as_posix() for path in _literature_files(collection_root)}
-                try:
-                    fresh = not previous and record.stage == "proposed" and not record.execution_attempt and not record.study_literature_attempt
-                    supplement = self.collector(missing, ws.path("research"), limit=remaining, cancel=lambda: False,
-                                                pdf_candidates=None if fresh else [])
-                finally:
-                    _freeze_literature_files(ws, record, collection_root, previous_files)
-                    self._save(ws, record)
+                fresh = not previous and record.stage == "proposed" and not record.execution_attempt and not record.study_literature_attempt
+                supplement = {"sources": [], "searches": [], "warnings": []}
+                if missing:
+                    try:
+                        supplement = self.collector(missing, ws.path("research"), limit=remaining, cancel=lambda: False,
+                                                    pdf_candidates=None if fresh else [])
+                    finally:
+                        _freeze_literature_files(ws, record, collection_root, previous_files)
+                        self._save(ws, record)
                 if fresh and any(source.get("scope") == "full_text" and source.get("copy_type") == "author_copy"
                                  for source in supplement.get("sources", [])) and supplement.get("pdf_discovery_mode") != "initial_metadata":
                     raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "Initial author-copy bodies require the explicit metadata-discovery reservation contract")
@@ -1429,11 +1589,11 @@ class WorkflowService:
                     raise WorkflowError("LITERATURE_SOURCE_LIMIT", "Literature supplement exceeds the remaining source budget")
                 inspected = [source for source in candidates if source.get("scope") in {"abstract", "full_text"} and source.get("excerpts")]
                 metadata = [source for source in candidates if source not in inspected]
-                evidence = {**previous, **{key: value for key, value in supplement.items()
-                                           if key not in {"sources", "searches", "warnings", "history"}},
+                evidence = {**seed, **{key: value for key, value in supplement.items()
+                                      if key not in {"sources", "searches", "warnings", "history", "retained_queries"}},
                             "sources": (inspected + metadata)[:6],
-                            "searches": previous.get("searches", []) + supplement.get("searches", []),
-                            "warnings": previous.get("warnings", []) + supplement.get("warnings", []),
+                            "searches": seed.get("searches", []) + supplement.get("searches", []),
+                            "warnings": seed.get("warnings", []) + supplement.get("warnings", []),
                             "cancelled": supplement.get("cancelled", False),
                             "timed_out": supplement.get("timed_out", False),
                             "rate_limited": supplement.get("rate_limited", False)}
@@ -1470,7 +1630,7 @@ class WorkflowService:
             if evidence.get("cancelled") or not any(source.get("scope") in {"abstract", "full_text"} and source.get("excerpts")
                                                     for source in evidence.get("sources", [])):
                 raise WorkflowError("LITERATURE_EVIDENCE_INSUFFICIENT", "Metadata alone cannot support Related Work; retrieval evidence is retained")
-            _require_complete_literature(plan, evidence)
+            _require_complete_literature(plan, evidence, ws, record)
             return self._public(ws, record)
 
     def collect_authoring_literature(self, research_id: str, queries: list[str]) -> dict:

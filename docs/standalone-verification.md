@@ -994,4 +994,43 @@ reporter를 바로 고쳐 이미 시작한 별도 보조 회수도 종료했으�
 
 첫 실제 앱 실행 `qpos/2dd124a6459a/recovery-runs/60af1027cc3a`는 초기화가 진행되지 않아 소유 프로세스를 수동 종료했다. 새 모델·SCI·DB 바이트 변경은 없었고 소유 프로세스의 부재를 확인했지만 정상 engine shutdown acknowledgement는 얻지 못했다. 원인은 미확인이다. 원래 launch/harness와 `initialization-stall-before-cleanup.json`·`initialization-stall-after-cleanup.json`을 보존했다. 별도 Node controller와 숨김 Electron 초기화 probe는 각각 약4.5초·5초에 ready/정상 shutdown을 통과했으며 기록은 `verification/controller-initialization-probe-01413.jsonl`이다. 이 probe의 성공으로 최초 정체 원인이 해결됐다고 주장하지 않는다.
 
-관찰 로그만 보강한 traced harness의 SHA256은 `222085aded0e3c69cded5c903746394907758da5c78afdfc8d987c5dde06617a`다. 새 실제 실행 `qpos/2dd124a6459a/recovery-runs/9d31b7c1c921`에서 02:42:37 UTC / 11:42:37 KST에 `redesign-plan` 모델 요청 시작을 확인했다. 현재는 진행 중이며 새 후보·준비 검토 결과·SCI·완료 원고와 별도 학술 품질 평가는 미확인이다. 초기 수집 control·합성 심사 경계·패키지·preflight 성공을 실제 논문 품질 통과로 계산하지 않는다. 새 투고 준비도 기준을 통과한 실제 완료 원고는 아직 없다.
+관찰 로그만 보강한 traced harness의 SHA256은 `222085aded0e3c69cded5c903746394907758da5c78afdfc8d987c5dde06617a`다. 실제 실행 `qpos/2dd124a6459a/recovery-runs/9d31b7c1c921`은 02:42:37 UTC / 11:42:37 KST에 연구안 작성 요청을 시작했고, 03:04:22.075 UTC / 12:04:22.075 KST에 정상 종료했다. 별도 문맥의 준비 검토를 통과한 후보를 `research-1a3b6612f610`의 첫 제안에 같은 바이트로 넘겼다. 후보 SHA256은 `69f56da9e66501eee03394f8545d36388c083be49973eb681a174ec1805cd76f`다. 준비 검토는 후속 준비의 적합성 판단이며 논문의 학술 품질 승인이 아니다.
+
+후속은 제안 3회·문헌 보완 2회를 진행했다. 처음 확보한 Greenberg와 Git diff 원문은 첫 설계 검토에 사용됐다. 두 번째 제안에서 현재 문헌을 이력으로 옮긴 뒤 새 검색어로 수집하면서 두 원문이 심사 패킷에서 빠졌다. 원문 바이트와 이력은 삭제되지 않았다. 세 번째 제안은 모델이 해당 arXiv 버전을 질의에 다시 넣어 두 본문을 회수했다. 최종 심사는 신규성·검증에 실패하고 중요성은 통과했다. `coordinate_certified_targets`와 `string_only_recoveries`의 좌표·편집 유래·치환·빈 경계 처리가 단일한 계산 규칙으로 정의되지 않았고, 최근접 선택적 적용 방법의 직접 본문도 부족했다. 후속은 proposed/blocked/STUDY_REJECTED·SCI0이며 새 프로토콜·실험 코드·관측·분석·완료 원고는 없다. 검증 계획이 실패해 남아 있던 마지막 직접 PDF 회수 조건도 충족하지 못했다. 한도를 초기화하거나 같은 연구를 다시 실행하지 않았다.
+
+실행 후 읽기 전용 독립 감사 37항목이 모두 참이다. 기존 artifact 476개 exact binding, 현재 934개 binding, 세 연구의 source 1,392개, 모델 요청 94개와 raw 433개를 대조했다. 새 후속의 raw 201개는 모두 동결됐다. 첫 감사는 생략된 과거 counter의 기본값 처리와 기존 legacy raw 범위 분류가 달라 실패했고, 실패 receipt를 보존한 뒤 과거 전수 inventory와 실제 기본값을 대조해 수정했다. 두 번의 immutable 감사에서 DB SHA가 변하지 않았으며 원래 root DB도 preflight와 동일하다. 소유 Electron·engine PID 부재, 빈 supervisor worker 목록과 `shutdownConfirmed=true`를 확인했다. 최종 receipt `verification/madi-preparation-redesign-01413-independent-audit.json`은 1,271,651 B, SHA256 `92799a6c7858abd3391ca56bc861deee8ddab31e47dc3b57a06fee1989da47f3`다. 이는 실행·근거 보존 감사이며 학술 품질 통과가 아니다. 새 투고 준비도 기준을 통과한 실제 완료 원고는 아직 없다.
+
+## 0.14.14 필요한 원문 재사용과 구체적인 측정 정의: 2026-10-08
+
+실제 0.14.13에서 설계 수정 후 필요한 원문이 심사 패킷에서 빠지고 마지막 지표의 좌표·편집 유래가 불명확했던 문제를 개선했다. 새 제안의 첫 수집에서 현재 연구의 동결된 문헌 이력만 대상으로 정확 DOI·명시 버전 arXiv 식별자·유일한 전체 제목이 지칭한 full_text를 선택한다. packet·PDF·서지·추출 텍스트·발견 및 identity proof의 원본 바이트와 실제 본문 범위·발췌 위치를 재대조한다. 초록·metadata·부분 제목·일반 키워드·추정 버전은 재사용하지 않는다. 무관한 기존 문헌은 새 검색 한도를 소비하지 않으며 선택한 문헌과 새 문헌의 합계는 6개를 넘지 않는다.
+
+별도 native `retained_queries`는 현재 proposal SHA와 원래 artifact의 SHA·크기에 연결된다. 네트워크 검색 성공을 만들거나 과거 searches를 바꾸지 않고, collector가 반환한 재사용 receipt는 받아들이지 않는다. 새 승인 시에도 원래 본문·현재 정체성과 실제 발췌를 다시 대조한다. 같은 논문의 정상적인 새 본문·발췌 회수는 허용하지만 재사용만으로 같은 제안의 새 본문 재심사를 열지 않는다. 이전 승인은 가져오지 않으며 SCI·제안·문헌·초기 PDF 예약 한도를 유지한다. 독립 코드 검토에서 현재 문헌 날짜와 저자 공개본의 원래 서지 연도 대조 누락 두 곳을 발견해 좁게 수정했다.
+
+계획·설계 보완·새 연구안 준비와 별도 적합성·준비 심사에 같은 측정 정의 요구를 적용한다. 기존 schema의 metric description·scalar parameters·procedure·independent_oracle·validation_plan을 사용해 입력 영역·기준값 출처·계산 규칙·예외 및 빈 경계 처리·독립 기대값을 구체화한다. 작업 변환에는 적용 가능한 삽입·삭제·치환·좌표 대응을 정의한다. 예시 기대값은 계획된 논리 검사이며 실행한 관측으로 표시하지 않는다. 심사자가 누락된 정의를 대필하지 않고 설계를 보완하도록 돌려보낸다. 새 의존성이나 schema를 추가하지 않았다.
+
+| 0.14.14 검사 | 결과와 범위 |
+| --- | --- |
+| Desktop build·typecheck | 통과. 작성·수정·준비 계획과 별도 심사 프롬프트를 포함 |
+| Desktop 전체 단위 검사 | 379 통과, 18.27초. `verification/operational-design-desktop-01414-all-tests.log` |
+| Native 관련 경계 묶음 | 216 통과·준비 단계 오류 1개, 119.28초. 최종 날짜 수정 전 이력이며 `.paper-factory/retained-primary-01414/focused.log`에 보존 |
+| 해당 준비 오류 고립 검사 | 정확 case 한 번, 1 통과·16.79초. 최초 오류 원인의 해결로 계산하지 않음 |
+| 최종 재사용 모듈 | 46 통과·25.64초. exact query·손상 proof·새 body upgrade·서지 날짜·6문헌/8질의 한도·새 심사 검증 |
+| 독립 코드 검토 | 날짜 대조 두 누락 수정 후 추가 지적 없음. 소스·test 바이트 재해시 일치 |
+
+위 검사 묶음과 이전 40·5·8·7개 영향 검사는 겹치므로 합산하지 않는다. 첫 author-origin 누락 digest 검사의 4 통과·1 실패도 보존했고, source eligibility 검증 순서를 고친 뒤 원래 assertion으로 통과했다. SQLite 오류는 `Workspace.save('project')`의 첫 INSERT에서 발생해 재사용 helper나 심사 assertion까지 들어가지 않았다. 당시 원본 DB는 Archive 속성·owner FullControl이고 여유 공간 약157GB, journal/WAL/SHM은 없었다. immutable read-only 감사에서 empty records·CREATE TABLE·quick_check와 DB 바이트 불변을 확인했다. 원인은 미확정이며 자동 재시도·DB migration·검사 완화는 추가하지 않았다. 이후 pytest의 기본 임시 폴더 정리로 원래 실패 경로가 사라졌지만, 그 전에 남긴 DB 복사본·속성·ACL 기록을 보존했다. 복사본 SHA256은 `3b28bd7c56ca40dbc36f207e62bcf2093c2666f0dcc178631130e7bbd3cbb15e`다. 별도 read-only 진단 receipt SHA256은 `a3a9f1ac3af89ef28ed8469b9c17b9f4822ea7dc387747e504dd03cbc4d97ca5`다.
+
+최종 native source SHA256은 `4388cd79fb048c9b89d69f15401d72c447d573ae325e52925726af8b8155ab4a`, desktop controller는 `474e6e32aae8b5b06af5b80f871269232913dcf4a57370856d74027a09af4741`다. 최종 native freeze receipt `.paper-factory/retained-primary-01414/source-freeze-after-author-date-review.json`의 SHA256은 `1cd4ad461cdb7499f9f53890a430ee5273700d030bc0a425d21864a7461bfb9d`다. 포함 Windows runtime은 2,218개·473,714,488 B, inventory SHA256 `e6b7629769b337b04b084e35568c087c62913d32bd5216c3d0ffbb09e94c2de2`이며 실제 host 검사를 통과했다. builder receipt는 `standalone-runtime-builder/build-win32-x64-626f51ff-b9af-4aa0-923c-851388b1403d/build-receipt.json`이다.
+
+실제 Madi 후속의 보존된 두 arXiv 본문을 새 native 순수 helper로 읽기 전용 재대조했다. 원래 metadata·버전·날짜·본문·proposal SHA와 맞고, 재사용만으로 genuinely-new-body가 되지 않았다. 22항목이 참이며 실제 세 workspace의 2,331파일·1,392 source·934 artifact binding·3DB 전후 바이트가 동일하다. DB는 mode=ro&immutable=1 SELECT만 사용했고 create/save/list/latest/database/operation·네트워크·수집·추출·worker·model·SCI는 금지했다. receipt `.paper-factory/retained-primary-01414/actual-proof-read-9fdf8aa4029c/receipt.json`은 10,545 B, SHA256 `48d3bcf97dda8e5d9051e054bb74e04240b4f230dad012bd77f343ab14b36ece`다. 이는 최종 개발 소스의 순수 proof 재대조이며 실제 앱 admission·새 심사·논문 품질·포함 runtime에서의 동일 probe 실행과 구분한다.
+
+새 출력 `verification/windows-release-01414-primary-reuse`와 최종 `desktop/release/` 복사본의 정적 검증을 통과했다. ASAR 7,667항목·SDK import·renderer·Pretendard·현재 native 소스와 runtime 2,218파일을 전수 대조했다. 이전 0.14.13 최종 배포본의 설치 파일·ASAR·실행 파일을 당시 receipt와 먼저 비교한 뒤 전체 폴더를 `verification/preserved-windows-release-01413-final`에 보존했다. 로그는 `retained-primary-package-static-01414.log`와 `retained-primary-package-default-01414.log`다. 설치·새 OAuth·로그인 복원·GitHub Release 게시를 수행하지 않았다.
+
+| 0.14.14 배포 파일 | 크기(B) | SHA256 |
+| --- | ---: | --- |
+| Paper Factory Setup 0.14.14.exe | 213,132,692 | fe52a931e3e672bde4b7d8e3d70a7ac0c17c9c53c9fed7307c6ad337021404ea |
+| win-unpacked/resources/app.asar | 44,783,358 | d85c9a029133b1cd423f6364ebdb281f2ea0678fd06fff4d95eeaa70575d8ff2 |
+| win-unpacked/Paper Factory.exe | 245,726,720 | 5efa0643938efaaa53139f53ae5059493eb51d85eaedf0d7bb9459a48db08c17 |
+
+다음 실제 평가 후보도 검토했다. 기존 Premiere positive는 정확 DOI·논문 제목·oracle·표본 조건을 수동 지정한 사례이고 negative는 수동 parseSrt 계획을 가져온 반려 검사여서 일반 사용자 입력의 논문 품질 성과로 승격하지 않는다. 두 기존 연구는 resume_kind=null이며 실제 재개하지 않았다. provenance 대조 10항목이 참이며 DB·모든 workspace 파일이 그대로다. receipt `verification/premiere-existing-input-provenance-01414-readonly.json` SHA256은 `f78c8f8913008a31c1edd02fea328736e3470d908cac5c58030e8549da6b3c2e`다.
+
+추가 저장소 7개를 제한된 원문·tree 범위에서 정적으로 검토했지만 현재 QuickJS 함수 환경에서 학술 기여까지 정당화한 새 후보는 찾지 못했다. Garak의 좁은 그래프 검증과 Flick의 문자열 정리는 기술상 호출 가능성이 있으나 학술적 신규성은 미확립이다. JIZURA·Savior·Kkakka·Web-coder의 핵심은 브라우저·서버·다른 실행 환경을 필요로 한다. Chat-view의 확인 범위에서도 독립적인 pure core를 찾지 못했다. 이를 프로젝트 전체 실행 불가능성이나 연구 불가능성으로 일반화하지 않는다. 55,144 B 원문과 판독 범위·미검증 한계·새 과학실험 없음이 기록된 `verification/static-candidate-audit-01414.json`의 SHA256은 `0fb0e7c82e07af6300d05410a0977d879de5b7a6adcdf13df57fd5b48803aa8f`다. Madi 계보를 초기화하거나 같은 과학을 새 root로 반복하지 않았다. 이번 수정과 검사는 실제 투고 준비도를 통과한 원고 생성의 증거가 아니다.

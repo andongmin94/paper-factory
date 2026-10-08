@@ -899,6 +899,18 @@ const stagePreparation = (parent, candidate = preparationCandidate(), review = n
 const completePreparation = () => [preparationCandidate(), preparationAccepted(), studyAccepted,
   { files: [{ path: 'experiment.mjs', content: 'SYNTHETIC_DISTINCT_PROTOCOL_THROUGH_ALL_GATES' }] }, accepted,
   { sections: [] }, manuscriptAccepted];
+const assertOperationalDesignPrompt = prompt => {
+  assert.match(prompt, /admissible input domain, inputs, reference target, scalar output and unit, and deterministic formula or algorithm/);
+  assert.match(prompt, /do not silently assign zero to undefined measurements/);
+  assert.match(prompt, /provenance of every target, coordinate\/range and expected result/);
+  assert.match(prompt, /independent identity-tracking and mapping rules/);
+  assert.match(prompt, /insertion, deletion, replacement and empty boundaries where applicable/);
+  assert.match(prompt, /scalar parameters and deterministic steps in procedure/);
+  assert.match(prompt, /independently derived expected outputs and metric values/);
+  assert.match(prompt, /planned logical checks, not executed controls or observations/);
+  assert.match(prompt, /without copying production\/comparator code or inferring targets from production outputs/);
+  assert.match(prompt, /supported JSON projection/);
+};
 
 test('preexecution preparation independently reviews a frozen candidate before a fresh fully gated successor', async () => {
   const original = heldPreparation(), frozen = structuredClone(original);
@@ -920,6 +932,10 @@ test('preexecution preparation independently reviews a frozen candidate before a
     assert.equal(f.prompts[0].input[0].content.includes(sourceText), false);
     assert.ok(f.prompts[1].input[0].content.includes(JSON.stringify(preparationCandidate())));
     assert.ok(f.prompts[1].input[0].content.includes(JSON.stringify(frozen.study_review)));
+    for (const prompt of f.prompts.slice(0, 3)) assertOperationalDesignPrompt(prompt.input[0].content);
+    assert.match(f.prompts[0].input[0].content, /retain unchanged exact DOI\/arXiv identifier queries \(including supplied versions\) or complete exact-title queries/);
+    assert.match(f.prompts[0].input[0].content, /Choose the relevant subset; do not blindly carry every source/);
+    assert.match(f.prompts[1].input[0].content, /Reject unresolved metric, target-provenance or boundary ambiguities/);
     assert.deepEqual(promptMaterials(f.prompts[1].input[0].content).productionSource, { 'module.ts': sourceText });
     assert.match(f.prompts[1].input[0].content, /selected production files and accompanying source notices below are complete/);
     const completedReceipts = f.calls.filter(call => call.method === 'workflow.recordInference' && call.params.receipt.outcome === 'completed');
@@ -1216,6 +1232,57 @@ test('proposal, inspected literature and fresh suitability acceptance precede an
   } finally { await f.cleanup(); }
 });
 
+test('validation rejection repairs operational definitions using retained primary identities before fresh approval and science', async () => {
+  const primary = { id: 'synthetic-primary-fixture', doi: '10.5555/synthetic-fixture-only', version: 'synthetic-fixture-v2',
+    title: 'Synthetic Target Provenance Methods for Controller Fixtures', scope: 'full_text',
+    excerpts: ['Synthetic inspected primary body for orchestration only; it is not actual scientific literature.'] };
+  const unrelated = { id: 'synthetic-unrelated-fixture', title: 'Unrelated Synthetic Reading Fixture', scope: 'abstract', excerpts: [] };
+  const literature = { sources: [primary, unrelated], searches: [{ query: primary.doi, outcome: 'full_text' }] };
+  const ambiguous = { feasible: true, source_files: ['module.ts'], title: 'Synthetic ambiguous target measurement',
+    metrics: [{ name: 'origin_consistency', unit: 'count', description: 'Compare targets without a derivation.' }],
+    literature_queries: [primary.doi, primary.title] };
+  const rejected = { ...studyAccepted, accepted: false,
+    issues: ['Synthetic target origin and replacement or empty-boundary behavior are undefined.'],
+    comparison: { passed: false, reason: 'The synthetic oracle has no independent target-provenance rule.' },
+    publication_readiness: { ...publicationReadiness,
+      validation: { passed: false, reason: 'The synthetic metric domain, target mapping and boundary derivation are undefined.' } } };
+  const repaired = { ...ambiguous, title: 'Synthetic explicit target measurement',
+    metrics: [{ name: 'origin_consistency', unit: 'count', description: 'Count provenance-label mismatches over the supplied finite synthetic input list.' }],
+    parameters: { input_bound: 3 }, independent_oracle: 'Derive synthetic target labels from input operation records independently of observed production output.',
+    procedure: ['Enumerate three distinct synthetic inputs per seed.', 'Derive targets from each input operation record.',
+      'Plan ordinary and empty-boundary worked checks; their expected values are not observations.'],
+    research_claim: { validation_plan: 'Independently derive expected labels from synthetic records before comparing production outputs.' },
+    comparison_rationale: primary.doi + '; ' + primary.title + '; recorded version ' + primary.version + ' defines the needed synthetic provenance method.' };
+  const prior = { execution_attempt: 1, analysis: { 'synthetic.behavior.mean': 2, 'synthetic.correctness.mean': 0 } };
+  const workflow = { ...base(), stage: 'created', proposal_attempt: 0, study_review: null, plan: null,
+    literature, prior_study: prior };
+  const f = await fixture([ambiguous, rejected, repaired, studyAccepted, { files: [] }, accepted, { sections: [] }, manuscriptAccepted], workflow);
+  try {
+    await f.controller.initialize(); await f.controller.create(input);
+    const state = await settled(f.controller); assert.equal(state.jobs[0].pipeline, 'completed');
+    for (const prompt of f.prompts.slice(0, 4)) assertOperationalDesignPrompt(prompt.input[0].content);
+    const revision = f.prompts[2].input[0].content;
+    assert.match(revision, /For each failed validation or comparison issue, identify the repaired definition or derivation/);
+    assert.match(revision, /retain unchanged exact DOI\/arXiv identifier queries \(including supplied versions\) or complete exact-title queries/);
+    assert.match(revision, /recorded identifiers, versions and full titles/);
+    assert.match(revision, /Choose the relevant subset; do not blindly carry every source/);
+    assert.ok(revision.includes(JSON.stringify(literature))); assert.ok(revision.includes(JSON.stringify(rejected)));
+    assert.ok(revision.includes(JSON.stringify(prior)));
+    assert.match(revision, /Preserve every prior observed nonzero difference and every zero, negative or null finding separately/);
+    assert.match(f.prompts[1].input[0].content, /Do not invent missing definitions or repair the proposal on the author's behalf/);
+    assert.equal(f.studyRemediationPrompts.length, 0, 'Validation failure must revise design without a literature-only detour');
+    assert.deepEqual(workflow.plan.literature_queries, [primary.doi, primary.title]);
+    assert.deepEqual(workflow.prior_study, prior); assert.deepEqual(workflow.literature, literature);
+    const decisions = f.calls.filter(call => call.method === 'workflow.submitStudyReview');
+    assert.deepEqual(decisions.map(call => call.params.review.accepted), [false, true]);
+    const science = f.calls.findIndex(call => call.method === 'workflow.startExperiment');
+    const freshApproval = f.calls.findIndex(call => call.method === 'workflow.submitStudyReview' && call.params.review.accepted);
+    assert.ok(science > freshApproval);
+    assert.equal(f.calls.filter(call => call.method === 'workflow.startExperiment').length, 1);
+    assert.equal(workflow.proposal_attempt, 2); assert.equal(workflow.execution_attempt, 1);
+  } finally { await f.cleanup(); }
+});
+
 test('a literature deficit collects refined evidence and receives fresh approval before code or science', async () => {
   const missing = { sources: [], searches: [{ query: 'synthetic broad query', status: 'failed', error: 'HTTPStatusError', http_status: 503 }] };
   const inspected = { sources: [{ id: 'synthetic-source', scope: 'full_text', excerpts: ['Synthetic directly relevant body evidence for orchestration only.'] }] };
@@ -1243,6 +1310,7 @@ test('a literature deficit collects refined evidence and receives fresh approval
     assert.equal(workflow.proposal_attempt, 1); assert.equal(workflow.study_literature_attempt, 1);
     const followupPlan = f.studyRemediationPrompts[0].input[0].content;
     assert.match(followupPlan, /unchanged, executable design/);
+    assert.match(followupPlan, /Ambiguous metric domains\/formulas, target provenance or boundary behavior require action=revise_design/);
     assert.match(followupPlan, /failed search does not establish absence/);
     assert.ok(followupPlan.includes(JSON.stringify(missing))); assert.ok(followupPlan.includes(JSON.stringify(rejected)));
     assert.ok(f.prompts[2].input[0].content.includes(JSON.stringify(inspected)));
