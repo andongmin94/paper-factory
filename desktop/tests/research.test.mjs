@@ -8,6 +8,7 @@ import test from 'node:test';
 import { ChatGPTError } from '@siwc/local';
 import { apiError } from '../vendor/siwc-local/dist/errors.js';
 import { ResearchController, durableJson, parseModelObject, projectObservationEvidence } from '../dist/research.js';
+import { EngineError } from '../dist/engine.js';
 
 const id = 'research-abcdef123456';
 const sourceText = 'export const actual = value => value;';
@@ -311,7 +312,7 @@ test('cancelling a fixture selector preserves its interrupted receipt without au
   const selecting = deferred();
   const f = await explanatoryFixture(explanatoryData(), { evidenceSelection(options) {
     selecting.resolve();
-    return new Promise((_resolve, reject) => options.signal.addEventListener('abort', () => reject(fakeEngineError('REQUEST_CANCELLED')), { once: true }));
+    return new Promise((_resolve, reject) => options.signal.addEventListener('abort', () => reject(new EngineError('REQUEST_CANCELLED', 'Synthetic engine failure')), { once: true }));
   } }, []);
   try {
     await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer'); await selecting.promise;
@@ -514,17 +515,6 @@ test('large retained fixture bytes permit authoring from full measurements witho
     assert.equal(JSON.stringify(data), raw);
   } finally { await f.cleanup(); }
 });
-
-function fakeEngineError(code) {
-  // research.js bundles its own EngineError; another dist entrypoint has a different prototype.
-  try { parseModelObject('[]'); }
-  catch (error) {
-    assert.equal(error.name, 'EngineError');
-    error.code = code; error.message = 'Synthetic fake-engine failure: ' + code;
-    return error;
-  }
-  throw new Error('The research bundle did not expose its expected engine error');
-}
 
 async function fixture(responses = [], workflow = base(), transport = {}) {
   const home = await mkdtemp(join(tmpdir(), 'paper-factory-research-test-'));
@@ -733,7 +723,7 @@ test('cancelling a follow-up stops its model request and preserves the rejected 
   const started = deferred(); const original = observed();
   const f = await fixture([{ sections: [] }, redesignRejected(), options => {
     started.resolve(); return new Promise((_resolve, reject) => options.signal.addEventListener('abort',
-      () => reject(fakeEngineError('REQUEST_CANCELLED')), { once: true }));
+      () => reject(new EngineError('REQUEST_CANCELLED', 'Synthetic engine failure')), { once: true }));
   }], original);
   try {
     await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer'); await started.promise;
@@ -1215,6 +1205,42 @@ test('a complete prompt beyond the native receipt budget stops before any model 
 
 const input = { source: 'https://github.com/fixture/repository', goal: 'Inspect a synthetic test fixture only.', model: 'writer', reviewerModel: 'reviewer' };
 
+for (const trusted of [true, false]) {
+  test('completed design admission preserves ' + (trusted ? 'the shared native runtime error' : 'an untrusted error boundary'), async () => {
+    const proposal = { feasible: true, source_files: ['module.ts'], title: 'Synthetic candidate only',
+      reason: 'Synthetic model output retained before native runtime admission; this is not a study approval.' };
+    const workflow = planningWorkflow({ 'module.ts': sourceText });
+    const nativeError = trusted ? new EngineError('ISOLATION_UNAVAILABLE', 'Synthetic runtime admission rejection')
+      : Object.assign(new Error('PRIVATE_LOOKALIKE_NATIVE_MESSAGE'), { name: 'EngineError', code: 'ISOLATION_UNAVAILABLE' });
+    const f = await fixture([proposal], workflow, { request(method) {
+      if (method === 'workflow.submitProposal') throw nativeError;
+    } });
+    try {
+      await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer');
+      const state = await settled(f.controller), expected = trusted ? 'ISOLATION_UNAVAILABLE' : 'connection_error';
+      assert.equal(state.error.code, expected); assert.equal(state.jobs[0].pipeline, 'failed');
+      assert.equal(state.jobs[0].code, expected); assert.equal(state.jobs[0].stage, 'created');
+      assert.equal(state.cleanupResearchIds.length, 0); assert.equal(state.busy, false);
+      const saved = JSON.parse(await readFile(join(f.home, 'jobs.json'), 'utf8'))[0];
+      assert.equal(saved.code, expected); assert.equal(saved.pipeline, 'failed');
+      const receipts = f.calls.filter(call => call.method === 'workflow.recordInference').map(call => call.params.receipt);
+      assert.deepEqual(receipts.map(receipt => [receipt.phase, receipt.outcome]),
+        [['source-selection', 'started'], ['source-selection', 'completed'], ['plan', 'started'], ['plan', 'completed']]);
+      const complete = receipts[3], raw = await readFile(join(f.home, id, 'inference', complete.id + '-completed.json'), 'utf8');
+      assert.deepEqual(JSON.parse(raw), complete); assert.deepEqual(JSON.parse(complete.text), proposal);
+      assert.equal(complete.textSha256, digest(complete.text)); assert.equal(complete.promptSha256, digest(complete.prompt));
+      assert.equal(f.sourceSelectionPrompts.length, 1); assert.equal(f.prompts.length, 1);
+      assert.equal(f.calls.filter(call => call.method === 'workflow.submitProposal').length, 1);
+      assert.equal(workflow.proposal_attempt, 0); assert.equal(workflow.execution_attempt, 0);
+      for (const method of ['workflow.collectLiterature', 'workflow.collectStudyLiterature', 'workflow.submitStudyReview',
+        'workflow.submitCode', 'workflow.startExperiment', 'workflow.submitManuscript', 'workflow.export']) {
+        assert.equal(f.calls.some(call => call.method === method), false);
+      }
+      if (!trusted) assert.equal(JSON.stringify([state, saved, receipts]).includes('PRIVATE_LOOKALIKE_NATIVE_MESSAGE'), false);
+    } finally { await f.cleanup(); }
+  });
+}
+
 test('proposal, inspected literature and fresh suitability acceptance precede any code or experiment', async () => {
   const proposal = { feasible: true, source_files: ['module.ts'], title: 'Synthetic proposal only', reason: 'This initial proposal has not yet been reviewed.' };
   const selectedLiterature = { sources: [{ id: 'synthetic-source', scope: 'abstract', excerpts: ['Synthetic selected reading fixture, not actual literature.'] }] };
@@ -1454,7 +1480,7 @@ test('native rejection of a DOI and title candidate stops science and retains it
     proposal_attempt: 3, proposal: { source_files: ['module.ts'] }, plan: null, study_review: evidenceDeficitReview() };
   const f = await fixture([], workflow, {
     studyRemediation: () => ({ ...retrievalRemediation(), queries: ['10.1234/synthetic'], pdfCandidates }),
-    request(method) { if (method === 'workflow.collectStudyLiterature') throw fakeEngineError('LITERATURE_QUERIES_INVALID'); },
+    request(method) { if (method === 'workflow.collectStudyLiterature') throw new EngineError('LITERATURE_QUERIES_INVALID', 'Synthetic engine failure'); },
   });
   try {
     await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer');
@@ -1593,7 +1619,7 @@ test('shutdown holds one lease through initial restoration and confirmed engine 
 test('shutdown failure preserves the public cleanup gate and retries all pending workflows before engine close', async () => {
   let fails = true;
   const f = await fixture([], { ...observed(), cleanup_pending: true }, { request(method) {
-    if (method === 'workflow.cancel' && fails) throw fakeEngineError('CLEANUP_UNCONFIRMED');
+    if (method === 'workflow.cancel' && fails) throw new EngineError('CLEANUP_UNCONFIRMED', 'Synthetic engine failure');
   } });
   try {
     await f.controller.initialize();
@@ -1611,7 +1637,7 @@ test('shutdown failure preserves the public cleanup gate and retries all pending
 
 test('engine-close failure publishes its error and leaves research shutdown retry available', async () => {
   let fails = true;
-  const f = await fixture([], observed(), { async close() { if (fails) throw fakeEngineError('ENGINE_SHUTDOWN_UNCONFIRMED'); } });
+  const f = await fixture([], observed(), { async close() { if (fails) throw new EngineError('ENGINE_SHUTDOWN_UNCONFIRMED', 'Synthetic engine failure'); } });
   try {
     await f.controller.initialize();
     await assert.rejects(f.controller.shutdown(), error => error.code === 'ENGINE_SHUTDOWN_UNCONFIRMED');
@@ -1883,11 +1909,11 @@ test('a timed-out scientific dispatch holds the lease until explicit cleanup, th
       if (count === 2) { online = true; Object.assign(workflow, observed()); }
     },
     async request(method) {
-      if (!online) throw fakeEngineError('ENGINE_UNAVAILABLE');
+      if (!online) throw new EngineError('ENGINE_UNAVAILABLE', 'Synthetic engine failure');
       if (method === 'workflow.startExperiment') {
         workflow.execution_attempt = 1;
         online = false;
-        throw fakeEngineError('ENGINE_TIMEOUT');
+        throw new EngineError('ENGINE_TIMEOUT', 'Synthetic engine failure');
       }
     },
   });
@@ -1937,7 +1963,7 @@ test('a timed-out scientific dispatch holds the lease until explicit cleanup, th
 for (const code of ['ENGINE_TIMEOUT', 'ENGINE_INTERRUPTED', 'ENGINE_PROTOCOL_INVALID', 'ENGINE_START_FAILED', 'ENGINE_UNAVAILABLE']) {
   test('create clears cached runtime readiness after a synthetic ' + code + ' transport failure', async () => {
     const f = await fixture([], base(), {
-      async request(method) { if (method === 'workflow.create') throw fakeEngineError(code); },
+      async request(method) { if (method === 'workflow.create') throw new EngineError(code, 'Synthetic engine failure'); },
     });
     try {
       await f.controller.initialize();
@@ -1963,11 +1989,11 @@ for (const failure of [
     let fail = false;
     const workflow = observed();
     const f = await fixture([], workflow, {
-      async start() { if (fail && failure.at === 'start') throw fakeEngineError(failure.code); },
+      async start() { if (fail && failure.at === 'start') throw new EngineError(failure.code, 'Synthetic engine failure'); },
       async request(method) {
         if (!fail || method !== failure.at) return;
         if (method === 'runtime.status') return { ready: false };
-        throw fakeEngineError(failure.code);
+        throw new EngineError(failure.code, 'Synthetic engine failure');
       },
     });
     try {
@@ -2084,7 +2110,7 @@ for (const unavailable of [false, true]) {
     const native = stagePreparation(heldPreparation(), preparationCandidate(), preparationRejected());
     const f = await fixture([], native, { async start() {
       began.resolve(); await release.promise;
-      if (unavailable) throw fakeEngineError('ENGINE_START_FAILED');
+      if (unavailable) throw new EngineError('ENGINE_START_FAILED', 'Synthetic engine failure');
     } });
     try {
       await durableJson(join(f.home, 'jobs.json'), [{ id, ...input, phase: 'redesign-review', pipeline: 'paused', stage: 'proposed',
@@ -2174,7 +2200,7 @@ test('evidence import preserves paused science, stores only public document meta
 test('runtime recovery failure stops before native selection or evidence import', async () => {
   let fail = false; let selections = 0;
   const f = await fixture([], observed(), { request(method) {
-    if (fail && method === 'runtime.status') throw fakeEngineError('ENGINE_UNAVAILABLE');
+    if (fail && method === 'runtime.status') throw new EngineError('ENGINE_UNAVAILABLE', 'Synthetic engine failure');
   } });
   try {
     await f.controller.initialize(); fail = true;
@@ -2222,7 +2248,7 @@ test('selector failure releases its lease but shutdown waits for native selectio
   let release;
   try {
     await f.controller.initialize();
-    await assert.rejects(f.controller.addEvidence(id, async () => { throw fakeEngineError('SUPPORTING_EVIDENCE_INVALID'); }),
+    await assert.rejects(f.controller.addEvidence(id, async () => { throw new EngineError('SUPPORTING_EVIDENCE_INVALID', 'Synthetic engine failure'); }),
       error => error.code === 'SUPPORTING_EVIDENCE_INVALID');
     assert.equal(f.controller.snapshot().busy, false);
     const began = new Promise(resolve => {
@@ -2609,7 +2635,10 @@ test('ordinary planning selects whole files from the complete inventory without 
   const texts = { 'module.ts': sourceText, 'style.css': 'SYNTHETIC CSS', 'index.html': 'SYNTHETIC HTML',
     'config.yml': 'SYNTHETIC YAML', 'other.yaml': 'SYNTHETIC YAML LONG SUFFIX', COPYING: 'SYNTHETIC COPYING',
     'image.png': 'SYNTHETIC binary', 'data.bin': 'SYNTHETIC binary' };
-  const f = await fixture([{ feasible: false }], planningWorkflow(texts), { request: sourceRead(texts) });
+  const workflow = planningWorkflow(texts);
+  workflow.planning_instructions = 'Synthetic retained native instructions with an initial bounded excerpt: ' +
+    '<source-file path="style.css">SYNTHETIC_INITIAL_PARTIAL_EXCERPT</source-file>';
+  const f = await fixture([{ feasible: false }], workflow, { request: sourceRead(texts) });
   try {
     await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer'); await settled(f.controller);
     const material = promptMaterials(f.prompts[0].input[0].content);
@@ -2617,7 +2646,9 @@ test('ordinary planning selects whole files from the complete inventory without 
     assert.equal(Object.hasOwn(material, 'planningSourceExcerpts'), false);
     assert.deepEqual(material.sourceInventory, sourceInventory(texts));
     assert.deepEqual(material.uninspectedSourceFiles, Object.keys(texts).filter(name => !['module.ts', 'COPYING'].includes(name)));
-    assert.match(f.prompts[0].input[0].content, /all uninspectedSourceFiles remain unread/);
+    assert.match(f.prompts[0].input[0].content, /uninspectedSourceFiles have not been fully inspected and may appear as bounded prior excerpts/);
+    assert.equal(f.prompts[0].input[0].content.split(workflow.planning_instructions).length - 1, 1);
+    assert.ok(material.uninspectedSourceFiles.includes('style.css')); assert.equal(Object.hasOwn(material.productionSource, 'style.css'), false);
     assert.equal(f.sourceSelectionPrompts.length, 1);
     assert.ok(f.sourceSelectionPrompts[0].input[0].content.includes(JSON.stringify(sourceInventory(texts))));
     assert.deepEqual(f.calls.filter(call => call.method === 'workflow.readMaterial').map(call => call.params.name), ['module.ts', 'COPYING']);
@@ -2643,7 +2674,7 @@ for (const goal of ['Inspect this repository.', 'Inspect module.ts.', 'prefix/mo
 test('an explicitly named binary source produces a material error before planning instead of silently selecting alternatives', async () => {
   const texts = { 'data.bin': 'SYNTHETIC BINARY', 'module.ts': sourceText };
   const f = await fixture([], planningWorkflow(texts, 'Measure `data.bin`.'), { request(method, params) {
-    if (method === 'workflow.readMaterial') { assert.equal(params.name, 'data.bin'); throw fakeEngineError('MATERIAL_NOT_TEXT'); }
+    if (method === 'workflow.readMaterial') { assert.equal(params.name, 'data.bin'); throw new EngineError('MATERIAL_NOT_TEXT', 'Synthetic engine failure'); }
   } });
   try {
     await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer');
@@ -2955,7 +2986,7 @@ test('a failed cancellation retains the lease and partial receipt until cleanup 
   const started = deferred(), aborted = deferred(), cleanup = deferred(), cancelling = deferred();
   let fails = true;
   const f = await fixture([pendingModel(started, aborted, cleanup)], observed(), { request(method) {
-    if (method === 'workflow.cancel' && fails) { cancelling.resolve(); throw fakeEngineError('SYNTHETIC_CANCEL_FAILED'); }
+    if (method === 'workflow.cancel' && fails) { cancelling.resolve(); throw new EngineError('SYNTHETIC_CANCEL_FAILED', 'Synthetic engine failure'); }
   } });
   let cancellation; let resolved = false;
   try {
@@ -3142,7 +3173,7 @@ test('failed interrupted-receipt commit holds cleanup and retries exact partial 
   let fails = true;
   const f = await fixture([pendingModel(started, aborted, cleanup)], observed(), { request(method, params) {
     if (method === 'workflow.recordInference' && params.receipt.outcome === 'interrupted' && fails) {
-      throw fakeEngineError('SYNTHETIC_RECEIPT_COMMIT_FAILED');
+      throw new EngineError('SYNTHETIC_RECEIPT_COMMIT_FAILED', 'Synthetic engine failure');
     }
   } });
   let cancellation;
@@ -3268,7 +3299,7 @@ test('revision runtime, models and backend failures release the lease without an
     let fail = false;
     const f = await fixture([], exported(), { request(method) {
       if (fail && ((failure === 'runtime' && method === 'runtime.status') || (failure === 'REVISION_EVIDENCE_INVALID' && method === 'workflow.reviseWriting'))) {
-        throw fakeEngineError(failure === 'runtime' ? 'ENGINE_UNAVAILABLE' : failure);
+        throw new EngineError(failure === 'runtime' ? 'ENGINE_UNAVAILABLE' : failure, 'Synthetic engine failure');
       }
     } });
     try {
@@ -3333,7 +3364,7 @@ for (const code of ['MANUSCRIPT_INVALID', 'ARTIFACT_CHANGED']) {
   test('model acceptance cannot appear as native manuscript approval after ' + code, async () => {
     const responses = Array.from({ length: code === 'MANUSCRIPT_INVALID' ? 3 : 1 }, () => [{ sections: [] }, manuscriptAccepted]).flat();
     const f = await fixture(responses, observed(), { request(method) {
-      if (method === 'workflow.submitManuscript') throw fakeEngineError(code);
+      if (method === 'workflow.submitManuscript') throw new EngineError(code, 'Synthetic engine failure');
     } });
     try {
       await f.controller.initialize(); await f.controller.resume(id, 'writer', 'reviewer');

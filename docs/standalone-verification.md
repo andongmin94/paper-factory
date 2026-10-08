@@ -1,6 +1,6 @@
 # 독립 앱 검증 기록
 
-갱신일: 2026-10-08 (Asia/Seoul). 현재 앱과 엔진 소스는 `0.14.13`이다. 최신 Windows 설치 파일 생성·정적 검증과 회귀 결과는 [0.14.13 기록](#01413-초기-원문-발견과-실행-전-재설계-준비-2026-10-08)에 있다. 새 설치·OAuth·로그인 복원은 미검증이고 GitHub Releases에는 게시하지 않았다. 새 실제 앱 평가는 진행 중이며, 새 투고 준비도 기준을 통과한 실제 완료 원고는 아직 없다. 아래는 `0.13.0` 전환 작업의 시작 commit `ac22fdd95778572968e3227d271a0b9846cd7f8b`부터 보존한 실제 검사 이력이다. 0.13.1의 5단계 개선·새 패키지 검사는 [UI 검증 기록](standalone-ui-provenance.md)에 구분해 기록한다.
+갱신일: 2026-10-08 (Asia/Seoul). 현재 앱과 엔진 소스는 `0.14.18`이다. 최신 Windows 설치 파일·최종 release의 검증과 소스 변경·검사는 [0.14.18 기록](#01418-실행-환경-실패-기록과-windows-긴-경로-2026-10-08)에 있다. 0.14.18 실제 연구 재개 결과는 아직 미확인이다. 새 설치·OAuth·로그인 복원은 미검증이고 GitHub Releases에는 게시하지 않았다. 새 투고 준비도 기준을 통과한 실제 완료 원고는 아직 없다. 아래는 `0.13.0` 전환 작업의 시작 commit `ac22fdd95778572968e3227d271a0b9846cd7f8b`부터 보존한 실제 검사 이력이다. 0.13.1의 5단계 개선·새 패키지 검사는 [UI 검증 기록](standalone-ui-provenance.md)에 구분해 기록한다.
 
 0.14.6의 네 기준 승인과 독립 유한 수치·인용·파일 검수는 당시 생성 흐름과 보존 근거의 일치를 확인했다. 학술지 제출에 충분한 신규성·중요성이나 더 넓은 주장 범위를 입증한 검증은 아니었다. 당시 승인·생성 파일·감사 기록은 보존하며, 새 투고 준비도 승인으로 소급해 계산하지 않는다.
 
@@ -1137,8 +1137,44 @@ Windows runtime을 고정된 wheel 19개로 다시 구성하고 실제 호스트
 | win-unpacked/resources/app.asar | 44,792,840 | 057a254e8574d4226dbb405872bcd960ec6b2394baa04a2b58b4a71a8e1812ed |
 | win-unpacked/Paper Factory.exe | 245,726,208 | 9582e840d20ab729535d47f78904a4660f656bc8a1c9809429887e9fa920373f |
 
-실제 0.14.17은 `.paper-factory/j17/f06937e694ae`에서 같은 JIZURA `research-7fc481808695`를 재개했다. 소스 선택 `47a17e61-86f2-4f11-9d6d-a2e31f7bc1fc`가 05:48:48.229 UTC에 완료돼 원래 166파일 목록에서 12개를 골랐다. 설계 `18042e34-66bf-4760-969d-385f07c1c02a`에는 metadata 7개를 포함한 총 19파일의 전체 본문과 Unicode 페이지 23개의 원문·해시를 전달했다. 요청 564,551 UTF-8 B/SHA256 `8ed00771472972f91331633448d45c06cc1b4fc798df8d299afa5075d2f05d63`이며, 모델은 05:51:25.028 UTC에 feasible=true의 Chromium 연구안을 정상 완료했다. 같은 원래 저장소·목표·writer/reviewer를 사용했고 수동 selector·문헌·프로토콜·기대 결과를 입력하지 않았다. 원본 전체를 읽고 계획을 만드는 흐름의 실제 반영을 확인했지만, 신규성 심사나 논문 품질 통과는 확인한 상태가 아니다.
+실제 0.14.17은 `.paper-factory/j17/f06937e694ae`에서 같은 JIZURA `research-7fc481808695`를 재개했다. 소스 선택 `47a17e61-86f2-4f11-9d6d-a2e31f7bc1fc`가 05:48:48.229 UTC에 완료돼 원래 166파일 목록에서 12개를 골랐다. 설계 `18042e34-66bf-4760-969d-385f07c1c02a`에는 metadata 7개를 포함한 총 19파일의 전체 본문과 Unicode 페이지 23개의 원문·해시를 전달했다. 요청 564,551 UTF-8 B/SHA256 `8ed00771472972f91331633448d45c06cc1b4fc798df8d299afa5075d2f05d63`이며, 모델은 05:51:25.028 UTC에 feasible=true의 Chromium 연구안을 정상 완료했다. 같은 원래 저장소·목표·writer/reviewer를 사용했고 수동 selector·문헌·프로토콜·기대 결과를 입력하지 않았다. 선택한 19개 원본 파일의 전체 본문을 읽고 계획을 만드는 흐름의 실제 반영을 확인했지만, 신규성 심사나 논문 품질 통과는 확인한 상태가 아니다.
 
 이후 native `workflow.submitProposal`이 05:51:25.072–05:51:27.149 UTC에 `ISOLATION_UNAVAILABLE`로 거절됐다. 실행 전 동적 runtime admission의 실패이며, 이번 설계 JSON이나 SDK 응답 실패가 아니다. 별도 bundle을 불러오는 평가 도구에서 이 오류가 화면용 `connection_error`로 투영된 원인도 조사 중이다. 최초 runtime은 두 profile ready였지만, 제안 등록 시점의 개별 profile 진단은 generic error에 보존되지 않아 실패한 점검 항목을 소급 확정할 수 없다. Native는 created/ready, proposal·SCI·논문 0이며 종료를 확인했다. 새 SDK 실패가 없어 HTTP 실패 진단의 실제 보존 경로를 검증한 실행으로 계산하지 않는다.
 
 종료 후 읽기 전용 감사 37항목이 참이다. 같은 root의 현재 239파일/owned228파일/산출물20개, 재개 전 202파일 전체 archive, 불변197개·최초 불변190개·195파일 archive·기존 산출물11개·과거 기록을 전수 대조했다. SQLite는 immutable/query_only SELECT로만 읽고 감사 전후 바이트 불변을 확인했다. 산출물·원문·제품 결합59개·소유 handle/worker 종료·SCI 한도도 확인했다. `.paper-factory/inference-diagnostics-01417/post-completion-audit/closed-run-audit.json`은 389,606 B/SHA256 `15028850f5bba8bc4a73a2503a9c86d5b36fe20f2ecf51c5d052a50c87fec449`이며 코드 동결 기록은 같은 폴더의 `audit-source-freeze.json` SHA256 `d9c3884748c3be3f57318d391a8ecdac06e9be68596364ff7891ee327a3b3b7f`다. 실행 shell 종료값1과 결과 파일 exitCode2는 각각 보존하며 그 차이를 학술 실패나 추가 SDK 실패로 해석하지 않는다.
+
+## 0.14.18 실행 환경 실패 기록과 Windows 긴 경로 (2026-10-08)
+
+제안 등록·새 연구안 준비·실험 시작에서 실행 환경 점검이 실패하면, 당시 선택한 runtime과 전체 로컬 상태를 고유한 `runtime-admission-*` 산출물로 저장하고 해시·크기를 동결한다. 기존 진단을 덮어쓰지 않으며 변조·누락·식별자 충돌은 거절한다. 공개 오류에는 `ISOLATION_UNAVAILABLE`와 확인할 산출물만 안내하고 원래 상태 값은 전달하지 않는다. 원본 진단은 재현 ZIP에 별도 보존하지만, 모델에 전달하는 과학 근거와 새 연구 준비의 과학적 기준에서는 제외한다. 환경 점검 실패로 제안·문헌·SCI 횟수를 늘리거나 심사를 승인하지 않는다.
+
+별도 `dist/research.js`를 사용하는 평가 경로가 실제 `dist/engine.js`의 `EngineError` 클래스를 공유하도록 빌드를 고쳤다. 이름과 필드만 흉내 내던 테스트 helper는 제거했다. 원래 제품의 `app.js`는 단일 bundle이므로, 이 클래스 중복 문제를 배포 앱 전체의 오류 처리 결함으로 확대하지 않는다. 합성 검사에서 완료된 계획·원문 해시를 유지하면서 native 실행 환경 실패를 정확히 표시하고 이후 문헌·실험을 실행하지 않는 경계를 확인했다. 이전 bounded 발췌를 보존한 파일은 전체 본문을 새로 검토하지 않았다고 문맥에 명시한다.
+
+Windows JSON writer는 일반 `Path`도 기존 artifact IO 경로로 처리하고, 임시 파일에도 Windows 확장 경로와 짧은 이름을 사용한다. 기존 JSON 필드 순서·UTF-8·CRLF, fsync 뒤 atomic 교체, 실패한 임시 파일 정리와 링크 거절을 유지한다. 문헌의 `_save`는 기존 `safe_relative`를 사용해 긴 경로를 처리하며 PDF·XML·JSON·본문 bytes를 다시 직렬화하지 않는다. 원문 SHA·상대명·독점 생성과 기존 파일 변조 거절 규칙은 유지한다.
+
+| 최종 제품 검사 | 결과 |
+| --- | --- |
+| Desktop build·typecheck | 통과 |
+| 전체 Desktop Node 검사 | 449 통과, 실패·취소·skip 0. 기존 0.14.18 동결 결과이며 이번 재개에서 반복하지 않음 |
+| SDK 검사 | 48 통과, Windows POSIX 권한 검사 1 skip. 기존 동결 결과 |
+| Native 영향 회귀 | 234 통과·0 실패·기존 Windows symlink 생성 권한 3 skip, 96.03초. 원래 실패와 같은 길이의 새 basetemp 사용 |
+| Windows JSON writer 개별 검사 | 38 통과·0 실패·0 skip. 일반 Path 270자·부모 247/274자에서 원문 bytes·교체·정리·링크 확인 |
+| 마지막 본문·심사 경계 재확인 | 기존 테스트 1 통과, 2.84초. 같은 길이의 새 basetemp에서 metadata 270자와 실제 보존 본문·identity 근거 확인, SCI 0 |
+| 문헌 원문·링크 개별 검사 | 9 통과·기존 Windows symlink 권한 3 skip·79 미선택. JSON/XML/PDF/TXT 원문·SHA·재사용·변조 거절 및 junction·최종 링크 검사 |
+
+개별 writer·본문·문헌 검사는 최종 영향 회귀와 겹치므로 합산하지 않는다. Native 최종 동결 기록은 `.paper-factory/runtime-admission-01418/native-final-7e1ec009bb40/final-source-freeze.json` SHA256 `06a5ea39c3186cd363ebab3572b703770a83ffed32733f1722b7dd3db46d1f8d`다. Desktop 동결 기록은 `.paper-factory/standalone-engine-error-01418/desktop-standalone-engine-error-freeze.json` SHA256 `9f7bfed3e9c53e705c997b56b0fc820658f9a8fdad96844aa41e0ab85c8b8e0d`다. Renderer·worker 검사를 새 결과로 계산하지 않았다.
+
+원래 긴 경로 실패 로그·임시 작업실·SQLite·검색 및 본문 기록을 보존했다. 262자 임시 JSON 경로와 270자 문헌 metadata 경로의 별도 IO 문제를 해결했으며, 테스트를 짧은 경로로 옮기거나 심사 조건을 완화하지 않았다. 문헌 감사 helper의 상대 경로 중복과 최종 receipt helper의 UTF-8 경로 표시 읽기 오류도 원본과 함께 남겼고, 읽기 전용 감사만 수정했으며 해당 테스트를 반복하지 않았다. 본문 감사 9항목은 같은 synthetic root의 metadata·PDF·본문·identity·발견 자료 해시와 동결 결합, 제안3·문헌3·SCI0 및 SQLite·제품 바이트 불변을 확인했다. `.paper-factory/runtime-admission-01418/collector-4bb569e464ea/receipt.json` SHA256은 `0dc5bec0328d2553abb2f0fb170e4d3203b4338a9aac693e31300201d837c6ac`다.
+
+Windows runtime을 고정 wheel 19개로 다시 구성하고 실제 호스트 진단을 통과했다. 2,219파일/473,791,500 B의 inventory SHA256은 `f3d74c66d25e78b3995927b6d4583d1f8f11259a688bca5a3eef3ed394595327`이며 `.paper-factory/standalone-runtime-builder/build-win32-x64-9166827f-f24c-4a8e-861b-502ae682a257/build-receipt.json`에 기록했다. 이 기록은 runtime 구성·호스트 진단이며 새 설치본이나 실제 연구의 성공을 확인한 결과가 아니다.
+
+새 `.paper-factory/p18-release`의 정상 NSIS build를 완료하고 ASAR 7,668항목·SDK import·renderer·Pretendard·현재 엔진·runtime 2,219파일 해시를 전수 대조했다. 실제 포함 Python IPC와 패키지의 Chromium worker로 두 profile 준비·browser control 7개·정상 종료·같은 작업실 재시작 두 번을 확인했다. 새 workflow·모델·SCI·계정 접근은 0회이고 자원 불변·소유 engine/worker 종료를 확인했다. 패키지 실행 기록은 `.paper-factory/runtime-admission-01418/packaged-engine-82c4e1b2-d5a5-4ec6-a889-8f81049771e8/receipt.json`이다.
+
+기존 최종 0.14.17의 3파일 해시·크기와 해당 경로의 실행 process 부재를 확인하고 전체 배포본을 `.paper-factory/preserved-release-01417`에 보존했다. 새 전체 패키지를 `desktop/release`로 복사해 동일한 전수 정적 검증을 통과했다. 새 설치·OAuth·로그인 복원·GitHub Releases 게시를 수행하지 않았다.
+
+| 최종 0.14.18 배포 파일 | 크기(B) | SHA256 |
+| --- | ---: | --- |
+| Paper Factory Setup 0.14.18.exe | 213,079,892 | 41ffd0103f688fb93bf16a9bfa95632cdb222da63c599eb0d9302c7d2bae785a |
+| win-unpacked/resources/app.asar | 44,792,893 | 134d7d198117c36ed62e3240d124e42cd048ad4d6e1d61f639a156f96a2ad52e |
+| win-unpacked/Paper Factory.exe | 245,726,208 | 393d6eaf58b873393fb41086d5630dd676e208eec85b04403c870b445358d8c2 |
+
+0.14.18 실제 JIZURA 재개 결과는 아직 미확인이다. 0.14.17의 최초 runtime admission 실패 항목은 소급 확정하지 못했고, 성공한 SDK 요청만 있었으므로 실제 SDK 실패에서 HTTP 진단을 보존하는 경로도 미검증이다. 이번 합성 검사와 패키지 진단은 과학 승인이나 투고 준비도 평가가 아니며, 새 실제 SCI·완료 원고는 없다. 0.14.17의 확정 배포 해시와 모든 과거 연구 기록은 유지한다.

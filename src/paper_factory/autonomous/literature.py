@@ -34,7 +34,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from ..literature import _doi, _metadata
-from ..workspace import ensure_unlinked, is_link
+from ..workspace import is_link, safe_relative
 from .windows_runtime import WindowsJob
 
 CROSSREF = "https://api.crossref.org"
@@ -294,9 +294,9 @@ def _prepare_root(root: Path) -> Path:
 def _save(root: Path, prefix: str, suffix: str, content: bytes) -> tuple[str, str]:
     digest = hashlib.sha256(content).hexdigest()
     relative = f"literature/{prefix}-{digest[:16]}.{suffix}"
-    path = root / relative
-    # Check the final component too: Windows os.open has no O_NOFOLLOW.
-    ensure_unlinked(path)
+    # Reuse verified artifact IO without changing the fetched bytes or filename.
+    # safe_relative also checks links; Windows os.open has no O_NOFOLLOW.
+    path = safe_relative(root, relative)
     # POSIX NOFOLLOW additionally guards the final component during creation.
     try:
         descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)

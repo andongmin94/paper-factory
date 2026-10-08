@@ -1158,14 +1158,31 @@ class WorkflowService:
                     "total_chars": total_chars, "next_offset": end if end < total_chars else None,
                     "sha256": actual_digest, "text": "".join(fragments), "is_untrusted_data": True}
 
-    def _validate_proposal(self, ws: Workspace, plan: ResearchPlan) -> None:
+    def _admit_runtime(self, ws: Workspace, record: Workflow, runtime: str, operation: str) -> dict:
+        status = self.runner.status()
+        try:
+            return _protocol_runtime(status, runtime)
+        except WorkflowError as error:
+            if error.code != "ISOLATION_UNAVAILABLE":
+                raise
+            identifier = uid("runtime-admission")
+            path = ws.path("research/runtime-admission/" + identifier + ".json")
+            if path.exists() or identifier in record.artifacts:
+                raise WorkflowError("RUNTIME_ADMISSION_EVIDENCE_CONFLICT", "Runtime admission evidence cannot overwrite retained bytes") from None
+            write_json(path, {"event": "runtime-admission-failed", "at": now(), "research_id": record.id,
+                              "operation": operation, "runtime": runtime, "status": status,
+                              "scope": "Original local runtime status; operational diagnostics, not scientific observations or approval"})
+            _freeze(ws, record, identifier, path)
+            self._save(ws, record)
+            raise WorkflowError(error.code, "Runtime admission failed for " + runtime + "; inspect retained artifact " + identifier) from None
+
+    def _validate_proposal(self, ws: Workspace, record: Workflow, plan: ResearchPlan, operation: str) -> None:
         if plan.research_claim is None:
             raise WorkflowError("RESEARCH_CLAIM_REQUIRED", "A new proposal must identify its claim, scope, importance and validation strategy")
         science.validate_plan(plan, ws.path("source"))
         if any(not safe_relative(ws.path("source"), path).is_file() for path in plan.source_files):
             raise WorkflowError("PLAN_SOURCE_MISSING", "Protocol refers to absent source files")
-        runtime = self.runner.status()
-        profile = _protocol_runtime(runtime, plan.runtime)
+        profile = self._admit_runtime(ws, record, plan.runtime, operation)
         missing = set(plan.dependencies) - set(profile.get("dependencies", []))
         if missing:
             raise WorkflowError("RUNTIME_DEPENDENCY_UNAVAILABLE", "Unprovisioned dependencies: " + ", ".join(sorted(missing)))
@@ -1192,7 +1209,7 @@ class WorkflowService:
                     raise WorkflowError("INVALID_STATE", "Assess the retained proposal before replacing it")
             if self._study_literature_pending(ws, record):
                 raise WorkflowError("STUDY_REVIEW_REQUIRED", "Review the new literal literature before revising the retained proposal")
-            self._validate_proposal(ws, plan)
+            self._validate_proposal(ws, record, plan, "submit-proposal")
             if record.redesign_attempt and _read(ws, record, "redesign-origin")["event"] == "preexecution-study-redesign":
                 candidate = _read(ws, record, "prior-study-" + record.parent_research_id + "-redesign-candidate")
                 if record.proposal_attempt == 0 and plan.model_dump(mode="json") != candidate:
@@ -1899,7 +1916,7 @@ class WorkflowService:
             plan = ResearchPlan.model_validate(_read(ws, record, "plan"))
             if record.redesign_attempt:
                 _require_distinct_redesign(ws, record, plan, ancestors_only=True)
-            _protocol_runtime(self.runner.status(), plan.runtime)
+            self._admit_runtime(ws, record, plan.runtime, "start-experiment")
             lease = ws.lock("execution")
             lease.__enter__()
             record.status, record.stage = "running", "execute"
@@ -2108,7 +2125,7 @@ class WorkflowService:
                                 frozen.sha256 == intent.get("prior_literature_sha256")), None)
         if review_literature is None or prior_literature is None:
             raise WorkflowError("ARTIFACT_CHANGED", "Preparation cannot discard literature inspected by an earlier review")
-        keys = {key for key in record.artifacts if not key.startswith("model-") and
+        keys = {key for key in record.artifacts if not key.startswith(("model-", "runtime-admission-")) and
                 key not in {"redesign-preparation", "redesign-candidate", "redesign-review", "redesign-intent"}}
         imported = ws.latest("project", Project)
         if Project.model_validate(loads_json(ws.path("project.json").read_bytes())) != imported:
@@ -2135,7 +2152,7 @@ class WorkflowService:
         candidate = ResearchPlan.model_validate(value)
         with self._operation(research_id) as (ws, record):
             basis = self._preparation_redesign_basis(ws, record)
-            self._validate_proposal(ws, candidate)
+            self._validate_proposal(ws, record, candidate, "submit-redesign-proposal")
             if not candidate.feasible or candidate.research_claim is None:
                 raise WorkflowError("STUDY_REDESIGN_NOT_ALLOWED", "A successor candidate must describe a feasible distinct scientific design")
             _require_distinct_redesign(ws, record, candidate)
@@ -2785,6 +2802,8 @@ class WorkflowService:
             if path.is_file():
                 selection["generated/" + path.relative_to(bundle).as_posix()] = path
         for key in record.artifacts:
+            if key.startswith("runtime-admission-"):
+                selection["runtime-admission/" + key + ".json"] = _artifact(ws, record, key)
             if key.startswith("prior-study-"):
                 path = _artifact(ws, record, key)
                 selection["prior-studies/" + path.relative_to(ws.path("research/prior-studies")).as_posix()] = path

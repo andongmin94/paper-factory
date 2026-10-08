@@ -431,6 +431,34 @@ def test_regular_content_addressed_artifact_creation_reuse_and_corruption(tmp_pa
     assert path.read_bytes() == b"changed evidence"
 
 
+@pytest.mark.parametrize("suffix, content", [
+    ("json", '{\r\n  "z": 1, "a": "원문🙂"\r\n}\r\n'.encode("utf-8")),
+    ("xml", '<?xml version="1.0"?>\r\n<entry>원문🙂</entry>\r\n'.encode("utf-8")),
+    ("pdf", b"%PDF-1.7\r\n\x00raw synthetic PDF bytes\r\n%%EOF"),
+    ("txt", "[Page 1]\r\nExact evidence\x00가🙂\r\n".encode("utf-8")),
+])
+def test_long_content_addressed_artifact_keeps_raw_bytes_and_refuses_corruption(tmp_path, suffix, content):
+    prefix = "source-" + "b" * 20 + "-metadata"
+    digest = hashlib.sha256(content).hexdigest()
+    relative = f"literature/{prefix}-{digest[:16]}.{suffix}"
+    padding = 270 - len(str(tmp_path)) - len(relative) - 2
+    assert padding > 0
+    # Keep the collector root a normal path while its artifact exceeds MAX_PATH.
+    root = literature._prepare_root(tmp_path / ("p" + "x" * (padding - 1)))
+    path = workspace.safe_relative(root, relative)
+    assert len(str(path)) == 270 and len(str(root / "literature")) < 248
+    assert literature._save(root, prefix, suffix, content) == (relative, digest)
+    assert path.read_bytes() == content and workspace.digest_file(path) == digest
+    assert path.relative_to(root).as_posix() == relative and not str(path).startswith("\\\\?\\")
+    assert literature._save(root, prefix, suffix, content) == (relative, digest)
+    assert list(path.parent.iterdir()) == [path]
+    changed = b"changed frozen evidence\r\n"
+    path.write_bytes(changed)
+    with pytest.raises(ValueError, match="does not match"):
+        literature._save(root, prefix, suffix, content)
+    assert path.read_bytes() == changed and list(path.parent.iterdir()) == [path]
+
+
 def test_final_link_detection_rejects_before_native_open(tmp_path, monkeypatch):
     """Exercise final-component refusal when symlink creation is unavailable."""
     root = literature._prepare_root(tmp_path / "output")

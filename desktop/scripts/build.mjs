@@ -30,7 +30,7 @@ await build({
 });
 await build({
   entryPoints: ['src/main/research.ts'], outfile: 'dist/research.js',
-  bundle: true, platform: 'node', format: 'esm', target: 'node22', external: ['@siwc/local'],
+  bundle: true, platform: 'node', format: 'esm', target: 'node22', external: ['@siwc/local', './engine.js'],
 });
 await build({
   entryPoints: ['src/main/engine.ts'], outfile: 'dist/engine.js',

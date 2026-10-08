@@ -1,7 +1,9 @@
 import errno
 import hashlib
+import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 from types import SimpleNamespace
 
@@ -54,6 +56,164 @@ def test_long_artifact_paths_preserve_relative_identity_and_verified_io(tmp_path
     assert target.read_bytes() == content and not staging.exists()
     assert not str(target).startswith("\\\\?\\")
     assert Path(str(target)).relative_to(ws.root).as_posix().endswith("atomic-copy.json")
+
+
+def test_json_writer_keeps_short_temporary_name_at_windows_path_boundary(tmp_path, monkeypatch):
+    ws = Workspace.create(tmp_path / "workspace")
+    filename = "journal-12345678-1234-1234-1234-123456789abc-completed.json"
+    parent_length = 248 - len(filename) - 1
+    padding = parent_length - len(str(ws.root)) - 1
+    assert padding > 0
+    relative = "p" + "x" * (padding - 1) + "/" + filename
+    path = ws.path(relative)
+    assert len(str(path)) == 248 and len(str(path.parent)) < 248
+    # The former target-derived temporary name exceeded normal Windows IO limits.
+    assert len(str(path.parent / ("." + filename + ".12345678.tmp"))) == 262
+    assert path.relative_to(ws.root).as_posix() == relative
+    expected, retained, replacements = [], [], []
+    replace = os.replace
+
+    def observe_replace(source, target):
+        assert Path(str(source)).parent == path.parent
+        assert len(str(source)) < 248
+        assert Path(source).read_bytes() == expected[-1]
+        assert path.read_bytes() == retained[-1] if retained else not path.exists()
+        replacements.append(str(source))
+        return replace(source, target)
+
+    monkeypatch.setattr(module.os, "replace", observe_replace)
+    for value in ({"retained": "정확한 원문", "version": 1}, {"retained": "새 원문", "version": 2}):
+        expected.append((json.dumps(value, indent=2, ensure_ascii=False, allow_nan=False) + "\n").replace("\n", os.linesep).encode("utf-8"))
+        module.write_json(path, value)
+        raw = path.read_bytes()
+        assert raw == expected[-1] and loads_json(raw) == value
+        assert module.digest_file(path) == hashlib.sha256(raw).hexdigest()
+        assert str(path) == str(ws.root / relative) and path.relative_to(ws.root).as_posix() == relative
+        assert list(path.parent.iterdir()) == [path]
+        retained.append(raw)
+    assert len(replacements) == 2 and all(not Path(name).exists() for name in replacements)
+
+
+def _json_path_with_parent_length(tmp_path, length, filename):
+    padding = length - len(str(tmp_path)) - 1
+    assert 0 < padding < 256
+    return tmp_path / ("p" * padding) / filename
+
+
+@pytest.mark.parametrize("parent_length,filename,artifact_path", [
+    (247, "result.json", True),
+    (247, "retained-evidence.json", False),
+    (274, "result.json", True),
+])
+def test_json_writer_atomically_replaces_exact_evidence_across_windows_io_boundaries(
+        tmp_path, monkeypatch, parent_length, filename, artifact_path):
+    path = _json_path_with_parent_length(tmp_path, parent_length, filename)
+    assert len(str(path.parent)) == parent_length
+    if not artifact_path:
+        assert len(str(path)) == 270 and type(path) is type(tmp_path)
+    target = module._ArtifactPath(path)
+    candidate = target if artifact_path else path
+    values = [{"version": 1, "label": "정확한 원문"}, {"version": 2, "label": "교체된 원문"}]
+    expected = [(json.dumps(value, indent=2, ensure_ascii=False, allow_nan=False) + "\n")
+                .replace("\n", os.linesep).encode("utf-8") for value in values]
+    replacements, synced = [], []
+    replace, fsync = os.replace, os.fsync
+
+    def durable_sync(descriptor):
+        assert os.fstat(descriptor).st_size == len(expected[len(synced)])
+        fsync(descriptor)
+        synced.append(descriptor)
+
+    def atomic_replace(source, destination):
+        index = len(replacements)
+        assert len(synced) == index + 1
+        assert str(destination) == str(path)
+        assert Path(str(source)).parent == path.parent
+        assert module._ArtifactPath(source).read_bytes() == expected[index]
+        if index:
+            assert target.read_bytes() == expected[index - 1]
+        else:
+            assert not target.exists()
+        replacements.append(source)
+        return replace(source, destination)
+
+    monkeypatch.setattr(module.os, "fsync", durable_sync)
+    monkeypatch.setattr(module.os, "replace", atomic_replace)
+    for value, raw in zip(values, expected, strict=True):
+        module.write_json(candidate, value)
+        assert target.read_bytes() == raw and loads_json(raw) == value
+        assert module.digest_file(target) == hashlib.sha256(raw).hexdigest()
+        assert str(candidate) == str(path)
+        assert list(target.parent.iterdir()) == [target]
+    assert len(replacements) == len(synced) == 2
+    assert all(not source.exists() for source in replacements)
+
+
+@pytest.mark.parametrize("failure_stage", ["fsync", "replace", "scanner"])
+def test_json_writer_io_failure_preserves_existing_evidence_and_cleans_long_temporary(
+        tmp_path, monkeypatch, failure_stage):
+    path = _json_path_with_parent_length(tmp_path, 247, "retained-evidence.json")
+    assert len(str(path)) == 270
+    target = module._ArtifactPath(path)
+    module.write_json(path, {"retained": "immutable previous evidence"})
+    before = target.read_bytes()
+    attempts, delays = [], []
+    failure = (PermissionError(errno.EACCES, "Synthetic scanner hold") if failure_stage == "scanner"
+               else OSError(errno.EIO, "Synthetic persistence failure"))
+
+    def fail(*args):
+        attempts.append(args)
+        raise failure
+
+    monkeypatch.setattr(module.os, "fsync" if failure_stage == "fsync" else "replace", fail)
+    monkeypatch.setattr(module.time, "sleep", delays.append)
+    with pytest.raises(OSError) as caught:
+        module.write_json(path, {"retained": "must not replace previous evidence"})
+    assert caught.value is failure
+    assert target.read_bytes() == before
+    assert list(target.parent.iterdir()) == [target]
+    expected_attempts = 5 if failure_stage == "scanner" and os.name == "nt" else 1
+    assert len(attempts) == expected_attempts and len(delays) == expected_attempts - 1
+
+
+@pytest.mark.parametrize("link_location", ["ancestor", "target", "target_after_sync"])
+def test_json_writer_keeps_link_checks_before_creation_and_atomic_replacement(
+        tmp_path, monkeypatch, link_location):
+    path = _json_path_with_parent_length(tmp_path, 247, "retained-evidence.json")
+    target = module._ArtifactPath(path)
+    module.write_json(path, {"retained": "original evidence"})
+    before = target.read_bytes()
+    linked = link_location != "target_after_sync"
+    is_link, fsync = module.is_link, os.fsync
+
+    def detect_link(candidate):
+        guarded = target.parent if link_location == "ancestor" else target
+        return (linked and candidate == guarded) or is_link(candidate)
+
+    def expose_link(descriptor):
+        nonlocal linked
+        fsync(descriptor)
+        linked = True
+
+    monkeypatch.setattr(module, "is_link", detect_link)
+    monkeypatch.setattr(module.os, "fsync", expose_link)
+    with pytest.raises(ValueError, match="symlinks or junctions"):
+        module.write_json(path, {"retained": "must not traverse a link"})
+    assert target.read_bytes() == before and list(target.parent.iterdir()) == [target]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows junction regression")
+def test_plain_long_json_path_refuses_a_real_windows_junction(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    junction = tmp_path / "linked"
+    subprocess.run(["cmd", "/c", "mklink", "/J", str(junction), str(outside)],
+                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+    path = _json_path_with_parent_length(junction, 274, "retained-evidence.json")
+    assert len(str(path)) > 260
+    with pytest.raises(ValueError, match="symlinks or junctions"):
+        module.write_json(path, {"retained": "must not enter the linked directory"})
+    assert list(outside.iterdir()) == []
 
 
 def test_long_relative_artifact_checks_absolute_ancestors_without_changing_identity(tmp_path, monkeypatch):

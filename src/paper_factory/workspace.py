@@ -30,10 +30,12 @@ class _ArtifactPath(type(Path())):
         value = str(self)
         if os.name != "nt":
             return value
-        absolute = os.path.abspath(value)
-        if len(absolute) < 248:
+        if len(os.path.abspath(value)) < 248:
             return value
-        value = absolute
+        return self._windows_path()
+
+    def _windows_path(self) -> str:
+        value = os.path.abspath(str(self))
         if value.startswith("\\\\?\\"):
             return value
         return "\\\\?\\UNC\\" + value[2:] if value.startswith("\\\\") else "\\\\?\\" + value
@@ -140,14 +142,18 @@ def loads_json(content: str | bytes) -> object:
 
 
 def write_json(path: Path, value: object) -> None:
+    path = _ArtifactPath(path)
     ensure_unlinked(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     data = value.model_dump(mode="json") if isinstance(value, Record) else value
     content = json.dumps(data, indent=2, ensure_ascii=False, allow_nan=False) + "\n"
     temporary = None
     try:
-        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False) as stream:
-            temporary = Path(stream.name)
+        # tempfile appends its name after converting dir; even a short parent
+        # can produce a long Windows path. Keep the portable identity for IO below.
+        directory = path.parent._windows_path() if os.name == "nt" else path.parent
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=directory, prefix=".json-", suffix=".tmp", delete=False) as stream:
+            temporary = path.parent / Path(stream.name).name
             stream.write(content)
             stream.flush()
             os.fsync(stream.fileno())
