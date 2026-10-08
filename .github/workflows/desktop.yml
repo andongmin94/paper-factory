@@ -40,6 +40,14 @@ jobs:
         run: npm run package:app
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Verify hidden Chromium boundaries with the inspected bundled Python
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $testRuntime = (Resolve-Path 'runtime/win32-x64').Path
+          $testInventory = Get-Content -LiteralPath (Join-Path $testRuntime 'runtime-inventory.json') -Raw | ConvertFrom-Json
+          $env:PF_CHROMIUM_TEST_PYTHON = Join-Path $testRuntime $testInventory.executables.python
+          npm run test:chromium
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: standalone-static-verification-${{ matrix.os }}

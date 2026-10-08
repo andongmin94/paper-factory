@@ -1,6 +1,20 @@
 # Paper Factory 독립 데스크톱 앱 전환
 
-갱신일: 2026-10-06 (Asia/Seoul). 현재 앱·엔진 소스 버전은 `0.13.1`이다. 아래 전환 작업의 실제 설치·계정·논문 검사는 이전 `0.13.0`의 이력이다. 과거 플러그인 논문·Cloud export·Mac 엔진 CI를 새 앱의 성공으로 계산하지 않는다.
+갱신일: 2026-10-08 (Asia/Seoul). 현재 앱·엔진 소스 버전은 `0.14.15`이다. 최신 실행 설계와 아래 날짜별 전환·검증 이력을 구분한다. 당시 생성한 원고와 기술 검사를 최신 기준에서 승인된 학술 논문으로 계산하지 않는다.
+
+## 현재 실행 설계
+
+Windows에서는 계획에 맞춰 QuickJS 또는 준비 확인을 통과한 Chromium 프로필을 선택한다. QuickJS는 JS/TS 함수의 Wasm 실행을 맡고, Chromium은 변경하지 않은 classic `.js` 원문을 선언한 순서로 읽어 DOM·Canvas를 사용하는 동기 함수를 호출한다. 실험 `.js`/`.mjs` 코드는 비동기 `callProduction`·`retainFixture`·`readScientificInput`을 기다린다. 원본 함수와 주고받는 값은 유한한 일반 JSON 자료로 제한되므로 DOM 객체나 Promise를 반환하는 함수, 저장소 전체 앱 실행까지 지원하는 것은 아니다. 선택한 프로필이 실패하면 다른 프로필로 바꾸어 실행하지 않는다.
+
+Chromium의 원본과 실험은 서로 다른 sandbox renderer와 임시 세션을 쓴다. 계정 정보와 Node·호스트 파일 API를 전달하지 않으며 네트워크·다운로드·장치 권한을 차단한다. Windows Job은 작업 메모리 1 GiB와 프로세스 16개를 제한하고 소유한 작업의 종료를 확인한다. 실행 시간 제한은 CPU 할당량이 아니며 OS 전체 파일 접근을 차단하는 보장은 아니다. 지정 실행 파일·worker·자산의 크기와 SHA를 연결하지만 그 연결만으로 Electron의 전체 바이너리 의존성을 검증했다고 주장하지 않는다.
+
+고정 원문·순서·프로토콜·문헌·리뷰·입력과 실제 호출/fixture·원시 응답·관측·종료 확인을 보존하고 이후 분석과 내보내기에서도 연결을 확인한다. 정리 미확인 상태에서는 계속 실행하지 않는다. 계측에는 브라우저 및 비동기 bridge 비용이 포함되므로 일반 앱의 지연 성능으로 해석할 수 없다. UI와 문서는 Pretendard를 사용하지만 Canvas 글자는 Windows에 있는 글꼴과 실험 환경에 의존하며 외부 글꼴을 내려받지 않는다.
+
+이 설계의 Chromium 지원은 Windows에 한정한다. macOS 네이티브 Chromium 실행·배포, 실제 앱 전체 사용성, 시각 인지나 기하 정확도, 학술지 수준 논문 품질은 별도 확인이 필요하다. 현재 소스와 설치본의 검증 상태는 [검증 기록](standalone-verification.md)에 기록한다.
+
+## 0.13.1 전환 및 검증 이력 — 2026-10-06
+
+당시 앱·엔진 소스 버전은 `0.13.1`이었다. 아래 전환 작업의 실제 설치·계정·논문 검사는 이전 `0.13.0`의 이력이다. 과거 플러그인 논문·Cloud export·Mac 엔진 CI를 새 앱의 성공으로 계산하지 않는다.
 
 승인한 5단계 개선은 소스 반영과 검증을 완료했다. 0.13.1 Windows 설치 파일을 만들고 패키지의 소스·글꼴·런타임을 전수 대조했다. 새 설치·실계정·논문 생성과 macOS 빌드는 이번에 실행하지 않았다. 검사 수·해시·범위는 [0.13.1 검증 기록](standalone-ui-provenance.md)에 있다.
 
@@ -32,7 +46,7 @@
 | 제거 | plugin manifest·host skill·Cloud 전달·plugin ZIP·CLI·Docker/WindowsRunner/AppContainer·범위 밖 투고/포털 코드 및 직접 대응 설정·스크립트·CI·테스트 제거 완료 |
 | 증거 | 이전 논문·관측·receipt·실패 기록 보존. 제거 전 자원/문서의 원본 bytes·해시와 역사 문서 보존 |
 
-세부 근거는 [정리 완료 기록](standalone-cleanup-inventory.md), [인증 조사](standalone-auth-research.md), [UI 출처](standalone-ui-provenance.md), [검증 기록](standalone-verification.md)에 있다. Python engine과 pyproject도 `0.13.0`이며, trusted 분석·문서 변환·Windows Job Object와 macOS guardian을 유지했다. 앱 실험 범위는 빈 dependencies의 QuickJS JS/TS 생산 함수이고 DOM·네트워크·범용 Node/Python 실험으로 확장하지 않았다.
+세부 근거는 [정리 완료 기록](standalone-cleanup-inventory.md), [인증 조사](standalone-auth-research.md), [UI 출처](standalone-ui-provenance.md), [검증 기록](standalone-verification.md)에 있다. 당시 Python engine과 pyproject도 `0.13.0`이며, trusted 분석·문서 변환·Windows Job Object와 macOS guardian을 유지했다. 당시 앱 실험 범위는 빈 dependencies의 QuickJS JS/TS 생산 함수였고 DOM·네트워크·범용 Node/Python 실험으로 확장하지 않았다. 현재 Windows Chromium 지원 범위는 위 최신 설계에 별도로 기록한다.
 
 ## 단계별 완료 기준
 

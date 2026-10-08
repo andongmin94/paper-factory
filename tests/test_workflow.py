@@ -235,7 +235,7 @@ def test_controller_requires_explicit_owned_home_and_runner(tmp_path):
         WorkflowService(runner=FixtureRunner())
     with pytest.raises(TypeError):
         WorkflowService(tmp_path / "home")
-    with pytest.raises(ValueError, match="explicit QuickJS"):
+    with pytest.raises(ValueError, match="explicit isolated"):
         WorkflowService(tmp_path / "home", runner=None)
     assert not (tmp_path / "home").exists()
 

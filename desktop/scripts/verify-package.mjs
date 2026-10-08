@@ -18,7 +18,7 @@ const extract = (name) => asar.extractFile(archive, name.replaceAll('/', sep));
 const files = asar.listPackage(archive).map((name) => name.replaceAll('\\', '/').replace(/^\//, ''));
 assert(!files.some((name) => /(^|\/)(chatgpt-auth\.json|chatgpt-host\.json|\.env|\.paper-factory|output)(\/|$)/.test(name)), 'Private data must not be packaged');
 const required = [
-  'package.json', 'dist/main.js', 'dist/preload.cjs', 'dist/renderer/index.html', 'dist/LICENSE',
+  'package.json', 'dist/main.js', 'dist/app.js', 'dist/preload.cjs', 'dist/renderer/index.html', 'dist/LICENSE',
   'node_modules/@siwc/local/package.json', 'node_modules/@siwc/local/dist/index.js',
   'node_modules/@siwc/local/LICENSE', 'node_modules/@siwc/local/THIRD_PARTY_NOTICES.md',
   'node_modules/jose/package.json', 'node_modules/proper-lockfile/package.json',
@@ -30,7 +30,7 @@ const packaged = JSON.parse(extract('package.json').toString());
 const sourcePackage = JSON.parse(await readFile('package.json', 'utf8'));
 assert.equal(packaged.version, sourcePackage.version);
 assert.equal(packaged.main, 'dist/main.js');
-for (const name of ['dist/main.js', 'dist/preload.cjs', 'dist/renderer/index.html']) {
+for (const name of ['dist/main.js', 'dist/app.js', 'dist/preload.cjs', 'dist/renderer/index.html']) {
   assert.deepEqual(extract(name), await readFile(name), `Package has stale built source: ${name}`);
 }
 const html = extract('dist/renderer/index.html').toString();
@@ -95,6 +95,9 @@ try {
     runtimeVerification = { fileCount: inventory.files.length, fullHashesVerified: true,
       inventorySha256: createHash('sha256').update(await readFile(join(runtimeRoot, 'runtime-inventory.json'))).digest('hex'),
       executables: inventory.executables, appEngineSourceMatches: true };
+    if (process.platform === 'win32') {
+      assert.deepEqual(await readFile(join(dirname(archive), 'chromium-worker.mjs')), await readFile('dist/chromium-worker.mjs'), 'Stale or missing external Chromium worker');
+    }
   }
 } finally {
   const target = resolve(inspection);

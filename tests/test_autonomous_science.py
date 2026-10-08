@@ -844,6 +844,39 @@ def test_code_prompt_uses_guest_bridges_and_structured_repair_feedback(protocol)
     assert "Repair measurement code without changing the protocol." in prompt
 
 
+def test_chromium_code_contract_requires_awaited_calls_without_changing_frozen_plan(protocol):
+    protocol.runtime = "chromium"
+    protocol.production_entrypoint = "transform.js:J.measure"
+    original = protocol.model_dump(mode="json")
+    bundle = {"runtime": "chromium", "entrypoint": "experiment.mjs", "files": [
+        {"path": "experiment.mjs", "content": "export default async function run() {}"}],
+        "explanation": "Labelled prompt contract control, without execution."}
+    for prompt in (science.code_prompt(protocol, "original source"),
+                   science.code_review_prompt(protocol, bundle, "original source")):
+        assert "async" in prompt and "await" in prompt
+        assert "callProduction" in prompt and "readScientificInput" in prompt and "retainFixture" in prompt
+        assert "classic .js" in prompt and "own-data" in prompt
+        assert "nonfinite" in prompt and "font" in prompt and "latency" in prompt
+        assert "runtime quickjs" not in prompt and "default synchronous function run()" not in prompt
+        assert protocol.model_dump(mode="json") == original
+    generated = science.code_prompt(protocol, "original source")
+    assert "Every .cjs file, including secondary helper modules, is unsupported" in generated
+    assert "retained inert artifacts, not script modules" in generated
+
+
+def test_chromium_plan_validation_requires_selected_classic_script_last(protocol, tmp_path):
+    protocol.runtime = "chromium"
+    protocol.source_files = ["helper.js", "transform.js"]
+    protocol.production_entrypoint = "transform.js:J.measure"
+    science.validate_plan(protocol, tmp_path)
+    protocol.source_files.reverse()
+    with pytest.raises(ValueError, match="ordered classic"):
+        science.validate_plan(protocol, tmp_path)
+    protocol.source_files = ["helper.ts", "transform.js"]
+    with pytest.raises(ValueError, match="ordered classic"):
+        science.validate_plan(protocol, tmp_path)
+
+
 def test_model_prompts_explain_existing_protocol_and_generation_boundaries(protocol):
     planning = science.planning_prompt("inspected production source", "study behavior")
     assert "distinct short stable labels of one to eighty characters" in planning

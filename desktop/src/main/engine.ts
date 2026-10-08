@@ -20,6 +20,19 @@ type Inventory = { schemaVersion: number; platform: string; arch: string;
   files: Array<{ path: string; size: number; sha256: string }> };
 type Binding = { profiles: Record<string, { inventorySha256: string }> };
 type Pending = { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout };
+export type ChromiumPaths = { executable: string; worker: string; assets: string[]; app_entry?: string };
+export type FileBinding = { path: string; size: number; sha256: string };
+
+export async function chromiumBinding(paths: ChromiumPaths) {
+  async function descriptor(path: string): Promise<FileBinding> {
+    if (!isAbsolute(path) || await realpath(path) !== path || !(await stat(path)).isFile()) throw new EngineError('RUNTIME_INVALID', 'Chromium 실행 파일 경로가 올바르지 않습니다.');
+    const bytes = await readFile(path);
+    return { path, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') };
+  }
+  const executable = await descriptor(paths.executable), worker = await descriptor(paths.worker);
+  const assets = await Promise.all(paths.assets.map(descriptor));
+  return { executable, worker, assets, ...(paths.app_entry ? { app_entry: await descriptor(paths.app_entry) } : {}) };
+}
 
 export async function checkedRuntimePath(root: string, name: string): Promise<string> {
   if (typeof name !== 'string' || !name || isAbsolute(name) || /[\\\u0000-\u001f]/.test(name) || name.split('/').some(p => !p || p === '.' || p === '..')) {
@@ -77,7 +90,7 @@ export class EngineBridge {
   private childClosed?: Promise<number | null>;
   private expiredShutdowns = new Set<string>();
 
-  constructor(private runtimeRoot: string, private home: string, private bindingPath: string) {}
+  constructor(private runtimeRoot: string, private home: string, private bindingPath: string, private chromium?: ChromiumPaths) {}
 
   async start() {
     if (this.startup) return this.startup;
@@ -108,8 +121,10 @@ export class EngineBridge {
         ...(process.env.WINDIR ? { WINDIR: process.env.WINDIR } : {}),
         ...(process.platform === 'darwin' ? { LANG: 'en_US.UTF-8' } : {}),
       };
+      const browser = this.chromium ? JSON.stringify(await chromiumBinding(this.chromium)) : undefined;
+      if (browser && (process.platform !== 'win32' || Buffer.byteLength(browser) > 64 * 1024)) throw new EngineError('RUNTIME_INVALID', 'Chromium 실행 환경의 구성이 올바르지 않습니다.');
       const child = spawn(python, ['-I', '-B', '-m', 'paper_factory.ipc', '--home', home,
-        '--runtime-root', quickjs, '--node', node, '--pandoc', pandoc], {
+        '--runtime-root', quickjs, '--node', node, '--pandoc', pandoc, ...(browser ? ['--chromium-binding', browser] : [])], {
         cwd: home, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, shell: false,
       });
       this.buffer = Buffer.alloc(0);

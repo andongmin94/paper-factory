@@ -5,7 +5,19 @@ await mkdir('dist', { recursive: true });
 await build({
   entryPoints: ['src/main/main.ts'], outfile: 'dist/main.js',
   bundle: true, platform: 'node', format: 'esm', target: 'node22',
-  external: ['electron', '@siwc/local'],
+  external: ['electron'],
+});
+await build({
+  entryPoints: ['src/main/app.ts'], outfile: 'dist/app.js',
+  bundle: true, platform: 'node', format: 'esm', target: 'node22', external: ['electron', '@siwc/local'],
+});
+await build({
+  entryPoints: ['src/main/chromium-worker.ts'], outfile: 'dist/chromium-worker.mjs',
+  bundle: true, platform: 'node', format: 'esm', target: 'node22', external: ['electron'],
+});
+await build({
+  entryPoints: ['src/main/chromium-contract.ts'], outfile: 'dist/chromium-contract.js',
+  bundle: true, platform: 'node', format: 'esm', target: 'node22',
 });
 await build({
   entryPoints: ['src/main/preload.ts'], outfile: 'dist/preload.cjs',

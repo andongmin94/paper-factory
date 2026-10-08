@@ -1,6 +1,23 @@
 # Standalone engine inventory
 
-> Initial transition audit. Implementation cleanup is tracked in [standalone-cleanup-inventory.md](standalone-cleanup-inventory.md); removal/move proposals below describe the original state.
+> Current runtime design is described below. The dated transition audit, removal proposals and baseline results that follow remain historical. Implementation cleanup is tracked in [standalone-cleanup-inventory.md](standalone-cleanup-inventory.md).
+
+## Current runtime design — 0.14.15, 2026-10-08
+
+The Windows source now declares two isolated experiment profiles. A plan selects an actually ready profile; Chromium failure does not fall back to QuickJS. These capabilities describe bounded function experiments, not execution of an entire repository or application. Current package and validation evidence belongs in [standalone-verification.md](standalone-verification.md).
+
+| Profile | Supported source and experiment contract |
+| --- | --- |
+| QuickJS | Frozen JS/TS modules in separate Wasm guests, trusted TypeScript transformation, and synchronous controller-held JSON gates. Existing serializer and protocol digests remain unchanged. DOM and ambient Node APIs are unavailable in this profile. |
+| Windows Chromium | Up to 20 whole unchanged classic `.js` source files in the declared order, with the selected file last. An own-data global function chain selects the original synchronous production function. Generated `.js`/`.mjs` experiment modules await `callProduction`, `retainFixture` and `readScientificInput`; arguments and results must satisfy the finite plain-data JSON contract. DOM and Canvas are available within that contract. |
+
+`autonomous/browser_runner.py` supervises Electron's dedicated Chromium worker, separate sandboxed production/experiment renderers and nonpersistent sessions. Guests receive no Node, filesystem or account APIs; network requests, navigation, downloads and device permissions are denied. The worker branch starts without the app's authentication SDK. The Windows Job Object bounds job memory to 1 GiB and processes to 16, and supports owned process-tree cancellation and cleanup. Wall-clock deadlines are not CPU quotas, and neither the Job Object nor guest API denial constitutes a whole-OS filesystem sandbox or a controller RSS limit.
+
+Explicit executable, worker and asset bindings record file sizes and SHA256 values; this binding alone does not verify the complete Electron binary closure. Readiness requires actual capability and owned-cleanup checks. Frozen source order/hashes, held-function provenance, native call/fixture receipts, original worker-response bytes, observations and cleanup remain evidence for later analysis and export. An incomplete startup ownership record blocks admission when cleanup cannot be established; recovery does not guess a PID or rerun an experiment. Measurements include browser execution and asynchronous bridge overhead, so they do not establish normal application latency.
+
+Pretendard remains the app/document font. Chromium does not automatically inherit the document font bundle, and external font loading is denied; Canvas text depends on available Windows fonts and the recorded experiment environment. DOM/Canvas availability does not validate geometry, visual perception, user behavior, novelty or scholarly quality. The new Chromium profile is Windows-only; native macOS Chromium execution and an accepted live-model paper under this design remain unverified.
+
+## Original transition audit — 2026-10-05
 
 Audit date: 2026-10-05 (Asia/Seoul). Starting revision: `ac22fdd`; Python source version: `0.12.0`. This inventory describes the existing engine and the changes needed when the authentication gate passes. It does not attest that the standalone app, subscription inference, installer, or three final studies have passed.
 
@@ -31,7 +48,7 @@ The gate is a real Electron app using the app's own official ChatGPT sign-in, an
 | --- | --- |
 | `WorkflowService(home=None)` and `pf_home()` | Pass an explicit app-owned data directory. Creating the service immediately calls `_recover()`; recovery may stop a retained owned worker. Never point a new app or audit at another session's research directory. |
 | `autonomous/runner.py` | QuickJS imports bounded helpers/constants from this module. Move these shared helpers out, then remove `DockerRunner` and the default `research_runner()` selection. The current default picks WindowsRunner on Windows and DockerRunner elsewhere; it is not the standalone runtime. Explicitly provide `QuickJSRunner` for the supported JS/TS scope. |
-| `ResearchPlan.runtime`, `CodeBundle.runtime` | Remove Python/Node product paths when the app engine is connected; keep only the declared QuickJS scope. Avoid advertising DOM, ambient Node, networked experiments, or other languages. |
+| `ResearchPlan.runtime`, `CodeBundle.runtime` | The initial transition removed Python/ambient Node product paths and targeted QuickJS. Current schemas additionally declare the Windows Chromium profile described above; its bounded DOM/Canvas scope does not expose ambient Node or networked experiments. |
 | `skills/paper-factory/assets/quickjs-runtime.zip`, `quickjs-runtime.json` | Move into app runtime resources before deleting the plugin directory. Preserve exact archive/inventory/member hashes, bounded extraction, and upstream license files. |
 | `skills/paper-factory/scripts/prepare_runtime.py` | Reuse the bounded safe extraction/verification rules inside the app's own runtime preparation. Remove host-probe and plugin resource-location assumptions. |
 | `skills/paper-factory/dependency-manifest.json`, `skills/paper-factory/host-dependencies.json`, `skills/paper-factory/scripts/cloud-dependencies.lock`, `skills/paper-factory/wheelhouse/`, `skills/paper-factory/licenses/` | Retain relevant package pins, wheel source/hash/license information as build inputs; generate a standalone platform runtime inventory. These manifests describe prepared plugin hosts and are not evidence of a bundled application runtime. |

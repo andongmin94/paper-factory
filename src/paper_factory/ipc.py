@@ -216,8 +216,8 @@ class Dispatcher:
         if method == "workflow.addEvidence":
             return self.service.add_evidence(p["researchId"], p["files"])
         if method == "workflow.submitProposal":
-            if not isinstance(p["value"], dict) or p["value"].get("runtime") != "quickjs":
-                raise ValueError("Standalone research supports QuickJS only")
+            if not isinstance(p["value"], dict) or p["value"].get("runtime") not in {"quickjs", "chromium"}:
+                raise ValueError("Standalone research supports QuickJS or Chromium")
             return self.service.submit_proposal(p["researchId"], p["value"])
         if method == "workflow.submitStudyReview":
             return self.service.submit_study_review(p["researchId"], p["review"])
@@ -232,8 +232,8 @@ class Dispatcher:
         if method == "workflow.selectAuthoringLiterature":
             return self.service.select_authoring_literature(p["researchId"], p["selectedSources"])
         if method == "workflow.submitCode":
-            if not isinstance(p["value"], dict) or p["value"].get("runtime") != "quickjs":
-                raise ValueError("Standalone research supports QuickJS only")
+            if not isinstance(p["value"], dict) or p["value"].get("runtime") not in {"quickjs", "chromium"}:
+                raise ValueError("Standalone research supports QuickJS or Chromium")
             return self.service.submit_code(p["researchId"], p["value"], p["review"])
         if method == "workflow.submitManuscript":
             return self.service.submit_manuscript(p["researchId"], p["value"], p["review"])
@@ -272,6 +272,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("home", "runtime-root", "node", "pandoc"):
         parser.add_argument("--" + name, required=True, type=Path)
+    parser.add_argument("--chromium-binding", type=str)
     args = parser.parse_args(argv)
     output = sys.stdout.buffer
     dispatcher = None
@@ -279,7 +280,14 @@ def main(argv=None):
     failed = False
     try:
         with redirect_stdout(sys.stderr):
-            runtime = StandaloneRuntime(args.home, args.runtime_root, args.node, args.pandoc)
+            browser = None
+            if args.chromium_binding is not None:
+                if len(args.chromium_binding.encode("utf-8")) > 64 * 1024:
+                    raise ValueError("Chromium runtime binding exceeds its byte boundary")
+                browser = loads_json(args.chromium_binding)
+                if not isinstance(browser, dict):
+                    raise ValueError("Chromium runtime binding must be an object")
+            runtime = StandaloneRuntime(args.home, args.runtime_root, args.node, args.pandoc, chromium_binding=browser)
             dispatcher = Dispatcher(runtime, output)
             for raw in iter(lambda: sys.stdin.buffer.readline(MAX_INPUT_BYTES + 1), b""):
                 try:

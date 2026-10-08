@@ -251,8 +251,9 @@ implemented oracle, and what controlled fixtures can and cannot establish.
 Asset inventories, counting repository files, summarizing documentation, and
 calling a toy reimplementation 'production' are not research studies. If there
 is no feasible experiment, return a feasibility rejection with its concrete
-reason rather than an invented paper. Limit the scope to controller-verified
-QuickJS runtime and bounded fixture-based software experiments.
+reason rather than an invented paper. Use only a runtime actually listed as
+ready in the supplied controller capabilities and its own declared limits.
+Limit the scope to bounded fixture-based software experiments.
 QuickJS supports pure JavaScript inside separate WebAssembly guests and a
 controller-held production-call gate, without host filesystem, network or Node
 APIs. The experiment guest can read declared source and imported UTF-8 documents
@@ -271,10 +272,30 @@ Describe compiled guest execution accurately; it is not native TypeScript
 execution. Use only the syntax that the controller actually verifies. Native
 extensions, Node built-ins, filesystem or network APIs and unsupported TypeScript
 syntax make the study infeasible; report the concrete reason.
-The production gate exposes only the captured JSON.stringify projection of a
-return value. Object properties containing undefined or functions disappear;
+Chromium, when verified ready on Windows, supports ordered whole unchanged
+classic .js production scripts in a separate hidden sandboxed renderer. Declare
+source_files in their actual load order, with the production_entrypoint file
+last, and name an own-data-property callable such as src/text.js:J.measure.
+The selected production callable must return immediate JSON, not a Promise.
+It does not execute production ESM, CommonJS or TypeScript. The generated ESM
+experiment uses async run() and awaits the controller's JSON-string gates.
+Only source scripts supplied by the controller are loaded: network, additional
+assets, font downloads, Node and host filesystem access are unavailable.
+Canvas text geometry depends on the recorded Chromium, Windows and requested
+system-font fallback; this does not establish font identity, ink bounds,
+readability, perception or a complete application's behavior. Generated and
+production renderers are separate. Measurements through callProduction include
+asynchronous browser/bridge overhead and cannot establish algorithm latency.
+The controller binds the actual held function to its selected script bytes;
+do not substitute an implementation or infer invocation from model counters.
+The production gate exposes only captured JSON. In QuickJS, object properties
+containing undefined or functions disappear;
 Map/Set entries, prototypes and non-enumerable properties are not observable,
-and BigInt or an undefined top-level return cannot be serialized. Define every
+and BigInt or an undefined top-level return cannot be serialized. Chromium
+instead requires finite plain own-data JSON: observable undefined, functions and
+nonfinite numbers, any own symbol key or accessor (including non-enumerable ones),
+and any own toJSON field invalidate execution. Non-enumerable plain data fields and inherited
+prototype hooks are excluded from the controller's validated JSON projection. Define every
 metric on the supported JSON projection, not on original own-key presence or
 unavailable JavaScript value types. Reject an unobservable metric as infeasible.
 
@@ -301,7 +322,7 @@ such as production and byte_hash. Put explanations in comparator or procedure,
 never in condition names. Each condition, seed, source_files path, and metric
 name must be unique within its respective list. Use exact inspected relative
 source paths, preserving their original Unicode spelling and internal spaces.
-Dependencies must be [] because the pure guest runtime exposes no installed
+Dependencies must be [] because the isolated runtime exposes no installed
 third-party packages or Node built-in modules. Never put runtime versions or
 module descriptions in dependencies.
 Use at least a positive control and a negative control: the positive control
@@ -333,7 +354,7 @@ comparison: credible alternatives or a justified mechanism ablation answer the
     question; a deliberately wrong result useful only as a control is insufficient;
 sampling: units, workload variation and measurement scope justify the intended
     conclusion without treating fixed fixtures or renamed duplicates as populations;
-feasibility: inspected production code, JSON observation and QuickJS constraints
+feasibility: inspected production code, JSON observation and the selected verified runtime constraints
     support the complete proposed claim, not a convenient substitute question.
 
 Compare the complete proposal with the ORIGINAL requested research goal below,
@@ -471,12 +492,48 @@ remediation in the language of the research goal.
 
 
 def code_prompt(plan: Any, source_context: str, feedback: Any = None) -> str:
-    prompt = """Implement exactly this frozen ResearchPlan as CodeBundle JSON with runtime quickjs.
+    chromium = _dump(plan).get("runtime") == "chromium"
+    generated_files = """Only .js, .mjs, .json, .md and .txt generated files are supported in Chromium.
+Every .cjs file, including secondary helper modules, is unsupported. The
+entrypoint must be a present .js or .mjs ESM file, with only generated ESM imports.
+JSON, Markdown and text files are retained inert artifacts, not script modules.
+Do not generate .ts or .tsx files; production TypeScript is also unsupported.
+""" if chromium else """Only .js, .mjs, .cjs, .json, .md and .txt generated files are supported.
+The .js/.mjs/.cjs entrypoint must be present in files. Do not generate .ts or
+.tsx files; TypeScript erasure applies only to frozen production source.
+"""
+    contract = """Implement exactly this frozen ResearchPlan as CodeBundle JSON with runtime chromium.
+Return a JavaScript ES module with a default async function run(). The controller
+awaits run exactly once in a hidden sandboxed experiment renderer, separate from
+the production renderer. Await EVERY callProduction(JSON.stringify([args...])),
+readScientificInput(key) and retainFixture(label, text), then parse the returned
+JSON string. Unawaited work cannot establish completed observations or receipts.
+Only generated relative ESM imports are available. No filesystem, environment,
+network, Node, subprocesses, package installation or host APIs are available.
+The controller loads every unchanged whole classic .js source in frozen
+source_files order, then captures the selected own-data-property callable from
+the final file. Do not load or copy production source in the experiment.
+The callable must stay identical before and after calls. Accessors, prototype
+selectors, replacement or script provenance mismatches invalidate execution.
+The production callable must return immediate JSON, not a Promise. Production
+input and output must be finite plain own-data JSON. Observable undefined,
+functions and nonfinite values, any own symbol key or accessor (even if
+non-enumerable), and any own toJSON field are invalid. Non-enumerable plain data
+fields and inherited prototype hooks are excluded from the validated JSON projection.
+Actual ordinary production exceptions count as calls and may be retained as
+algorithm outcomes; infrastructure or boundary failures remain fatal even caught.
+There are no external assets or font downloads. Record requested system-font
+fallback and browser/OS scope accurately, without claiming resolved font identity.
+Browser dispatch timings include asynchronous bridge overhead, not algorithm
+latency. Use ONLY the limits recorded for the verified Chromium profile.
+""" if chromium else """Implement exactly this frozen ResearchPlan as CodeBundle JSON with runtime quickjs.
 The generated JavaScript runs only inside a bounded QuickJS WebAssembly guest.
 Return a JavaScript ES module with a default synchronous function run(). The
 controller calls run once and retains its returned observations envelope.
 No filesystem, environment, network, Node built-ins, subprocesses, package
 installation or host APIs are available. Do not use native imports or async work.
+"""
+    prompt = contract + """
 The controller also provides read-only readScientificInput(key) to this guest.
 It returns a JSON string with exactly name, text and sha256 for verified original
 UTF-8 bytes. Source keys are source/<path> for this plan's source_files; imported
@@ -491,10 +548,10 @@ even if caught by generated code. The gate is immutable and exists only in the
 experiment guest, not the production guest. At most twenty-eight inputs are
 available, with at most five hundred twelve reads and sixteen MiB of returned
 JSON UTF-8 bytes across the execution. Existing memory and artifact limits remain.
-Use the read-only global callProduction(JSON.stringify([args...])) to invoke the
+Use the read-only global callProduction(JSON.stringify([args...])) (await it in Chromium) to invoke the
 declared production export in a separate guest. Parse its returned JSON string;
 actual production exceptions are exposed as guest errors and count as invocations.
-Returned values are captured JSON.stringify projections, not original JavaScript
+Returned values are captured JSON, not original JavaScript
 objects; do not claim to observe undefined-valued keys, prototypes or Map/Set
 entries. The trusted gate records infrastructure and boundary failures separately
 and invalidates the entire execution even when generated code catches their
@@ -503,14 +560,14 @@ as algorithm outcomes only within that controller-enforced boundary.
 Never copy or redefine the inspected production implementation. The controller
 holds its immutable export handle and records its actual calls separately from
 model-authored observations. Guest declarations of call counts are not evidence.
-TypeScript production modules require the controller's verified compiler receipt;
+For QuickJS only, TypeScript production modules require the controller's verified compiler receipt;
 describe this as execution of compiled code bound to original and compiled byte
 hashes, with the actual transformer version and per-file transformation_options.
 Top-level transformer.options records shared settings only. Do not attest
 retained emitted JavaScript bytes or a separate pre-call syntax/built-in probe
 record that the runtime does not provide, and do not claim native original .ts
 execution.
-Use the read-only global retainFixture(label, text) for exact UTF-8 input, output,
+Use the read-only global retainFixture(label, text) (await it in Chromium) for exact UTF-8 input, output,
 oracle, mutation-log and manifest bytes. It returns a JSON string with exactly
 label, encoding, content and sha256, computed by the trusted controller. Parse
 that string and include the object in fixtures. Retain every actual mutated input
@@ -544,12 +601,10 @@ or rehashing by the worker. A reconstructed summary is not the authoritative
 protocol and must not be described as such.
 Return portable relative paths using / separators, without . or ..,
 hidden/credential paths, backslashes, controls or reserved Windows names.
-Only .js, .mjs, .cjs, .json, .md and .txt generated files are supported.
-The .js/.mjs/.cjs entrypoint must be present in files. Do not generate .ts or
-.tsx files; TypeScript erasure applies only to frozen production source.
+""" + generated_files + """
 The full bundle is limited to 512 KiB (524288 UTF-8 bytes);
 each file has a 262144-character limit. Approved dependencies are [] for the
-pure guest runtime. No generated code executes on the host.
+isolated runtime. No generated code executes on the host.
 
 Frozen protocol:
 """ + json.dumps(_dump(plan), ensure_ascii=False, indent=2) + "\n\nUntrusted source excerpts:\n" + source_context
@@ -560,7 +615,26 @@ Frozen protocol:
 
 
 def code_review_prompt(plan: Any, bundle: Any, source_context: str) -> str:
-    return """Independently audit this proposed experiment BEFORE execution against its frozen protocol and actual production source.
+    runtime_contract = """For the frozen Chromium profile, require a default async run() and awaited
+callProduction, readScientificInput and retainFixture gates. Check every
+asynchronous production result before deriving observations; reject unawaited
+work. Production scripts are whole unchanged classic .js files in frozen order
+with the selected file last. The held callable must be an own-data-property
+function bound to that file, not a prototype, getter, replacement or copied
+implementation. Input/output require finite plain own-data JSON. Observable
+undefined, functions and nonfinite numbers, any own symbol key or accessor
+(including non-enumerable ones), and any own toJSON field invalidate execution.
+Non-enumerable plain data fields and inherited prototype hooks are excluded from
+the validated projection; metrics cannot observe them.
+Invalid values or boundary errors remain fatal even caught. External assets,
+font downloads and host APIs are absent. Geometry is limited to recorded
+browser/OS and requested font fallback; bridge durations cannot establish
+algorithm latency.
+""" if _dump(plan).get("runtime") == "chromium" else """For the frozen QuickJS profile, require a default synchronous run() and
+synchronous JSON-string gates. Do not approve code requiring async work or
+browser APIs.
+"""
+    return runtime_contract + """Independently audit this proposed experiment BEFORE execution against its frozen protocol and actual production source.
 This is a static code audit: determine whether the code will derive and retain genuine measurements when run.
 Do not demand observations.json or an execution receipt that cannot exist before this audit approves execution.
 A static acceptance does not establish execution or successful results.
@@ -576,7 +650,7 @@ calls, retains failures, and does not replace these checks with a preflight note
 Return ScientificReview JSON. Accept only if the code calls the declared
 production callable, independently computes the oracle, uses the frozen
 conditions, seeds, unit counts and metrics, and measures actual outputs when run.
-Check that the synchronous run() will return an observations envelope with a nonempty fixtures array
+Check that run() under its frozen runtime contract will return an observations envelope with a nonempty fixtures array
 retaining the exact input, mutation-log, oracle-expectation and manifest bytes
 in Base64 with matching SHA-256 from the controller's retainFixture(label, text).
 Retaining only a baseline plus mutation recipes or input hashes is insufficient.
@@ -622,6 +696,9 @@ def validate_plan(plan: ResearchPlan, source_root: Path) -> None:
         raise ValueError("Production entrypoint must bind to a declared immutable source file")
     if Path(source_file).suffix not in {".js", ".mjs", ".cjs", ".ts"}:
         raise ValueError("Production entrypoint does not match the supported runtime")
+    if plan.runtime == "chromium" and (any(Path(name).suffix != ".js" for name in plan.source_files)
+                                       or plan.source_files[-1] != source_file):
+        raise ValueError("Chromium requires ordered classic .js sources with the selected file last")
     if plan.comparator.strip().casefold() == plan.independent_oracle.strip().casefold():
         raise ValueError("Comparator and independent oracle require distinct definitions")
     for value in plan.parameters.values():
@@ -638,10 +715,13 @@ The frozen protocol and its parameter placeholders describe planned requirements
 not evidence that the proposed instrumentation occurred. State any discrepancy
 between the planned mechanism and the receipt's actual evidence.
 production_calls contains function counts aggregated across the whole execution.
-The QuickJS controller-held call
-gate counts actual invocations of the selected guest export, including calls
+The selected runtime's controller-held call
+gate counts actual invocations of the selected callable, including ordinary calls
 that throw. Its counts are aggregated and are not per-call timing evidence.
-These mechanisms do not establish per-invocation
+Any separately supplied Chromium call receipts bind recorded arguments and
+outputs to the held callable; their hashes establish byte identity, not oracle
+correctness or algorithm timing. Use only receipts actually retained and supplied.
+Aggregate counts do not establish per-invocation
 timing endpoints, coverage snapshots or function-count increments around individual
 calls. Individual output or latency records are distinct from call-specific tracing
 evidence. Do not claim, and reject manuscript claims of, unsupported per-invocation

@@ -2,14 +2,14 @@
   "schemaVersion": 1,
   "profiles": {
     "win32-x64": {
-      "inventorySha256": "e6b7629769b337b04b084e35568c087c62913d32bd5216c3d0ffbb09e94c2de2",
+      "inventorySha256": "0f2e2f7a17c1483b7c115e031925829a8e4a42f460add13f8e9239654248adb0",
       "sourceManifestSha256": "bbc69a991cc2be903645f6274f33ed14f9f91d70a1e5941497c859d14f2540d1",
       "executables": {
         "python": "python/python.exe",
         "node": "node/node.exe",
         "pandoc": "python/Lib/site-packages/pypandoc/files/pandoc.exe"
       },
-      "fileCount": 2218,
+      "fileCount": 2219,
       "actualHostTested": true
     },
     "darwin-arm64": {

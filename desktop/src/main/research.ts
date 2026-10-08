@@ -332,8 +332,8 @@ export class ResearchController {
         try {
           await this.engine.start();
           const runtime = await this.engine.request<{ ready: boolean; versions?: Record<string, string> }>('runtime.status');
-          if (!runtime.ready) throw new EngineError('ISOLATION_UNAVAILABLE', '포함된 QuickJS 실험 환경이 준비되지 않았습니다.');
-          this.state.runtime = { state: 'ready', message: '포함된 Python·Node·QuickJS·문서 변환 환경이 준비됐습니다.', versions: runtime.versions };
+          if (!runtime.ready) throw new EngineError('ISOLATION_UNAVAILABLE', '포함된 연구 실행 환경이 준비되지 않았습니다.');
+          this.state.runtime = { state: 'ready', message: '연구 실행·문서 변환 환경을 확인했습니다.', versions: runtime.versions };
           for (const workflow of await this.engine.request<Workflow[]>('workflow.list')) {
             let job = this.jobs.get(workflow.id);
             if (!job) {

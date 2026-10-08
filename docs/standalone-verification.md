@@ -1034,3 +1034,43 @@ reporter를 바로 고쳐 이미 시작한 별도 보조 회수도 종료했으�
 다음 실제 평가 후보도 검토했다. 기존 Premiere positive는 정확 DOI·논문 제목·oracle·표본 조건을 수동 지정한 사례이고 negative는 수동 parseSrt 계획을 가져온 반려 검사여서 일반 사용자 입력의 논문 품질 성과로 승격하지 않는다. 두 기존 연구는 resume_kind=null이며 실제 재개하지 않았다. provenance 대조 10항목이 참이며 DB·모든 workspace 파일이 그대로다. receipt `verification/premiere-existing-input-provenance-01414-readonly.json` SHA256은 `f78c8f8913008a31c1edd02fea328736e3470d908cac5c58030e8549da6b3c2e`다.
 
 추가 저장소 7개를 제한된 원문·tree 범위에서 정적으로 검토했지만 현재 QuickJS 함수 환경에서 학술 기여까지 정당화한 새 후보는 찾지 못했다. Garak의 좁은 그래프 검증과 Flick의 문자열 정리는 기술상 호출 가능성이 있으나 학술적 신규성은 미확립이다. JIZURA·Savior·Kkakka·Web-coder의 핵심은 브라우저·서버·다른 실행 환경을 필요로 한다. Chat-view의 확인 범위에서도 독립적인 pure core를 찾지 못했다. 이를 프로젝트 전체 실행 불가능성이나 연구 불가능성으로 일반화하지 않는다. 55,144 B 원문과 판독 범위·미검증 한계·새 과학실험 없음이 기록된 `verification/static-candidate-audit-01414.json`의 SHA256은 `0fb0e7c82e07af6300d05410a0977d879de5b7a6adcdf13df57fd5b48803aa8f`다. Madi 계보를 초기화하거나 같은 과학을 새 root로 반복하지 않았다. 이번 수정과 검사는 실제 투고 준비도를 통과한 원고 생성의 증거가 아니다.
+
+## 0.14.15 Windows Chromium 실행과 실제 초기 설계: 2026-10-08
+
+계획의 실행 환경에 따라 QuickJS 또는 Windows Chromium을 선택한다. Chromium은 동결한 classic JS를 명시된 순서로 읽고, 선택한 원본 동기 함수의 JSON 입력·출력을 별도 숨김 renderer에서 호출한다. controller가 실제 함수 위치·스크립트 원본·호출 횟수·입출력 해시·fixture·경계 거부 기록을 보존한다. 실험 코드는 비동기 JSON gate만 사용하며 Node·preload·계정 API를 제공하지 않는다. 생성 코드와 원본 함수의 실행 문맥을 분리하고 전체 Windows Job 종료를 확인한다. 준비되지 않은 환경으로 실행하거나 QuickJS로 대신 실행하지 않는다.
+
+이는 일반 웹 앱 전체를 실행하는 환경이 아니다. 외부 assets·웹 폰트·비동기 원본 함수는 지원하지 않으며, array의 추가 데이터 속성은 JSON 관측에 포함되지 않는다. 시스템 글꼴의 실제 해석된 font identity·잉크 잘림·가독성·사용자 효과를 측정했다고 주장할 수 없다. bridge 왕복 시간을 원본 알고리즘의 지연으로 해석할 수 없다. 입력·출력·파일·관측·기록·프로세스 수·메모리·시간 제한은 적용하지만 CPU/RSS 측정이나 운영체제 전체 파일 격리로 설명하지 않는다.
+
+| 검사 | 결과와 적용 소스 |
+| --- | --- |
+| Desktop 단위·SDK | Desktop 394 통과, SDK 48 통과·Windows 권한 1 건너뜀. 마지막 worker strict 지시문 수정 전 이력 |
+| 실제 Chromium 최종 전체 | 27 통과·0 실패·0 건너뜀, 45.626초. 최종 worker SHA256 `9d922a1b468773ec8211ef3e65f67175e2c502dc3c604b964a9a7a1423c0c08c` |
+| 최종 strict 관련 검사 | build·typecheck와 순수 compiled contract 16개·영향 실제 검사 5개 통과. 전체 27개와 겹침 |
+| 숨김 Electron UI | 14 통과, retry0. 이전 worker에서 실행했으며 최종 main·app·renderer·IPC는 동일. 설치·새 로그인 검사가 아님 |
+| Native 브라우저·workflow 전체 | 127 통과·0 실패·0 건너뜀, 90.87초. 아래 최종 native SHA에 적용하며 worker strict 수정 전 이력 |
+| 과학 계획·runtime 계약 | 236 통과·6.66초. runtime exact boolean·명시 결합·profile 분기·IPC·계획 검증 |
+| 별도 합성 전체 workflow | 실제 StandaloneRuntime와 Chromium으로 SCI1·원본 8호출·12쌍의 scalar·fixture9개. 학술 성과와 구분 |
+| 최종 Windows 배포 | ASAR 7,668항목·SDK import·renderer·Pretendard·worker·native 소스·포함 runtime 2,219파일 전수 대조 |
+| 실제 패키지 포함 엔진 | 같은 작업실에서 준비·7개 browser control·종료를 두 번 실행. QuickJS·Chromium 모두 ready, 원본 자원 불변·소유 worker0. 모델·새 workflow·SCI0 |
+
+그룹은 겹치므로 합산하지 않는다. 숨김 UI의 첫 실패는 기존 0.14.14 runtime이 새 binding 인자를 이해하지 못한 경우와 두 시작 대기가 10초를 넘긴 경우였다. 새 runtime 구성 후 시작 poll만 기존 UI의 60초 대기와 맞췄다. 실제 assertion·전체 timeout·retry 횟수는 유지했다. 원래 실패 로그와 정리 기록을 보존했다.
+
+독립 경계 검사에서 CDP로 재평가한 renderer 함수가 ESM의 strict 실행을 잃고 원본 Proxy를 통해 private 호출 frame 이름을 드러내는 문제를 확인했다. 함수 본문에 명시적인 strict 지시문을 추가해 frame 접근을 막았다. 원본 함수 해시·출력·controller 횟수·provenance 검사는 유지했다. nonce 위조·host escape·SCI 위조가 가능했다고 확대하지 않는다. 최종 소스와 검사 freeze는 `.paper-factory/chromium-desktop-tests-01415/desktop-final-strict-authority-source-freeze.json`(SHA256 `b3a80232c3630cb5dcffb6d361f2e4c799233e877ca7c055c5cdf679f838ee8b`)이다.
+
+브라우저 raw response는 실행 시 동결하고 분석·재개·원고 작성에서도 실제 attempt 파일·크기·SHA를 재대조한다. 손상된 선언은 취소·종료·재시작 뒤에도 거부하며 raw 원본을 보존한다. Native BrowserRunner SHA256은 `7de28e0f00049abc3b9502fd16d57d1fe22934f9f534d87c8e67d2c14684b1c1`, workflow SHA256은 `c499023c342d43c552baa6f4528f52eb8ba0a22aeecfbea3d79cc6e1102d908e`다. native 합동 검사 receipt `.paper-factory/chromium-native-01415/combined-final-receipt.json`의 SHA256은 `c9da7d9396c25644826797752fc42dee79372ea8ab6e095d1e2b6324840dea54`다.
+
+합성 workflow의 첫 검증 helper는 portable analyzer에 없는 host bytebinding 두 항목까지 동일해야 한다고 비교하고, supervisor journal을 배열로 기대해 실패했다. 원래 실패를 보존했다. 동일 실행의 계산 항목과 host 해시·실제 journal 구조를 각각 대조해 11항목을 확인했으며 SCI를 다시 실행하지 않았다. `.paper-factory/chromium-workflow-e2e-01415/ae4c0824c1b140879c570a8e49b80684/reconciliation.json`에 기록했다. 이 합성 control은 논문 품질이나 실제 JIZURA 연구의 SCI가 아니다.
+
+포함 runtime은 2,219파일·473,784,503 B이며 inventory SHA256은 `0f2e2f7a17c1483b7c115e031925829a8e4a42f460add13f8e9239654248adb0`다. 깊은 검사 출력 경로에서는 QuickJS asset의 일반 Win32 경로가 260자를 넘겨 읽기에 실패했다. 같은 바이트를 짧은 독립 경로로 복사한 뒤 실제 준비·재시작을 확인했다. 긴 경로 문제를 모든 환경에서 해결했다고 주장하지 않으며 OS 설정·제품 fallback을 추가하지 않았다.
+
+마지막 strict 수정 뒤 두 새 Electron extraction 시도에서 임시 폴더 rename EPERM이 발생했다. 원래 실패 폴더·로그를 보존했다. 소유 폴더의 제한된 왕복 rename 진단은 이후 성공하고 모든 파일 바이트가 같았지만 최초 lock 원인은 미확인이다. 이미 검증한 동일 버전 앱에 최종 외부 worker를 넣고 전수 대조한 뒤 electron-builder의 공식 `--prepackaged`로 새 NSIS를 생성했다. 새 출력과 최종 기본 `desktop/release/` 복사본을 다시 전수 검증했다. 이전 0.14.14 전체 배포본은 `.paper-factory/preserved-release-01414`에 보존했다. 설치·새 OAuth·로그인 복원·GitHub Release 게시는 수행하지 않았다.
+
+| 최종 0.14.15 배포 파일 | 크기(B) | SHA256 |
+| --- | ---: | --- |
+| Paper Factory Setup 0.14.15.exe | 213,076,374 | b10bece8a46dc54ec174c1c167e0088fece5fa49b211a87901d57658a1a13443 |
+| win-unpacked/resources/app.asar | 44,785,891 | 12fc8c0aec7b1bb48e66d99304ba59a4e823656a8a1290a4a60d4f996fbfd342 |
+| win-unpacked/Paper Factory.exe | 245,726,208 | 2b51c48d2b5249a812c68551c62bb544d4e19d17c9971aea41726a9b10dfe1a9 |
+
+실제 JIZURA 평가에는 저장소 `https://github.com/andongmin94/JIZURA`와 목표 `다양한 문자의 배치와 자동 크기 조절이 어떤 조건에서 안정적으로 동작하는지 연구해 주세요.`만 입력했다. DOI·논문 제목·코드 entrypoint·oracle·기대 결과·승인을 주입하지 않았다. `.paper-factory/j15/73b3b723c72b`의 `research-7fc481808695`는 모델 계획 요청 한 번 뒤 STUDY_INFEASIBLE로 끝났으며 native created/proposal0·문헌0·SCI0·원고0이다. 모델은 브라우저 준비를 인정했지만 실제 배치 구현 본문을 확인하지 못해 callable·의존성·출력을 발명할 수 없다고 판단했다.
+
+초기 prefix 발췌는 96,000자 한도에 도달한 README·번역 파일 등 10개였고 `src/` 본문은 0개였다. 전체 동결 목록에는 배치 구현이 포함됐다. 이는 초기 자료 선택 문제이며 저장소 전체가 실행·연구 불가능하다는 결론이 아니다. 초기 harness의 SOURCE_CHANGED 오류는 간략 `workflow.list` 결과로 전체 manifest를 덮어쓴 검증 helper의 오류였다. 결과 원본을 수정하지 않고 immutable SQLite SELECT와 전수 파일 해시로 독립 감사했다. 16항목이 참이며 실제 root 195파일·원본166개·동결 산출물6개·제품 결합59개가 그대로다. audit SHA256은 `94d097dd11e1d0da6d903d28c1b91eca2a0b95e4e3a289c35094dbab263c2223`이며 `.paper-factory/chromium-ordinary-jizura-01415/diagnosis-7fc481808695/readonly-diagnosis.json`에 있다. 다음 개선은 계획 전에 전체 목록에서 목표에 필요한 원본을 선택하고 검증된 본문을 읽게 하는 것이다. 기존 연구를 보존해 이어가며 SCI를 재실행하거나 새 root로 같은 연구를 반복하지 않는다. 투고 준비도를 통과한 실제 완료 원고는 아직 없다.

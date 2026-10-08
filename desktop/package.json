@@ -1,6 +1,6 @@
 {
   "name": "paper-factory-desktop",
-  "version": "0.14.14",
+  "version": "0.14.15",
   "private": true,
   "description": "Paper Factory standalone research desktop",
   "license": "MIT",
@@ -15,6 +15,7 @@
     "start": "npm run build && electron .",
     "test": "npm run build && node --test tests/*.test.mjs && npm run test --workspace @siwc/local",
     "test:electron": "playwright test",
+    "test:chromium": "npm run build && node --test tests/chromium-worker.integration.mjs",
     "build:runtime": "node scripts/build-runtime.mjs",
     "package:app": "npm run build:runtime && npm run build && electron-builder && node scripts/verify-package.mjs",
     "verify:package": "node scripts/verify-package.mjs"
@@ -56,6 +57,7 @@
     },
     "files": [
       "dist/main.js",
+      "dist/app.js",
       "dist/preload.cjs",
       "dist/renderer/**",
       "dist/LICENSE",
@@ -68,7 +70,10 @@
     ],
     "win": {
       "target": "nsis",
-      "extraResources": [{ "from": "runtime/win32-${arch}", "to": "runtime", "filter": ["**/*"] }]
+      "extraResources": [
+        { "from": "runtime/win32-${arch}", "to": "runtime", "filter": ["**/*"] },
+        { "from": "dist/chromium-worker.mjs", "to": "chromium-worker.mjs" }
+      ]
     },
     "mac": {
       "target": "dmg",

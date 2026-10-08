@@ -71,9 +71,10 @@ async function launch(dataDir: string) {
 const electron = require("electron");
 const { registerHooks } = require("node:module");
 const entry = ${JSON.stringify(new URL("../dist/main.js", import.meta.url).href)};
+const appEntry = ${JSON.stringify(new URL("../dist/app.js", import.meta.url).href)};
 registerHooks({ load(url, context, nextLoad) {
   const loaded = nextLoad(url, context);
-  if (url !== entry) return loaded;
+  if (url !== appEntry) return loaded;
   const source = loaded.source.toString();
   const pattern = /new BrowserWindow\\(\\{[\\s\\S]*?\\n\\s*\\}\\);/g;
   const constructors = [...source.matchAll(pattern)];
@@ -285,7 +286,7 @@ test("credit retry is explicit, research draft models persist, and synthetic bus
     await expect(page.getByRole("button", { name: "Continue with ChatGPT", exact: true })).toBeVisible();
     await expectView(page, "연결");
     // Let only this owned, disconnected temp app finish startup before replacing its research state.
-    await expect.poll(async () => (await page.evaluate(() => window.paperFactory.researchSnapshot())).runtime.state)
+    await expect.poll(async () => (await page.evaluate(() => window.paperFactory.researchSnapshot())).runtime.state, { timeout: 60_000 })
       .not.toBe("checking");
     const pageErrors: string[] = [];
     page.on("pageerror", (error) => pageErrors.push(error.message));
@@ -921,7 +922,7 @@ test("native artifact chooser cancellation, protected destinations, and portable
   try {
     electronApp = await launch(dataDir);
     const page = await electronApp.firstWindow();
-    await expect.poll(async () => (await page.evaluate(() => window.paperFactory.researchSnapshot())).runtime.state).not.toBe("checking");
+    await expect.poll(async () => (await page.evaluate(() => window.paperFactory.researchSnapshot())).runtime.state, { timeout: 60_000 }).not.toBe("checking");
     await installGateFixture(electronApp, connection, research);
     await electronApp.evaluate(({ BrowserWindow, dialog, ipcMain }, { artifactModule, formats, documentsPath, protectedRoot }) => {
       const { saveArtifactWithDialog } = process.getBuiltinModule("module").createRequire(artifactModule)("./artifacts.js");
@@ -1113,7 +1114,7 @@ test("unconfirmed cleanup is retried without login or ready runtime while accoun
   try {
     electronApp = await launch(dataDir);
     const page = await electronApp.firstWindow();
-    await expect.poll(async () => (await page.evaluate(() => window.paperFactory.researchSnapshot())).runtime.state).not.toBe("checking");
+    await expect.poll(async () => (await page.evaluate(() => window.paperFactory.researchSnapshot())).runtime.state, { timeout: 60_000 }).not.toBe("checking");
     await installGateFixture(electronApp, connection, research);
     await expect(page.getByRole("button", { name: "Continue with ChatGPT", exact: true })).toBeDisabled();
     await expect(page.getByRole("button", { name: "계정 추가", exact: true })).toBeDisabled();
@@ -1167,7 +1168,7 @@ test("account selection and disconnection busy events lock model and research ac
   try {
     electronApp = await launch(dataDir);
     const page = await electronApp.firstWindow();
-    await expect.poll(async () => (await page.evaluate(() => window.paperFactory.researchSnapshot())).runtime.state).not.toBe("checking");
+    await expect.poll(async () => (await page.evaluate(() => window.paperFactory.researchSnapshot())).runtime.state, { timeout: 60_000 }).not.toBe("checking");
     await installGateFixture(electronApp, connection, research);
     await selectView(page, "새 연구");
     await page.getByLabel("공개 GitHub 저장소 또는 계정 URL", { exact: true }).fill("https://github.com/fixture-owner/synthetic-study");
@@ -1231,7 +1232,7 @@ test("resume actions follow authoritative preparation and authoring kinds and ne
   try {
     electronApp = await launch(dataDir);
     const page = await electronApp.firstWindow();
-    await expect.poll(async () => (await page.evaluate(() => window.paperFactory.researchSnapshot())).runtime.state).not.toBe("checking");
+    await expect.poll(async () => (await page.evaluate(() => window.paperFactory.researchSnapshot())).runtime.state, { timeout: 60_000 }).not.toBe("checking");
     await installGateFixture(electronApp, connection, research);
     await electronApp.evaluate(({ BrowserWindow, ipcMain }) => {
       const fixture = (globalThis as typeof globalThis & { __paperFactoryGateFixture: GateFixture }).__paperFactoryGateFixture;
@@ -1314,7 +1315,7 @@ test("held manuscript improvement uses selected models and respects authorizatio
   try {
     electronApp = await launch(dataDir);
     const page = await electronApp.firstWindow();
-    await expect.poll(async () => (await page.evaluate(() => window.paperFactory.researchSnapshot())).runtime.state).not.toBe("checking");
+    await expect.poll(async () => (await page.evaluate(() => window.paperFactory.researchSnapshot())).runtime.state, { timeout: 60_000 }).not.toBe("checking");
     await installGateFixture(electronApp, connection, research);
     await electronApp.evaluate(({ BrowserWindow, ipcMain }) => {
       const gate = (globalThis as typeof globalThis & { __paperFactoryGateFixture: GateFixture }).__paperFactoryGateFixture;
@@ -1421,7 +1422,7 @@ test("preexecution preparation shows its limited approval and uses the generic i
   try {
     electronApp = await launch(dataDir);
     const page = await electronApp.firstWindow();
-    await expect.poll(async () => (await page.evaluate(() => window.paperFactory.researchSnapshot())).runtime.state).not.toBe("checking");
+    await expect.poll(async () => (await page.evaluate(() => window.paperFactory.researchSnapshot())).runtime.state, { timeout: 60_000 }).not.toBe("checking");
     await installGateFixture(electronApp, connection, research);
     await electronApp.evaluate(({ BrowserWindow, ipcMain }) => {
       const gate = (globalThis as typeof globalThis & { __paperFactoryGateFixture: GateFixture }).__paperFactoryGateFixture;
@@ -1517,7 +1518,7 @@ test("structured manuscript repairs and follow-up lineage preserve prior results
   try {
     electronApp = await launch(dataDir);
     const page = await electronApp.firstWindow();
-    await expect.poll(async () => (await page.evaluate(() => window.paperFactory.researchSnapshot())).runtime.state).not.toBe("checking");
+    await expect.poll(async () => (await page.evaluate(() => window.paperFactory.researchSnapshot())).runtime.state, { timeout: 60_000 }).not.toBe("checking");
     await installGateFixture(electronApp, connection, research);
     await selectView(page, "결과");
     const original = page.getByRole("article", { name: "original-study", exact: true });
@@ -1624,7 +1625,7 @@ test("research and manuscript quality rejections show reasons without presenting
   try {
     electronApp = await launch(dataDir);
     const page = await electronApp.firstWindow();
-    await expect.poll(async () => (await page.evaluate(() => window.paperFactory.researchSnapshot())).runtime.state).not.toBe("checking");
+    await expect.poll(async () => (await page.evaluate(() => window.paperFactory.researchSnapshot())).runtime.state, { timeout: 60_000 }).not.toBe("checking");
     await installGateFixture(electronApp, connection, research);
     await selectView(page, "결과");
     const rejectedStudy = page.getByRole("article", { name: "study-rejected", exact: true });

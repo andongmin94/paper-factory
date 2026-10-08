@@ -30,6 +30,7 @@ from .workflow_models import ModelEvidenceReceipt, Workflow
 from .workspace import Workspace, digest_file, ensure_unlinked, loads_json, safe_relative, write_json
 
 MAX_BUNDLE_BYTES = 96 * 1024 * 1024
+MAX_WORKER_RESPONSE_BYTES = 16 * 1024 * 1024
 MAX_SUPPORTING_FILES = 8
 MAX_SUPPORTING_FILE_BYTES = 128 * 1024
 MAX_SUPPORTING_BYTES = 256 * 1024
@@ -41,13 +42,53 @@ SCHEMAS = {"plan": ResearchPlan.model_json_schema(), "study_review": StudyReview
            "code": CodeBundle.model_json_schema(), "review": ScientificReview.model_json_schema(),
            "manuscript": ManuscriptDraft.model_json_schema(), "manuscript_review": ManuscriptReview.model_json_schema()}
 READABLE_EVIDENCE = {"proposal", "plan", "study-review", "selected-literature", "observations", "analysis",
-                     "literature", "authoring-selected-literature", "manuscript", "canonical", "runtime-manifest", "prior-study", "redesign-origin",
+                     "literature", "authoring-selected-literature", "manuscript", "canonical", "runtime-manifest", "worker-response", "prior-study", "redesign-origin",
                      "redesign-candidate", "redesign-preparation", "redesign-review"}
 PUBLIC_EXECUTION_FIELDS = ("status", "code", "backend", "simulation", "exit_code", "coverage_mechanism", "coverage_truncated",
                            "production_calls", "cleanup_confirmed", "duration_seconds", "limits", "source_digest",
                            "protocol_sha256", "bundle_sha256")
 PRIOR_STUDY_SCOPE = "Exploratory prior-study findings; not observations or approval for this new study"
 INHERITED_DOCUMENT_SCOPE = "Inherited exact bytes and original import receipts; no new inspection or pre-experiment collection attested"
+EXECUTION_INSTRUMENTATION = {
+    "quickjs": "Controller-held QuickJS production-call gate; timings include guest and bridge overhead",
+    "chromium": "Controller-held Chromium production-call gate; timings include browser and asynchronous bridge overhead",
+}
+
+
+def _protocol_runtime(status: dict, runtime: str) -> dict:
+    profiles = status.get("profiles")
+    if isinstance(profiles, dict):
+        profile = profiles.get(runtime)
+    elif profiles is None and runtime == "quickjs":
+        profile = status
+    else:
+        profile = None
+    if (status.get("ready") is not True or runtime not in status.get("runtimes", []) or
+            not isinstance(profile, dict) or profile.get("ready") is not True or
+            runtime not in profile.get("runtimes", [])):
+        raise WorkflowError("ISOLATION_UNAVAILABLE", "The required isolated runtime is unavailable")
+    return profile
+
+
+def _reproduction_runtime_instructions(plan: ResearchPlan) -> str:
+    common = (
+        "Inspect runtime-inventory.json from the desktop distribution and require the selected runtime profile's readiness before execution.\n"
+        "Rebuild scientific_inputs from runtime-manifest.json: each key maps to {name,text,sha256}.\n"
+        "Source keys use the matching source/<path> archive member; supporting-document IDs use supporting-documents/<id>/ and its import receipt. Preserve the manifest name, decode original UTF-8 bytes without newline conversion, and verify recorded size and SHA256 before dispatch.\n"
+    )
+    if plan.runtime == "chromium":
+        return (
+            "Use Paper Factory's recorded bundled Python and the verified Electron Chromium worker, executable and assets.\n" + common +
+            "BrowserRunner.run requires runtime='chromium', source_order=plan.source_files, the frozen production_entrypoint, experiment entrypoint and scientific_inputs. Preserve the ordered whole classic .js sources; the selected source file is last. No source compilation or excerpt replacement is allowed.\n"
+            "Source and experiment run in separate sandboxed browser renderers. Await callProduction for each actual invocation of the controller-held own-data function; await retainFixture and readScientificInput as required by the recorded bridge contract.\n"
+            "Inspect runtime-manifest.json for unchanged source hashes and order, worker/executable provenance, actual browser capability checks, production-call counts, declared limits and cleanup. Browser and asynchronous bridge overhead affects timings.\n"
+            "Browser isolation does not inherit QuickJS Wasm heap guarantees. Apply only the recorded enforced limits; DOM execution alone does not validate geometry, visual perception or user behavior.\n"
+        )
+    return (
+        "Use Paper Factory's recorded bundled Python, Node and extracted QuickJS runtime.\n" + common +
+        "QuickJS runs frozen source and generated code in separate guests using callProduction, retainFixture and readScientificInput. Supply these inputs to QuickJSRunner.run.\n"
+        "TypeScript is erased by the recorded trusted transformer; inspect original and compiled hashes in runtime-manifest.json.\n"
+    )
 
 
 def _readable_evidence(key: str) -> bool:
@@ -405,6 +446,21 @@ def _read(ws: Workspace, record: Workflow, key: str):
     return loads_json(_artifact(ws, record, key).read_bytes())
 
 
+def _require_chromium_raw_response(ws: Workspace, record: Workflow, execution: dict) -> None:
+    """Every use of retained browser evidence requires its exact native byte binding."""
+    if "worker-response" not in record.artifacts:
+        raise WorkflowError("RUNTIME_EVIDENCE_UNVERIFIED", "Chromium execution requires its original raw response")
+    response = _artifact(ws, record, "worker-response")
+    frozen = record.artifacts["worker-response"]
+    declared = execution.get("artifacts", [])
+    rows = [item for item in declared if isinstance(item, dict) and item.get("path") == "worker-response.json"] if type(declared) is list else []
+    if (response != _artifact(ws, record, "execution").parent / "worker-response.json" or
+            frozen.size > MAX_WORKER_RESPONSE_BYTES or len(rows) != 1 or
+            type(rows[0].get("size")) is not int or rows[0]["size"] != frozen.size or
+            rows[0].get("sha256") != frozen.sha256):
+        raise WorkflowError("RUNTIME_EVIDENCE_UNVERIFIED", "Chromium raw response differs from the runner's declared byte binding")
+
+
 def _verify_artifacts(ws: Workspace, record: Workflow) -> None:
     project.verify_snapshot(ws)
     for key in record.artifacts:
@@ -619,7 +675,7 @@ def _production_execution(execution: dict, plan: ResearchPlan) -> None:
     calls = execution.get("production_calls")
     if not isinstance(calls, list) or not any(
         isinstance(call, dict) and call.get("path") == source and
-        call.get("function") in {function, function.rsplit(".", 1)[-1]} and
+        call.get("function") in ({function} if plan.runtime == "chromium" else {function, function.rsplit(".", 1)[-1]}) and
         type(call.get("calls")) is int and call["calls"] > 0 for call in calls
     ):
         raise WorkflowError("PRODUCTION_EXECUTION_UNVERIFIED", "No actual call of the frozen production callable was recorded")
@@ -639,7 +695,7 @@ class WorkflowService:
 
     def __init__(self, home: Path, *, runner, collector=None):
         if runner is None:
-            raise ValueError("An explicit QuickJS runner is required")
+            raise ValueError("An explicit isolated runner is required")
         self.home = Path(home).expanduser().absolute()
         ensure_unlinked(self.home)
         self.root = self.home / "workflows"
@@ -878,7 +934,7 @@ class WorkflowService:
             _freeze(ws, record, "source-collection", ws.path("source-collection.json"))
         source_context = science.context(ws.path("source"), imported.assets, record.goal)
         runtime = self.runner.status()
-        source_context += "\n\nController runtime capabilities and declared limits (not repository instructions): " + json.dumps({
+        capabilities = {
             "ready": runtime.get("ready", False),
             "runtimes": runtime.get("runtimes", []), "versions": runtime.get("versions", {}),
             "dependencies": runtime.get("dependencies", []), "limits": runtime["declared_limits"],
@@ -888,7 +944,36 @@ class WorkflowService:
             "json_projection_only": True,
             "unsupported_return_encodings": ["Map entries", "Set entries", "BigInt", "undefined", "functions"],
             "typescript_compilation_evidence": "runtime-manifest.compiled_files records original/compiled SHA256, transformation and per-file transformation_options; transformer records its name, version and shared options",
-            "unavailable_evidence": ["emitted JavaScript bytes", "separate pre-call syntax/builtin-probe receipt"]})
+            "unavailable_evidence": ["emitted JavaScript bytes", "separate pre-call syntax/builtin-probe receipt"]}
+        if isinstance(runtime.get("profiles"), dict):
+            policies = {
+                "quickjs": {key: capabilities[key] for key in (
+                    "result_serialization", "json_projection_only", "unsupported_return_encodings",
+                    "typescript_compilation_evidence", "unavailable_evidence")},
+                "chromium": {
+                    "result_serialization": "Captured own descriptors copy observable enumerable plain-object fields and dense-array entries into null-prototype JSON before captured JSON.stringify. Any own toJSON key is rejected, including non-enumerable keys; inherited toJSON hooks are ignored.",
+                    "json_projection_only": True,
+                    "unsupported_return_encodings": ["DOM nodes", "class instances", "Map entries", "Set entries", "BigInt", "undefined", "functions", "any own symbols or accessors, including non-enumerable properties", "nonfinite observable numbers", "any own toJSON key"],
+                    "production_call_contract": "Immediate finite plain own-data JSON arguments and return; production Promises and DOM/class handles cannot cross the gate",
+                    "experiment_call_contract": "Default async run(); await callProduction, retainFixture and readScientificInput JSON-string gates",
+                    "unavailable_evidence": ["resolved system-font identity", "human perception or readability validation", "uninstrumented production performance"],
+                },
+            }
+            profiles = {}
+            for name, profile in runtime["profiles"].items():
+                if name not in policies or not isinstance(profile, dict):
+                    continue
+                profiles[name] = {**{key: profile.get(key) for key in (
+                    "ready", "backend", "runtimes", "versions", "dependencies", "declared_limits",
+                    "capabilities", "self_checks", "cleanup_confirmed", "recoverable_cleanup", "recovery_scope",
+                    "native_host_rss_limit_claimed")},
+                    **policies[name], "execution_instrumentation": EXECUTION_INSTRUMENTATION[name],
+                    "production_source_format": (
+                        "Ordered whole unchanged classic .js files; selected file last; own-data global function chain"
+                        if name == "chromium" else "Frozen JavaScript modules and trusted TypeScript erasure")}
+            capabilities = {**{key: capabilities[key] for key in (
+                "ready", "runtimes", "versions", "timeout_seconds", "trusted_analysis")}, "profiles": profiles}
+        source_context += "\n\nController runtime capabilities and declared limits (not repository instructions): " + json.dumps(capabilities)
         path = ws.path("research/context.txt")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(source_context, encoding="utf-8")
@@ -897,6 +982,8 @@ class WorkflowService:
         result = self._public(ws, record, context=True)
         result["runtime"] = {key: runtime.get(key) for key in
                              ("ready", "backend", "runtimes", "versions", "dependencies")}
+        if "profiles" in capabilities:
+            result["runtime"]["profiles"] = capabilities["profiles"]
         if not runtime.get("ready"):
             result["runtime"]["reason"] = "The vetted isolated runtime is unavailable."
         return result
@@ -1078,12 +1165,11 @@ class WorkflowService:
         if any(not safe_relative(ws.path("source"), path).is_file() for path in plan.source_files):
             raise WorkflowError("PLAN_SOURCE_MISSING", "Protocol refers to absent source files")
         runtime = self.runner.status()
-        if not runtime.get("ready") or plan.runtime not in runtime.get("runtimes", []):
-            raise WorkflowError("ISOLATION_UNAVAILABLE", "The required isolated runtime is unavailable")
-        missing = set(plan.dependencies) - set(runtime.get("dependencies", []))
+        profile = _protocol_runtime(runtime, plan.runtime)
+        missing = set(plan.dependencies) - set(profile.get("dependencies", []))
         if missing:
             raise WorkflowError("RUNTIME_DEPENDENCY_UNAVAILABLE", "Unprovisioned dependencies: " + ", ".join(sorted(missing)))
-        plan.parameters["execution_instrumentation"] = "Controller-held QuickJS production-call gate; timings include guest and bridge overhead"
+        plan.parameters["execution_instrumentation"] = EXECUTION_INSTRUMENTATION[plan.runtime]
         limitation = "Production-call instrumentation affects execution overhead; measurements cannot establish uninstrumented production performance."
         if not any(limitation in text for text in plan.limitations):
             if len(plan.limitations) == 12:
@@ -1768,8 +1854,12 @@ class WorkflowService:
                     raise ValueError("Experiment file collides with reserved controller metadata")
                 if project._secret(path) or any(part.startswith(".") for part in Path(item.path).parts):
                     raise ValueError("Experiment code must use public declared paths")
-                if path.suffix not in {".js", ".mjs", ".cjs", ".json", ".md", ".txt"}:
-                    raise ValueError("Unsupported experiment file type")
+                allowed = {".js", ".mjs", ".json", ".md", ".txt"}
+                if bundle.runtime == "quickjs":
+                    allowed.add(".cjs")
+                if path.suffix not in allowed:
+                    raise ValueError("Chromium experiment files must use .js/.mjs modules or .json/.md/.txt artifacts"
+                                     if bundle.runtime == "chromium" else "Unsupported experiment file type")
             if Path(bundle.entrypoint).suffix not in {".js", ".mjs", ".cjs"}:
                 raise ValueError("Experiment entrypoint must be a JavaScript module")
             record.code_attempt += 1
@@ -1806,10 +1896,10 @@ class WorkflowService:
                 raise WorkflowError("EXPERIMENT_ALREADY_DISPATCHED", "A scientific execution was already dispatched; retained evidence cannot be replaced or rerun")
             self._require(ws, record, {"code_ready"})
             self._require_study_review(ws, record)
+            plan = ResearchPlan.model_validate(_read(ws, record, "plan"))
             if record.redesign_attempt:
-                _require_distinct_redesign(ws, record, ResearchPlan.model_validate(_read(ws, record, "plan")), ancestors_only=True)
-            if not self.runner.status().get("ready"):
-                raise WorkflowError("ISOLATION_UNAVAILABLE", "The isolated research worker is unavailable")
+                _require_distinct_redesign(ws, record, plan, ancestors_only=True)
+            _protocol_runtime(self.runner.status(), plan.runtime)
             lease = ws.lock("execution")
             lease.__enter__()
             record.status, record.stage = "running", "execute"
@@ -1970,6 +2060,8 @@ class WorkflowService:
                 any(not any(re.search(r"(?:^|[ _-])" + kind + r"(?:$|[ _-])", control["name"].casefold())
                             for control in controls) for kind in ("positive", "negative"))):
             raise WorkflowError("CONTROL_FAILED", "Retained positive and intentional-fault negative controls must have actually passed")
+        if plan.runtime == "chromium":
+            _require_chromium_raw_response(ws, record, execution)
         analysis = _read(ws, record, "analysis")
         if (analysis.get("raw_sha256") != record.artifacts["observations"].sha256 or
                 analysis.get("protocol_sha256") != record.artifacts["plan"].sha256 or
@@ -2420,11 +2512,13 @@ class WorkflowService:
             metadata = _read(ws, record, "bundle")
             output = ws.path(f"research/executions/attempt-{record.execution_attempt}")
             output.mkdir(parents=True, exist_ok=False)
+            runtime_arguments = {"source_order": list(plan.source_files)} if plan.runtime == "chromium" else {}
             receipt = self.runner.run(ws.path("source"), _artifact(ws, record, "bundle").parent, output,
                                         runtime=metadata["runtime"], entrypoint=metadata["entrypoint"],
                                         production_entrypoint=plan.production_entrypoint,
                                         scientific_inputs=_scientific_inputs(ws, record, plan),
-                                        timeout_seconds=record.experiment_timeout_seconds, cancel=stopped, on_handle=retain)
+                                        timeout_seconds=record.experiment_timeout_seconds, cancel=stopped, on_handle=retain,
+                                        **runtime_arguments)
             with self._mutex, ws.lock("workflow"):
                 record = ws.get("workflow", research_id, Workflow)
                 receipt.update(source_digest=metadata["source_digest"], protocol_sha256=metadata["protocol_sha256"],
@@ -2438,6 +2532,25 @@ class WorkflowService:
                     _freeze(ws, record, f"observations-{record.execution_attempt}", observations)
                 if (output / "runtime-manifest.json").is_file():
                     _freeze(ws, record, "runtime-manifest", output / "runtime-manifest.json")
+                response_error = None
+                if plan.runtime == "chromium":
+                    response = output / "worker-response.json"
+                    declared = receipt.get("artifacts", [])
+                    rows = [item for item in declared if isinstance(item, dict) and item.get("path") == response.name] if type(declared) is list else []
+                    if response.is_file():
+                        if response.stat().st_size > MAX_WORKER_RESPONSE_BYTES:
+                            response_error = WorkflowError("RUNTIME_EVIDENCE_UNVERIFIED", "Chromium raw response exceeds its retained byte boundary")
+                        else:
+                            # Capture exact negative or malformed bytes as evidence,
+                            # even if the runner's claimed binding is invalid.
+                            _freeze(ws, record, "worker-response", response)
+                            _freeze(ws, record, f"worker-response-{record.execution_attempt}", response)
+                            try:
+                                _require_chromium_raw_response(ws, record, receipt)
+                            except WorkflowError as error:
+                                response_error = error
+                    elif rows:
+                        response_error = WorkflowError("RUNTIME_EVIDENCE_UNVERIFIED", "Chromium declared raw response is absent")
                 if receipt.get("cleanup_confirmed") is not True:
                     record.active_handle = receipt.get("active_handle") or record.active_handle
                     self._save(ws, record)
@@ -2447,6 +2560,8 @@ class WorkflowService:
                 # Failed controls override structural/exit errors, and retain raw evidence.
                 if observations.is_file():
                     science.reject_failed_controls(_read(ws, record, "observations"))
+                if response_error is not None:
+                    raise response_error
                 if receipt.get("status") != "succeeded":
                     code = "CANCELLED" if stopped() or receipt.get("status") == "cancelled" else "EXPERIMENT_FAILED"
                     raise WorkflowError(code, "Isolated experiment did not complete successfully: " +
@@ -2485,6 +2600,22 @@ class WorkflowService:
         execution = _read(ws, record, "execution")
         if execution.get("status") != "succeeded" or not self._confirmed_cleanup(ws, record):
             raise WorkflowError("EXPERIMENT_FAILED", "Retained execution was not successful with confirmed cleanup")
+        if plan.runtime == "chromium":
+            if not {"runtime-manifest", "worker-response"} <= record.artifacts.keys():
+                raise WorkflowError("RUNTIME_EVIDENCE_UNVERIFIED", "Chromium execution requires its frozen runtime manifest and original raw response")
+            _require_chromium_raw_response(ws, record, execution)
+            manifest = _read(ws, record, "runtime-manifest")
+            assets = {asset.path: asset for asset in ws.latest("project", Project).assets}
+            sources = manifest.get("source_files")
+            if (manifest.get("backend") != "chromium-sandbox" or
+                    manifest.get("production_entrypoint") != plan.production_entrypoint or
+                    manifest.get("source_order") != plan.source_files or
+                    not isinstance(sources, dict) or set(sources) != set(plan.source_files) or
+                    any(not isinstance(sources[name], dict) or
+                        sources[name].get("original_sha256") != assets[name].sha256 or
+                        type(sources[name].get("size")) is not int or sources[name]["size"] != assets[name].size
+                        for name in plan.source_files)):
+                raise WorkflowError("RUNTIME_EVIDENCE_UNVERIFIED", "Chromium manifest differs from the frozen source protocol")
         science.reject_failed_controls(_read(ws, record, "observations"))
         _production_execution(execution, plan)
         if "analysis" in record.artifacts:
@@ -2630,6 +2761,8 @@ class WorkflowService:
             "conversion-receipts.json": "conversion", "manuscript-review.json": "manuscript-review"}.items()}
         if "runtime-manifest" in record.artifacts:
             selection["runtime-manifest.json"] = _artifact(ws, record, "runtime-manifest")
+        if "worker-response" in record.artifacts:
+            selection["worker-response.json"] = _artifact(ws, record, "worker-response")
         for key in record.artifacts:
             if key.startswith("study-literature-") or re.fullmatch(r"study-review-[1-3]-literature-[1-3]", key):
                 selection["research-design/literature/" + key + ".json"] = _artifact(ws, record, key)
@@ -2704,14 +2837,7 @@ class WorkflowService:
         if sum(path.stat().st_size for path in selection.values()) > MAX_BUNDLE_BYTES:
             raise WorkflowError("REPRODUCTION_BUNDLE_TOO_LARGE", "Reproduction archive inputs exceed 96 MiB")
         archive = root / "reproducibility.zip"
-        runtime_instructions = (
-            "Use Paper Factory's recorded bundled Python, Node and extracted QuickJS runtime.\n"
-            "Inspect runtime-inventory.json from the desktop distribution and require runtime readiness before execution.\n"
-            "QuickJS runs frozen source and generated code in separate guests using callProduction, retainFixture and readScientificInput.\n"
-            "Rebuild the scientific_inputs argument to QuickJSRunner.run from runtime-manifest.json scientific_inputs: each key maps to {name,text,sha256}.\n"
-            "Source keys use the matching source/<path> archive member; supporting-document IDs use supporting-documents/<id>/ and its import receipt. Preserve the manifest name, decode original UTF-8 bytes without newline conversion, and verify recorded size and SHA256 before dispatch.\n"
-            "TypeScript is erased by the recorded trusted transformer; inspect original and compiled hashes in runtime-manifest.json.\n"
-        )
+        runtime_instructions = _reproduction_runtime_instructions(ResearchPlan.model_validate(_read(ws, record, "plan")))
         with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as output:
             output.writestr("README.md", "# Reproduce this controlled software study\n\n"
                 "Frozen source, protocol, experiment, observations, analysis and native exports are retained.\n"

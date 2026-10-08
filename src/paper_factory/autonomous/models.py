@@ -39,7 +39,7 @@ class ResearchPlan(Record):
     expected_contribution: str = Field(min_length=24, max_length=4000)
     comparison_rationale: str = Field(min_length=24, max_length=4000)
     sampling_rationale: str = Field(min_length=24, max_length=4000)
-    runtime: Literal["quickjs"]
+    runtime: Literal["quickjs", "chromium"]
     source_files: list[str] = Field(min_length=1, max_length=20)
     production_entrypoint: str = Field(default="", max_length=300)
     dependencies: list[str] = Field(default_factory=list, max_length=0)
@@ -100,7 +100,7 @@ class GeneratedFile(Record):
 
 
 class CodeBundle(Record):
-    runtime: Literal["quickjs"]
+    runtime: Literal["quickjs", "chromium"]
     entrypoint: str = Field(min_length=1, max_length=200)
     files: list[GeneratedFile] = Field(min_length=1, max_length=12)
     explanation: str = Field(min_length=12, max_length=5000)
