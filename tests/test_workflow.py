@@ -447,7 +447,13 @@ def finished(service, research_id):
 
 def test_native_submissions_analyze_actual_runner_artifacts(setup):
     service, runner, research_id = setup
-    assert set(service.status(research_id)["schemas"]) == {"plan", "code", "review", "manuscript", "study_review", "study_redesign_review", "manuscript_review"}
+    assert set(service.status(research_id)["schemas"]) == {
+        "plan", "code", "review", "manuscript", "study_review", "study_redesign_review", "manuscript_review",
+        "research_questions", "question_selection", "redesign_question_selection", "redesign_question_reframing",
+        "redesign_question_reframing_selection", "redesign_search_repair_plan", "question_literature_followup_plan",
+        "literature_passages", "study_remediation", "study_repair", "preparation_repair", "submission_contract",
+        "submission_confirmation", "author_metadata", "manuscript_claim", "manuscript_repair",
+    }
     prepare(service, research_id)
     started = service.start_experiment(research_id)
     assert started["status"] == "running" and "active_handle" not in started
@@ -2177,9 +2183,9 @@ def test_verification_recomputes_equal_values_without_rendering_analysis_and_fsy
     expected = {key: value for key, value in retained.items() if key not in {"raw_sha256", "protocol_sha256"}}
     inputs = []
 
-    def verified_compute(observations_value, frozen_protocol):
+    def verified_compute(observations_value, frozen_protocol, **kwargs):
         inputs.append((copy.deepcopy(observations_value), copy.deepcopy(frozen_protocol)))
-        result = compute(observations_value, frozen_protocol)
+        result = compute(observations_value, frozen_protocol, **kwargs)
         assert result == expected
         return result
 
@@ -2585,9 +2591,21 @@ def test_failed_revised_authoring_preserves_all_previous_completed_bytes(setup, 
             service.export(research_id)
     current = ws.get("workflow", research_id, Workflow)
     for key, item in prior["artifacts"].items():
-        preserved = receipt["preserved_artifacts"].get(key, key)
+        preserved = (Path(item["path"]).stem if key == "research-ledger" else
+                     receipt["preserved_artifacts"].get(key, key))
         assert current.artifacts[preserved].model_dump(mode="json") == item
         assert original[key][0].read_bytes() == original[key][1]
+    before_ledger = json.loads(original["research-ledger"][1])
+    after_ledger = json.loads(service.artifact_path(research_id, "research-ledger").read_bytes())
+    assert {(entry["event"], entry["sha256"]) for entry in before_ledger["entries"]} <= {
+        (entry["event"], entry["sha256"]) for entry in after_ledger["entries"]}
+    if failure_phase == "native-export":
+        assert len(after_ledger["entries"]) > len(before_ledger["entries"])
+        assert any(entry["artifact_id"] == f"manuscript-review-{current.draft_attempt}"
+                   and entry["sha256"] == current.artifacts["manuscript-review"].sha256
+                   and entry["accepted"] is True for entry in after_ledger["entries"])
+    else:
+        assert current.artifacts["research-ledger"].model_dump(mode="json") == prior["artifacts"]["research-ledger"]
     assert current.execution_attempt == 1 and runner.calls == 0
 
 

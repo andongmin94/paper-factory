@@ -307,7 +307,7 @@ def test_eight_exact_queries_complete_without_silently_reusing_more_than_six_sou
     service.submit_study_review(identifier, rejected_study_review())
 
     def supplement(queries, root, *, limit, cancel, pdf_candidates):
-        assert limit == 3 and pdf_candidates == []
+        assert limit == 3 and pdf_candidates is None
         packet = {"sources": [], "searches": []}
         for query in queries:
             evidence = collect_arxiv_preprint([query], root, limit=3, cancel=cancel, arxiv_id=query.removeprefix("arxiv:"))
@@ -349,7 +349,7 @@ def test_targeted_new_body_upgrade_preserves_retained_query_completion_and_requi
     fresh_passage = "A separately retained synthetic body passage adds different inspected methods for the orchestration contract. " * 3
 
     def retrieve(queries, root, *, limit, cancel, pdf_candidates):
-        assert limit == 3 and pdf_candidates == []
+        assert limit == 3 and pdf_candidates is None
         packet = collect_arxiv_preprint(queries, root, limit=3, cancel=cancel)
         source = packet["sources"][0]
         text = SYNTHETIC_PREFIX + fresh_passage + SYNTHETIC_SUFFIX

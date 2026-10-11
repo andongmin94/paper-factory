@@ -35,18 +35,6 @@ function Select({ dir, ...props }: SelectProps) {
   return dir === undefined ? root : <DirectionProvider direction={dir}>{root}</DirectionProvider>;
 }
 
-function SelectGroup({ className, ...props }: SelectPrimitive.Group.Props) {
-  return (
-    <SelectPrimitive.Group
-      data-slot="select-group"
-      {...props}
-      className={(state) =>
-        cn("scroll-my-1 p-1", typeof className === "function" ? className(state) : className)
-      }
-    />
-  );
-}
-
 function SelectValue({ className, ...props }: SelectPrimitive.Value.Props) {
   return (
     <SelectPrimitive.Value
@@ -145,21 +133,6 @@ function SelectContent({
   );
 }
 
-function SelectLabel({ className, ...props }: SelectPrimitive.GroupLabel.Props) {
-  return (
-    <SelectPrimitive.GroupLabel
-      data-slot="select-label"
-      {...props}
-      className={(state) =>
-        cn(
-          "border-2 border-transparent py-1.5 pr-8 pl-2 text-sm font-base text-main-foreground/80",
-          typeof className === "function" ? className(state) : className,
-        )
-      }
-    />
-  );
-}
-
 function SelectItem({ className, children, ...props }: SelectPrimitive.Item.Props) {
   return (
     <SelectPrimitive.Item
@@ -183,21 +156,6 @@ function SelectItem({ className, children, ...props }: SelectPrimitive.Item.Prop
         <CheckIcon className="pointer-events-none" />
       </SelectPrimitive.ItemIndicator>
     </SelectPrimitive.Item>
-  );
-}
-
-function SelectSeparator({ className, ...props }: SelectPrimitive.Separator.Props) {
-  return (
-    <SelectPrimitive.Separator
-      data-slot="select-separator"
-      {...props}
-      className={(state) =>
-        cn(
-          "pointer-events-none -mx-1 my-1 h-px bg-border",
-          typeof className === "function" ? className(state) : className,
-        )
-      }
-    />
   );
 }
 
@@ -244,12 +202,9 @@ function SelectScrollDownButton({
 export {
   Select,
   SelectContent,
-  SelectGroup,
   SelectItem,
-  SelectLabel,
   SelectScrollDownButton,
   SelectScrollUpButton,
-  SelectSeparator,
   SelectTrigger,
   SelectValue,
 };

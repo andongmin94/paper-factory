@@ -98,7 +98,7 @@ def test_hint_normalization_is_pure_and_requires_explicit_doi(monkeypatch):
     [{"doi": DOI}], [{**HINT, "doi": "https://doi.org/10.1234/test"}],
     [{**HINT, "title": ""}], [{**HINT, "title": "x" * 501}], [{**HINT, "title": "title\x7f"}],
     [{**HINT, "title": "title\n"}], [{**HINT, "title": 2}], [{**HINT, "doi": "10.1234/else"}],
-    [{**HINT, "url": URL}], [{**HINT, "title": "!!!"}],
+    [{**HINT, "url": "http://www.cs.cmu.edu/paper.pdf"}], [{**HINT, "title": "!!!"}],
     [{**HINT, "title": TITLE + " different"}, HINT]])
 def test_invalid_hints_rejected_before_files_dns_or_http(tmp_path, monkeypatch, value):
     monkeypatch.setattr(literature.socket, "getaddrinfo", lambda *args, **kwargs: pytest.fail("Unsafe hint reached DNS"))

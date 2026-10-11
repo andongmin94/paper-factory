@@ -89,8 +89,8 @@ def test_failed_provider_attempt_is_recorded_coverage_without_inventing_reading(
 def test_resumed_resolution_cancellation_recollects_all_queries_and_preserves_partial_bytes(pending_study):
     service, runner, research_id = pending_study
     calls = []
-    def resolution_cancelled(queries, root, *, limit, cancel):
-        calls.append((queries, limit))
+    def resolution_cancelled(queries, root, *, limit, cancel, pdf_candidates):
+        calls.append((queries, limit, pdf_candidates))
         evidence = collect(queries, root, limit=6, cancel=cancel)
         evidence["cancelled"] = len(calls) == 1
         return evidence
@@ -103,7 +103,7 @@ def test_resumed_resolution_cancellation_recollects_all_queries_and_preserves_pa
     service.cancel(research_id)
     assert service.resume(research_id)["stage"] == "proposed"
     completed = service.collect_literature(research_id)
-    assert calls == [(["first query", "second query"], 6), (["first query", "second query"], 5)]
+    assert calls == [(["first query", "second query"], 6, None), (["first query", "second query"], 5, [])]
     assert completed["literature"]["cancelled"] is False
     assert service.artifact_path(research_id, "literature") != partial_path
     history = completed["literature"]["history"][0]

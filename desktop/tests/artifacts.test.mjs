@@ -1,16 +1,66 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import fs, { mkdtemp, mkdir, readFile, readdir, writeFile, link, symlink, rm } from 'node:fs/promises';
+import fs, { mkdtemp, mkdir, readFile, readdir, writeFile, link, symlink, rm, realpath } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { readVerifiedArtifact, saveArtifactWithDialog, validateSaveDestination, writeArtifactBundle, writeArtifactCopy } from '../dist/artifacts.js';
+import { artifactFormat, artifactFormats, isReadableArtifactId, readVerifiedArtifact, saveArtifactWithDialog, validateSaveDestination, writeArtifactBundle, writeArtifactCopy } from '../dist/artifacts.js';
 
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const rejected = error => error.code === 'SAVE_PATH_INVALID';
+
+test('page review admits only frozen PDF quality identifiers for read-only opening', () => {
+  assert.equal(isReadableArtifactId('export-pdf'), true);
+  assert.equal(isReadableArtifactId('pdf-quality-012345abcdef'), true);
+  assert.equal(isReadableArtifactId('submission-requirements-012345abcdef-text'), true);
+  assert.equal(Object.hasOwn(artifactFormats, 'pdf-quality-012345abcdef'), false);
+  for (const value of [null, {}, 'pdf-quality', 'pdf-quality-source', 'pdf-quality-../page.png', 'pdf-quality-ABCDEF123456',
+    'submission-requirements-012345abcdef-raw', 'submission-requirements-../body-text', 'source/image.png']) {
+    assert.equal(isReadableArtifactId(value), false);
+  }
+});
+
+test('repository manuscript versions resolve only supported downloadable formats', () => {
+  for (const extension of ['md', 'pdf', 'docx']) {
+    for (const version of [1, 2, 3]) {
+      const id = `repository-draft-${extension}-${version}`;
+      assert.equal(isReadableArtifactId(id), true);
+      assert.deepEqual(artifactFormat(id), artifactFormats[`export-${extension}`]);
+    }
+  }
+  for (const extension of ['md', 'pdf', 'docx']) for (const version of [1, 2, 3]) for (const attempt of [1, 2, 3]) {
+    const id = `repository-draft-${extension}-${version}-format-${attempt}`;
+    assert.equal(isReadableArtifactId(id), true);
+    assert.deepEqual(artifactFormat(id), artifactFormats[`export-${extension}`]);
+  }
+  for (const id of ['repository-draft-md', 'repository-draft-md-0', 'repository-draft-pdf-4',
+    'repository-draft-tex-1', 'repository-draft-md-../paper', 'repository-draft-pdf-1/raw',
+    'repository-draft-tex-1-format-1', 'repository-draft-pdf-2-format-4', 'repository-draft-docx-0-format-1',
+    'repository-draft-pdf-2-format-1/raw', 'repository-draft-pdf-2-format-../paper']) {
+    assert.equal(isReadableArtifactId(id), false);
+    assert.equal(artifactFormat(id), undefined);
+  }
+});
+
+test('a reviewed repository PDF remains downloadable with exact retained bytes', async () => {
+  await fixture(async ({ home, protectedRoot }) => {
+    const bytes = Buffer.from('RETAINED REPOSITORY PAPER');
+    const target = join(home, 'paper.pdf');
+    assert.equal(await saveArtifactWithDialog({
+      artifact: { path: join(protectedRoot, 'paper.pdf'), files: [{ name: 'paper.pdf', bytes }] },
+      artifactId: 'repository-draft-pdf-2-format-1', researchId: 'research-abcdef123456', documentsPath: home, protectedRoot,
+      chooseFile: async options => {
+        assert.deepEqual(options.filters, [{ name: 'PDF 문서', extensions: ['pdf'] }]);
+        return { canceled: false, filePath: target };
+      },
+      chooseDirectory: async () => { assert.fail('PDF uses a file dialog'); },
+    }), true);
+    assert.deepEqual(await readFile(target), bytes);
+  });
+});
 async function fixture(run) {
-  const home = await mkdtemp(join(tmpdir(), 'paper-factory-artifact-test-'));
+  const home = await realpath(await mkdtemp(join(tmpdir(), 'paper-factory-artifact-test-')));
   const protectedRoot = join(home, 'app-data'); await mkdir(protectedRoot);
   try { await run({ home, protectedRoot }); } finally { await rm(home, { recursive: true, force: true }); }
 }

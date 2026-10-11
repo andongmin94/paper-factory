@@ -40,6 +40,7 @@ class BrowserFixtureRunner(FixtureRunner):
         self.manifest_defect = None
         self.received_order = None
         self.received_selector = None
+        self.received_fonts = None
         self.raw_defect = None
 
     def status(self):
@@ -53,13 +54,14 @@ class BrowserFixtureRunner(FixtureRunner):
                 "profiles": {"quickjs": quickjs, "chromium": chromium}}
 
     def run(self, source_dir, bundle_dir, output_dir, *, runtime, entrypoint, production_entrypoint,
-            scientific_inputs, source_order, timeout_seconds, cancel, on_handle):
+            scientific_inputs, source_order, browser_fonts, timeout_seconds, cancel, on_handle):
         assert runtime == "chromium" and timeout_seconds == 300
         assert Path(bundle_dir, entrypoint).is_file()
         assert source_order == ["dependency.js", "editor.js"]
         self.calls += 1
         self.received_order = list(source_order)
         self.received_selector = production_entrypoint
+        self.received_fonts = list(browser_fonts)
         self.scientific_inputs = copy.deepcopy(scientific_inputs)
         self.entered.set()
         on_handle({"kind": "fixture", "pid": 123, "simulation": True})
@@ -67,7 +69,9 @@ class BrowserFixtureRunner(FixtureRunner):
             manifest = {"backend": "chromium-sandbox", "simulation": True,
                         "source_order": list(source_order), "production_entrypoint": production_entrypoint,
                         "source_files": {name: {"original_sha256": digest_file(Path(source_dir, name)),
-                                                "size": Path(source_dir, name).stat().st_size} for name in source_order}}
+                                                "size": Path(source_dir, name).stat().st_size} for name in source_order},
+                        "frozen_fonts": {name: {"sha256": digest_file(Path(source_dir, name)), "size": Path(source_dir, name).stat().st_size,
+                                                "family": "PF_FROZEN_" + digest_file(Path(source_dir, name))[:24]} for name in browser_fonts}}
             if self.manifest_defect == "order":
                 manifest["source_order"].reverse()
             elif self.manifest_defect == "selector":
@@ -110,6 +114,7 @@ def browser_setup(tmp_path):
     source.mkdir()
     (source / "dependency.js").write_bytes(b"var fixtureDependency = 1;\r\n")
     (source / "editor.js").write_bytes(b"var ResearchFixture = {transform(values){return values.slice();}};\r\n")
+    (source / "synthetic-font.woff2").write_bytes(b"Synthetic font route bytes; never loaded by an actual browser.")
     runner = BrowserFixtureRunner()
     service = WorkflowService(tmp_path / "home", runner=runner, collector=collect)
     created = service.create(str(source), "Check synthetic browser orchestration without executing any scientific study.")
@@ -123,6 +128,32 @@ def prepare_browser(service, research_id):
     service.collect_literature(research_id)
     service.submit_study_review(research_id, copy.deepcopy(STUDY_REVIEW))
     return service.submit_code(research_id, browser_bundle(), copy.deepcopy(REVIEW))
+
+
+def test_frozen_source_fonts_are_passed_to_runner_and_rederived_from_inventory(browser_setup):
+    service, runner, identifier = browser_setup
+    plan = browser_protocol()
+    plan["browser_fonts"] = ["synthetic-font.woff2"]
+    service.submit_proposal(identifier, plan)
+    service.collect_literature(identifier)
+    service.submit_study_review(identifier, copy.deepcopy(STUDY_REVIEW))
+    service.submit_code(identifier, browser_bundle(), copy.deepcopy(REVIEW))
+    service.start_experiment(identifier)
+    state = finished(service, identifier)
+    assert state["stage"] == "analyzed" and runner.received_fonts == ["synthetic-font.woff2"]
+    manifest = json.loads(service.artifact_path(identifier, "runtime-manifest").read_bytes())
+    source = service._workspace(identifier).path("source/synthetic-font.woff2")
+    assert manifest["frozen_fonts"]["synthetic-font.woff2"] == {"sha256": digest_file(source), "size": source.stat().st_size, "family": "PF_FROZEN_" + digest_file(source)[:24]}
+
+
+@pytest.mark.parametrize("path", ["missing-font.ttf", "editor.js", "../synthetic-font.woff2"])
+def test_font_paths_must_identify_actual_source_font_assets_before_attempt(browser_setup, path):
+    service, runner, identifier = browser_setup
+    plan = browser_protocol()
+    plan["browser_fonts"] = [path]
+    with pytest.raises(ValueError):
+        service.submit_proposal(identifier, plan)
+    assert service.status(identifier)["proposal_attempt"] == runner.calls == 0
 
 
 def test_chromium_runtime_native_and_json_schemas_agree():

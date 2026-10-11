@@ -79,6 +79,46 @@ def test_catalog_derives_only_literal_report_tokens_and_whole_titles():
         literature.discover_unicode_reports(catalog().replace(b'href="tr77/"', b'href="https://127.0.0.1/private"'), ["UAX77"])
 
 
+@pytest.mark.parametrize(("query", "report_id"), [
+    ("Unicode Standard Annex #77: Literal Segmentation Standard", "UAX77"),
+    ("Unicode Technical Standard #79: Literal Expression Standard", "UTS79"),
+    ("Unicode® Standard Annex #77: Literal Segmentation Standard", "UAX77"),
+])
+def test_formal_heading_requires_the_catalog_kind_number_and_complete_title(query, report_id):
+    matches = literature.discover_unicode_reports(catalog(), [query])
+    assert [entry["report_id"] for entry in matches] == [report_id]
+    assert matches[0]["queries"] == [query]
+
+
+def test_generated_segmentation_and_vertical_layout_heading_forms_match_literal_catalog_rows():
+    raw = (catalog().replace(b"77", b"29").replace(b"78", b"50")
+           .replace(b"Literal Segmentation Standard", b"Unicode Text Segmentation")
+           .replace(b"Literal Normalization Standard", b"Unicode Vertical Text Layout"))
+    queries = ["Unicode Standard Annex #29: Unicode Text Segmentation",
+               "Unicode Standard Annex #50: Unicode Vertical Text Layout"]
+    matches = literature.discover_unicode_reports(raw, queries)
+    assert [entry["report_id"] for entry in matches] == ["UAX29", "UAX50"]
+    assert [entry["queries"] for entry in matches] == [[queries[0]], [queries[1]]]
+
+
+@pytest.mark.parametrize("query", [
+    "Unicode Technical Standard #77: Literal Segmentation Standard",
+    "Unicode Standard Annex #79: Literal Expression Standard",
+    "Unicode Standard Annex #78: Literal Segmentation Standard",
+    "Unicode Standard Annex #99: Literal Segmentation Standard",
+    "Unicode Standard Annex #77: Unrelated Segmentation Standard",
+    "Unicode Standard Annex #77: Literal Segmentation",
+    "Read Unicode Standard Annex #77: Literal Segmentation Standard",
+    "Unicode Standard Annex #77: Literal Segmentation Standard related methods",
+    "Unicode Standard Annex #80: Withdrawn Literal Standard",
+    "Unicode Standard Annex #077: Literal Segmentation Standard",
+    "Unicode Standard Annex #78: Literal Segmentation Standard UAX77",
+    "Unicode Standard Annex #77: Literal Segmentation Standard; UTS79",
+])
+def test_formal_heading_rejects_conflicting_or_partial_catalog_identity(query):
+    assert literature.discover_unicode_reports(catalog(), [query]) == []
+
+
 def test_identity_and_body_are_derived_from_actual_header_and_anchored_sections():
     raw = report()
     identity = literature.unicode_report_identity(raw, "https://www.unicode.org/reports/tr77/tr77-7.html")
@@ -165,10 +205,16 @@ def test_draft_version_mismatch_or_conflicting_fixed_identity_stays_metadata(tmp
     assert any(json.loads(path.read_bytes())["status"] == "rejected" for path in (tmp_path / "literature").glob("*-unicode-identity-*.json"))
 
 
-def test_exact_catalog_queries_preserve_two_method_searches_for_other_queries(tmp_path, monkeypatch, clock):
+@pytest.mark.parametrize("standard_queries", [
+    ["Unicode UAX77 boundary rules", "UTS79 expressions"],
+    ["Unicode Standard Annex #77: Literal Segmentation Standard",
+     "Unicode Technical Standard #79: Literal Expression Standard"],
+])
+def test_exact_catalog_queries_preserve_two_method_searches_for_other_queries(tmp_path, monkeypatch, clock, standard_queries):
     requests = install(monkeypatch, public_response, methods=True)
-    queries = ["Unicode UAX77 boundary rules", "UTS79 expressions", "ordinary typography methods", "ordinary rendering methods"]
+    queries = standard_queries + ["ordinary typography methods", "ordinary rendering methods"]
     result = literature.collect(queries, tmp_path, pdf_candidates=[])
+    assert {source["report_id"] for source in result["sources"] if source.get("scope") == "full_text"} == {"UAX77", "UTS79"}
     method_queries = [request.url.params["search_query"] for request in requests if request.url.host == "export.arxiv.org"]
     assert len(method_queries) == 2 and all("ordinary" in query for query in method_queries)
     assert len([search for search in result["searches"] if search.get("lookup") == "method"]) == 2

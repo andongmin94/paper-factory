@@ -1,6 +1,7 @@
 from pathlib import Path
 import hashlib
 import json
+import os
 import subprocess
 from types import SimpleNamespace
 import zipfile
@@ -51,6 +52,89 @@ def test_latex_export_uses_native_line_and_page_settings(source, pandoc, enabled
     assert (r"\usepackage{lineno}" in text) is enabled
     assert (r"\linenumbers" in text) is enabled
     assert (r"\pagestyle{empty}" in text) is not enabled
+
+
+@pytest.mark.parametrize("separate_output", [False, True])
+def test_generated_helpers_stage_exact_bytes_without_changing_source_cwd(source, pandoc, monkeypatch, separate_output):
+    output = source.parent / "native outputs" / "paper.tex" if separate_output else source.with_suffix(".tex")
+    original = source.read_bytes()
+    actual_run = conversion.subprocess.run
+    calls = []
+
+    def run(command, **kwargs):
+        assert kwargs["creationflags"] == (subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+        paths = {}
+        for option in ("--lua-filter", "--metadata-file", "--include-in-header"):
+            staged = Path(command[command.index(option) + 1])
+            retained = output.parent / staged.name
+            assert staged.is_absolute() and staged.is_file() and staged != retained.resolve()
+            assert staged.read_bytes() == retained.read_bytes()
+            paths[option] = staged
+        calls.append((command, kwargs["cwd"], paths))
+        return actual_run(command, **kwargs)
+
+    monkeypatch.setattr(conversion.subprocess, "run", run)
+    receipt = conversion.convert(source, output, pandoc=pandoc, metadata={"author": ["Fixture Author"]},
+                                 line_numbers=True, page_numbers=False)
+    command, cwd, staged = calls[0]
+    assert cwd == source.parent.resolve()
+    assert command == receipt["command"] and Path(command[1]) == source.resolve()
+    assert Path(command[command.index("-o") + 1]) == output.resolve()
+    for option, helper in (
+        ("--lua-filter", output.with_name(output.stem + "-table-layout.lua")),
+        ("--metadata-file", output.with_name(output.stem + "-pandoc-metadata.json")),
+        ("--include-in-header", output.with_name(output.stem + "-formatting.tex")),
+    ):
+        argument = command[command.index(option) + 1]
+        assert Path(argument) == staged[option] and not staged[option].exists()
+        assert receipt["generated_inputs"][option] == {"path": str(helper.resolve()), "sha256": digest_file(helper)}
+    assert receipt["working_directory"] == str(cwd)
+    text = output.read_text(encoding="utf-8")
+    assert "Fixture Author" in text and r"\usepackage{lineno}" in text and r"\pagestyle{empty}" in text
+    assert source.read_bytes() == original and receipt["input_sha256"] == hashlib.sha256(original).hexdigest()
+    assert receipt["table_layout_sha256"] == digest_file(output.with_name(output.stem + "-table-layout.lua"))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Regression for Windows Lua's absolute path boundary")
+@pytest.mark.parametrize("suffix", [".pdf", ".docx"])
+def test_windows_long_generated_paths_export_complete_native_content(tmp_path, pandoc, suffix):
+    directory = tmp_path
+    padding = 260 - len(str((directory / "paper-table-layout.lua").resolve())) - 1
+    assert 0 < padding <= 255
+    directory /= "x" * padding
+    directory.mkdir(parents=True)
+    source = directory / "paper.md"
+    source.write_text("# Long path conversion\n\n"
+                      "| Boundary | Input | Principal | Predicate | Action | Outcome |\n"
+                      "|---|---|---|---|---|---|\n"
+                      "| Fixed bridge | Renderer | Main frame | Sender equality | Return data | Unresolved policy |\n",
+                      encoding="utf-8")
+    original = source.read_bytes()
+    output = source.with_suffix(suffix)
+    assert len(str(output.with_name("paper-table-layout.lua").resolve())) == 260
+    assert len(str(output.with_name("paper-pandoc-metadata.json").resolve())) >= 260
+    receipt = conversion.convert(source, output, pandoc=pandoc, metadata={"author": ["Fixture Author"]})
+    assert Path(receipt["command"][1]).is_absolute()
+    assert Path(receipt["command"][receipt["command"].index("-o") + 1]).is_absolute()
+    for option in ("--lua-filter", "--metadata-file"):
+        argument = receipt["command"][receipt["command"].index(option) + 1]
+        assert Path(argument).is_absolute() and len(argument) < 260 and not Path(argument).exists()
+        retained = receipt["generated_inputs"][option]
+        assert Path(retained["path"]).is_file() and retained["sha256"] == digest_file(Path(retained["path"]))
+    if suffix == ".docx":
+        from docx import Document
+        document = Document(output)
+        assert not document.tables
+        text = " ".join(paragraph.text for paragraph in document.paragraphs)
+    else:
+        from pypdf import PdfReader
+        text = " ".join(page.extract_text() or "" for page in PdfReader(output).pages)
+    compact = " ".join(text.split())
+    for expected in ("Long path conversion", "Fixture Author", "Record 1", "Fixed bridge", "Renderer", "Main frame",
+                     "Sender equality", "Return data", "Unresolved policy"):
+        assert expected in compact
+    assert source.read_bytes() == original and receipt["input_sha256"] == hashlib.sha256(original).hexdigest()
+    assert receipt["output_sha256"] == digest_file(output)
 
 
 @pytest.mark.parametrize("enabled", [False, True])
@@ -165,6 +249,88 @@ def test_pipe_tables_convert_to_native_tables_without_editing_source(source, pan
     receipts = source.with_name("receipts.json")
     receipts.write_text(json.dumps({suffix[1:]: receipt}), encoding="utf-8")
     assert conversion.verify_receipts(source, {suffix[1:]: output}, receipts) == []
+
+
+@pytest.mark.parametrize("suffix", [".pdf", ".docx"])
+def test_seven_column_boundary_trace_is_readable_records_with_complete_cells(source, pandoc, suffix):
+    # The actual failing appendix shape: seven text columns, including long
+    # predicates and qualifications. This is output layout, never source editing.
+    headers = ["Boundary/class", "Input", "Authority holder", "Predicate", "Action", "Rejected case", "Residual assumption"]
+    rows = [
+        ["Destination I/A, E13", "Renderer request URL", "Protocol handler", "Scheme and host match",
+         "Copy path/query upstream", "Mismatch returns no target, then 404", "Destination is not initiator authentication"],
+        ["File identity I/A, E5/E15/E21", "Candidate or cached entry pathname", "Resolver/serving function",
+         "Containment before open; regular opened file", "Read opened handle", "Outside-root selection or nonfile",
+         "No hostile replacement between relevant operations"],
+    ]
+    source.write_text("# Boundary obligation trace\n\n| " + " | ".join(headers) + " |\n|" + "---|" * 7 + "\n" +
+                      "".join("| " + " | ".join(row) + " |\n" for row in rows), encoding="utf-8")
+    original = source.read_bytes()
+    output = source.with_suffix(suffix)
+    receipt = conversion.convert(source, output, pandoc=pandoc)
+    assert source.read_bytes() == original
+    assert receipt["input_sha256"] == hashlib.sha256(original).hexdigest()
+    assert receipt["table_layout_sha256"] == digest_file(output.with_name(output.stem + "-table-layout.lua"))
+    if suffix == ".docx":
+        from docx import Document
+        document = Document(output)
+        assert document.tables == []
+        text = " ".join(paragraph.text for paragraph in document.paragraphs)
+    else:
+        from pypdf import PdfReader
+        reader = PdfReader(output)
+        assert "#table(" not in output.with_suffix(".typ").read_text(encoding="utf-8")
+        text = " ".join(page.extract_text() or "" for page in reader.pages)
+        # Every extracted glyph fits the printable area. Actual PNG inspection
+        # still checks overlap visually; extraction alone cannot establish that.
+        for page in reader.pages:
+            positions = []
+            page.extract_text(visitor_text=lambda value, cm, tm, font, size:
+                positions.append((value, tm[4] * cm[0] + tm[5] * cm[2] + cm[4],
+                                  tm[4] * cm[1] + tm[5] * cm[3] + cm[5])) if value.strip() else None)
+            assert all(55 <= x <= float(page.mediabox.width) - 55 for _, x, _ in positions)
+    compact = " ".join(text.split())
+    for value in headers + [value for row in rows for value in row]:
+        assert value in compact
+    assert "Record 1" in compact and "Record 2" in compact
+
+
+@pytest.mark.parametrize("empty", [False, True])
+def test_wide_records_keep_header_evidence_and_row_span_column_labels(tmp_path, pandoc, empty):
+    text = ("| [Boundary](https://example.org/boundary) | Input[^scope] | $authority$ | Predicate | Action | Residual |\n"
+            "|---|---|---|---|---|---|\n" + ("" if empty else
+            "| v0 | v1 | v2 | v3 | v4 | v5 |\n| w0 | w1 | w2 | w3 | w4 | w5 |\n") +
+            "\n[^scope]: Exact retained header qualification.\n")
+    parsed = json.loads(subprocess.run([pandoc, "--from=markdown", "--to=json"], input=text,
+                                      text=True, capture_output=True, encoding="utf-8", check=True).stdout)
+    table = next(block for block in parsed["blocks"] if block["t"] == "Table")
+    if not empty:
+        rows = table["c"][4][0][3]
+        rows[0][1][0][2] = 2  # A body cell spans the following row's first column.
+        rows[1][1].pop(0)
+    path = tmp_path / "layout.lua"
+    path.write_text(conversion.WIDE_TABLE_FILTER, encoding="utf-8")
+    converted = json.loads(subprocess.run([pandoc, "--from=json", "--to=json", "--lua-filter", str(path)],
+        input=json.dumps(parsed), text=True, capture_output=True, encoding="utf-8", check=True).stdout)
+    def nodes(value):
+        if isinstance(value, dict):
+            yield value
+            for child in value.values():
+                yield from nodes(child)
+        elif isinstance(value, list):
+            for child in value:
+                yield from nodes(child)
+    tags = {node.get("t") for node in nodes(converted)}
+    assert {"Link", "Math", "Note"} <= tags and "Table" not in tags
+    if not empty:
+        lists = [node["c"] for node in nodes(converted) if node.get("t") == "BulletList"]
+        second_row = lists[-1]
+        assert second_row[0][0]["c"][0]["t"] == "Strong"
+        # The row-spanning Boundary belongs to the preceding row; the second
+        # row starts with Input and still ends with Residual, never shifted names.
+        rendered = subprocess.run([pandoc, "--from=json", "--to=plain"], input=json.dumps(converted),
+            text=True, capture_output=True, encoding="utf-8", check=True).stdout
+        assert "Input" in rendered and "Residual: w5" in rendered
 
 
 def test_trusted_statistics_renderer_emits_one_native_pandoc_table(pandoc):

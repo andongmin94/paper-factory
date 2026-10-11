@@ -3,9 +3,10 @@
 from typing import Annotated, Literal
 import math
 
-from pydantic import Field, field_validator, model_serializer, model_validator
+from pydantic import Field, StrictInt, StrictStr, field_validator, model_serializer, model_validator
 
 from ..models import Record
+from .submission import ManuscriptClaim, ValidationContract
 
 
 class Measure(Record):
@@ -59,6 +60,8 @@ class ResearchPlan(Record):
     limitations: list[str] = Field(min_length=2, max_length=12)
     literature_queries: list[str] = Field(min_length=1, max_length=8)
     research_claim: ResearchClaim | None = None
+    validation_contract: ValidationContract | None = None
+    browser_fonts: list[Annotated[str, Field(min_length=1, max_length=300)]] = Field(default_factory=list, max_length=8)
 
     @model_serializer(mode="wrap")
     def retained_protocol(self, handler):
@@ -69,6 +72,10 @@ class ResearchPlan(Record):
         # Fresh proposal submissions require this field at the workflow boundary.
         if self.research_claim is None:
             value.pop("research_claim", None)
+        if self.validation_contract is None:
+            value.pop("validation_contract", None)
+        if not self.browser_fonts:
+            value.pop("browser_fonts", None)
         return value
 
     @field_validator("parameters")
@@ -91,6 +98,8 @@ class ResearchPlan(Record):
         for values in (self.conditions, self.seeds, self.source_files, [m.name for m in self.metrics]):
             if len(values) != len(set(values)):
                 raise ValueError("Protocol identifiers, conditions, seeds and metrics must be distinct")
+        if len(set(self.browser_fonts)) != len(self.browser_fonts) or self.browser_fonts and self.runtime != "chromium":
+            raise ValueError("Declared browser fonts must be distinct and require Chromium")
         return self
 
 
@@ -158,6 +167,67 @@ class StudyRedesignReview(Record):
             self.scientific_difference, self.prior_evidence, self.feasibility)) and not self.issues
         if self.accepted != eligible or (not self.accepted and not self.issues) or any(not item.strip() for item in self.issues):
             raise ValueError("Redesign preparation must agree with every criterion and record rejection issues")
+        return self
+
+
+class PreparationIssueRepair(Record):
+    issue_index: StrictInt = Field(ge=0, le=11)
+    required_change: StrictStr = Field(min_length=1, max_length=2000)
+    actual_change: StrictStr = Field(min_length=24, max_length=4000)
+    changed_fields: list[Literal["procedure", "analysis_method"]] = Field(min_length=1, max_length=2)
+
+    @model_validator(mode="after")
+    def concrete_change(self):
+        if len(set(self.changed_fields)) != len(self.changed_fields) or len(self.actual_change.strip()) < 24:
+            raise ValueError("Operational repairs require distinct fields and substantive actual changes")
+        return self
+
+
+class PreparationRepair(Record):
+    """One same-candidate operational correction, never a new scientific design."""
+    original_candidate_sha256: StrictStr = Field(pattern=r"^[a-f0-9]{64}$")
+    prior_review_sha256: StrictStr = Field(pattern=r"^[a-f0-9]{64}$")
+    changes: list[PreparationIssueRepair] = Field(min_length=1, max_length=12)
+
+    @model_validator(mode="after")
+    def distinct_issues(self):
+        if len({item.issue_index for item in self.changes}) != len(self.changes):
+            raise ValueError("Every retained preparation issue must be addressed once")
+        return self
+
+
+class LiteraturePassage(Record):
+    """A literal body quote; the native host resolves and freezes its bounds."""
+    source_id: StrictStr = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.-]+$")
+    text_sha256: StrictStr = Field(pattern=r"^[a-f0-9]{64}$")
+    text: StrictStr = Field(min_length=80, max_length=1500)
+    relevance: StrictStr = Field(min_length=24, max_length=4000)
+
+    @field_validator("text")
+    @classmethod
+    def substantive_literal(cls, value: str) -> str:
+        if len(value.strip()) < 80 or any(
+                (ord(char) < 32 and char not in "\n\r\t") or ord(char) == 127 or 0xD800 <= ord(char) <= 0xDFFF for char in value):
+            raise ValueError("Select substantive literal body text without control characters")
+        return value
+
+    @field_validator("relevance")
+    @classmethod
+    def substantive_relevance(cls, value: str) -> str:
+        value = value.strip()
+        if len(value) < 24:
+            raise ValueError("Selected literature requires a substantive relevance explanation")
+        return value
+
+
+class LiteraturePassages(Record):
+    passages: list[LiteraturePassage] = Field(max_length=12)
+
+    @model_validator(mode="after")
+    def distinct_literals(self):
+        identities = [(item.source_id, item.text_sha256, item.text) for item in self.passages]
+        if len(identities) != len(set(identities)):
+            raise ValueError("Literal source passages must be distinct")
         return self
 
 
@@ -306,6 +376,16 @@ class ManuscriptReview(ScientificReview):
     presentation: QualityCriterion
     remediation: ManuscriptRemediation | None = None
     publication_readiness: PublicationReadiness | None = None
+    observed_claim: ManuscriptClaim | None = None
+    claim_scope: QualityCriterion | None = None
+
+    @model_serializer(mode="wrap")
+    def retained_review(self, handler):
+        value = handler(self)
+        for key in ("observed_claim", "claim_scope"):
+            if getattr(self, key) is None:
+                value.pop(key, None)
+        return value
 
     @model_validator(mode="after")
     def consistent_decision(self):
@@ -313,6 +393,8 @@ class ManuscriptReview(ScientificReview):
         eligible = all(item.passed for item in criteria) and not self.issues
         if self.publication_readiness is not None:
             eligible = eligible and self.publication_readiness.eligible()
+        if self.observed_claim is not None:
+            eligible = eligible and self.claim_scope is not None and self.claim_scope.passed
         if self.accepted != eligible:
             raise ValueError("Manuscript acceptance must agree with all quality criteria and issues")
         if self.accepted and self.remediation is not None:
@@ -325,6 +407,8 @@ class ManuscriptReview(ScientificReview):
                     failed.add("contribution")
                 if not self.publication_readiness.validation.passed:
                     failed.add("interpretation")
+            if self.observed_claim is not None and (self.claim_scope is None or not self.claim_scope.passed):
+                failed.add("interpretation")
             covered = {action.criterion for action in self.remediation.actions}
             if failed - covered:
                 raise ValueError("Manuscript remediation must address every failed criterion")

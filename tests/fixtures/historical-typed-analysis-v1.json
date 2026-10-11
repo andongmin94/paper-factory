@@ -1,0 +1,716 @@
+{
+  "protocol": {
+    "feasible": true,
+    "reason": "Production behavior can be tested with independent fixtures.",
+    "title": "Controlled comparison of production transformation contracts",
+    "question": "How does production transformation preserve protected input values?",
+    "research_gap": "Existing methods do not characterize protected-value violations under the proposed workload families.",
+    "expected_contribution": "Identify the conditions that cause protection failures and their relationship to the studied mechanism.",
+    "comparison_rationale": "A targeted ablation isolates the protection mechanism without asserting competitive performance.",
+    "sampling_rationale": "Seeded workload families cover the specified structural variations; conclusions remain within this generated domain.",
+    "runtime": "quickjs",
+    "source_files": [
+      "transform.js"
+    ],
+    "production_entrypoint": "",
+    "dependencies": [],
+    "conditions": [
+      "production",
+      "ablation"
+    ],
+    "metrics": [
+      {
+        "name": "error",
+        "unit": "events",
+        "description": "Number of independently detected contract violations."
+      }
+    ],
+    "comparator": "The ablation removes the guard while preserving remaining behavior.",
+    "independent_oracle": "An independent fixture generator computes exact preserved values.",
+    "sampling_unit": "A generated input with protected values and independently known output.",
+    "units_per_seed": 3,
+    "seeds": [
+      11,
+      37
+    ],
+    "parameters": {
+      "fixture_size": 12
+    },
+    "procedure": [
+      "Generate seeded fixtures.",
+      "Run real production and comparator.",
+      "Compare both against independent expected outputs."
+    ],
+    "analysis_method": "Descriptive summaries and differences paired by seed and fixture.",
+    "limitations": [
+      "Synthetic cases cannot establish behavior in natural input populations.",
+      "One source snapshot does not establish universal software correctness."
+    ],
+    "literature_queries": [
+      "software testing independent oracle controlled study"
+    ],
+    "validation_contract": {
+      "mode": "empirical",
+      "declared_units": [
+        {
+          "seed": 11,
+          "unit_id": "case-0",
+          "stratum": "bounded-family"
+        },
+        {
+          "seed": 11,
+          "unit_id": "case-1",
+          "stratum": "bounded-family"
+        },
+        {
+          "seed": 11,
+          "unit_id": "case-2",
+          "stratum": "bounded-family"
+        },
+        {
+          "seed": 37,
+          "unit_id": "case-0",
+          "stratum": "bounded-family"
+        },
+        {
+          "seed": 37,
+          "unit_id": "case-1",
+          "stratum": "bounded-family"
+        },
+        {
+          "seed": 37,
+          "unit_id": "case-2",
+          "stratum": "bounded-family"
+        }
+      ],
+      "finite_domain_label": null,
+      "uncertainty": "none",
+      "independent_sampling": false,
+      "sampling_basis": "Synthetic independent seed-cluster assumption, not a scientific population claim.",
+      "bootstrap_seed": 719,
+      "bootstrap_replicates": 200,
+      "confidence_level": 0.95,
+      "oracle_sources": [
+        {
+          "source_id": "synthetic-source",
+          "text_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "quote": "Synthetic oracle source binding fixture only; its scientific semantics remain unverified. Synthetic oracle source binding fixture only; its scientific semantics remain unverified. "
+        }
+      ]
+    }
+  },
+  "observations": {
+    "observations": [
+      {
+        "unit_id": "case-0",
+        "seed": 11,
+        "condition": "production",
+        "metric": "error",
+        "value": 0
+      },
+      {
+        "unit_id": "case-0",
+        "seed": 11,
+        "condition": "ablation",
+        "metric": "error",
+        "value": 1
+      },
+      {
+        "unit_id": "case-1",
+        "seed": 11,
+        "condition": "production",
+        "metric": "error",
+        "value": 0
+      },
+      {
+        "unit_id": "case-1",
+        "seed": 11,
+        "condition": "ablation",
+        "metric": "error",
+        "value": 2
+      },
+      {
+        "unit_id": "case-2",
+        "seed": 11,
+        "condition": "production",
+        "metric": "error",
+        "value": 0
+      },
+      {
+        "unit_id": "case-2",
+        "seed": 11,
+        "condition": "ablation",
+        "metric": "error",
+        "value": 3
+      },
+      {
+        "unit_id": "case-0",
+        "seed": 37,
+        "condition": "production",
+        "metric": "error",
+        "value": 0
+      },
+      {
+        "unit_id": "case-0",
+        "seed": 37,
+        "condition": "ablation",
+        "metric": "error",
+        "value": 1
+      },
+      {
+        "unit_id": "case-1",
+        "seed": 37,
+        "condition": "production",
+        "metric": "error",
+        "value": 0
+      },
+      {
+        "unit_id": "case-1",
+        "seed": 37,
+        "condition": "ablation",
+        "metric": "error",
+        "value": 2
+      },
+      {
+        "unit_id": "case-2",
+        "seed": 37,
+        "condition": "production",
+        "metric": "error",
+        "value": 0
+      },
+      {
+        "unit_id": "case-2",
+        "seed": 37,
+        "condition": "ablation",
+        "metric": "error",
+        "value": 3
+      }
+    ],
+    "controls": [
+      {
+        "name": "positive known response",
+        "passed": true,
+        "details": "An actually retained equal fixture comparison.",
+        "input_fixture": "control-input",
+        "expected_fixture": "expected-output",
+        "actual_fixture": "actual-output",
+        "comparison": "equal"
+      },
+      {
+        "name": "negative intentional fault",
+        "passed": true,
+        "details": "An actually retained different fixture comparison.",
+        "input_fixture": "control-input",
+        "expected_fixture": "expected-output",
+        "actual_fixture": "fault-output",
+        "comparison": "different"
+      }
+    ],
+    "fixtures": [
+      {
+        "label": "synthetic-inputs.json",
+        "encoding": "base64",
+        "content": "eyJzeW50aGV0aWMiOnRydWUsImFubm90YXRpb25zIjpbMCwxLDJdfQ==",
+        "sha256": "8580d8ac7816cb28a0f4d32fc872cf041efa4e542829d1c599ea25be25d4c837"
+      },
+      {
+        "label": "control-input",
+        "encoding": "base64",
+        "content": "aW5wdXQ=",
+        "sha256": "c96c6d5be8d08a12e7b5cdc1b207fa6b2430974c86803d8891675e76fd992c20"
+      },
+      {
+        "label": "expected-output",
+        "encoding": "base64",
+        "content": "ZXhwZWN0ZWQ=",
+        "sha256": "cea23dd4b87e8b00d19fb9ccaaef93e97353c7353e2070f3baf05aeb3995dff4"
+      },
+      {
+        "label": "actual-output",
+        "encoding": "base64",
+        "content": "ZXhwZWN0ZWQ=",
+        "sha256": "cea23dd4b87e8b00d19fb9ccaaef93e97353c7353e2070f3baf05aeb3995dff4"
+      },
+      {
+        "label": "fault-output",
+        "encoding": "base64",
+        "content": "aW50ZW50aW9uYWwgZmF1bHQ=",
+        "sha256": "e0e9f04c7c2fd59913a0b3f32d803a03a197d31d4f66558d5f852ea9ff4c3c1b"
+      }
+    ]
+  },
+  "analysis": {
+    "schema_version": 1,
+    "results": {
+      "error.condition_1.count": {
+        "value": 6,
+        "unit": "observations",
+        "description": "count of error for production",
+        "source": "observations.json"
+      },
+      "error.condition_1.mean": {
+        "value": 0.0,
+        "unit": "events",
+        "description": "mean of error for production",
+        "source": "observations.json"
+      },
+      "error.condition_1.median": {
+        "value": 0.0,
+        "unit": "events",
+        "description": "median of error for production",
+        "source": "observations.json"
+      },
+      "error.condition_1.stdev": {
+        "value": 0.0,
+        "unit": "events",
+        "description": "stdev of error for production",
+        "source": "observations.json"
+      },
+      "error.condition_1.min": {
+        "value": 0.0,
+        "unit": "events",
+        "description": "min of error for production",
+        "source": "observations.json"
+      },
+      "error.condition_1.max": {
+        "value": 0.0,
+        "unit": "events",
+        "description": "max of error for production",
+        "source": "observations.json"
+      },
+      "error.condition_2.count": {
+        "value": 6,
+        "unit": "observations",
+        "description": "count of error for ablation",
+        "source": "observations.json"
+      },
+      "error.condition_2.mean": {
+        "value": 2.0,
+        "unit": "events",
+        "description": "mean of error for ablation",
+        "source": "observations.json"
+      },
+      "error.condition_2.median": {
+        "value": 2.0,
+        "unit": "events",
+        "description": "median of error for ablation",
+        "source": "observations.json"
+      },
+      "error.condition_2.stdev": {
+        "value": 0.8944271909999159,
+        "unit": "events",
+        "description": "stdev of error for ablation",
+        "source": "observations.json"
+      },
+      "error.condition_2.min": {
+        "value": 1.0,
+        "unit": "events",
+        "description": "min of error for ablation",
+        "source": "observations.json"
+      },
+      "error.condition_2.max": {
+        "value": 3.0,
+        "unit": "events",
+        "description": "max of error for ablation",
+        "source": "observations.json"
+      },
+      "error.paired_2_minus_1.count": {
+        "value": 6,
+        "unit": "pairs",
+        "description": "count of paired error difference: ablation minus production",
+        "source": "observations.json"
+      },
+      "error.paired_2_minus_1.mean": {
+        "value": 2.0,
+        "unit": "events",
+        "description": "mean of paired error difference: ablation minus production",
+        "source": "observations.json"
+      },
+      "error.paired_2_minus_1.median": {
+        "value": 2.0,
+        "unit": "events",
+        "description": "median of paired error difference: ablation minus production",
+        "source": "observations.json"
+      },
+      "error.paired_2_minus_1.stdev": {
+        "value": 0.8944271909999159,
+        "unit": "events",
+        "description": "stdev of paired error difference: ablation minus production",
+        "source": "observations.json"
+      },
+      "error.paired_2_minus_1.min": {
+        "value": 1.0,
+        "unit": "events",
+        "description": "min of paired error difference: ablation minus production",
+        "source": "observations.json"
+      },
+      "error.paired_2_minus_1.max": {
+        "value": 3.0,
+        "unit": "events",
+        "description": "max of paired error difference: ablation minus production",
+        "source": "observations.json"
+      },
+      "validation.cell_1.count": {
+        "value": 6,
+        "unit": "declared units",
+        "description": "count of level error for production in declared stratum bounded-family",
+        "source": "claim-validation.json",
+        "validation_spec_sha256": "a087d1eb808a4c2c0fdb39fabea48007f3aa9d48c0ad01def67814141732c956",
+        "scope": "Declared-domain coverage and conditional seed-cluster analysis only; no novelty, oracle semantics, population representativeness or scientific approval is attested.",
+        "stratum": "bounded-family",
+        "metric": "error",
+        "condition": "production",
+        "kind": "level"
+      },
+      "validation.cell_1.mean": {
+        "value": 0,
+        "unit": "events",
+        "description": "mean of level error for production in declared stratum bounded-family",
+        "source": "claim-validation.json",
+        "validation_spec_sha256": "a087d1eb808a4c2c0fdb39fabea48007f3aa9d48c0ad01def67814141732c956",
+        "scope": "Declared-domain coverage and conditional seed-cluster analysis only; no novelty, oracle semantics, population representativeness or scientific approval is attested.",
+        "stratum": "bounded-family",
+        "metric": "error",
+        "condition": "production",
+        "kind": "level"
+      },
+      "validation.cell_1.median": {
+        "value": 0.0,
+        "unit": "events",
+        "description": "median of level error for production in declared stratum bounded-family",
+        "source": "claim-validation.json",
+        "validation_spec_sha256": "a087d1eb808a4c2c0fdb39fabea48007f3aa9d48c0ad01def67814141732c956",
+        "scope": "Declared-domain coverage and conditional seed-cluster analysis only; no novelty, oracle semantics, population representativeness or scientific approval is attested.",
+        "stratum": "bounded-family",
+        "metric": "error",
+        "condition": "production",
+        "kind": "level"
+      },
+      "validation.cell_1.min": {
+        "value": 0,
+        "unit": "events",
+        "description": "min of level error for production in declared stratum bounded-family",
+        "source": "claim-validation.json",
+        "validation_spec_sha256": "a087d1eb808a4c2c0fdb39fabea48007f3aa9d48c0ad01def67814141732c956",
+        "scope": "Declared-domain coverage and conditional seed-cluster analysis only; no novelty, oracle semantics, population representativeness or scientific approval is attested.",
+        "stratum": "bounded-family",
+        "metric": "error",
+        "condition": "production",
+        "kind": "level"
+      },
+      "validation.cell_1.max": {
+        "value": 0,
+        "unit": "events",
+        "description": "max of level error for production in declared stratum bounded-family",
+        "source": "claim-validation.json",
+        "validation_spec_sha256": "a087d1eb808a4c2c0fdb39fabea48007f3aa9d48c0ad01def67814141732c956",
+        "scope": "Declared-domain coverage and conditional seed-cluster analysis only; no novelty, oracle semantics, population representativeness or scientific approval is attested.",
+        "stratum": "bounded-family",
+        "metric": "error",
+        "condition": "production",
+        "kind": "level"
+      },
+      "validation.cell_1.stdev": {
+        "value": 0.0,
+        "unit": "events",
+        "description": "stdev of level error for production in declared stratum bounded-family",
+        "source": "claim-validation.json",
+        "validation_spec_sha256": "a087d1eb808a4c2c0fdb39fabea48007f3aa9d48c0ad01def67814141732c956",
+        "scope": "Declared-domain coverage and conditional seed-cluster analysis only; no novelty, oracle semantics, population representativeness or scientific approval is attested.",
+        "stratum": "bounded-family",
+        "metric": "error",
+        "condition": "production",
+        "kind": "level"
+      },
+      "validation.cell_2.count": {
+        "value": 6,
+        "unit": "declared units",
+        "description": "count of level error for ablation in declared stratum bounded-family",
+        "source": "claim-validation.json",
+        "validation_spec_sha256": "a087d1eb808a4c2c0fdb39fabea48007f3aa9d48c0ad01def67814141732c956",
+        "scope": "Declared-domain coverage and conditional seed-cluster analysis only; no novelty, oracle semantics, population representativeness or scientific approval is attested.",
+        "stratum": "bounded-family",
+        "metric": "error",
+        "condition": "ablation",
+        "kind": "level"
+      },
+      "validation.cell_2.mean": {
+        "value": 2,
+        "unit": "events",
+        "description": "mean of level error for ablation in declared stratum bounded-family",
+        "source": "claim-validation.json",
+        "validation_spec_sha256": "a087d1eb808a4c2c0fdb39fabea48007f3aa9d48c0ad01def67814141732c956",
+        "scope": "Declared-domain coverage and conditional seed-cluster analysis only; no novelty, oracle semantics, population representativeness or scientific approval is attested.",
+        "stratum": "bounded-family",
+        "metric": "error",
+        "condition": "ablation",
+        "kind": "level"
+      },
+      "validation.cell_2.median": {
+        "value": 2.0,
+        "unit": "events",
+        "description": "median of level error for ablation in declared stratum bounded-family",
+        "source": "claim-validation.json",
+        "validation_spec_sha256": "a087d1eb808a4c2c0fdb39fabea48007f3aa9d48c0ad01def67814141732c956",
+        "scope": "Declared-domain coverage and conditional seed-cluster analysis only; no novelty, oracle semantics, population representativeness or scientific approval is attested.",
+        "stratum": "bounded-family",
+        "metric": "error",
+        "condition": "ablation",
+        "kind": "level"
+      },
+      "validation.cell_2.min": {
+        "value": 1,
+        "unit": "events",
+        "description": "min of level error for ablation in declared stratum bounded-family",
+        "source": "claim-validation.json",
+        "validation_spec_sha256": "a087d1eb808a4c2c0fdb39fabea48007f3aa9d48c0ad01def67814141732c956",
+        "scope": "Declared-domain coverage and conditional seed-cluster analysis only; no novelty, oracle semantics, population representativeness or scientific approval is attested.",
+        "stratum": "bounded-family",
+        "metric": "error",
+        "condition": "ablation",
+        "kind": "level"
+      },
+      "validation.cell_2.max": {
+        "value": 3,
+        "unit": "events",
+        "description": "max of level error for ablation in declared stratum bounded-family",
+        "source": "claim-validation.json",
+        "validation_spec_sha256": "a087d1eb808a4c2c0fdb39fabea48007f3aa9d48c0ad01def67814141732c956",
+        "scope": "Declared-domain coverage and conditional seed-cluster analysis only; no novelty, oracle semantics, population representativeness or scientific approval is attested.",
+        "stratum": "bounded-family",
+        "metric": "error",
+        "condition": "ablation",
+        "kind": "level"
+      },
+      "validation.cell_2.stdev": {
+        "value": 0.8944271909999159,
+        "unit": "events",
+        "description": "stdev of level error for ablation in declared stratum bounded-family",
+        "source": "claim-validation.json",
+        "validation_spec_sha256": "a087d1eb808a4c2c0fdb39fabea48007f3aa9d48c0ad01def67814141732c956",
+        "scope": "Declared-domain coverage and conditional seed-cluster analysis only; no novelty, oracle semantics, population representativeness or scientific approval is attested.",
+        "stratum": "bounded-family",
+        "metric": "error",
+        "condition": "ablation",
+        "kind": "level"
+      },
+      "validation.cell_3.count": {
+        "value": 6,
+        "unit": "declared units",
+        "description": "count of paired_difference error for ablation in declared stratum bounded-family",
+        "source": "claim-validation.json",
+        "validation_spec_sha256": "a087d1eb808a4c2c0fdb39fabea48007f3aa9d48c0ad01def67814141732c956",
+        "scope": "Declared-domain coverage and conditional seed-cluster analysis only; no novelty, oracle semantics, population representativeness or scientific approval is attested.",
+        "stratum": "bounded-family",
+        "metric": "error",
+        "condition": "ablation",
+        "kind": "paired_difference"
+      },
+      "validation.cell_3.mean": {
+        "value": 2,
+        "unit": "events",
+        "description": "mean of paired_difference error for ablation in declared stratum bounded-family",
+        "source": "claim-validation.json",
+        "validation_spec_sha256": "a087d1eb808a4c2c0fdb39fabea48007f3aa9d48c0ad01def67814141732c956",
+        "scope": "Declared-domain coverage and conditional seed-cluster analysis only; no novelty, oracle semantics, population representativeness or scientific approval is attested.",
+        "stratum": "bounded-family",
+        "metric": "error",
+        "condition": "ablation",
+        "kind": "paired_difference"
+      },
+      "validation.cell_3.median": {
+        "value": 2.0,
+        "unit": "events",
+        "description": "median of paired_difference error for ablation in declared stratum bounded-family",
+        "source": "claim-validation.json",
+        "validation_spec_sha256": "a087d1eb808a4c2c0fdb39fabea48007f3aa9d48c0ad01def67814141732c956",
+        "scope": "Declared-domain coverage and conditional seed-cluster analysis only; no novelty, oracle semantics, population representativeness or scientific approval is attested.",
+        "stratum": "bounded-family",
+        "metric": "error",
+        "condition": "ablation",
+        "kind": "paired_difference"
+      },
+      "validation.cell_3.min": {
+        "value": 1,
+        "unit": "events",
+        "description": "min of paired_difference error for ablation in declared stratum bounded-family",
+        "source": "claim-validation.json",
+        "validation_spec_sha256": "a087d1eb808a4c2c0fdb39fabea48007f3aa9d48c0ad01def67814141732c956",
+        "scope": "Declared-domain coverage and conditional seed-cluster analysis only; no novelty, oracle semantics, population representativeness or scientific approval is attested.",
+        "stratum": "bounded-family",
+        "metric": "error",
+        "condition": "ablation",
+        "kind": "paired_difference"
+      },
+      "validation.cell_3.max": {
+        "value": 3,
+        "unit": "events",
+        "description": "max of paired_difference error for ablation in declared stratum bounded-family",
+        "source": "claim-validation.json",
+        "validation_spec_sha256": "a087d1eb808a4c2c0fdb39fabea48007f3aa9d48c0ad01def67814141732c956",
+        "scope": "Declared-domain coverage and conditional seed-cluster analysis only; no novelty, oracle semantics, population representativeness or scientific approval is attested.",
+        "stratum": "bounded-family",
+        "metric": "error",
+        "condition": "ablation",
+        "kind": "paired_difference"
+      },
+      "validation.cell_3.stdev": {
+        "value": 0.8944271909999159,
+        "unit": "events",
+        "description": "stdev of paired_difference error for ablation in declared stratum bounded-family",
+        "source": "claim-validation.json",
+        "validation_spec_sha256": "a087d1eb808a4c2c0fdb39fabea48007f3aa9d48c0ad01def67814141732c956",
+        "scope": "Declared-domain coverage and conditional seed-cluster analysis only; no novelty, oracle semantics, population representativeness or scientific approval is attested.",
+        "stratum": "bounded-family",
+        "metric": "error",
+        "condition": "ablation",
+        "kind": "paired_difference"
+      }
+    },
+    "parameters": {
+      "units_per_seed": 3,
+      "seed_count": 2,
+      "seed_list": "11, 37",
+      "unit_count": 6,
+      "observation_count": 12,
+      "condition_count": 2,
+      "conditions": "production, ablation",
+      "runtime": "quickjs",
+      "source_files": "transform.js",
+      "sampling_unit": "A generated input with protected values and independently known output.",
+      "setting.fixture_size": 12
+    },
+    "summaries": [
+      {
+        "metric": "error",
+        "condition": "production",
+        "unit": "events",
+        "count": 6,
+        "mean": 0.0,
+        "median": 0.0,
+        "stdev": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      {
+        "metric": "error",
+        "condition": "ablation",
+        "unit": "events",
+        "count": 6,
+        "mean": 2.0,
+        "median": 2.0,
+        "stdev": 0.8944271909999159,
+        "min": 1.0,
+        "max": 3.0
+      }
+    ],
+    "paired_deltas": [
+      {
+        "metric": "error",
+        "condition": "ablation",
+        "baseline": "production",
+        "unit": "events",
+        "direction": "condition minus baseline",
+        "count": 6,
+        "mean": 2.0,
+        "median": 2.0,
+        "stdev": 0.8944271909999159,
+        "min": 1.0,
+        "max": 3.0
+      }
+    ],
+    "controls": [
+      {
+        "name": "positive known response",
+        "passed": true,
+        "details": "An actually retained equal fixture comparison.",
+        "input_fixture": "control-input",
+        "expected_fixture": "expected-output",
+        "actual_fixture": "actual-output",
+        "comparison": "equal"
+      },
+      {
+        "name": "negative intentional fault",
+        "passed": true,
+        "details": "An actually retained different fixture comparison.",
+        "input_fixture": "control-input",
+        "expected_fixture": "expected-output",
+        "actual_fixture": "fault-output",
+        "comparison": "different"
+      }
+    ],
+    "observation_digest": "88b07ef0e18f4b99759d26d5ec5163ab6a7e0264383a84b224dde0cd229c1767",
+    "protocol_digest": "15d0493d7dfd66569d376d9f3d17e03894fcc9d44f602e1882262d62cfd16032",
+    "analysis_scope": "Fixed-seed descriptive and declared-stratum validation; named validation.cell_N results are rederived from the unchanged frozen declared-domain contract. Any interval is conditional seed-cluster bootstrap under its reviewed sampling basis, not population representativeness, novelty or scientific approval.",
+    "statistic_definition": "stdev is sample standard deviation (n-1 denominator); paired differences are condition minus the first protocol condition."
+  },
+  "validation": {
+    "supported": true,
+    "passed": true,
+    "status": "verified",
+    "blockers": [],
+    "scope": "Declared-domain coverage and conditional seed-cluster analysis only; no novelty, oracle semantics, population representativeness or scientific approval is attested.",
+    "complete_declared_domain": false,
+    "strata": [
+      {
+        "stratum": "bounded-family",
+        "metric": "error",
+        "condition": "production",
+        "kind": "level",
+        "unit": "events",
+        "count": 6,
+        "mean": 0,
+        "median": 0.0,
+        "min": 0,
+        "max": 0,
+        "stdev": 0.0
+      },
+      {
+        "stratum": "bounded-family",
+        "metric": "error",
+        "condition": "ablation",
+        "kind": "level",
+        "unit": "events",
+        "count": 6,
+        "mean": 2,
+        "median": 2.0,
+        "min": 1,
+        "max": 3,
+        "stdev": 0.8944271909999159
+      },
+      {
+        "stratum": "bounded-family",
+        "metric": "error",
+        "condition": "ablation",
+        "kind": "paired_difference",
+        "unit": "events",
+        "count": 6,
+        "mean": 2,
+        "median": 2.0,
+        "min": 1,
+        "max": 3,
+        "stdev": 0.8944271909999159
+      }
+    ],
+    "uncertainty": [],
+    "controls": [
+      {
+        "name": "positive known response",
+        "passed": true,
+        "comparison": "equal",
+        "input_fixture_sha256": "c96c6d5be8d08a12e7b5cdc1b207fa6b2430974c86803d8891675e76fd992c20",
+        "expected_fixture_sha256": "cea23dd4b87e8b00d19fb9ccaaef93e97353c7353e2070f3baf05aeb3995dff4",
+        "actual_fixture_sha256": "cea23dd4b87e8b00d19fb9ccaaef93e97353c7353e2070f3baf05aeb3995dff4"
+      },
+      {
+        "name": "negative intentional fault",
+        "passed": true,
+        "comparison": "different",
+        "input_fixture_sha256": "c96c6d5be8d08a12e7b5cdc1b207fa6b2430974c86803d8891675e76fd992c20",
+        "expected_fixture_sha256": "cea23dd4b87e8b00d19fb9ccaaef93e97353c7353e2070f3baf05aeb3995dff4",
+        "actual_fixture_sha256": "e0e9f04c7c2fd59913a0b3f32d803a03a197d31d4f66558d5f852ea9ff4c3c1b"
+      }
+    ],
+    "spec_sha256": "a087d1eb808a4c2c0fdb39fabea48007f3aa9d48c0ad01def67814141732c956"
+  }
+}

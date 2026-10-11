@@ -12,8 +12,8 @@ const file = text => ({ text, sha256: sha256(text) });
 const production = 'window.J={calculate(x){const c=document.createElement("canvas").getContext("2d");return {value:x+1,width:c.measureText("가").width}}};';
 const run = 'export default async function run(){return {value:JSON.parse(await callProduction("[6]"))}}';
 function packet(source = production, code = run) { return { source_files: { 'original.js': file(source) }, source_order: ['original.js'],
-  production_entrypoint: 'original.js:J.calculate', experiment_files: { 'run.mjs': file(code) }, entrypoint: 'run.mjs', scientific_inputs: {}, timeout_seconds: 5 }; }
-async function isolated(value, cancel_after) {
+  production_entrypoint: 'original.js:J.calculate', experiment_files: { 'run.mjs': file(code) }, entrypoint: 'run.mjs', scientific_inputs: {}, fonts: {}, timeout_seconds: 5 }; }
+async function isolated(value, cancel_after, verify_measurement_mutations = false) {
   // Python creates and journals a private Windows Job before writing GO to Electron.
   const python = process.env.PF_CHROMIUM_TEST_PYTHON ?? join(repository, '.venv/Scripts/python.exe');
   assert(isAbsolute(python), 'Chromium test interpreter must be an explicit absolute path');
@@ -23,7 +23,7 @@ async function isolated(value, cancel_after) {
   const stdout = [], stderr = []; let bytes = 0;
   child.stdout.on('data', piece => { bytes += piece.length; if (bytes > 18 * 1024 * 1024) child.kill(); else stdout.push(piece); });
   child.stderr.on('data', piece => stderr.push(piece));
-  child.stdin.end(JSON.stringify({ packet: value, ...(cancel_after === undefined ? {} : { cancel_after }) }));
+  child.stdin.end(JSON.stringify({ packet: value, ...(cancel_after === undefined ? {} : { cancel_after }), ...(verify_measurement_mutations ? { verify_measurement_mutations } : {}) }));
   const code = await new Promise((resolveExit, reject) => { child.once('error', reject); child.once('close', resolveExit); });
   assert.equal(code, 0, Buffer.concat(stderr).toString().slice(0, 2000));
   const receipt = JSON.parse(Buffer.concat(stdout).toString());
@@ -48,11 +48,42 @@ test('hidden Chromium executes original Canvas function once with main-owned rec
   assert.equal(manifest.call_receipts[0].input_sha256, sha256('[6]')); assert.equal(manifest.call_receipts[0].status, 'succeeded');
   assert.equal(manifest.function_provenance.script_sha256, sha256(production));
   assert.equal(manifest.loaded_source_scripts.length, 1); assert.equal(manifest.loaded_source_scripts[0].sha256, sha256(production));
-  assert.deepEqual(manifest.renderer_capabilities, { production: { require: 'undefined', process: 'undefined' }, experiment: { require: 'undefined', process: 'undefined' } });
+  assert.deepEqual(manifest.renderer_capabilities, { production: { require: 'undefined', process: 'undefined' }, experiment: { require: 'undefined', process: 'undefined' }, measurement: { require: 'undefined', process: 'undefined' } });
+  assert.equal(manifest.measurement_renderer_isolated, true);
+  assert.deepEqual(manifest.frozen_fonts, {});
   assert.equal(manifest.distinct_renderer_processes, true); assert.equal(manifest.shutdown_windows_closed, true);
   assert.equal(manifest.owned_deny_proxy.host, '127.0.0.1');
   assert(Number.isInteger(manifest.owned_deny_proxy.port) && manifest.owned_deny_proxy.port > 0 && manifest.owned_deny_proxy.port <= 65535);
   assert.equal(manifest.owned_deny_proxy.close_requested, true);
+});
+
+test('pristine trusted layout measurement retains actual geometry despite production prototype tampering', options, async () => {
+  const source = production + 'Element.prototype.getBoundingClientRect=function(){return {width:99999,height:99999}};';
+  const code = 'export default async function run(){await callProduction("[6]");return JSON.parse(await measureLayout(JSON.stringify({text:"가A🙂",font:"system:sans-serif",font_size:16,width:120,direction:"ltr"})))}';
+  const receipt = await isolated(packet(source, code));
+  assert.equal(receipt.envelope.status, 'succeeded'); const result = observed(receipt);
+  assert.equal(result.css_bounds.width, 120); assert(result.css_bounds.height > 0); assert(result.canvas.advance_width > 0);
+  assert.equal(result.font.identity, 'unverified-fallback'); assert.equal(result.font.sha256, null);
+  const manifest = receipt.envelope.runtime_manifest;
+  assert.equal(manifest.layout_measurements, 1); assert.equal(manifest.measurement_renderer_isolated, true);
+  const record = manifest.retained_fixtures.find(x => x.label === 'controller-layout-000001');
+  assert.deepEqual(JSON.parse(Buffer.from(record.content, 'base64').toString()), result);
+  assert.equal(manifest.layout_receipts[0].output_sha256, record.sha256);
+  assert.equal(manifest.production_completed_calls, 1);
+});
+
+test('source font bytes load in the isolated layout renderer and remain bound to the original asset hash', options, async () => {
+  const font = await readFile(join(desktop, 'runtime/win32-x64/fonts/Pretendard-Regular.ttf'));
+  const code = 'export default async function run(){await callProduction("[6]");return JSON.parse(await measureLayout(JSON.stringify({text:"가A",font:"source:font.ttf",font_size:16,width:120,direction:"ltr"})))}';
+  const value = packet(production, code);
+  value.fonts = { 'font.ttf': { content: font.toString('base64'), size: font.length, sha256: sha256(font) } };
+  const receipt = await isolated(value, undefined, true);
+  assert.equal(receipt.envelope.status, 'succeeded'); assert.equal(receipt.native_manifest_verified, true);
+  const measured = observed(receipt); assert.equal(measured.font.identity, 'frozen-file');
+  assert.equal(measured.font.sha256, sha256(font)); assert.equal(measured.font.size, font.length);
+  assert.equal(measured.family, 'PF_FROZEN_' + sha256(font).slice(0, 24));
+  assert(measured.canvas.advance_width > 0); assert.equal(measured.css_bounds.width, 120);
+  assert.deepEqual(receipt.rejected_measurement_mutations, ['isolation', 'font_digest', 'missing_layout_receipt', 'changed_geometry_font']);
 });
 
 test('original exception is observable while trusted dispatch count includes its rejection', options, async () => {
@@ -231,23 +262,4 @@ test('never-resolving run reaches bounded deadline and leaves no owned Chromium 
 test('native cancel terminates the entire owned Chromium tree and never reruns the experiment', options, async () => {
   const receipt = await isolated(packet(production, 'export default async function run(){while(true){}}'), 0.8);
   assert.equal(receipt.reason, 'cancelled'); assert.equal(receipt.forced_stop_confirmed, true); assert.equal(receipt.owned_handles.length, 1);
-});
-
-test('JIZURA original three modules make one real Canvas-backed call without font or network claims', options, async context => {
-  const names = ['src/01_util.js', 'src/02_fonts.js', 'src/03_text.js'], files = {};
-  const paths = names.map(name => name === 'src/02_fonts.js' ? join(repository, '.paper-factory/submission-quality-20261007/verification/jizura-browser-capability-01414/02_fonts.original.js') : join(repository, '.paper-factory/papers-20261006/selection-a/JIZURA', name));
-  try { await Promise.all(paths.map(path => access(path))); } catch {
-    context.skip('Optional frozen JIZURA source cache is absent; no source download, fabrication, model or SCI is authorized by this capability test'); return;
-  }
-  for (const name of names) {
-    const path = name === 'src/02_fonts.js' ? join(repository, '.paper-factory/submission-quality-20261007/verification/jizura-browser-capability-01414/02_fonts.original.js') : join(repository, '.paper-factory/papers-20261006/selection-a/JIZURA', name);
-    files[name] = file(await readFile(path, 'utf8'));
-  }
-  const input = { text: 'Aあ文\nB', font: 'gothic_black', size: 40, track: 0.05, align: 'left', vertical: false, sx: 1, sy: 1 };
-  const value = packet(); value.source_files = files; value.source_order = names; value.production_entrypoint = 'src/03_text.js:J.measure';
-  value.experiment_files['run.mjs'] = file(`export default async function run(){return {value:JSON.parse(await callProduction(${JSON.stringify(JSON.stringify([input]))}))}}`);
-  const receipt = await isolated(value); assert.equal(receipt.envelope.status, 'succeeded');
-  const result = observed(receipt).value; assert(result.w > 0 && result.h > 0); assert.equal(result.lay.length, 4);
-  assert.equal(receipt.envelope.production_calls[0].calls, 1); assert.equal(receipt.envelope.runtime_manifest.loaded_source_scripts.length, 3);
-  assert.equal(receipt.envelope.runtime_manifest.entire_electron_binary_closure_verified, undefined);
 });

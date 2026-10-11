@@ -114,11 +114,11 @@ class ModelEvidenceDiagnostics(Record):
 class ModelEvidenceReceipt(Record):
     """Main-process SDK evidence; no credentials or execution authority."""
     id: str = Field(pattern=r"^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$")
-    phase: Literal["source-selection", "plan", "study-review", "redesign-plan", "redesign-review", "code", "code-review", "literature-plan", "evidence-selection", "manuscript", "manuscript-review"]
+    phase: Literal["source-selection", "source-analysis", "venue-manuscript", "venue-manuscript-review", "venue-manuscript-repair", "submission-plan", "research-questions", "question-selection", "question-search-plan", "question-reframing", "question-reframing-selection", "plan", "study-review", "redesign-plan", "redesign-review", "code", "code-review", "literature-plan", "evidence-selection", "manuscript-claim", "manuscript-repair", "manuscript", "manuscript-review"]
     at: str = Field(max_length=40)
     model: str = Field(min_length=1, max_length=100)
     profileId: str = Field(min_length=1, max_length=128)
-    prompt: str = Field(min_length=1, max_length=700000)
+    prompt: str = Field(min_length=1, max_length=900000)
     promptSha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     text: str | None = Field(default=None, max_length=700000)
     textSha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
@@ -135,6 +135,10 @@ class ModelEvidenceReceipt(Record):
 
     @model_validator(mode="after")
     def verified_receipt(self):
+        if len(self.prompt) > 700000 and (self.model != "gpt-6.1-sol" or
+                self.phase not in {"venue-manuscript", "venue-manuscript-review", "venue-manuscript-repair"} or
+                len(self.prompt.encode("utf-8")) > 900000):
+            raise ValueError("Additional complete-input capacity requires the verified model and a bounded portfolio request")
         if datetime.fromisoformat(self.at.replace("Z", "+00:00")).tzinfo is None:
             raise ValueError("Inference receipt needs a timezone")
         if hashlib.sha256(self.prompt.encode()).hexdigest() != self.promptSha256:
@@ -157,8 +161,9 @@ class Workflow(Record):
     root_research_id: str | None = Field(default=None, pattern=r"^research-[a-f0-9]{12}$")
     redesign_attempt: int = Field(default=0, ge=0, le=2)
     goal: str = Field(min_length=8, max_length=4000)
+    research_mode: Literal["empirical", "repository_analysis"] = "empirical"
     status: Literal["ready", "running", "blocked", "failed", "cancelled", "completed"] = "ready"
-    stage: Literal["created", "proposed", "planned", "code_ready", "execute", "analyzed", "manuscript", "exported"] = "created"
+    stage: Literal["created", "proposed", "planned", "code_ready", "execute", "analyzed", "manuscript", "exported", "repository_planned", "repository_manuscript"] = "created"
     created_at: str = Field(default_factory=now)
     updated_at: str = Field(default_factory=now)
     experiment_timeout_seconds: int = Field(default=300, ge=1, le=300)

@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -24,7 +25,7 @@ from . import windows_runtime
 from .runner_common import MAX_ARTIFACT_BYTES, MAX_LOG_BYTES, _production_calls, _retain_observations, _safe_tree
 
 
-PROTOCOL = "paper-factory-chromium-v1"
+PROTOCOL = "paper-factory-chromium-v2"
 JOURNAL = "paper-factory-chromium-supervisor-v1"
 MAX_SOURCE_BYTES = 16 * 1024 * 1024
 MAX_REQUEST_BYTES = 24 * 1024 * 1024
@@ -38,6 +39,7 @@ LIMITS = {"artifact_bytes": MAX_ARTIFACT_BYTES, "log_bytes": MAX_LOG_BYTES,
           "source_and_scientific_input_bytes": MAX_SOURCE_BYTES, "scientific_inputs": 28,
           "frozen_script_and_scientific_input_bytes": MAX_SOURCE_BYTES,
           "scientific_input_reads": 512, "scientific_input_read_bytes": MAX_SOURCE_BYTES,
+          "font_files": 8, "font_bytes": 8 * 1024 * 1024, "layout_measurements": 2048,
           "native_job_memory_bytes": 1024 * 1024 * 1024, "native_job_processes": 16,
           "network": "denied by trusted Chromium worker", "host_filesystem": "not exposed to guests",
           "native_host_rss_limit_claimed": False}
@@ -505,7 +507,8 @@ class BrowserRunner:
                 "duration_seconds": round(time.monotonic() - started, 3)}
 
     def _packet(self, source: Path, bundle: Path, *, source_order: list[str], entrypoint: str,
-                production_entrypoint: str, scientific_inputs: dict | None, timeout_seconds: int) -> dict:
+                production_entrypoint: str, scientific_inputs: dict | None, timeout_seconds: int,
+                browser_fonts: list[str] | None = None) -> dict:
         if (type(source_order) is not list or not 1 <= len(source_order) <= 20
                 or any(type(name) is not str for name in source_order)
                 or len(set(source_order)) != len(source_order)):
@@ -540,7 +543,21 @@ class BrowserRunner:
                 experiment_files[name] = item
         if entrypoint not in experiment_files:
             raise ValueError("Generated entrypoint is absent from frozen inventory")
-        inputs = _inputs(scientific_inputs, total + size)
+        browser_fonts = [] if browser_fonts is None else browser_fonts
+        if (type(browser_fonts) is not list or len(browser_fonts) > LIMITS["font_files"]
+                or any(type(name) is not str for name in browser_fonts) or len(set(browser_fonts)) != len(browser_fonts)):
+            raise ValueError("Chromium requires a bounded unique original font list")
+        fonts, font_bytes = {}, 0
+        for name in browser_fonts:
+            _relative(name, {".ttf", ".otf", ".woff", ".woff2"})
+            raw = _read(source / name, LIMITS["font_bytes"])
+            if not raw:
+                raise ValueError("Frozen font cannot be empty")
+            font_bytes += len(raw)
+            if font_bytes > LIMITS["font_bytes"]:
+                raise ValueError("Frozen fonts exceed byte boundary")
+            fonts[name] = {"content": base64.b64encode(raw).decode("ascii"), "size": len(raw), "sha256": _hash(raw)}
+        inputs = _inputs(scientific_inputs, total + size + font_bytes)
         for name, item in source_files.items():
             supplied = inputs.get("source/" + name)
             if supplied is not None and (supplied["text"] != item["text"] or supplied["sha256"] != item["sha256"]):
@@ -549,7 +566,7 @@ class BrowserRunner:
             raise ValueError("Experiment timeout must be between one and 3600 seconds")
         return {"source_files": source_files, "source_order": source_order, "experiment_files": experiment_files,
                 "entrypoint": entrypoint, "production_entrypoint": production_entrypoint,
-                "scientific_inputs": inputs, "timeout_seconds": timeout_seconds}
+                "scientific_inputs": inputs, "fonts": fonts, "timeout_seconds": timeout_seconds}
 
     @staticmethod
     def _verify_manifest(envelope: dict, request: dict) -> dict:
@@ -560,7 +577,7 @@ class BrowserRunner:
                 or envelope.get("coverage_truncated") is not False or envelope.get("coverage_mechanism") != BRIDGE
                 or any(manifest.get(key) is not True for key in ("distinct_renderer_processes", "separate_nonpersistent_sessions",
                         "sandboxed", "network_denied", "shutdown_windows_closed"))
-                or manifest.get("node_integration") is not False):
+                or manifest.get("node_integration") is not False or manifest.get("measurement_renderer_isolated") is not True):
             raise ValueError("Trusted Chromium boundary receipt is incomplete")
         proxy = manifest.get("owned_deny_proxy")
         if (type(proxy) is not dict or set(proxy) != {"host", "port", "denied_connections", "close_requested", "close_callback_confirmed"}
@@ -584,6 +601,21 @@ class BrowserRunner:
         input_bytes = sum(item["size"] for item in expected.values())
         if type(manifest.get("scientific_input_bytes")) is not int or manifest["scientific_input_bytes"] != input_bytes:
             raise ValueError("Chromium scientific-input byte total differs")
+        expected_fonts = {name: {"sha256": item["sha256"], "size": item["size"], "family": "PF_FROZEN_" + item["sha256"][:24]}
+                          for name, item in request["fonts"].items()}
+        if manifest.get("frozen_fonts") != expected_fonts:
+            raise ValueError("Chromium frozen font manifest differs from original bytes")
+        layout_count, layouts = manifest.get("layout_measurements"), manifest.get("layout_receipts")
+        if (type(layout_count) is not int or not 0 <= layout_count <= LIMITS["layout_measurements"]
+                or type(layouts) is not list or len(layouts) != layout_count):
+            raise ValueError("Chromium layout measurement count differs")
+        for index, layout in enumerate(layouts, 1):
+            if (type(layout) is not dict or set(layout) != {"index", "input_sha256", "output_sha256", "fixture_label"}
+                    or type(layout["index"]) is not int or layout["index"] != index
+                    or layout["fixture_label"] != f"controller-layout-{index:06d}"
+                    or not re.fullmatch(r"[a-f0-9]{64}", str(layout["input_sha256"]))
+                    or not re.fullmatch(r"[a-f0-9]{64}", str(layout["output_sha256"]))):
+                raise ValueError("Invalid trusted layout measurement receipt")
         for key, maximum in (("production_dispatch_attempts", LIMITS["production_dispatches"]),
                              ("production_completed_calls", LIMITS["production_dispatches"]),
                              ("fixture_count", 4096), ("fixture_bytes", MAX_ARTIFACT_BYTES),
@@ -614,7 +646,7 @@ class BrowserRunner:
         if completed != successes:
             raise ValueError("Chromium completed-call count differs from call receipts")
         capabilities = manifest.get("renderer_capabilities")
-        if (type(capabilities) is not dict or set(capabilities) != {"production", "experiment"}
+        if (type(capabilities) is not dict or set(capabilities) != {"production", "experiment", "measurement"}
                 or any(type(value) is not dict or value.get("require") != "undefined" or value.get("process") != "undefined"
                        for value in capabilities.values())):
             raise ValueError("Chromium renderer Node absence is unverified")
@@ -658,8 +690,42 @@ class BrowserRunner:
                 raise ValueError("Chromium fixture bytes differ from trusted hash")
         if total != manifest["fixture_bytes"]:
             raise ValueError("Chromium fixture byte count differs")
+        layout_fixtures = {item["label"]: item for item in fixtures if item["label"].startswith("controller-layout-")}
+        if set(layout_fixtures) != {item["fixture_label"] for item in layouts}:
+            raise ValueError("Trusted layout fixture and receipt sets differ")
+        for layout in layouts:
+            fixture = layout_fixtures[layout["fixture_label"]]
+            if fixture["sha256"] != layout["output_sha256"]:
+                raise ValueError("Trusted layout output differs from retained measurement")
+            geometry = loads_json(base64.b64decode(fixture["content"], validate=True))
+            parameters = geometry.get("request") if type(geometry) is dict else None
+            if (type(parameters) is not dict or set(parameters) != {"text", "font", "font_size", "width", "direction"}
+                    or type(parameters["text"]) is not str or not parameters["text"].strip() or len(parameters["text"]) > 4096
+                    or type(parameters["font"]) is not str or parameters["direction"] not in {"ltr", "rtl"}
+                    or any(type(parameters[key]) not in {int, float} or not math.isfinite(parameters[key]) or
+                           not 1 <= parameters[key] <= maximum for key, maximum in (("font_size", 256), ("width", 2048)))):
+                raise ValueError("Trusted layout parameters are invalid")
+            font_name = parameters["font"]
+            source_name = font_name[7:] if type(font_name) is str and font_name.startswith("source:") else None
+            font = request["fonts"].get(source_name) if source_name is not None else None
+            if source_name is not None and font is None or source_name is None and font_name not in {"system:serif", "system:sans-serif", "system:monospace"}:
+                raise ValueError("Trusted layout selected an unfrozen font")
+            expected_font = {"identity": "frozen-file" if font else "unverified-fallback", "source": source_name,
+                             "sha256": font["sha256"] if font else None, "size": font["size"] if font else None}
+            if geometry.get("font") != expected_font:
+                raise ValueError("Trusted layout font identity differs")
+            family = "PF_FROZEN_" + font["sha256"][:24] if font else font_name[7:]
+            if (geometry.get("family") != family or type(geometry.get("device_pixel_ratio")) not in {int, float}
+                    or not math.isfinite(geometry["device_pixel_ratio"]) or geometry["device_pixel_ratio"] <= 0):
+                raise ValueError("Trusted layout rendering environment differs")
+            for key, fields in (("css_bounds", {"width", "height"}), ("scroll", {"width", "height"}),
+                                ("canvas", {"advance_width", "actual_left", "actual_right", "actual_ascent", "actual_descent"})):
+                values = geometry.get(key)
+                if (type(values) is not dict or set(values) != fields or
+                        any(type(value) not in {int, float} or not math.isfinite(value) for value in values.values())):
+                    raise ValueError("Trusted layout geometry is not finite measured data")
         record_bytes = sum(len(json.dumps(record, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
-                           for record in calls + fixtures)
+                           for record in calls + fixtures + layouts)
         if record_bytes > LIMITS["trusted_call_and_fixture_record_bytes"]:
             raise ValueError("Chromium combined call and fixture record bytes exceed frame allocation")
         return manifest
@@ -717,7 +783,10 @@ class BrowserRunner:
                   let rejection=false;try{await callProduction("[null]")}catch(e){rejection=e.message.includes("original rejection")}
                   const input=JSON.parse(await readScientificInput("supporting-document-000000000000"));
                   const fixture=JSON.parse(await retainFixture("unicode","가"));
-                  return {value,rejection,immutable:immutable&&callProduction===original,input,fixture,
+                  const layoutDescriptor=Object.getOwnPropertyDescriptor(globalThis,"measureLayout");
+                  const layout=JSON.parse(await measureLayout(JSON.stringify({text:"가🙂",font:"system:sans-serif",font_size:16,width:160,direction:"ltr"})));
+                  return {value,rejection,immutable:immutable&&callProduction===original,input,fixture,layout,
+                    layoutImmutable:layoutDescriptor.configurable===false,
                     noNode:typeof require==="undefined"&&typeof process==="undefined"};}'''
                 input_text = "\ufeff가🙂\r\n"
                 input_record = {"name": "check.md", "text": input_text, "sha256": _hash(input_text.encode())}
@@ -725,7 +794,7 @@ class BrowserRunner:
                           "source_order": ["check.js"], "production_entrypoint": "check.js:J.measure",
                           "experiment_files": {"check.mjs": {"text": code, "sha256": _hash(code.encode())}},
                           "entrypoint": "check.mjs", "timeout_seconds": 10,
-                          "scientific_inputs": {"supporting-document-000000000000": input_record}}
+                          "scientific_inputs": {"supporting-document-000000000000": input_record}, "fonts": {}}
                 self_check = "canvas_and_held_call"
                 last_receipt = receipt = self._execute(packet, purpose="probe")
                 envelope = receipt.get("envelope") or {}
@@ -740,8 +809,17 @@ class BrowserRunner:
                         or value.get("fixture", {}).get("sha256") != _hash("가".encode())
                         or base64.b64decode(value["fixture"]["content"], validate=True) != "가".encode()):
                     raise ValueError("Actual Chromium gate self-check failed")
+                self_check = "isolated_layout_measurement"
+                layout = value.get("layout") or {}
+                if (value.get("layoutImmutable") is not True or manifest.get("layout_measurements") != 1
+                        or layout.get("css_bounds", {}).get("width") != 160
+                        or not layout.get("css_bounds", {}).get("height", 0) > 0
+                        or not layout.get("canvas", {}).get("advance_width", 0) > 0
+                        or layout.get("font", {}).get("identity") != "unverified-fallback"):
+                    raise ValueError("Actual isolated Chromium layout self-check failed")
                 checks = {"canvas_and_held_call": True, "ordinary_production_rejection": True,
-                          "no_node_in_renderers": True, "frozen_input_and_fixture": True}
+                          "no_node_in_renderers": True, "frozen_input_and_fixture": True,
+                          "isolated_layout_measurement": True}
                 for name, body, error in (
                     ("caught_gate_replacement_rejected", 'try{globalThis.callProduction=()=>"forged"}catch{}', "Browser capability replacement"),
                     ("caught_fetch_rejected", 'try{await fetch("https://example.invalid/blocked")}catch{}', "Forbidden browser capability"),
@@ -759,7 +837,7 @@ class BrowserRunner:
                     checks[name] = True
                 kill_code = "export default async function run(){while(true){}}"
                 kill_packet = {**packet, "experiment_files": {"check.mjs": {"text": kill_code, "sha256": _hash(kill_code.encode())}},
-                               "scientific_inputs": {}, "timeout_seconds": 10}
+                               "scientific_inputs": {}, "fonts": {}, "timeout_seconds": 10}
                 kill_started = time.monotonic()
                 self_check, last_receipt = "owned_tree_termination", None
                 last_receipt = stopped = self._execute(kill_packet, purpose="probe", cancel=lambda: time.monotonic() - kill_started > 1)
@@ -796,13 +874,13 @@ class BrowserRunner:
 
     def run(self, source_dir: Path, bundle_dir: Path, output_dir: Path, *, runtime: str, entrypoint: str,
             production_entrypoint: str, source_order: list[str], timeout_seconds: int = 300,
-            scientific_inputs: dict | None = None, cancel=None, on_handle=None) -> dict:
+            scientific_inputs: dict | None = None, browser_fonts: list[str] | None = None, cancel=None, on_handle=None) -> dict:
         if runtime != "chromium":
             raise ValueError("Chromium runner only accepts runtime chromium")
         source, bundle = _safe_tree(Path(source_dir), "source"), _safe_tree(Path(bundle_dir), "bundle")
         packet = self._packet(source, bundle, source_order=source_order, entrypoint=entrypoint,
                               production_entrypoint=production_entrypoint, scientific_inputs=scientific_inputs,
-                              timeout_seconds=timeout_seconds)
+                              timeout_seconds=timeout_seconds, browser_fonts=browser_fonts)
         output = Path(output_dir)
         ensure_unlinked(output)
         output = output.resolve()

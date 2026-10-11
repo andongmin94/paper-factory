@@ -3,12 +3,22 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readFile, mkdir, stat, realpath } from 'node:fs/promises';
 import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
-export type EngineMethod = 'runtime.status' | 'workflow.create' | 'workflow.list' | 'workflow.status' |
-  'workflow.readMaterial' | 'workflow.addEvidence' | 'workflow.submitProposal' | 'workflow.submitStudyReview' | 'workflow.submitCode' | 'workflow.collectLiterature' | 'workflow.collectStudyLiterature' | 'workflow.collectAuthoringLiterature' | 'workflow.selectAuthoringLiterature' |
-  'workflow.startExperiment' | 'workflow.cancel' | 'workflow.resume' | 'workflow.reviseWriting' | 'workflow.improveWriting' | 'workflow.submitRedesignProposal' | 'workflow.submitRedesignReview' | 'workflow.redesignStudy' | 'workflow.submitManuscript' | 'workflow.recordInference' | 'workflow.export' | 'artifact.resolve' | 'shutdown';
-const methods = new Set<EngineMethod>(['runtime.status', 'workflow.create', 'workflow.list', 'workflow.status',
-  'workflow.readMaterial', 'workflow.addEvidence', 'workflow.submitProposal', 'workflow.submitStudyReview', 'workflow.submitCode', 'workflow.collectLiterature', 'workflow.collectStudyLiterature', 'workflow.collectAuthoringLiterature', 'workflow.selectAuthoringLiterature',
-  'workflow.startExperiment', 'workflow.cancel', 'workflow.resume', 'workflow.reviseWriting', 'workflow.improveWriting', 'workflow.submitRedesignProposal', 'workflow.submitRedesignReview', 'workflow.redesignStudy', 'workflow.submitManuscript', 'workflow.recordInference', 'workflow.export', 'artifact.resolve', 'shutdown']);
+const engineMethods = [
+  'runtime.status', 'workflow.create', 'workflow.list', 'workflow.status',
+  'workflow.submitRepositoryPlan', 'workflow.submitRepositoryAnalysis', 'workflow.collectRepositoryLiterature', 'workflow.collectRepositoryReferences',
+  'workflow.submitRepositoryManuscript', 'workflow.submitRepositoryReview', 'workflow.submitRepositoryContentAssessment',
+  'workflow.requestRepositoryRevision', 'workflow.reviseRepositoryManuscript',
+  'workflow.exportRepositoryDraft', 'workflow.reformatRepositoryDraft',
+  'workflow.startPortfolio', 'workflow.submitPortfolioAnalysis', 'workflow.submitPortfolioManuscript',
+  'workflow.submitPortfolioReview', 'workflow.exportPortfolioDraft',
+  'workflow.collectPortfolioLiterature',
+  'workflow.preparePortfolioRevision', 'workflow.repairPortfolioExport', 'workflow.reformatPortfolioDraft', 'workflow.correctPortfolioLayout',
+  'workflow.admitPortfolioEvidence',
+  'workflow.readMaterial', 'workflow.addEvidence', 'workflow.setAuthorMetadata', 'workflow.recordInference',
+  'workflow.cancel', 'workflow.resume', 'artifact.resolve', 'shutdown',
+] as const;
+export type EngineMethod = typeof engineMethods[number];
+const methods = new Set<string>(engineMethods);
 const MAX_LINE = 16 * 1024 * 1024;
 
 export class EngineError extends Error {

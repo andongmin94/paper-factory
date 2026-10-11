@@ -158,7 +158,7 @@ def test_study_ipc_routes_bounded_objects_to_explicit_new_methods(method, field)
             ipc.request(json.dumps({**valid, "params": bad}).encode())
     calls = []
     service = SimpleNamespace(
-        submit_proposal=lambda identifier, item: calls.append(("proposal", identifier, item)) or {"stage": "proposed"},
+        submit_proposal=lambda identifier, item, repair=None: calls.append(("proposal", identifier, item)) or {"stage": "proposed"},
         submit_study_review=lambda identifier, item: calls.append(("study", identifier, item)) or {"stage": "planned"})
     dispatcher = ipc.Dispatcher(SimpleNamespace(service=service), io.BytesIO())
     try:
@@ -419,7 +419,7 @@ def test_shutdown_main_keeps_command_loop_after_failure_and_exits_only_after_ret
         return original_status()
 
     monkeypatch.setattr(engine.runner, "status", status_and_enable_cleanup)
-    monkeypatch.setattr(ipc, "StandaloneRuntime", lambda *args: engine)
+    monkeypatch.setattr(ipc, "StandaloneRuntime", lambda *args, **kwargs: engine)
     requests = [frame("first", "shutdown"), frame("runtime", "runtime.status"), frame("list", "workflow.list"),
                 frame("retained", "workflow.status", researchId=identifier, includeMaterials=False),
                 frame("receipt", "workflow.recordInference", researchId=identifier, receipt=receipt("started")),
@@ -818,3 +818,20 @@ def test_generic_remote_and_credentials_rejected_before_network(tmp_path, monkey
     for source in ("https://user:secret@github.com/owner/repo", "https://example.invalid/owner/repo", "ssh://git@github.com/owner/repo"):
         with pytest.raises(ValueError, match="public GitHub"):
             project.ingest(source, tmp_path / "workspace")
+
+
+def test_repository_analysis_ipc_has_explicit_object_route():
+    calls = []
+    params = {"researchId": "research-abcdefabcdef", "value": {"method": "Synthetic routed analysis fixture"}}
+    valid = {"id": "analysis", "method": "workflow.submitRepositoryAnalysis", "params": params}
+    assert ipc.request(json.dumps(valid).encode()) == valid
+    for malformed in ({"researchId": params["researchId"]}, {**params, "reset": True}, {**params, "value": []}):
+        with pytest.raises(ValueError):
+            ipc.request(json.dumps({**valid, "params": malformed}).encode())
+    service = SimpleNamespace(submit_repository_analysis=lambda identifier, value: calls.append((identifier, value)) or {"stage": "repository_planned"})
+    dispatcher = ipc.Dispatcher(SimpleNamespace(service=service), io.BytesIO())
+    try:
+        assert dispatcher.execute(valid["method"], params) == {"stage": "repository_planned"}
+        assert calls == [(params["researchId"], params["value"])]
+    finally:
+        dispatcher._pool.shutdown(wait=True)

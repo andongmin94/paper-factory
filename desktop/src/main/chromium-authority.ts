@@ -1,6 +1,6 @@
 // This closure is installed in a blank renderer before any untrusted script.
 // The returned object is retained only as a CDP remote handle, never on window.
-export function rendererAuthority(bindingName: string, nonce: string, kind: 'production' | 'experiment') {
+export function rendererAuthority(bindingName: string, nonce: string, kind: 'production' | 'experiment' | 'measurement') {
   'use strict'; // Survives toString() and CDP reevaluation outside the original ESM context.
   const apply = Reflect.apply, descriptor = Object.getOwnPropertyDescriptor, define = Object.defineProperty;
   const hasOwn = Object.hasOwn;
@@ -14,6 +14,17 @@ export function rendererAuthority(bindingName: string, nonce: string, kind: 'pro
   const createElement = Document.prototype.createElement, appendChild = Node.prototype.appendChild, head = document.head;
   const scriptSource = descriptor(HTMLScriptElement.prototype, 'src')!.set!;
   const addEvent = EventTarget.prototype.addEventListener;
+  const body = document.body, fontSet = document.fonts, FontFaceClass = FontFace, Uint8ArrayClass = Uint8Array, decodeBase64 = atob;
+  const loadFont = FontFace.prototype.load, addFont = FontFaceSet.prototype.add, hasFont = FontFaceSet.prototype.has;
+  const getContext = HTMLCanvasElement.prototype.getContext, measureText = CanvasRenderingContext2D.prototype.measureText;
+  const canvasFont = descriptor(CanvasRenderingContext2D.prototype, 'font')!.set!;
+  const canvasDirection = descriptor(CanvasRenderingContext2D.prototype, 'direction')!.set!;
+  const setText = descriptor(Node.prototype, 'textContent')!.set!;
+  const getStyle = descriptor(HTMLElement.prototype, 'style')!.get!, setCss = descriptor(CSSStyleDeclaration.prototype, 'cssText')!.set!;
+  const rect = Element.prototype.getBoundingClientRect, scrollWidth = descriptor(Element.prototype, 'scrollWidth')!.get!;
+  const scrollHeight = descriptor(Element.prototype, 'scrollHeight')!.get!, removeChild = Node.prototype.removeChild;
+  const pixelRatio = devicePixelRatio, frame = requestAnimationFrame;
+  const loadedFonts = new MapClass<string, { family: string; face: FontFace }>();
   const initialCapabilities = { require: typeof (globalThis as unknown as Record<string, unknown>).require, process: typeof (globalThis as unknown as Record<string, unknown>).process };
   const binding = (globalThis as unknown as Record<string, (text: string) => void>)[bindingName]!;
   delete (globalThis as unknown as Record<string, unknown>)[bindingName];
@@ -49,7 +60,7 @@ export function rendererAuthority(bindingName: string, nonce: string, kind: 'pro
   document.addEventListener('securitypolicyviolation', () => fatal('Content security policy violation'));
   apply(addEvent, globalThis, ['error', () => fatal('Uncaught renderer script error')]);
   apply(addEvent, globalThis, ['unhandledrejection', () => fatal('Unhandled renderer promise rejection')]);
-  if (kind === 'experiment') for (const name of ['callProduction', 'retainFixture', 'readScientificInput']) {
+  if (kind === 'experiment') for (const name of ['callProduction', 'retainFixture', 'readScientificInput', 'measureLayout']) {
     immutable(globalThis, name, (...args: unknown[]) => gate(name, args));
   }
   function json(value: unknown): string {
@@ -105,6 +116,45 @@ export function rendererAuthority(bindingName: string, nonce: string, kind: 'pro
   }
   return {
     capabilities() { return json(initialCapabilities); },
+    async installFonts(records: Array<{ path: string; family: string; content: string }>) {
+      if (kind === 'experiment') fatal('Experiment cannot install fonts');
+      for (const item of records) {
+        const binary = apply(decodeBase64, undefined, [item.content]);
+        const bytes = new Uint8ArrayClass(binary.length);
+        for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+        const face = new FontFaceClass(item.family, bytes);
+        await apply(loadFont, face, []);
+        apply(addFont, fontSet, [face]);
+        apply(mapSet, loadedFonts, [item.path, { family: item.family, face }]);
+      }
+      return json({ loaded: records.length });
+    },
+    async measureLayout(request: { text: string; font: string; font_size: number; width: number; direction: string }) {
+      if (kind !== 'measurement') fatal('Layout measurement requires the pristine renderer');
+      const loaded = request.font.startsWith('source:') ? apply(mapGet, loadedFonts, [request.font.slice(7)]) : undefined;
+      if (loaded && !apply(hasFont, fontSet, [loaded.face])) fatal('Frozen font is absent');
+      const family = loaded ? loaded.family : request.font.slice(7);
+      const node = apply(createElement, document, ['div']) as HTMLDivElement;
+      const style = apply(getStyle, node, []);
+      apply(setCss, style, [`margin:0;padding:0;border:0;width:${request.width}px;font:${request.font_size}px ${family};direction:${request.direction};white-space:pre-wrap;overflow-wrap:normal;line-height:normal;`]);
+      apply(setText, node, [request.text]);
+      apply(appendChild, body, [node]);
+      await new PromiseClass<void>(resolve => apply(frame, globalThis, [() => resolve()]));
+      try {
+        const box = apply(rect, node, []);
+        const canvas = apply(createElement, document, ['canvas']) as HTMLCanvasElement;
+        const context = apply(getContext, canvas, ['2d']) as CanvasRenderingContext2D;
+        if (!context) fatal('Canvas measurement is unavailable');
+        apply(canvasFont, context, [`${request.font_size}px ${family}`]);
+        apply(canvasDirection, context, [request.direction]);
+        const measured = apply(measureText, context, [request.text]);
+        return json({ family, css_bounds: { width: box.width, height: box.height },
+          scroll: { width: apply(scrollWidth, node, []), height: apply(scrollHeight, node, []) },
+          canvas: { advance_width: measured.width, actual_left: measured.actualBoundingBoxLeft,
+            actual_right: measured.actualBoundingBoxRight, actual_ascent: measured.actualBoundingBoxAscent,
+            actual_descent: measured.actualBoundingBoxDescent }, device_pixel_ratio: pixelRatio });
+      } finally { apply(removeChild, body, [node]); }
+    },
     select(names: string[]) {
       path = names;
       const found = lookup();

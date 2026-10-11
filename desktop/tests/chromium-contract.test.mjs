@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { runInNewContext } from 'node:vm';
-import { CHROMIUM_PROTOCOL, validateChromiumRequest, boundedJson, chromiumSourceURL, sha256 } from '../dist/chromium-contract.js';
+import { CHROMIUM_PROTOCOL, validateChromiumRequest, validateLayoutRequest, boundedJson, chromiumSourceURL, sha256 } from '../dist/chromium-contract.js';
 import { chromiumBinding } from '../dist/engine.js';
 
 const file = text => ({ text, sha256: sha256(text) });
@@ -26,7 +26,7 @@ test('built renderer authority preserves strict private frames after toString an
 function request() { return { protocol: CHROMIUM_PROTOCOL, command: 'GO', nonce: randomUUID().replaceAll('-', ''),
   source_files: { 'first.js': file('window.J={};'), 'last.js': file('J.fn=()=>1') }, source_order: ['first.js', 'last.js'],
   production_entrypoint: 'last.js:J.fn', experiment_files: { 'run.mjs': file('export default async function run(){return {}}') },
-  entrypoint: 'run.mjs', scientific_inputs: { 'source/notes.md': { name: 'notes.md', ...file('가🙂\r\n') } }, timeout_seconds: 10 }; }
+  entrypoint: 'run.mjs', scientific_inputs: { 'source/notes.md': { name: 'notes.md', ...file('가🙂\r\n') } }, fonts: {}, timeout_seconds: 10 }; }
 
 test('Chromium GO freezes exact full classic order, async ESM and scientific input bytes', () => {
   const value = request(); assert.equal(validateChromiumRequest(value), value);
@@ -42,9 +42,25 @@ for (const [name, mutate] of [
   ['generated host dependency', value => value.experiment_files['../evil.mjs'] = file('')],
   ['source surrogate', value => value.source_files['last.js'] = file('\ud800')],
   ['scientific stale hash', value => value.scientific_inputs['source/notes.md'].text += ' '],
+  ['font path escapes', value => value.fonts['../font.woff2'] = { content: 'AA==', size: 1, sha256: sha256(Buffer.from([0])) }],
+  ['font bytes replaced', value => value.fonts['font.woff2'] = { content: 'AA==', size: 1, sha256: sha256('other') }],
+  ['font noncanonical base64', value => value.fonts['font.woff2'] = { content: 'AA', size: 1, sha256: sha256(Buffer.from([0])) }],
+  ['unrecognized font format', value => value.fonts['font.exe'] = { content: 'AA==', size: 1, sha256: sha256(Buffer.from([0])) }],
   ['extra launch limits', value => value.limits = {}],
   ['invalid nonce', value => value.nonce = 'model-picked'],
 ]) test(`Chromium GO rejects ${name} before dispatch`, () => { const value = request(); mutate(value); assert.throws(() => validateChromiumRequest(value)); });
+
+test('layout requests bind only frozen font paths or explicitly unverified system fallbacks', () => {
+  const font = { content: 'AA==', size: 1, sha256: sha256(Buffer.from([0])) };
+  const value = { text: '가A🙂', font: 'source/font.woff2', font_size: 16, width: 200, direction: 'ltr' };
+  assert.throws(() => validateLayoutRequest(JSON.stringify(value), { 'font.woff2': font }));
+  value.font = 'source:font.woff2';
+  assert.deepEqual(validateLayoutRequest(JSON.stringify(value), { 'font.woff2': font }), value);
+  for (const mutate of [x => x.font = 'system:invented', x => x.font = 'source:missing.woff2', x => x.width = 0,
+    x => x.font_size = 257, x => x.direction = 'sideways', x => x.url = 'https://example.invalid', x => x.text = '', x => x.text = '\0']) {
+    const changed = { ...value }; mutate(changed); assert.throws(() => validateLayoutRequest(JSON.stringify(changed), { 'font.woff2': font }));
+  }
+});
 
 test('Chromium finite JSON rejects overflow numbers, deep structure and oversized UTF-8 bytes', () => {
   assert.throws(() => boundedJson('{"value":1e999}'), /finite/);
@@ -62,7 +78,7 @@ test('frozen Unicode module paths use one canonical encoded URL without changing
 });
 
 test('explicit Chromium binding hashes only supplied trusted files and never uses ambient PATH', async () => {
-  const scratch = await mkdtemp(join(tmpdir(), 'pf-chromium-binding-'));
+  const scratch = await realpath(await mkdtemp(join(tmpdir(), 'pf-chromium-binding-')));
   try {
     const executable = join(scratch, 'electron.bin'), worker = join(scratch, 'worker.mjs'), app_entry = join(scratch, 'bootstrap.js');
     await writeFile(executable, 'Synthetic executable; never launched'); await writeFile(worker, 'Synthetic trusted worker'); await writeFile(app_entry, 'Synthetic bootstrap');
@@ -71,7 +87,7 @@ test('explicit Chromium binding hashes only supplied trusted files and never use
     assert.equal(binding.app_entry.sha256, sha256(await readFile(app_entry))); assert.deepEqual(binding.assets, []);
     await assert.rejects(chromiumBinding({ executable: 'electron', worker, assets: [] }), /경로/);
   } finally {
-    assert(resolve(scratch).startsWith(resolve(tmpdir()) + sep));
+    assert(resolve(scratch).startsWith(await realpath(tmpdir()) + sep));
     await rm(scratch, { recursive: true, force: true });
   }
 });

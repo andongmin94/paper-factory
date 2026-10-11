@@ -19,7 +19,7 @@ pdf = ["typst>=0.14,<1", "pypdf>=5,<7", "python-docx>=1.2,<2", "pypandoc_binary>
 where = ["src"]
 
 [tool.setuptools.package-data]
-"paper_factory" = ["fonts/*.ttf", "fonts/LICENSE", "fonts/provenance.json"]
+"paper_factory" = ["fonts/*.ttf", "fonts/LICENSE", "fonts/provenance.json", "publication_venues.json"]
 "paper_factory.autonomous" = ["quickjs_worker.mjs"]
 
 [tool.pytest.ini_options]

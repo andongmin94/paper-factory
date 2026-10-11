@@ -1,4 +1,5 @@
 import hashlib
+import json
 from html import escape
 
 import httpx
@@ -23,6 +24,32 @@ def journal(*, doi=DOI, title=TITLE):
     value = record(doi, abstract="Verified abstract retained independently of optional public full text.")
     value["message"].update(type="journal-article", title=[title])
     return value
+
+
+@pytest.mark.parametrize("title", ["An unrelated record.P { Font-Size: 12pt; Line-Height: 115%; }",
+                                  "Another unrelated record { text-align: left; font-family: Example; }", "A" * 501])
+def test_stylesheet_polluted_crossref_title_cannot_consume_reading_or_pdf_slots(tmp_path, monkeypatch, title):
+    candidate = "10.1234/malformed-title"
+    retained_search = {"status": "ok", "message": {"items": [{"DOI": candidate}, {"DOI": DOI}]}}
+    def handler(request):
+        if request.url.path == "/works":
+            return httpx.Response(200, json=retained_search)
+        if request.url.path.endswith(candidate):
+            return httpx.Response(200, json=journal(doi=candidate, title=title))
+        return httpx.Response(200, json=journal())
+    requests = mocked(monkeypatch, handler)
+    monkeypatch.setattr(literature, "_arxiv_pdf", lambda *args, **kwargs: None)
+    result = literature.collect(["bounded method discovery", "another bounded method query"], tmp_path, limit=2, pdf_candidates=[])
+    source, = result["sources"]
+    assert source["doi"] == DOI and source["title"] == TITLE
+    assert all(request.url.host == "api.crossref.org" for request in requests)
+    assert all(search["resolved_ids"] == [source["id"]] for search in result["searches"])
+    assert all(json.loads((tmp_path / search["raw_path"]).read_bytes()) == retained_search for search in result["searches"])
+    assert sum(request.url.path.endswith(candidate) for request in requests) == 1
+    rejected_id = "source-" + hashlib.sha256(candidate.encode()).hexdigest()[:20]
+    rejected, = (tmp_path / "literature").glob(rejected_id + "-metadata-*.json")
+    assert json.loads(rejected.read_bytes()) == journal(doi=candidate, title=title)
+    assert any("candidate verification failed" in warning for warning in result["warnings"])
 
 
 def test_exact_journal_identity_recovers_and_hashes_public_full_text(tmp_path, monkeypatch):

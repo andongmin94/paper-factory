@@ -999,11 +999,11 @@ def test_initial_planning_proposes_searchable_candidate_before_literature_approv
     prompt = science.planning_prompt("Inspected production code supports a bounded comparison.", "Study an unresolved software question.")
     compact = " ".join(prompt.split())
     assert "This stage proposes a candidate; it does not approve or freeze a study." in compact
-    assert "controller literature collection has not happened yet" in compact
-    assert "concrete literature_queries for the controller to retrieve next" in compact
-    assert "Do not set feasible=false solely because those queries have not been collected" in compact
-    assert "or the independent study review has not yet occurred" in compact
-    assert "provisional hypotheses to assess, not verified novelty" in compact
+    assert "app scouts two or three alternative questions, collects bounded primary literature" in compact
+    assert "selected question exactly; keep already investigated queries" in compact
+    assert "specific unresolved-evidence queries within the existing bounds" in compact
+    assert "Do not set feasible=false solely because an independent study review has not yet occurred" in compact
+    assert "hypotheses to assess against actual primary body evidence, not verified novelty" in compact
     assert "After proposal submission, the controller collects the requested literature" in compact
     assert "before protocol freezing, code generation or execution" in compact
     assert "Missing or irrelevant inspected evidence at that review must still prevent approval" in compact
@@ -1059,7 +1059,7 @@ def test_reviewed_planning_repairs_search_gaps_with_bounded_provisional_candidat
     assert "exceed its proposal-attempt limit" in compact
     assert "Do not change the requested goal, production code, measurements or seeds to evade a search gap" in compact
     assert "A retrieved-literature gap alone while another bounded lookup is possible does not establish that impossibility" in compact
-    assert "provisional hypotheses to assess, not verified novelty" in compact
+    assert "hypotheses to assess against actual primary body evidence, not verified novelty" in compact
     review = " ".join(science.study_review_prompt(protocol, literature, "Inspected source", goal).split())
     assert "If none qualify, reject literature and the study" in review
     assert "All six criteria must pass, issues must be empty" in review

@@ -3,10 +3,104 @@
 import json
 import os
 import subprocess
+import hashlib
+import struct
 from datetime import datetime, timezone
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
-from .workspace import digest_file, write_json
+from .workspace import digest_file, write_json, ensure_unlinked
+
+
+# Keep the source document unchanged. Pandoc's parsed cells retain their inline
+# formatting and complete contents while wide rows become readable records in
+# every native output format, rather than seven competing narrow columns.
+WIDE_TABLE_FILTER = r'''
+local table_number = 0
+function Table(tbl)
+  local numbered_caption = false
+  if FORMAT == 'docx' and tbl.caption and tbl.caption.long and #tbl.caption.long > 0 then
+    local first = tbl.caption.long[1]
+    if first.t == 'Plain' or first.t == 'Para' then
+      local explicit, tail = pandoc.utils.stringify(tbl.caption.long):lower():match('^%s*table%s+([a-z]?%d+)(.*)$')
+      if explicit and not tail:match('^%w') then
+        table_number = math.max(table_number, tonumber(explicit) or table_number + 1)
+      else
+        table_number = table_number + 1
+        first.content:insert(1, pandoc.Space())
+        first.content:insert(1, pandoc.Str('Table ' .. table_number .. ':'))
+        numbered_caption = true
+      end
+    end
+  end
+  if #tbl.colspecs < 6 then return numbered_caption and tbl or nil end
+  local result = pandoc.List()
+  if tbl.caption and tbl.caption.long then
+    result:extend(tbl.caption.long)
+  end
+  local headers = {}
+  local head_spans = {}
+  for _, row in ipairs(tbl.head.rows) do
+    local column = 1
+    for _, cell in ipairs(row.cells) do
+      while (head_spans[column] or 0) > 0 do column = column + 1 end
+      local label = pandoc.utils.blocks_to_inlines(cell.contents)
+      for offset = 0, cell.col_span - 1 do
+        local index = column + offset
+        if headers[index] then
+          headers[index]:extend({pandoc.Space(), pandoc.Str('/'), pandoc.Space()})
+          headers[index]:extend(label)
+        else
+          headers[index] = label:clone()
+        end
+        head_spans[index] = cell.row_span
+      end
+      column = column + cell.col_span
+    end
+    for index, span in pairs(head_spans) do head_spans[index] = span - 1 end
+  end
+  local record = 0
+  local function rows(items)
+    local spans = {}
+    for _, row in ipairs(items) do
+      record = record + 1
+      -- Native headings keep each record label with its first field across pages.
+      result:insert(pandoc.Header(5, {pandoc.Str('Record ' .. record)}))
+      local fields = pandoc.List()
+      local column = 1
+      for _, cell in ipairs(row.cells) do
+        while (spans[column] or 0) > 0 do column = column + 1 end
+        local names = pandoc.List()
+        for offset = 0, cell.col_span - 1 do
+          if offset > 0 then names:extend({pandoc.Space(), pandoc.Str('/'), pandoc.Space()}) end
+          names:extend(headers[column + offset] or {pandoc.Str('Column ' .. (column + offset))})
+          spans[column + offset] = cell.row_span
+        end
+        names:insert(pandoc.Str(':'))
+        local label = pandoc.Strong(names)
+        local blocks = pandoc.List()
+        if #cell.contents > 0 and (cell.contents[1].t == 'Plain' or cell.contents[1].t == 'Para') then
+          local inlines = pandoc.List({label, pandoc.Space()})
+          inlines:extend(cell.contents[1].content)
+          blocks:insert(pandoc.Para(inlines))
+          for index = 2, #cell.contents do blocks:insert(cell.contents[index]) end
+        else
+          blocks:insert(pandoc.Para({label}))
+          blocks:extend(cell.contents)
+        end
+        fields:insert(blocks)
+        column = column + cell.col_span
+      end
+      result:insert(pandoc.BulletList(fields))
+      for index, span in pairs(spans) do spans[index] = span - 1 end
+    end
+  end
+  for _, body in ipairs(tbl.bodies) do rows(body.head); rows(body.body) end
+  rows(tbl.foot.rows)
+  if record == 0 then rows(tbl.head.rows) end
+  return result
+end
+'''
 
 
 def verify_receipts(markdown: Path, outputs: dict[str, Path], receipt_path: Path) -> list[str]:
@@ -88,9 +182,13 @@ def convert(markdown: Path, output: Path, *, pandoc: str | None = None, bibliogr
     target = output.with_suffix(".typ") if suffix == ".pdf" else output
     target.unlink(missing_ok=True)
     binary = pandoc_binary(pandoc)
+    working_directory = markdown.parent.resolve()
     source_digest = digest_file(markdown)
     format = "typst" if suffix == ".pdf" else {".tex": "latex", ".docx": "docx"}[suffix]
     command = [binary, str(markdown.resolve()), "--from=markdown-smart-raw_tex-raw_html", "--standalone", "--to=" + format, "-o", str(target.resolve())]
+    table_filter = output.with_name(output.stem + "-table-layout.lua")
+    table_filter.write_text(WIDE_TABLE_FILTER, encoding="utf-8")
+    generated_inputs = {"--lua-filter": table_filter}
     if bibliography:
         command += ["--citeproc", "--bibliography", str(bibliography.resolve())]
     if csl:
@@ -108,11 +206,11 @@ def convert(markdown: Path, output: Path, *, pandoc: str | None = None, bibliogr
             # inserts these trusted native settings without treating them as prose.
             header_path = output.with_name(f"{output.stem}-formatting.tex")
             header_path.write_text("\n".join(headers) + "\n", encoding="utf-8")
-            command += ["--include-in-header", str(header_path.resolve())]
+            generated_inputs["--include-in-header"] = header_path
     if metadata:
         metadata_path = output.parent / f"{output.stem}-pandoc-metadata.json"
         write_json(metadata_path, metadata)
-        command += ["--metadata-file", str(metadata_path.resolve())]
+        generated_inputs["--metadata-file"] = metadata_path
     if suffix == ".pdf":
         # Typst headings end at a source newline. Let Typst perform visual
         # wrapping without turning Pandoc's continued title into body text.
@@ -120,7 +218,16 @@ def convert(markdown: Path, output: Path, *, pandoc: str | None = None, bibliogr
     else:
         command += ["-V", "geometry:margin=1in"]
     try:
-        result = subprocess.run(command, cwd=markdown.parent, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, check=False)
+        # Lua's Windows file opening rejects long paths even when relative to
+        # cwd. Preserve generated inputs beside the output, but run Pandoc with
+        # their exact bytes at short temporary paths; keep original I/O and cwd.
+        with TemporaryDirectory(prefix="paperfactory-convert-") as temporary:
+            for option, retained in generated_inputs.items():
+                staged = Path(temporary) / retained.name
+                staged.write_bytes(retained.read_bytes())
+                command += [option, str(staged.resolve())]
+            result = subprocess.run(command, cwd=working_directory, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, check=False,
+                                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
     except subprocess.TimeoutExpired as exc:
         target.unlink(missing_ok=True)
         raise ValueError("Pandoc conversion timed out after 120 seconds") from exc
@@ -182,5 +289,91 @@ show table.cell: cell => {
         output.unlink(missing_ok=True)
         raise ValueError("Manuscript changed during conversion")
     receipt = {"command": command, "engine": engine, "input_sha256": source_digest,
-               "output_sha256": digest_file(output), "diagnostics": result.stderr}
+               "output_sha256": digest_file(output), "diagnostics": result.stderr,
+               "working_directory": str(working_directory),
+               "generated_inputs": {option: {"path": str(path.resolve()), "sha256": digest_file(path)}
+                                    for option, path in generated_inputs.items()},
+               "table_layout_sha256": digest_file(table_filter),
+               "table_layout": "Tables with six or more columns render as complete labeled row records."}
+    if bibliography is not None:
+        receipt["bibliography_sha256"] = digest_file(bibliography)
+    if csl is not None:
+        receipt["csl_sha256"] = digest_file(csl)
+    if suffix == ".pdf":
+        receipt["typst_sha256"] = digest_file(target)
+    return receipt
+
+
+def inspect_pdf_quality(pdf: Path, output_root: Path, *, typst_source: Path | None = None) -> dict:
+    """Render every bound page; structural checks never attest visual approval.
+
+    Bundled Typst provides rasterization of its retained source. Recompiling the
+    PDF must produce the exact original hash before those images can attest its
+    pages. This avoids requiring a separately installed PDF renderer.
+    """
+    from pypdf import PdfReader
+    ensure_unlinked(pdf)
+    ensure_unlinked(output_root)
+    if pdf.stat().st_size > 32 * 1024 * 1024:
+        raise ValueError("PDF quality review exceeds its bounded file size")
+    reader = PdfReader(pdf)
+    if reader.is_encrypted or not 1 <= len(reader.pages) <= 100:
+        raise ValueError("PDF quality review requires one to one hundred readable pages")
+    receipt = {"pdf_sha256": digest_file(pdf), "page_count": len(reader.pages), "pages": [],
+               "automatic_checks": False, "visual_review_status": "pending", "status": "render_unavailable",
+               "issues": [], "scope": "Every-page structural/content and bound raster checks; clipping, overlap, formula correctness, missing glyphs and journal compliance still require actual visual review."}
+    for number, page in enumerate(reader.pages, 1):
+        text = page.extract_text() or ""
+        width, height = float(page.mediabox.width), float(page.mediabox.height)
+        receipt["pages"].append({"number": number, "text_sha256": hashlib.sha256(text.encode()).hexdigest(),
+                                 "text_chars": len(text), "width_points": width, "height_points": height})
+        if width <= 0 or height <= 0 or width > 2000 or height > 2000:
+            receipt["issues"].append(f"Page {number} has unsupported dimensions.")
+        if not text.strip():
+            receipt["issues"].append(f"Page {number} has no extractable text; image-only content requires explicit visual verification.")
+        if "\ufffd" in text or "\u0000" in text:
+            receipt["issues"].append(f"Page {number} contains replacement or null text characters.")
+    if typst_source is None or not typst_source.is_file():
+        receipt["issues"].append("The exact retained Typst rendering source is unavailable; every-page rasterization is unverified.")
+        return receipt
+    ensure_unlinked(typst_source)
+    if typst_source.parent != pdf.parent:
+        raise ValueError("Quality rendering source must belong to the PDF export directory")
+    receipt["typst_sha256"] = digest_file(typst_source)
+    import typst
+    font_paths = [str(Path(__file__).with_name("fonts").resolve())]
+    fonts = os.environ.get("TYPST_FONT_PATHS")
+    if fonts:
+        font_paths.append(fonts)
+    options = {"root": str(pdf.parent), "timestamp": datetime(2000, 1, 1, tzinfo=timezone.utc),
+               "font_paths": font_paths, "ignore_system_fonts": True}
+    recomputed = typst.compile(str(typst_source), format="pdf", **options)
+    if hashlib.sha256(recomputed).hexdigest() != receipt["pdf_sha256"]:
+        receipt.update(status="failed")
+        receipt["issues"].append("Raster source recompilation differs from the actual exported PDF bytes.")
+        return receipt
+    rendered = typst.compile(str(typst_source), format="png", ppi=96, **options)
+    images = [rendered] if isinstance(rendered, bytes) else list(rendered)
+    if len(images) != len(reader.pages):
+        raise ValueError("Rendered images do not cover every actual PDF page")
+    output_root.mkdir(parents=True, exist_ok=True)
+    for page, content in zip(receipt["pages"], images):
+        if not isinstance(content, bytes) or content[:8] != b"\x89PNG\r\n\x1a\n" or content[12:16] != b"IHDR":
+            raise ValueError("Page renderer did not return a PNG image")
+        width, height = struct.unpack(">II", content[16:24])
+        if not 1 <= width <= 3000 or not 1 <= height <= 3000 or len(content) > 16 * 1024 * 1024:
+            raise ValueError("Page image exceeds bounded review dimensions")
+        path = output_root / f"page-{page['number']:03}.png"
+        ensure_unlinked(path)
+        if path.exists():
+            if path.read_bytes() != content:
+                raise ValueError("Page review cannot replace different existing rendering bytes")
+        else:
+            with path.open("xb") as stream:
+                stream.write(content)
+        page.update(image_path=str(path.absolute()), image_sha256=hashlib.sha256(content).hexdigest(),
+                    width_pixels=width, height_pixels=height)
+    if digest_file(pdf) != receipt["pdf_sha256"] or digest_file(typst_source) != receipt["typst_sha256"]:
+        raise ValueError("Export changed during its every-page quality inspection")
+    receipt.update(automatic_checks=not receipt["issues"], status="pending_visual_review" if not receipt["issues"] else "failed")
     return receipt

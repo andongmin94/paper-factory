@@ -34,6 +34,37 @@ try:
     cancel_after = value.get("cancel_after")
     receipt = runner._execute(value["packet"], purpose="probe", on_handle=handles.append,
         cancel=(lambda: time.monotonic() - started >= cancel_after) if cancel_after is not None else None)
+    if (receipt.get("envelope") or {}).get("status") == "succeeded":
+        runner._verify_manifest(receipt["envelope"], value["packet"])
+        receipt["native_manifest_verified"] = True
+        if value.get("verify_measurement_mutations"):
+            rejected = []
+            for mutation in ("isolation", "font_digest", "missing_layout_receipt", "changed_geometry_font"):
+                envelope = json.loads(json.dumps(receipt["envelope"]))
+                manifest = envelope["runtime_manifest"]
+                if mutation == "isolation":
+                    manifest["measurement_renderer_isolated"] = False
+                elif mutation == "font_digest":
+                    manifest["frozen_fonts"][next(iter(manifest["frozen_fonts"]))]["sha256"] = "0" * 64
+                elif mutation == "missing_layout_receipt":
+                    manifest["layout_receipts"] = []
+                else:
+                    import base64
+                    fixture = next(item for item in manifest["retained_fixtures"] if item["label"].startswith("controller-layout-"))
+                    geometry = json.loads(base64.b64decode(fixture["content"]))
+                    geometry["font"]["sha256"] = "0" * 64
+                    raw_geometry = json.dumps(geometry, ensure_ascii=False, separators=(",", ":")).encode()
+                    old_size = len(base64.b64decode(fixture["content"]))
+                    fixture.update(content=base64.b64encode(raw_geometry).decode(), sha256=hashlib.sha256(raw_geometry).hexdigest())
+                    manifest["fixture_bytes"] += len(raw_geometry) - old_size
+                    manifest["layout_receipts"][0]["output_sha256"] = fixture["sha256"]
+                try:
+                    runner._verify_manifest(envelope, value["packet"])
+                except ValueError:
+                    rejected.append(mutation)
+                else:
+                    raise AssertionError("Forged measurement was accepted: " + mutation)
+            receipt["rejected_measurement_mutations"] = rejected
     raw = receipt.pop("raw_response")
     (scratch / "worker-response.jsonl").write_bytes(raw)
     receipt["raw_response_sha256"] = hashlib.sha256(raw).hexdigest()

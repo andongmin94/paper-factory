@@ -33,6 +33,10 @@ await build({
   bundle: true, platform: 'node', format: 'esm', target: 'node22', external: ['@siwc/local', './engine.js'],
 });
 await build({
+  entryPoints: ['src/main/repository-recovery.ts'], outfile: 'dist/repository-recovery.js',
+  bundle: true, platform: 'node', format: 'esm', target: 'node22', external: ['./engine.js'],
+});
+await build({
   entryPoints: ['src/main/engine.ts'], outfile: 'dist/engine.js',
   bundle: true, platform: 'node', format: 'esm', target: 'node22',
 });

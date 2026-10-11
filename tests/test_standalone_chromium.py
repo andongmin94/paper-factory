@@ -165,12 +165,14 @@ def _synthetic_browser_status(tmp_path, monkeypatch, failed_check=None):
         else:
             label, error = "canvas_and_held_call", None
         value = {"value": {"value": 7, "width": 12}, "noNode": True, "rejection": True, "immutable": True,
+                 "layoutImmutable": True, "layout": {"css_bounds": {"width": 160, "height": 20},
+                     "canvas": {"advance_width": 16}, "font": {"identity": "unverified-fallback"}},
                  "input": packet["scientific_inputs"].get("supporting-document-000000000000"),
                  "fixture": {"sha256": hashlib.sha256("가".encode()).hexdigest(),
                              "content": base64.b64encode("가".encode()).decode()}}
         envelope = {"status": "failed" if error else "succeeded", "error": error,
                     "production_calls": [{"path": "check.js", "function": "J.measure", "calls": 2}],
-                    "runtime_manifest": {"versions": {"engine": "synthetic status control"}},
+                    "runtime_manifest": {"versions": {"engine": "synthetic status control"}, "layout_measurements": 1},
                     "observation_b64": base64.b64encode(json.dumps(value).encode()).decode()}
         receipt = {"exit_code": 1 if error else 0, "envelope": envelope,
                    "cleanup_confirmed": True, "active_handle": {}, "reason": None,
@@ -242,12 +244,12 @@ def test_failed_diagnostic_retention_cannot_turn_browser_unavailability_into_rea
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows readiness control, no browser process")
-def test_successful_browser_status_creates_no_failure_evidence_and_keeps_all_seven_checks(tmp_path, monkeypatch):
+def test_successful_browser_status_creates_no_failure_evidence_and_keeps_all_eight_checks(tmp_path, monkeypatch):
     runner, received = _synthetic_browser_status(tmp_path, monkeypatch)
     try:
         status = runner.status()
         assert status["ready"] is True and status["cleanup_confirmed"] is True
-        assert len(status["self_checks"]) == 7 and all(status["self_checks"].values())
+        assert len(status["self_checks"]) == 8 and all(status["self_checks"].values())
         assert "diagnostic" not in status and len(received) == 4
         assert not (runner.supervisor_root / "self-check-failures").exists()
     finally:

@@ -1,8 +1,8 @@
-# Paper Factory 독립 데스크톱 앱 전환
+# Paper Factory 독립 데스크톱 앱 전환 이력
 
-갱신일: 2026-10-08 (Asia/Seoul). 현재 앱·엔진 소스 버전은 `0.14.15`이다. 최신 실행 설계와 아래 날짜별 전환·검증 이력을 구분한다. 당시 생성한 원고와 기술 검사를 최신 기준에서 승인된 학술 논문으로 계산하지 않는다.
+2026-10-08 (Asia/Seoul), 당시 소스 버전 `0.14.15`의 전환·검증 이력이다. 아래 실행 실험 설계는 현재 새 원고 경로가 아니다. 현재 두 IEEE 매체의 정적 연구·집필 흐름은 [현재 설계](ieee-magazine-redesign.md)와 [실제 검증](standalone-verification.md)을 따른다. 당시 생성한 원고와 기술 검사를 최신 기준에서 승인된 학술 논문으로 계산하지 않는다.
 
-## 현재 실행 설계
+## 당시 실행 설계
 
 Windows에서는 계획에 맞춰 QuickJS 또는 준비 확인을 통과한 Chromium 프로필을 선택한다. QuickJS는 JS/TS 함수의 Wasm 실행을 맡고, Chromium은 변경하지 않은 classic `.js` 원문을 선언한 순서로 읽어 DOM·Canvas를 사용하는 동기 함수를 호출한다. 실험 `.js`/`.mjs` 코드는 비동기 `callProduction`·`retainFixture`·`readScientificInput`을 기다린다. 원본 함수와 주고받는 값은 유한한 일반 JSON 자료로 제한되므로 DOM 객체나 Promise를 반환하는 함수, 저장소 전체 앱 실행까지 지원하는 것은 아니다. 선택한 프로필이 실패하면 다른 프로필로 바꾸어 실행하지 않는다.
 

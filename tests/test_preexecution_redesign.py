@@ -10,8 +10,47 @@ from paper_factory.autonomous.models import FrozenArtifact, StudyRedesignReview
 from paper_factory.workflow import WorkflowError, WorkflowService
 from paper_factory.workflow_models import Workflow
 from paper_factory.workspace import digest_file, write_json
-from test_workflow import BUNDLE, REVIEW, STUDY_REVIEW, collect, committed_workflows, evidence_selection_receipt, protocol, reject_for_redesign, setup
+from test_workflow import BUNDLE, REVIEW, STUDY_REVIEW, collect, collect_arxiv_preprint, committed_workflows, evidence_selection_receipt, protocol, reject_for_redesign, setup
 from test_study_literature_followup import PDF_HINT, REASON, collector, hinted_collector, rejected
+
+
+def collect_redesign(queries, root, **kwargs):
+    """Keep old simulated reviewer IDs and add a verified literal oracle fixture."""
+    packet = collect(queries, root, **kwargs)
+    primary = collect_arxiv_preprint(queries, root, **kwargs)
+    packet["sources"] += primary["sources"]
+    packet["searches"] += primary["searches"]
+    return packet
+
+
+def attach_validation(service, research_id, value):
+    """Declare actual fixture bytes; negative fixtures remain subject to native denial."""
+    state = service.status(research_id)
+    inventory = state["material_manifest"]["literature"]
+    source = state["literature"]["sources"][0] if not inventory else next(
+        item for item in state["literature"]["sources"] if item["id"] == inventory[0]["source_id"])
+    text = (service._workspace(research_id).path("research") / source["text_path"]).read_bytes().decode("utf-8")
+    body = source["body_range"]
+    mode = value["research_claim"]["mode"]
+    value["validation_contract"] = {"mode": mode,
+        "declared_units": [{"seed": seed, "unit_id": f"case-{index}", "stratum": "synthetic"}
+                           for seed in value["seeds"] for index in range(value["units_per_seed"])],
+        "finite_domain_label": "domain.json" if mode == "finite_enumeration" else None,
+        "uncertainty": "none", "independent_sampling": False,
+        "sampling_basis": "A fixed synthetic declared domain establishes no population sampling.",
+        "bootstrap_seed": 17, "bootstrap_replicates": 200, "confidence_level": .95,
+        "oracle_sources": [{"source_id": source["id"], "text_sha256": source["text_sha256"],
+                            "quote": text[body["start"]:min(body["start"] + 150, body["end"])]}]}
+    return value
+
+
+def freeze_child_target(service, research_id):
+    from test_submission_workflow import contract
+    target = contract()
+    target["article_type"] = service.status(research_id)["proposal"]["research_claim"]["mode"]
+    for item in target["claim_obligations"]:
+        item["validation_mode"] = target["article_type"]
+    return service.set_submission_contract(research_id, target)
 
 
 def exhaust(service, research_id, *, final_collector=None):
@@ -20,7 +59,7 @@ def exhaust(service, research_id, *, final_collector=None):
     if not state["proposal_attempt"]:
         plan = protocol(); plan["parameters"]["fixture_size"] += state["redesign_attempt"]
         service.submit_proposal(research_id, plan)
-    service.collector = collect
+    service.collector = collect_redesign
     service.collect_literature(research_id)
     service.submit_study_review(research_id, rejected())
     for number in (2, 3):
@@ -40,7 +79,7 @@ def candidate(service, research_id):
     value = copy.deepcopy(service.status(research_id)["proposal"])
     value["parameters"]["fixture_size"] += 7
     value["question"] += " A separately justified synthetic sampling domain changes the design."
-    return value
+    return attach_validation(service, research_id, value)
 
 
 def review(accepted=True):
@@ -68,7 +107,7 @@ def structural_rejection(criterion="question"):
     return value
 
 
-def reject_three_proposals(service, research_id, *, final_review=None, partial_attempts=0, initial_collector=collect):
+def reject_three_proposals(service, research_id, *, final_review=None, partial_attempts=0, initial_collector=collect_redesign):
     """Retain partial searches on the first design, then really reject two revisions."""
     for number in (1, 2, 3):
         plan = protocol() if number == 1 else copy.deepcopy(service.status(research_id)["proposal"])
@@ -105,7 +144,8 @@ def test_core_rejection_can_prepare_without_inventing_literature_attempts_and_ch
     assert (child["proposal_attempt"], child["study_literature_attempt"], child["execution_attempt"]) == (1, 0, 0)
     assert_error("INVALID_STATE", lambda: service.submit_code(child["id"], BUNDLE, REVIEW))
     assert_error("INVALID_STATE", lambda: service.start_experiment(child["id"]))
-    service.collector = collect
+    freeze_child_target(service, child["id"])
+    service.collector = collect_redesign
     service.collect_literature(child["id"])
     assert service.submit_study_review(child["id"], copy.deepcopy(STUDY_REVIEW))["stage"] == "planned"
     assert service.redesign_study(identifier)["id"] == child["id"]
@@ -240,7 +280,8 @@ def test_exact_candidate_becomes_one_child_with_fresh_gates_and_unchanged_parent
     assert service.redesign_study(identifier)["id"] == child["id"]
     assert len(committed_workflows(service)) == 2 and runner.calls == 0
     assert service.status(identifier)["preparation_redesign_available"] is False
-    service.collector = collect
+    freeze_child_target(service, child["id"])
+    service.collector = collect_redesign
     service.collect_literature(child["id"])
     assert service.submit_study_review(child["id"], copy.deepcopy(STUDY_REVIEW))["stage"] == "planned"
     assert runner.calls == 0
@@ -278,6 +319,7 @@ def test_metadata_seed_or_order_changes_cannot_pass_structural_guard(setup, chan
         value["conditions"].reverse(); value["metrics"].reverse()
     else:
         value["parameters"]["execution_instrumentation"] = "Another synthetic instrumentation description."
+    attach_validation(service, identifier, value)
     assert_error("REDESIGN_UNCHANGED", lambda: service.submit_redesign_proposal(identifier, value))
     assert "redesign-candidate" not in service.status(identifier)["artifacts"] and runner.calls == 0
 

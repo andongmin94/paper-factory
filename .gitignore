@@ -28,3 +28,9 @@ dist/
 
 # Local Windows cache directory
 /%SystemDrive%/
+
+# Local verification scratch files and browser captures
+/tmp/
+/.playwright-cli/
+/desktop/.documentation-component-*/
+/desktop/.paper-factory-*.cjs

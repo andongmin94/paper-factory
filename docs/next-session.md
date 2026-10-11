@@ -1,44 +1,42 @@
-# 다른 Windows PC에서 작업 재개
+# 다음 세션: 두 IEEE 매체의 실제 Frontron 원고
 
-2026-10-08 사용자의 중단 요청으로 작업을 일시정지했다. 이 문서는 현재 작업 상태와 다음 에이전트에게 전달할 지시문이다. Git에는 소스와 문서만 저장하며 연구 원자료·계정·생성된 실행 환경·설치 파일은 포함하지 않는다.
+2026-10-11 체크포인트. 현재 목표는 GitHub 저장소에서 **IEEE Software·IEEE Security & Privacy의 적합한 Feature Article을 실제 앱으로 작성하고, 각각 투고를 권할 만한지 평가하는 것**이다. 두 매체의 범위에 맞지 않는 프로젝트를 억지로 두 원고로 만들지 않는다.
 
-## 그대로 전달할 지시문
+사용자가 기존 연구 자료·심사·횟수 전체 삭제를 명시했고 초기화했다. 과거 JIZURA·9곳 포트폴리오·인계 ZIP은 현재 복원 대상이 아니다. 이 문서와 [현재 검증 기록](standalone-verification.md), [두 매체 설계](ieee-magazine-redesign.md)가 현재 지시다.
 
-> `https://github.com/andongmin94/paper-factory`의 최신 main을 내려받고 `AGENTS.md` 지시, README, `docs/next-session.md`, `docs/standalone-verification.md`를 읽어 기존 작업을 이어가라. 목표는 앱에서 만든 원고가 학술지 투고를 검토할 수준인지 실제 앱 실행과 독립 평가로 확인하고, 부족하면 앱 설계를 개선하는 것이다. 코드 검사 통과를 논문 품질 통과로 보고하지 말고, 심사 기준을 낮추거나 근거를 만들어 승인하지 마라.
->
-> 현재 소스는 0.14.20이다. 공식 Unicode 표준의 버전이 고정된 HTML 본문·서지·절 위치·원본 해시 검증과 인용 보존을 구현했다. 제안 3회를 마친 미실행 설계가 질문·비교·표본의 구조적 문제로 반려돼 문헌만 보완할 수 없는 경우에는 실제 문헌 횟수 0/1/2를 유지하면서 기존 독립 재설계 준비 검토를 열도록 개선했다. 기존 PDF·DOI·arXiv 경로, 근거 보존, root당 후속 2개 및 연구당 과학 실행 1회 한도는 유지한다.
->
-> Desktop 478개와 native 고유 검사 1,065개가 통과했으며 기존 Windows symlink 권한 검사 3개는 건너뛰었다. Native 최초 실행의 30개 인코딩 오류는 부모·자식 UTF-8을 맞춘 뒤 동일한 실패 검사만 다시 실행해 모두 통과했다. 최초 실패·helper·출력은 보존했으며 한 번에 전부 통과했다고 주장하지 마라. 변경하지 않은 SDK와 Chromium worker는 이전 검사 기록을 그대로 유지한다.
->
-> 0.14.20 Windows 설치 파일은 `.paper-factory/p20-release/`에 생성됐고 정적 대조와 숨김 패키지 엔진의 시작 두 번·browser control 7개·정상 종료·재시작·worker journal 비움이 통과했다. 기본 `desktop/release/`는 0.14.19 그대로다. 기본 배포본 전환 helper는 긴 경로 prefix를 이중으로 붙여 preflight에서 실패했으며 실제 rename/copy는 없었다. 사용자의 중단 요청 때문에 재시도하지 않았다. 새 설치·OAuth·다른 PC 실행·macOS는 확인하지 않았다.
->
-> **실제 0.14.20 연구 실행은 아직 시작하지 않았다.** 평가 준비 자료는 `ready=false`로 보존했고 최종 `launch-bindings.json`과 `preparation-freeze.json`은 만들지 않았다. 다음 단계는 새 PC에서 환경과 보존 자료의 바인딩을 확인하고, 같은 JIZURA 연구의 앱 `improveResearch` 기능을 실행해 논문 생성까지 이어지는지 확인하는 것이다. 원래 저장소 `https://github.com/andongmin94/JIZURA`, 목표 `다양한 문자의 배치와 자동 크기 조절이 어떤 조건에서 안정적으로 동작하는지 연구해 주세요.`, 작성·검토 모델 `gpt-6-astra`를 유지하라. 실제 평가에 수동 논문 URL·DOI·본문·후보·프로토콜·selector·oracle·예상 결과를 넣지 마라. 후보·문헌 계획·실험·심사는 제품이 생성해야 한다.
->
-> JIZURA 원래 연구는 `.paper-factory/j15/73b3b723c72b`, ID `research-7fc481808695`, 원본 source 166파일이다. 현재 부모 제안 3회·문헌 보완 0회·SCI 0회·후속 0개·원고 0개이며 `STUDY_REJECTED`로 보류됐다. 518개 물리 파일과 231개 동결 산출물, 이전 전체 archive와 실패 실행을 보존하라. 마지막 0.14.19 실제 실행은 모델 요청 7개가 완료됐지만 표준 근거·비교 규칙·기여 중요성이 부족해 논문까지 가지 못했다.
->
-> 과거 Madi 연구 `.paper-factory/qpos/2dd124a6459a`는 root와 후속 2개의 한도를 이미 사용했다. 이전 원고의 유한 실험 수치가 맞더라도 신규성·중요성이 부족해 투고 준비도가 반려됐다. **Madi를 다시 실행·재가져오기·횟수 초기화하지 마라.** JIZURA도 새 root를 만들어 기존 횟수를 초기화하지 마라. 지금까지 새 투고 준비도를 통과한 실제 완료 원고는 없다.
->
-> Git clone만으로 기존 연구 자료가 따라오지 않는다. 별도로 전달받은 `paper-factory-private-evidence-01420.zip`과 `manifest.json`을 먼저 확인하라. ZIP entry의 경로·크기·SHA256을 manifest와 대조하고 새 checkout에 저장소 상대 경로 그대로 복원하라. 기존 파일을 무조건 덮어쓰지 말고 충돌은 먼저 비교하라. 기록·DB·후보·심사·횟수·과학 근거를 수정하지 마라. 자료가 없다면 소스 분석과 환경 준비까지만 진행하고, 실제 같은 연구 재개에는 원자료 전송이 필요하다고 알려라.
->
-> 다른 PC에서는 경로·실행 파일·런타임·컴파일 산출물·계정 저장 위치가 다를 수 있다. 이전 PC의 동결 helper와 receipt를 수정하거나 그대로 실행하지 말고, 원본 바이트·native artifact·source·계보·횟수의 동일성을 확인한 별도의 새 PC용 평가 준비 기록을 만들어라. 원본을 변경해야만 재개할 수 있다면 임의로 DB를 고치거나 새 연구를 만들지 말고 원인을 먼저 보고하라. 최신 lockfile과 고정 runtime manifest를 사용해 환경을 준비하고, 플랫폼 변경으로 필요한 검사만 수행하라. 기존 통과 검사를 이유 없이 모두 반복하지 마라.
->
-> Windows 자체 실행을 유지하고 Docker를 요구하지 마라. 공식 Codex/ChatGPT 계정 연결을 사용하고 별도 회원가입이나 운영자 DB를 추가하지 마라. 이전 PC의 인증 파일·토큰을 복사하지 마라. 새 PC에 연결이 없으면 앱의 공식 로그인 절차를 사용자에게 안내하라. Electron·neobrutal-ui·모노 톤·Pretendard를 유지하라. Playwright와 숨김 창으로 확인하고 사용자의 다른 작업이나 화면을 방해하지 마라.
->
-> 필수 바인딩과 실행 환경 확인을 마친 뒤 일반 앱 경로로 실제 연구를 이어가라. 결과가 보류되면 당시 설계·전체 문헌 원문·심사·raw 응답·실험 횟수·종료 상태를 보존하고 실제 제품 결함을 구분해 개선하라. 원고가 나오면 별도 문맥에서 최근접 원문 본문, 신규성·기여 중요성, 주장과 관측·증명의 대응, 재현 자료 및 모든 PDF 페이지를 확인한 후 결과를 보고하라. 사용자가 중단하면 소유 작업자를 안전하게 닫고 checkpoint를 남겨라.
+아래 `output/`와 `.paper-factory/` 경로는 검증한 PC에만 보존한 로컬 자료다. Git에는 원고·계정 자료·실행 증빙을 포함하지 않으며 저장소를 새로 복제하면 이 경로는 없다. 상대 경로는 저장소 루트 기준이다.
 
-## 보존 기록
+## 실제 연구와 재개 상태
 
-| 항목 | 위치 |
-| --- | --- |
-| 0.14.20 native 검사 조합 기록 | `.paper-factory/runtime-admission-01420/native-final-reconciled-freeze.json` |
-| 0.14.20 패키지 정적 기록 | `.paper-factory/runtime-admission-01420/package-build-71a340e4db25/full-static-source-freeze.json` |
-| 포함 엔진 시작·종료 검사 | `.paper-factory/runtime-admission-01420/packaged-engine-dd6f1721-7031-47bf-a0ea-ff920631e065/receipt.json` |
-| 평가 준비 중단 checkpoint | `.paper-factory/runtime-admission-01420/evaluator-stop-773349b92cdd/checkpoint.json` |
-| 평가 helper·부분 준비 바인딩 | `.paper-factory/chromium-ordinary-jizura-01420/` |
-| 새 final helper 독립 검토 중단 기록 | `.paper-factory/chromium-ordinary-jizura-01420/collector-peer-final-stop.json` |
-| 마지막 실제 JIZURA 실행 | `.paper-factory/j19/d30d3537ed06/` |
-| 실제 실행 종료 후 읽기 감사 | `.paper-factory/runtime-admission-01419/post-completion-audit-v3/closed-run-audit.json` |
+- 저장소: `https://github.com/andongmin94/frontron`
+- 현재 연구: `research-100e940ea80b`
+- Windows 작업공간: `C:/Users/Andongmin/Desktop/repository/paper-factory`
+- 실제 앱 데이터: `.paper-factory/jizura-new-01420-20261008-04e3b1a0-4ee/app-data` — 디렉터리 이름만 과거 이름이며 새 Frontron 연구가 저장된다.
+- 첫 실행 증거: two-magazine-fresh-20261011 (`output/playwright/two-magazine-fresh-20261011/final-summary.json`)
+- 현재 종료 증거: resume-1 (`output/playwright/two-magazine-fresh-20261011/resume-1/final-summary.json`)
 
-인계 ZIP은 로컬 연구 기록이므로 공개 Git에 올리지 않는다. 생성된 runtime·이전 배포본·검사 임시 작업실 전체를 이 ZIP에 넣었다고 가정하지 마라. manifest의 실제 포함 범위를 확인하고, 패키지·환경은 별도로 준비한다.
+첫 실제 실행은 설계 1·문헌 1·분석 요청 2, 공통 원고 0·코드/실험 0이다. **분석 1만 채택됐고 분석 2는 완료 응답의 잘못된 evidence ID 때문에 채택되지 않았다.** 두 매체 모두 원고 1·심사 1·실제 PDF/Word 출력이 있다. Software는 완전한 Electron 비교 문서와 해석 보완을 요구했다. S&P는 개별 기준을 통과했으나 비차단 조언이 `issues`에 들어가 보수적 준비도는 false다. 어느 원 심사도 수정하거나 승인으로 재해석하지 않는다.
 
-완료된 인계 폴더는 `.paper-factory/handoff-20261008-01420-7c8476b0e034/`이다. ZIP은 186,413,558 B/SHA256 `5e1a74c9042de4547f8bb627438cb21781701c08d148e65f6bd4a58067f8cdba`, manifest는 1,243,948 B/SHA256 `b36494def5734e1f61d392ed33ae62b4b826e4caa1d91941577035249370d6e5`다. 원문 522,697,238 B의 4,766개 entry에 JIZURA 현재 518파일·231개 산출물과 이전 기록, 0.14.20 준비·검사·중단 자료, Madi 원자료와 계보 전체를 포함한다. ZIP 내부 모든 entry의 SHA256·크기·CRC와 원본 파일의 생성 전후 동일성을 확인했다. 인증 파일·설치 파일은 포함하지 않았으며 SQLite 연결·모델·SCI·원본 쓰기는 없었다. 구현 소스의 Git 커밋은 `fcc514690eeec0c4df05cc563ba323289908ee2e`이고 이후 인계 문서 변경은 별도 커밋이다.
+**resume-1은 2026-10-11 13:50:24 UTC 정상 종료했다.** 공식 Electron 문서 3개를 확보한 뒤 두 매체 모두 원고 2·독립 심사 2·실제 Word/PDF를 생성했다. 두 새 심사의 7개 기준과 비교·기여가 모두 통과하고 차단 문제·후속 작업은 비어 있으며, native `all_content_ready=true`다. 분석 요청은 2·채택된 분석은 1로 유지했고 추가 재분석·실험은 하지 않았다. 기존 282개 파일의 SHA/크기 변경은 0이고 첫 원고·원 심사·실패·횟수는 유지했다.
+
+최종 상태 (`output/playwright/two-magazine-fresh-20261011/resume-1/final-summary.json`) · 원 파일 보존 (`output/playwright/two-magazine-fresh-20261011/resume-1/immutable-research-final.json`) · 독립 품질 감사 (`output/playwright/two-magazine-fresh-20261011/resume-1/quality-audit.md`) · 전달 파일 manifest (`output/pdf/frontron-two-ieee-20261011/manifest.json`).
+
+내용상 두 Feature Article 모두 투고 검토를 권할 수준이다. Software PDF 8쪽·S&P PDF 11쪽을 렌더링하고 전체 페이지와 표를 확인했다. Word는 본문/표 보존만 확인했으며 최종 Word 시각 검수는 남아 있다. 실제 저자 정보·승인·제출 선언은 미입력이고 실제 투고하지 않았다. 두 원고는 같은 사례의 대안 투고본이다.
+
+## 현재 앱 흐름
+
+저장소 가져오기→범위와 기여를 설계→적합한 두 매체 선정→관련 문헌과 완전한 비교 문서 수집→공통 정적 분석 1회→매체별 Feature Article→실제 Word/PDF와 형식 선검사→독립 내용 심사→실제 지적에 연결된 보완이다. 범용 첫 원고·첫 심사를 중복 생성하지 않는다. 프로젝트 실행은 이 경로의 필수 조건이 아니며 정적 근거로 효과·성능·배포 결과를 주장하지 않는다.
+
+미완료 원래 출력·원고·심사를 먼저 수락한다. 그 뒤 실제 문서 보완 지적이 있으면 비교 문서를 수집하고 필요한 원고만 수정·재심사한다. 완전한 새 문서는 채택된 공통 분석 1을 유지한 채 원고의 비교와 해석을 고치는 데 사용할 수 있다. 과거 공통 수정 계획은 기록으로 남지만 현재 심사에서 사라진 요구를 다시 실행하지 않는다.
+
+문서 보완은 동일한 현재 분석·원고·심사 SHA 기준에서 한 번이며 실패·중단도 소비한다. 회당 서로 다른 비교 URL 1–3개, 전체 수집 3회와 완전 본문 120,000자 한도를 유지한다. 문헌·분석·집필·심사 예산과 실패 횟수를 초기화하지 않는다. `issues`는 차단 결함만 기록하고 통과 기준의 선택적 조언은 criterion reason에 남긴다.
+
+## 다음 작업 순서
+
+1. 두 원고는 내용 평가를 마쳤다. 작업이 없는 상태에서 새 집필·심사를 재개하지 않는다. 실제 저자 정보·승인·최종 제출 형식과 Word 시각 확인부터 이어간다.
+2. 종료 상태·실제 요청 영수증·채택된 산출물·이전 파일 SHA를 확인한다. 완료 응답 수와 채택된 분석/원고 수를 구분한다.
+3. 결과 화면의 정상 **IEEE 매체별 미완료 투고본 재개** 동작으로 필요한 작업만 이어간다. 직접 원고·심사 입력, 모델 응답 주입, 삭제된 예전 자료 복원, Madi/JIZURA 재실행을 하지 않는다.
+4. 실제 매체별 원고의 기여·비교·근거·실무적 조언·한계와 PDF 전페이지·Word 보존을 확인한다. 학술지별 공식 형식 확인·저자 정보/승인·AI 공개도 별도로 확인한다. 내부 PASS를 투고·채택·교수 임용 실적 인정으로 설명하지 않는다.
+5. 코드 변경이 필요하면 앱 정상 종료 후 집중 회귀→Windows runtime/desktop 빌드→소스/포함 bytes 결속→숨김 Electron·Playwright 정상 UI 재개 순서로 검증한다. 현재 코드와 횟수를 보존한 같은 연구로 계속한다.
+
+Git 상태와 `origin/main`을 읽기 전용으로 대조한 뒤 현재 수정 내용을 유지한다. 다음 PC에서는 절대 경로·공식 계정 연결·포함 런타임 SHA를 새로 확인하고 이 PC의 경로를 그대로 가정하지 않는다.

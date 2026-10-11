@@ -1,93 +1,14 @@
 import { useEffect, useState } from "react";
-import { Download, ExternalLink, LoaderCircle } from "lucide-react";
+import { ExternalLink, LoaderCircle } from "lucide-react";
 import type { AppSnapshot } from "../shared/contracts";
-import type { ManuscriptReview, PublicationReadiness, PublicRepository, ResearchPhase, ResearchSnapshot, ReviewCriterion } from "../shared/research";
+import { NEW_RESEARCH_MODE } from "../shared/publication";
+import { PUBLICATION_VENUES } from '../shared/venues';
+import type { PublicRepository, ResearchSnapshot } from "../shared/research";
+import { ResearchResultCard } from "./ResearchResultCard";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
-
-const phaseLabels: Record<ResearchPhase, string> = {
-  idle: "대기", "source-selection": "연구 소스 확인", plan: "연구 설계", redesign: "연구 설계 보완", "redesign-plan": "새 연구안 준비", "redesign-review": "재설계 준비 검토", "literature-plan": "투고 근거 보완 계획", literature: "문헌 수집", "study-review": "연구 적합성 검토", code: "실험 코드 작성",
-  "code-review": "실험 코드 리뷰", experiment: "과학실험", "evidence-selection": "설명 근거 확인", manuscript: "원고 작성",
-  "manuscript-review": "원고 품질 검토", export: "결과 파일 생성",
-};
-const pipelineLabels = { idle: "대기", running: "진행 중", paused: "중단됨", failed: "실패", completed: "원고 생성 완료" };
-const studyHoldCodes = ["STUDY_REJECTED", "STUDY_INFEASIBLE", "STUDY_REDESIGN_REJECTED"];
-const outputLabels: Record<string, string> = {
-  "export-pdf": "PDF", "export-docx": "Word", "export-md": "Markdown",
-  "export-tex": "LaTeX", reproducibility: "재현 패키지 ZIP",
-};
-const manuscriptCriterionLabels = {
-  contribution: "연구 기여", literature: "문헌 사용", interpretation: "결과 해석", presentation: "내용과 분량",
-};
-const remediationLabels = {
-  revise_manuscript: "원고 보완", redesign_study: "새 연구 설계", infeasible: "추가 근거 필요",
-};
-
-function ManuscriptRecovery({ remediation }: { remediation: NonNullable<ManuscriptReview["remediation"]> }) {
-  return <section className="space-y-3 rounded-base border-2 border-border p-3 text-sm" aria-label="원고 보완 방향">
-    <h4 className="font-semibold">보완 방향 · {remediationLabels[remediation.strategy]}</h4>
-    <p className="detail-note whitespace-pre-wrap">{remediation.reason}</p>
-    <dl className="space-y-2">
-      {remediation.actions.map(({ criterion, action }, index) => <div key={index}>
-        <dt className="font-semibold">{manuscriptCriterionLabels[criterion]}</dt>
-        <dd className="detail-note mt-1 whitespace-pre-wrap">{action}</dd>
-      </div>)}
-    </dl>
-    {remediation.evidence_gaps.length > 0 && <div>
-      <p className="font-semibold">부족한 근거</p>
-      <ul className="mt-1 list-disc space-y-1 pl-5">
-        {remediation.evidence_gaps.map((gap, index) => <li key={index}>{gap}</li>)}
-      </ul>
-    </div>}
-  </section>;
-}
-
-function QualityReview({ title, review, criteria, selectedSources, preparation = false }: {
-  title: string; review: { accepted: boolean; issues: string[]; publication_readiness?: PublicationReadiness | null };
-  criteria: Array<{ label: string; judgment: ReviewCriterion }>; selectedSources?: number; preparation?: boolean;
-}) {
-  return (
-    <details className="rounded-base border-2 border-border p-3 text-sm" open={!review.accepted}>
-      <summary className="font-semibold">{title} · {review.accepted ? "통과" : "보완 필요"}</summary>
-      <dl className="mt-3 space-y-3">
-        {criteria.map(({ label, judgment }) => <div key={label}>
-          <dt className="font-semibold">{label} · {judgment.passed ? "충족" : "미충족"}</dt>
-          <dd className="detail-note mt-1 whitespace-pre-wrap">{judgment.reason}</dd>
-        </div>)}
-      </dl>
-      {selectedSources !== undefined && <p className="detail-note mt-3">선정한 문헌 근거 {selectedSources}개</p>}
-      {preparation ? <p className="detail-note mt-3">새 연구안을 준비할 수 있는지 검토한 기록입니다. 문헌 수집·연구 적합성·실험 코드 검토를 거쳐야 실험을 실행할 수 있습니다. 투고 준비도는 원고에서 따로 평가합니다.</p> : review.publication_readiness ? <section className="mt-4 space-y-3" aria-label="투고 준비도 평가">
-        <h4 className="font-semibold">투고 준비도 평가</h4>
-        <dl className="space-y-3">
-          {[
-            { label: "선행 연구 대비 신규성", judgment: review.publication_readiness.novelty },
-            { label: "기여의 중요성", judgment: review.publication_readiness.significance },
-            { label: "주장 범위에 맞는 검증", judgment: review.publication_readiness.validation },
-          ].map(({ label, judgment }) => <div key={label}>
-            <dt className="font-semibold">{label} · {judgment.passed ? "충족" : "미충족"}</dt>
-            <dd className="detail-note mt-1 whitespace-pre-wrap">{judgment.reason}</dd>
-          </div>)}
-          <div><dt className="font-semibold">핵심 주장</dt><dd className="detail-note mt-1 whitespace-pre-wrap">{review.publication_readiness.claim}</dd></div>
-          <div><dt className="font-semibold">적용 범위</dt><dd className="detail-note mt-1 whitespace-pre-wrap">{review.publication_readiness.scope}</dd></div>
-          <div><dt className="font-semibold">검증 근거 · {{ formal: "이론·증명", empirical: "경험적 평가", finite_enumeration: "유한 공간 완전 열거" }[review.publication_readiness.evidence_mode]}</dt>
-            <dd className="detail-note mt-1 whitespace-pre-wrap">{review.publication_readiness.evidence_basis}</dd></div>
-        </dl>
-        {review.publication_readiness.closest_work.map((work, index) => <details key={`${work.source_id}:${work.excerpt_index}`} className="detail-note">
-          <summary>직접 관련 선행 연구 비교 {index + 1}</summary>
-          <p className="mt-2 whitespace-pre-wrap">알려진 결과: {work.known_result}</p>
-          <p className="mt-2 whitespace-pre-wrap">이번 연구의 차이: {work.difference}</p>
-          <blockquote className="mt-2 border-l-2 border-border pl-3 whitespace-pre-wrap">{work.quote}</blockquote>
-        </details>)}
-      </section> : <p className="detail-note mt-3">이 기록에는 신규성·기여의 중요성·검증 범위를 평가한 투고 준비도 검토가 없습니다.</p>}
-      {review.issues.length > 0 && <div className="mt-3">
-        <p className="font-semibold">보완할 내용</p>
-        <ul className="mt-1 list-disc space-y-1 pl-5">{review.issues.map((issue, index) => <li key={index}>{issue}</li>)}</ul>
-      </div>}
-    </details>
-  );
-}
 
 function ModelPicker({ id, label, models, value, onChange, disabled }: {
   id: string; label: string; models: AppSnapshot["models"]; value: string;
@@ -140,7 +61,7 @@ export function ResearchPane({ connection, connectionBusy, onBusyChange, view, o
     setReviewerModel(available);
   }, [connection.models, connection.session.profileId]);
 
-  const active = (snapshot?.busy ?? false) || ["create", "resume", "revise", "improve", "cancel", "evidence", "save"].includes(pending ?? "");
+  const active = (snapshot?.busy ?? false) || ["create", "resume", "improve", "repository-revision", "portfolio", "portfolio-format", "portfolio-layout", "reformat", "cancel", "save", "author"].includes(pending ?? "");
   useEffect(() => {
     onBusyChange(active);
   }, [active, onBusyChange]);
@@ -152,12 +73,12 @@ export function ResearchPane({ connection, connectionBusy, onBusyChange, view, o
     try {
       const result = await operation();
       if (result && typeof result === "object") setSnapshot(result);
-      if (["create", "resume", "revise", "improve"].includes(name) && result && typeof result === "object" && result.jobs.some((job) => job.pipeline === "running")) {
+      if (["create", "resume", "improve", "repository-revision", "portfolio"].includes(name) && result && typeof result === "object" && result.jobs.some((job) => job.pipeline === "running")) {
         onNavigate("results");
       }
-      if (name === "evidence") setNotice(result === false ? "추가 근거 선택을 취소했습니다." : "추가 근거를 보존했습니다. 연구를 이어가려면 재개 버튼을 누르세요.");
       if (name === "open") setNotice("결과 파일 열기를 요청했습니다.");
       if (name === "save" && result === true) setNotice("결과 파일을 저장했습니다.");
+      if (name === "reformat") setNotice("출력 다시 생성 기록을 보존했습니다. 새 PDF와 Word 파일의 페이지를 확인하세요.");
     } catch {
       setLocalError(name === "repositories"
         ? "GitHub 공개 저장소 목록을 조회하지 못했습니다. 계정 URL과 인터넷 연결, GitHub 조회 한도를 확인해 주세요."
@@ -171,8 +92,8 @@ export function ResearchPane({ connection, connectionBusy, onBusyChange, view, o
 
   const locked = active || pending !== null || connectionBusy;
   const authorized = connection.session.connected && connection.session.sharing;
-  const ready = snapshot?.runtime.state === "ready";
-  const canRun = ready && authorized && !!model && !!reviewerModel && !locked;
+  const analysisReady = snapshot?.runtime.repositoryAnalysisReady === true;
+  const canRun = analysisReady && authorized && !!model && !!reviewerModel && !locked;
   const accountSource = /^https:\/\/github\.com\/[A-Za-z0-9][A-Za-z0-9-]{0,38}\/?$/.test(source.trim());
   const error = snapshot?.error?.message ?? localError;
   const feedback = <>
@@ -200,17 +121,17 @@ export function ResearchPane({ connection, connectionBusy, onBusyChange, view, o
       <CardHeader>
         <div className="section-heading">
           <CardTitle role="heading" aria-level={2} className="text-xl">새 연구</CardTitle>
-          <span className="workspace-section-tag">GITHUB / RESEARCH</span>
+          <span className="workspace-section-tag">GITHUB / IEEE SOFTWARE · S&amp;P</span>
         </div>
         <CardDescription>
-          공개 GitHub 저장소에서 연구를 설계하고, 문헌과 연구 적합성을 검토한 뒤 실험과 원고 작성을 진행합니다.
+          공개 GitHub 저장소의 소스·문서를 분석해 IEEE Software·Security &amp; Privacy에 적합한 실제 Feature Article을 작성하고 각각 평가합니다.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-5">
         <section aria-label="앱 실행 환경" className="runtime-summary">
           <div className="runtime-summary-heading">
-            <Badge variant={ready ? "default" : "neutral"}>
-              {!snapshot || snapshot.runtime.state === "checking" ? "실행 환경 확인 중" : ready ? "실행 환경 준비됨" : "실행 환경 사용 불가"}
+            <Badge variant={analysisReady ? "default" : "neutral"}>
+              {!snapshot || snapshot.runtime.state === "checking" ? "연구 엔진 확인 중" : analysisReady ? "코드·문서 분석 준비됨" : "연구 엔진 사용 불가"}
             </Badge>
             <Button variant="ghost" size="sm" disabled={locked || snapshot?.runtime.state === "checking"}
               onClick={() => void runAction("runtime", () => window.paperFactory.checkRuntime())}>실행 환경 다시 확인</Button>
@@ -238,7 +159,7 @@ export function ResearchPane({ connection, connectionBusy, onBusyChange, view, o
           event.preventDefault();
           if (canRun && source.trim() && !accountSource && goal.trim().length >= 8) {
             void runAction("create", () => window.paperFactory.createResearch({
-              source: source.trim(), goal: goal.trim(), model, reviewerModel,
+              source: source.trim(), goal: goal.trim(), model, reviewerModel, researchMode: NEW_RESEARCH_MODE,
             }));
           }
         }}>
@@ -254,7 +175,7 @@ export function ResearchPane({ connection, connectionBusy, onBusyChange, view, o
                 setRepositories(await window.paperFactory.listPublicRepositories(source.trim()));
               })}>공개 저장소 조회</Button>}
             {repositories && <div className="space-y-2">
-              <p className="detail-note">최근 업데이트된 공개 저장소 최대 100개입니다. 선택 후 소스와 실험 가능성을 확인합니다.</p>
+              <p className="detail-note">최근 업데이트된 공개 저장소 최대 100개입니다. 선택 후 코드·문서에서 연구할 내용을 파악합니다.</p>
               {repositories.length === 0 ? <p className="detail-note">공개 저장소가 없습니다.</p> :
                 <Select value={null} items={repositories.map(repo => ({ value: repo.url, label: repo.name }))}
                   onValueChange={(url) => { if (url) { setSource(url); setRepositories(null); } }}>
@@ -268,8 +189,18 @@ export function ResearchPane({ connection, connectionBusy, onBusyChange, view, o
             <textarea id="research-goal" required minLength={8} maxLength={4000} rows={4} value={goal}
               onChange={(event) => setGoal(event.target.value)} disabled={locked} style={{ font: "inherit" }}
               className="w-full resize-y rounded-base border-2 border-border bg-secondary-background px-3 py-2 text-sm disabled:opacity-50" />
-            <p className="detail-note">어떤 문제를 밝히고 싶은지, 비교할 방법과 실제 사용 상황을 적어 주세요. 단순 동작 확인만으로 연구 기여가 부족하면 실험 전에 보류됩니다.</p>
+            <p className="detail-note">저장소에서 연구할 문제와 기대하는 기여를 적어 주세요. 앱이 실제 근거에 맞는 분석 범위, 투고처와 원고 구성을 설계합니다.</p>
           </div>
+          <section className="space-y-2 rounded-base border-2 border-border p-3 text-sm" aria-label="학술지 선택과 작성 목표">
+            <h3 className="font-semibold">투고 목표 · 공통 연구와 학술지별 실제 원고</h3>
+            <p className="detail-note">설계 → 필요한 문헌 확보 → 공통 소스 분석 → 적합한 매체별 원고 → PDF·Word 형식 선점검 → 독립 평가로 진행합니다. Software는 설계 결정과 실무 교훈, S&amp;P는 위협·권한 경계와 대응을 중심으로 작성합니다.</p>
+            <details className="detail-note"><summary>지원하는 두 IEEE 매체와 공식 안내</summary>
+              <ul className="mt-2 space-y-1">{PUBLICATION_VENUES.map(venue => <li key={venue.id}>
+                <a href={venue.guidelines_url} target="_blank" rel="noreferrer" className="underline">{venue.name} 공식 작성 안내</a>
+              </li>)}</ul>
+            </details>
+            <p className="detail-note">프로젝트마다 코드를 실행하지 않습니다. 학술지별로 부족한 근거와 다음 작업을 표시합니다. 임용 실적 인정과 학술지 채택은 별도 확인이 필요합니다.</p>
+          </section>
           <div className="grid gap-4 sm:grid-cols-2">
             <ModelPicker id="writer-model" label="작성 모델 (writer)" models={connection.models}
               value={model} onChange={setModel} disabled={locked || !authorized || connection.models.length === 0} />
@@ -291,7 +222,7 @@ export function ResearchPane({ connection, connectionBusy, onBusyChange, view, o
       <CardHeader>
         <div className="section-heading"><CardTitle role="heading" aria-level={2} className="text-xl">연구 결과</CardTitle>
           <Badge variant="neutral">{snapshot ? `${snapshot.jobs.length}개 연구` : "상태 확인 중"}</Badge></div>
-        <CardDescription>보존된 연구 설계·원고의 검토 판단과 결과 파일을 확인합니다. 원고 생성 완료는 초안 파일이 준비되었다는 뜻입니다.</CardDescription>
+        <CardDescription>공통 연구와 학술지별 원고·심사·필요한 근거를 확인합니다. 기존 자료·횟수와 결과 파일은 보존합니다.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-5">
         {feedback}
@@ -299,7 +230,7 @@ export function ResearchPane({ connection, connectionBusy, onBusyChange, view, o
         {snapshot?.jobs.length === 0 && <div className="empty-results"><h2>아직 저장된 연구가 없습니다.</h2>
           <p className="detail-note">새 연구에서 저장소와 목표를 정하면 이곳에서 작업 상태와 결과를 확인할 수 있습니다.</p>
           <Button variant="neutral" onClick={() => onNavigate("research")}>새 연구로 이동</Button></div>}
-        {snapshot?.jobs.some((job) => ["idle", "paused", "failed", "completed"].includes(job.pipeline)) && (
+        {snapshot?.jobs.some((job) => job.researchMode === NEW_RESEARCH_MODE && ["idle", "paused", "failed", "completed"].includes(job.pipeline)) && (
           <details className="resume-models"><summary>재개·보완·원고 수정에 사용할 모델</summary>
             <div className="grid gap-4 sm:grid-cols-2 mt-4">
               <ModelPicker id="resume-writer-model" label="재개 작성 모델" models={connection.models}
@@ -312,134 +243,12 @@ export function ResearchPane({ connection, connectionBusy, onBusyChange, view, o
         {snapshot && snapshot.jobs.length > 0 && (
           <section className="space-y-4" aria-labelledby="research-jobs-label">
             <h2 id="research-jobs-label" className="font-semibold">저장된 연구</h2>
-            <p className="detail-note">재개는 버튼을 눌러 시작합니다. 중단됐거나 결과가 불명확한 과학실험은 자동으로 다시 실행하지 않습니다.</p>
-            {snapshot.jobs.map((job) => (
-              <article key={job.id} id={job.id} tabIndex={-1} className="space-y-3 rounded-base border-2 border-border bg-secondary-background p-4" aria-labelledby={`${job.id}-label`}>
-                <div className="section-heading">
-                  <h3 id={`${job.id}-label`} className="font-semibold break-words">{job.source.split("/").filter(Boolean).at(-1) || job.id}</h3>
-                  <Badge variant={job.pipeline === "completed" ? "default" : "neutral"}>{job.pipeline !== "running" && studyHoldCodes.includes(job.code ?? "") ? "연구 보류" : job.pipeline !== "running" && job.code === "MANUSCRIPT_REJECTED" ? "원고 보류" : pipelineLabels[job.pipeline]}</Badge>
-                </div>
-                <p className="detail-note break-all">{job.source}</p>
-                <details className="detail-note"><summary>연구 목표</summary><p className="mt-2 whitespace-pre-wrap">{job.goal}</p></details>
-                <dl className="grid gap-1 text-xs">
-                  <div><dt className="inline font-semibold">작업 단계: </dt><dd className="inline">{phaseLabels[job.phase]} ({job.phase})</dd></div>
-                  <div><dt className="inline font-semibold">엔진 단계·상태: </dt><dd className="inline">{job.stage} · {job.status}</dd></div>
-                  <div><dt className="inline font-semibold">작성·리뷰 모델: </dt><dd className="inline">{job.model} · {job.reviewerModel}</dd></div>
-                  <div><dt className="inline font-semibold">연구 ID: </dt><dd className="inline">{job.id}</dd></div>
-                  <div><dt className="inline font-semibold">연구 설계 보완: </dt><dd className="inline">{job.redesignAttempt}/2회</dd></div>
-                </dl>
-                {(job.parentResearchId || job.followupResearchId) && <nav className="flex flex-wrap gap-4 text-sm" aria-label="연결된 연구">
-                  {job.parentResearchId && <a className="font-semibold underline underline-offset-4" href={`#${job.parentResearchId}`}>이전 연구 보기</a>}
-                  {job.rootResearchId !== job.id && job.rootResearchId !== job.parentResearchId && <a className="font-semibold underline underline-offset-4" href={`#${job.rootResearchId}`}>최초 연구 보기</a>}
-                  {job.followupResearchId && <a className="font-semibold underline underline-offset-4" href={`#${job.followupResearchId}`}>후속 연구 보기</a>}
-                </nav>}
-                {job.message && <p className="detail-note">{job.message}</p>}
-                {job.code && <p className="detail-note">상태 코드: {job.code}</p>}
-                {job.preparationRedesignReview && <QualityReview title="새 연구안 준비 검토" review={job.preparationRedesignReview} preparation criteria={[
-                  { label: "이전 연구와의 과학적 차이", judgment: job.preparationRedesignReview.scientific_difference },
-                  { label: "이전 결과와 근거의 보존", judgment: job.preparationRedesignReview.prior_evidence },
-                  { label: "실행 가능성과 주장 범위", judgment: job.preparationRedesignReview.feasibility },
-                ]} />}
-                {job.studyReview && <QualityReview title="연구 적합성 검토" review={job.studyReview}
-                  selectedSources={job.studyReview.selected_sources.length} criteria={[
-                    { label: "연구 질문", judgment: job.studyReview.question },
-                    { label: "새로운 기여", judgment: job.studyReview.contribution },
-                    { label: "관련 문헌", judgment: job.studyReview.literature },
-                    { label: "비교 대상", judgment: job.studyReview.comparison },
-                    { label: "표본과 실험 설계", judgment: job.studyReview.sampling },
-                    { label: "실행 가능성과 주장 범위", judgment: job.studyReview.feasibility },
-                  ]} />}
-                {job.manuscriptReview && <QualityReview title="원고 품질 검토" review={job.manuscriptReview} criteria={[
-                  { label: "연구 기여", judgment: job.manuscriptReview.contribution },
-                  { label: "문헌 사용", judgment: job.manuscriptReview.literature },
-                  { label: "결과 해석", judgment: job.manuscriptReview.interpretation },
-                  { label: "내용과 분량", judgment: job.manuscriptReview.presentation },
-                ]} />}
-                {job.manuscriptReview?.remediation && <ManuscriptRecovery remediation={job.manuscriptReview.remediation} />}
-                {job.pipeline === "completed" && !job.studyReview && <p className="detail-note">이 결과에는 현재 기준의 연구 적합성 검토 기록이 없습니다.</p>}
-                {job.pipeline === "completed" && !job.manuscriptReview && <p className="detail-note">이 결과에는 현재 기준의 원고 품질 검토 기록이 없습니다.</p>}
-                {studyHoldCodes.includes(job.code ?? "") && job.pipeline !== "running" && <p className="detail-note" role="status">{job.followupResearchId
-                  ? "이 연구의 설계와 검토 기록을 보존하고 별도 후속 연구를 만들었습니다. 후속 연구에서 새 설계의 적합성을 검토합니다."
-                  : "현재 설계의 근거가 부족해 실험과 원고 생성을 진행하지 않았습니다. 검토 이유와 이어갈 수 있는 보완 작업을 확인하세요."}</p>}
-                {job.code === "MANUSCRIPT_REJECTED" && job.pipeline !== "running" && <p className="detail-note" role="status">{job.followupResearchId
-                  ? "원고와 실험 결과를 보존하고, 검토 내용에 따라 별도 후속 연구를 만들었습니다. 후속 연구에서 설계를 보완하며 이전 실험 결과는 변경하지 않습니다."
-                  : "원고가 품질 검토를 통과하지 못해 결과 파일을 생성하지 않았습니다. 보완 방향과 검토 이유를 확인하세요. 이전 실험 결과는 보존됩니다."}</p>}
-                {snapshot.cleanupResearchIds.includes(job.id) && job.pipeline !== "running" && (
-                  <p className="detail-note" role="status">실험 종료와 기록 보존을 확인해야 새 연구와 계정 변경을 할 수 있습니다. 로그인 없이 정리 확인을 다시 시도할 수 있습니다.</p>
-                )}
-                <div className="action-row">
-                  {job.pipeline === "running" && (
-                    <Button variant="outline" disabled={pending !== null}
-                      onClick={() => void runAction("cancel", () => window.paperFactory.cancelResearch(job.id))}>연구 취소</Button>
-                  )}
-                  {snapshot.cleanupResearchIds.includes(job.id) && job.pipeline !== "running" && (
-                    <Button variant="outline" disabled={pending !== null || snapshot.runtime.state === "checking"}
-                      onClick={() => void runAction("cancel", () => window.paperFactory.cancelResearch(job.id))}>
-                      {pending === "cancel" ? "정리 확인 중…" : "정리 다시 확인"}
-                    </Button>
-                  )}
-                  {job.improvementAvailable && ["idle", "paused", "failed"].includes(job.pipeline) && (
-                    <Button variant="outline" disabled={!canRun}
-                      onClick={() => void runAction("improve", () => window.paperFactory.improveResearch(job.id, model, reviewerModel))}>
-                      심사·보완 이어가기
-                    </Button>
-                  )}
-                  {["idle", "paused", "failed"].includes(job.pipeline) && job.status !== "blocked" && !studyHoldCodes.includes(job.code ?? "") && job.resumeKind && !snapshot.cleanupResearchIds.includes(job.id) && (
-                    <Button variant="outline" disabled={!canRun}
-                      onClick={() => void runAction("resume", () => window.paperFactory.resumeResearch(job.id, model, reviewerModel))}>
-                      {job.resumeKind === "preparation" ? "연구 준비 재개" : "원고 작성 재개"}
-                    </Button>
-                  )}
-                  {["idle", "paused", "failed"].includes(job.pipeline) && ["created", "proposed", "planned", "analyzed"].includes(job.stage) &&
-                    ["ready", "cancelled"].includes(job.status) && (
-                    <Button variant="outline" disabled={locked}
-                      onClick={() => void runAction("evidence", () => window.paperFactory.addResearchEvidence(job.id))}>추가 근거 선택</Button>
-                  )}
-                </div>
-                {job.improvementAvailable && <p className="detail-note">보존된 근거로 새 심사를 진행합니다. 추가 측정이 필요하면 별도 연구를 설계하고 적합성 검토부터 진행합니다.</p>}
-                {(["created", "proposed", "planned", "analyzed"].includes(job.stage) || job.supportingDocuments.length > 0) && (
-                  <div className="space-y-2">
-                    <p className="detail-note">원문 문서(.md·.txt·.json, 영문 파일명)를 다음 작성·검토 요청과 재현 ZIP에 포함합니다. 각 128 KiB, 연구당 최대 8개·256 KiB입니다. 측정·고정 계획·리뷰 승인을 변경하지 않으며, 가져온 시각은 문서 안의 사전 활동 주장을 증명하지 않습니다.</p>
-                    <details className="detail-note"><summary>첨부 근거 {job.supportingDocuments.length}개</summary>
-                      {job.supportingDocuments.length === 0 ? <p className="mt-2">첨부된 근거 문서가 없습니다.</p> :
-                        <ul className="mt-2 space-y-1">{job.supportingDocuments.map(document =>
-                          <li key={document.id}>{document.name} · {document.size.toLocaleString("ko-KR")} 바이트</li>)}</ul>}
-                    </details>
-                  </div>
-                )}
-                {job.pipeline === "completed" && job.artifacts.some((artifact) => outputLabels[artifact.id]) && (
-                  <div className="space-y-3 border-t-2 border-border pt-3">
-                    <h4 className="font-semibold">생성된 결과 파일</h4>
-                    <p className="detail-note">완료 상태와 모델의 검토 통과는 학술지 심사나 채택을 의미하지 않습니다. 제출 전 원문 문헌·실험 설계·연구 기여를 직접 확인해 주세요.</p>
-                    <div className="action-row">
-                      <Button variant="outline" size="sm" disabled={locked}
-                        onClick={() => void runAction("folder", () => window.paperFactory.showArtifactFolder(job.id,
-                          job.artifacts.find(artifact => outputLabels[artifact.id])!.id))}>결과 폴더 열기</Button>
-                      {job.stage === "exported" && job.status === "completed" && job.studyReview?.accepted && job.manuscriptReview?.accepted && (
-                        <Button variant="outline" size="sm" disabled={!canRun}
-                          onClick={() => void runAction("revise", () => window.paperFactory.reviseResearchWriting(job.id, model, reviewerModel))}>원고 수정</Button>
-                      )}
-                    </div>
-                    {job.studyReview?.accepted && job.manuscriptReview?.accepted && <p className="detail-note">원고 수정은 보존된 실험 결과로 새 원고와 리뷰를 작성합니다. 이전 결과 파일과 실험 기록은 보존됩니다.</p>}
-                    {job.artifacts.filter((artifact) => outputLabels[artifact.id]).map((artifact) => (
-                      <div key={artifact.id} className="space-y-2">
-                        <p className="text-sm">{outputLabels[artifact.id]} · {artifact.size.toLocaleString("ko-KR")} 바이트</p>
-                        <div className="action-row">
-                          <Button variant="outline" size="sm" disabled={locked}
-                            onClick={() => void runAction("save", () => window.paperFactory.saveArtifact(job.id, artifact.id))}>
-                            <Download aria-hidden="true" /> {outputLabels[artifact.id]} 저장
-                          </Button>
-                          <Button variant="ghost" size="sm" disabled={locked}
-                            onClick={() => void runAction("open", () => window.paperFactory.openArtifact(job.id, artifact.id))}>
-                            {outputLabels[artifact.id]} 열기 <ExternalLink aria-hidden="true" />
-                          </Button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </article>
-            ))}
+            <p className="detail-note">최종 목표: 적합한 IEEE Software·Security &amp; Privacy 실제 원고와 개별 투고 준비도 평가</p>
+            <p className="detail-note">원고의 작성·보완은 버튼을 눌러 이어갑니다. 과거 실험 연구는 조회와 결과 파일 열기·저장만 제공합니다.</p>
+            {snapshot.jobs.map(job => <ResearchResultCard key={job.id} job={job} locked={locked}
+              canWork={canRun && job.researchMode === NEW_RESEARCH_MODE} analysisReady={analysisReady}
+              cleanupPending={snapshot.cleanupResearchIds.includes(job.id)} runtimeChecking={snapshot.runtime.state === "checking"}
+              pending={pending} model={model} reviewerModel={reviewerModel} runAction={runAction} />)}
           </section>
         )}
       </CardContent>

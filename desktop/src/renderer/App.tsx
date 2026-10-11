@@ -35,7 +35,7 @@ function accountLabel(profile: AppSnapshot["profiles"][number]) {
 
 const workspaceTabs = [
   { id: "connection", label: "연결", description: "계정 · 모델 · 크레딧", icon: Plug },
-  { id: "research", label: "새 연구", description: "저장소 · 목표 · 실행", icon: FlaskConical },
+  { id: "research", label: "새 연구", description: "저장소 · 학술지 선택 · 원고", icon: FlaskConical },
   { id: "results", label: "결과", description: "작업 상태 · 결과 파일", icon: Files },
 ] as const;
 type WorkspaceView = typeof workspaceTabs[number]["id"];

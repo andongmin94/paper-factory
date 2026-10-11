@@ -24,11 +24,55 @@ MAX_QUEUED_REQUESTS = 32
 MAX_RECENT_IDS = 1024
 SHUTDOWN_ALLOWED = {"shutdown", "runtime.status", "workflow.list", "workflow.status", "workflow.recordInference", "workflow.cancel"}
 METHODS = {
-    "runtime.status": set(), "workflow.create": {"source", "goal"}, "workflow.list": set(),
+    "runtime.status": set(), "workflow.create": {"source", "goal", "researchMode"}, "workflow.list": set(),
+    "workflow.submitRepositoryPlan": {"researchId", "value"},
+    "workflow.submitRepositoryAnalysis": {"researchId", "value"},
+    "workflow.collectRepositoryLiterature": {"researchId", "queries"},
+    "workflow.collectRepositoryReferences": {"researchId", "selection"},
+    "workflow.submitRepositoryManuscript": {"researchId", "value"},
+    "workflow.submitRepositoryReview": {"researchId", "value"},
+    "workflow.submitRepositoryContentAssessment": {"researchId", "value"},
+    "workflow.requestRepositoryRevision": {"researchId", "value"},
+    "workflow.reviseRepositoryManuscript": {"researchId"},
+    "workflow.exportRepositoryDraft": {"researchId"},
+    "workflow.reformatRepositoryDraft": {"researchId"},
+    "workflow.startPortfolio": {"researchId", "value"},
+    "workflow.collectPortfolioLiterature": {"researchId", "queries", "pdfCandidates", "htmlCandidates"},
+    "workflow.preparePortfolioRevision": {"researchId"},
+    "workflow.submitPortfolioAnalysis": {"researchId", "value"},
+    "workflow.submitPortfolioManuscript": {"researchId", "value"},
+    "workflow.submitPortfolioReview": {"researchId", "value"},
+    "workflow.exportPortfolioDraft": {"researchId", "venueId"},
+    "workflow.repairPortfolioExport": {"researchId", "venueId"},
+    "workflow.reformatPortfolioDraft": {"researchId", "venueId"},
+    "workflow.correctPortfolioLayout": {"researchId", "venueId"},
+    "workflow.admitPortfolioEvidence": {"researchId", "value", "files"},
     "workflow.status": {"researchId", "includeMaterials"},
     "workflow.readMaterial": {"researchId", "area", "name", "offset", "limit"},
+    "workflow.selectLiteraturePassages": {"researchId", "passages"},
+    "workflow.setSubmissionContract": {"researchId", "value"},
+    "workflow.setAuthorMetadata": {"researchId", "value"},
+    "workflow.collectSubmissionRequirements": {"researchId", "venue", "url"},
+    "workflow.confirmSubmissionReadiness": {"researchId", "value"},
+    "workflow.recordStudyRemediation": {"researchId", "value"},
+    "workflow.prepareResearchQuestions": {"researchId", "value"},
+    "workflow.selectResearchQuestion": {"researchId", "value"},
+    "workflow.reserveQuestionLiteratureFollowup": {"researchId"},
+    "workflow.submitQuestionLiteratureFollowup": {"researchId", "value"},
+    "workflow.collectQuestionLiteratureFollowup": {"researchId"},
+    "workflow.prepareRedesignQuestions": {"researchId", "value"},
+    "workflow.selectRedesignQuestion": {"researchId", "value"},
+    "workflow.collectRedesignQuestionEvidence": {"researchId"},
+    "workflow.reserveRedesignQuestionSearchRepair": {"researchId"},
+    "workflow.submitRedesignQuestionSearchRepair": {"researchId", "value"},
+    "workflow.collectRedesignQuestionSearchRepair": {"researchId"},
+    "workflow.reassessRedesignQuestion": {"researchId", "value"},
+    "workflow.reserveRedesignQuestionReframing": {"researchId"},
+    "workflow.submitRedesignQuestionReframing": {"researchId", "value"},
+    "workflow.reserveRedesignQuestionReframingSelection": {"researchId"},
+    "workflow.selectRedesignQuestionReframing": {"researchId", "value"},
     "workflow.addEvidence": {"researchId", "files"},
-    "workflow.submitProposal": {"researchId", "value"}, "workflow.submitStudyReview": {"researchId", "review"},
+    "workflow.submitProposal": {"researchId", "value", "repair"}, "workflow.submitStudyReview": {"researchId", "review"},
     "workflow.submitCode": {"researchId", "value", "review"},
     "workflow.collectLiterature": {"researchId"}, "workflow.startExperiment": {"researchId"},
     "workflow.collectAuthoringLiterature": {"researchId", "queries"},
@@ -36,14 +80,17 @@ METHODS = {
     "workflow.selectAuthoringLiterature": {"researchId", "selectedSources"},
     "workflow.cancel": {"researchId"}, "workflow.resume": {"researchId"}, "workflow.reviseWriting": {"researchId"},
     "workflow.redesignStudy": {"researchId"},
-    "workflow.submitRedesignProposal": {"researchId", "value"},
+    "workflow.submitRedesignProposal": {"researchId", "value", "repair", "preparationRepair"},
     "workflow.submitRedesignReview": {"researchId", "review"},
     "workflow.improveWriting": {"researchId"},
-    "workflow.submitManuscript": {"researchId", "value", "review"},
+    "workflow.submitManuscript": {"researchId", "value", "review", "claim", "repair"},
     "workflow.export": {"researchId"}, "artifact.resolve": {"researchId", "artifactId"}, "shutdown": set(),
     "workflow.recordInference": {"researchId", "receipt"},
 }
-OPTIONAL = {"workflow.status": {"includeMaterials"}, "workflow.readMaterial": {"offset", "limit"}}
+OPTIONAL = {"workflow.create": {"researchMode"}, "workflow.status": {"includeMaterials"}, "workflow.readMaterial": {"offset", "limit"},
+            "workflow.collectPortfolioLiterature": {"pdfCandidates", "htmlCandidates"},
+            "workflow.submitProposal": {"repair"}, "workflow.submitRedesignProposal": {"repair", "preparationRepair"},
+            "workflow.submitManuscript": {"claim", "repair"}}
 
 
 def request(raw: bytes) -> dict:
@@ -67,28 +114,34 @@ def request(raw: bytes) -> dict:
         raise ValueError("Invalid research identifier")
     if "includeMaterials" in params and type(params["includeMaterials"]) is not bool:
         raise ValueError("includeMaterials must be a boolean")
+    if "researchMode" in params and params["researchMode"] not in {"empirical", "repository_analysis"}:
+        raise ValueError("Research mode must be empirical or repository_analysis")
     for name in ("offset", "limit"):
         if name in params and type(params[name]) is not int:
             raise ValueError("Material bounds must be integers")
     if (("offset" in params and params["offset"] < 0) or
             ("limit" in params and not 1 <= params["limit"] <= 32000)):
         raise ValueError("Material bounds are outside the declared limit")
-    for name in ("goal", "area", "name", "artifactId", "source"):
+    for name in ("goal", "area", "name", "artifactId", "source", "venue", "venueId", "url"):
         if name in params and not isinstance(params[name], str):
             raise ValueError("Text parameters must be strings")
-    for name in ("value", "review", "receipt"):
+    for name in ("value", "review", "receipt", "repair", "claim", "preparationRepair", "selection"):
         if name in params and not isinstance(params[name], dict):
             raise ValueError("Submissions must be JSON objects")
-    if "files" in params and (not isinstance(params["files"], list) or not 1 <= len(params["files"]) <= 8 or
+    maximum_files = 32 if data["method"] == "workflow.admitPortfolioEvidence" else 8
+    if "files" in params and (not isinstance(params["files"], list) or not 1 <= len(params["files"]) <= maximum_files or
             any(not isinstance(item, dict) or set(item) != {"name", "contentBase64"} or
                 not isinstance(item["name"], str) or not isinstance(item["contentBase64"], str) for item in params["files"])):
-        raise ValueError("Supporting files require one to eight name/contentBase64 objects")
+        raise ValueError(f"Supporting files require one to {maximum_files} name/contentBase64 objects")
     if "queries" in params and (not isinstance(params["queries"], list) or not 1 <= len(params["queries"]) <= 4 or
             any(not isinstance(value, str) or not 8 <= len(value.strip()) <= 1000 for value in params["queries"])):
         raise ValueError("Authoring queries require one to four substantive bounded strings")
     if "selectedSources" in params and (not isinstance(params["selectedSources"], list) or
             not 1 <= len(params["selectedSources"]) <= 6 or any(not isinstance(value, dict) for value in params["selectedSources"])):
         raise ValueError("Select one to six authoring source passages")
+    if "passages" in params and (not isinstance(params["passages"], list) or len(params["passages"]) > 12 or
+            any(not isinstance(value, dict) for value in params["passages"])):
+        raise ValueError("Literature passages require at most twelve literal selections")
     return data
 
 
@@ -187,12 +240,56 @@ class Dispatcher:
 
     def execute(self, method, p, *, deadline=None):
         if method == "runtime.status":
-            return self.runtime.runner.status()
+            return {**self.runtime.runner.status(), "repository_analysis_ready": True}
         if method == "workflow.create":
             source, goal = p["source"], p["goal"]
             if not isinstance(source, str) or not re.fullmatch(r"https://github\.com/[A-Za-z0-9-]{1,39}/[A-Za-z0-9_.-]{1,100}/?", source):
                 raise ValueError("Research input must be a public GitHub repository URL")
-            return self.service.create(source.rstrip("/"), goal)
+            return self.service.create(source.rstrip("/"), goal, p.get("researchMode", "empirical"))
+        if method == "workflow.submitRepositoryPlan":
+            return self.service.submit_repository_plan(p["researchId"], p["value"])
+        if method == "workflow.startPortfolio":
+            return self.service.start_portfolio(p["researchId"], p["value"])
+        if method == "workflow.collectPortfolioLiterature":
+            return self.service.collect_portfolio_literature(p["researchId"], p["queries"], p.get("pdfCandidates"), p.get("htmlCandidates"))
+        if method == "workflow.preparePortfolioRevision":
+            return self.service.prepare_portfolio_revision(p["researchId"])
+        if method == "workflow.submitPortfolioAnalysis":
+            return self.service.submit_portfolio_analysis(p["researchId"], p["value"])
+        if method == "workflow.submitPortfolioManuscript":
+            return self.service.submit_portfolio_manuscript(p["researchId"], p["value"])
+        if method == "workflow.submitPortfolioReview":
+            return self.service.submit_portfolio_review(p["researchId"], p["value"])
+        if method == "workflow.exportPortfolioDraft":
+            return self.service.export_portfolio_draft(p["researchId"], p["venueId"])
+        if method == "workflow.repairPortfolioExport":
+            return self.service.repair_portfolio_export(p["researchId"], p["venueId"])
+        if method == "workflow.reformatPortfolioDraft":
+            return self.service.reformat_portfolio_draft(p["researchId"], p["venueId"])
+        if method == "workflow.correctPortfolioLayout":
+            return self.service.correct_portfolio_layout(p["researchId"], p["venueId"])
+        if method == "workflow.admitPortfolioEvidence":
+            return self.service.admit_portfolio_evidence(p["researchId"], p["value"], p["files"])
+        if method == "workflow.submitRepositoryAnalysis":
+            return self.service.submit_repository_analysis(p["researchId"], p["value"])
+        if method == "workflow.collectRepositoryLiterature":
+            return self.service.collect_repository_literature(p["researchId"], p["queries"])
+        if method == "workflow.collectRepositoryReferences":
+            return self.service.collect_repository_references(p["researchId"], p["selection"])
+        if method == "workflow.submitRepositoryManuscript":
+            return self.service.submit_repository_manuscript(p["researchId"], p["value"])
+        if method == "workflow.submitRepositoryReview":
+            return self.service.submit_repository_review(p["researchId"], p["value"])
+        if method == "workflow.submitRepositoryContentAssessment":
+            return self.service.submit_repository_content_assessment(p["researchId"], p["value"])
+        if method == "workflow.requestRepositoryRevision":
+            return self.service.request_repository_revision(p["researchId"], p["value"])
+        if method == "workflow.reviseRepositoryManuscript":
+            return self.service.revise_repository_manuscript(p["researchId"])
+        if method == "workflow.exportRepositoryDraft":
+            return self.service.export_repository_draft(p["researchId"])
+        if method == "workflow.reformatRepositoryDraft":
+            return self.service.reformat_repository_draft(p["researchId"])
         if method == "workflow.list":
             records = []
             for path in sorted(self.service.root.iterdir()):
@@ -213,12 +310,48 @@ class Dispatcher:
             return self.service.status(p["researchId"], include_materials=p.get("includeMaterials", True))
         if method == "workflow.readMaterial":
             return self.service.read_material(p["researchId"], p["area"], p["name"], offset=p.get("offset", 0), limit=p.get("limit", 16000))
+        if method == "workflow.selectLiteraturePassages":
+            return self.service.select_literature_passages(p["researchId"], p["passages"])
+        if method == "workflow.prepareResearchQuestions":
+            return self.service.prepare_research_questions(p["researchId"], p["value"])
+        if method == "workflow.selectResearchQuestion":
+            return self.service.select_research_question(p["researchId"], p["value"])
+        if method == "workflow.reserveQuestionLiteratureFollowup":
+            return self.service.reserve_question_literature_followup(p["researchId"])
+        if method == "workflow.submitQuestionLiteratureFollowup":
+            return self.service.submit_question_literature_followup(p["researchId"], p["value"])
+        if method == "workflow.collectQuestionLiteratureFollowup":
+            return self.service.collect_question_literature_followup(p["researchId"])
+        if method == "workflow.prepareRedesignQuestions":
+            return self.service.prepare_redesign_questions(p["researchId"], p["value"])
+        if method == "workflow.selectRedesignQuestion":
+            return self.service.select_redesign_question(p["researchId"], p["value"])
+        if method == "workflow.collectRedesignQuestionEvidence":
+            return self.service.collect_redesign_question_evidence(p["researchId"])
+        if method == "workflow.reserveRedesignQuestionSearchRepair":
+            return self.service.reserve_redesign_question_search_repair(p["researchId"])
+        if method == "workflow.submitRedesignQuestionSearchRepair":
+            return self.service.submit_redesign_question_search_repair(p["researchId"], p["value"])
+        if method == "workflow.collectRedesignQuestionSearchRepair":
+            return self.service.collect_redesign_question_search_repair(p["researchId"])
+        if method == "workflow.reassessRedesignQuestion":
+            return self.service.reassess_redesign_question(p["researchId"], p["value"])
+        if method == "workflow.reserveRedesignQuestionReframing":
+            return self.service.reserve_redesign_question_reframing(p["researchId"])
+        if method == "workflow.submitRedesignQuestionReframing":
+            return self.service.submit_redesign_question_reframing(p["researchId"], p["value"])
+        if method == "workflow.reserveRedesignQuestionReframingSelection":
+            return self.service.reserve_redesign_question_reframing_selection(p["researchId"])
+        if method == "workflow.selectRedesignQuestionReframing":
+            return self.service.select_redesign_question_reframing(p["researchId"], p["value"])
         if method == "workflow.addEvidence":
             return self.service.add_evidence(p["researchId"], p["files"])
         if method == "workflow.submitProposal":
             if not isinstance(p["value"], dict) or p["value"].get("runtime") not in {"quickjs", "chromium"}:
                 raise ValueError("Standalone research supports QuickJS or Chromium")
-            return self.service.submit_proposal(p["researchId"], p["value"])
+            return self.service.submit_proposal(p["researchId"], p["value"], p.get("repair"))
+        if method == "workflow.recordStudyRemediation":
+            return self.service.record_study_remediation(p["researchId"], p["value"])
         if method == "workflow.submitStudyReview":
             return self.service.submit_study_review(p["researchId"], p["review"])
         if method == "workflow.collectAuthoringLiterature":
@@ -226,7 +359,7 @@ class Dispatcher:
         if method == "workflow.collectStudyLiterature":
             return self.service.collect_study_literature(p["researchId"], p["queries"], p["reason"], p["pdfCandidates"])
         if method == "workflow.submitRedesignProposal":
-            return self.service.submit_redesign_proposal(p["researchId"], p["value"])
+            return self.service.submit_redesign_proposal(p["researchId"], p["value"], p.get("repair"), p.get("preparationRepair"))
         if method == "workflow.submitRedesignReview":
             return self.service.submit_redesign_review(p["researchId"], p["review"])
         if method == "workflow.selectAuthoringLiterature":
@@ -236,7 +369,15 @@ class Dispatcher:
                 raise ValueError("Standalone research supports QuickJS or Chromium")
             return self.service.submit_code(p["researchId"], p["value"], p["review"])
         if method == "workflow.submitManuscript":
-            return self.service.submit_manuscript(p["researchId"], p["value"], p["review"])
+            return self.service.submit_manuscript(p["researchId"], p["value"], p["review"], p.get("claim"), p.get("repair"))
+        if method == "workflow.setSubmissionContract":
+            return self.service.set_submission_contract(p["researchId"], p["value"])
+        if method == "workflow.setAuthorMetadata":
+            return self.service.set_author_metadata(p["researchId"], p["value"])
+        if method == "workflow.collectSubmissionRequirements":
+            return self.service.collect_submission_requirements(p["researchId"], p["venue"], p["url"])
+        if method == "workflow.confirmSubmissionReadiness":
+            return self.service.confirm_submission_readiness(p["researchId"], p["value"])
         if method == "workflow.recordInference":
             return self.service.record_inference(p["researchId"], p["receipt"])
         if method == "artifact.resolve":

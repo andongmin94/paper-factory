@@ -41,7 +41,7 @@ def initial(setup):
 def collector(*, identifier="new-primary", extra=" Additional directly inspected synthetic methods distinguish this evidence packet.", flags=None, no_sources=False, missing_query=False):
     def retrieve(queries, root, *, limit, cancel, pdf_candidates):
         assert limit == 3
-        assert isinstance(pdf_candidates, list)
+        assert pdf_candidates is None or isinstance(pdf_candidates, list)
         evidence = collect(queries, root, limit=limit, cancel=cancel)
         source = evidence["sources"][0]
         source["id"] = identifier
@@ -311,8 +311,8 @@ def test_ipc_declares_exact_api_fields_and_dispatches_native_method(setup, monke
     result = runtime.execute(request["method"], request["params"])
     assert result["study_literature_pending"] is True
     if retrieval == "public_listing":
-        obsolete = {**params, "pdfCandidates": [{**PDF_HINT, "url": PDF_URL}]}
-        bad = ipc.request(json.dumps({"id": "obsolete-url", "method": request["method"], "params": obsolete}).encode())
+        invalid = {**params, "pdfCandidates": [{**PDF_HINT, "url": PDF_URL.replace("https://", "http://", 1)}]}
+        bad = ipc.request(json.dumps({"id": "invalid-url", "method": request["method"], "params": invalid}).encode())
         assert_code("LITERATURE_QUERIES_INVALID", lambda: runtime.execute(bad["method"], bad["params"]))
         assert service.status(research_id)["study_literature_attempt"] == 1
     for bad in ({**params, "untrustedPath": "elsewhere"}, {"researchId": research_id, "queries": QUERIES},
@@ -711,7 +711,7 @@ def hinted_collector(monkeypatch, *, text=None, mutate=None, content_type="appli
 
 
 @pytest.mark.parametrize("candidates", [None, {}, [PDF_HINT] * 3, [{**PDF_HINT, "extra": True}],
-                                     [{**PDF_HINT, "url": PDF_URL}],
+                                     [{**PDF_HINT, "url": PDF_URL.replace("https://", "http://", 1)}],
                                      [{**PDF_HINT, "doi": "10.1234/unrequested"}]])
 def test_invalid_pdf_hints_are_rejected_before_reservation_or_network(setup, candidates):
     service, runner, research_id, old = initial(setup)
@@ -1025,7 +1025,7 @@ def test_every_returned_author_copy_binds_that_rounds_reserved_hint(setup, monke
     def unbound(queries, root, **kwargs):
         # Simulate a misbound collector result, not a forged scientific model
         # approval: all returned literal identity evidence is otherwise valid.
-        assert kwargs["pdf_candidates"] == candidates
+        assert kwargs["pdf_candidates"] == (candidates or None)
         return actual(queries, root, **{**kwargs, "pdf_candidates": [PDF_HINT]})
     service.collector = unbound
     assert_code("PUBLICATION_EVIDENCE_INVALID", lambda: service.collect_study_literature(research_id, [PDF_HINT["doi"]], REASON, candidates))

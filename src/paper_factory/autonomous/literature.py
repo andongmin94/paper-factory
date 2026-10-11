@@ -1,7 +1,8 @@
 """Bounded literature retrieval with an explicit distinction between metadata and reading.
 
-Only Crossref records/abstracts, identity-bound arXiv metadata, allowlisted public
-PDFs and version-bound official Unicode reports are fetched. Bibliographic candidates resolve by DOI;
+Only Crossref records/abstracts, identity-bound arXiv metadata, bounded public
+PDFs discovered by exact bibliographic identity, explicitly bound first-party
+scholarly HTML bodies, and version-bound official Unicode reports are fetched. Bibliographic candidates resolve by DOI;
 explicit arXiv identifiers resolve to a fixed preprint version before reading.
 Method queries can discover two version-bound preprints through the same API.
 The collector does not infer a finding from a title or identifier.
@@ -26,8 +27,8 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Callable, TypedDict
-from urllib.parse import quote, urljoin, urlsplit
+from typing import Callable, NotRequired, TypedDict
+from urllib.parse import quote, unquote, urljoin, urlsplit
 from urllib.request import getproxies_environment, proxy_bypass_environment
 from uuid import uuid4
 
@@ -39,6 +40,7 @@ from ..workspace import is_link, safe_relative
 from .windows_runtime import WindowsJob
 
 CROSSREF = "https://api.crossref.org"
+OPENALEX = "https://api.openalex.org"
 ARXIV = "https://export.arxiv.org/api/query"
 # Fixed provider boundaries prevent a metadata link from requesting local services.
 PDF_HOSTS = frozenset({"arxiv.org", "export.arxiv.org", "joss.theoj.org"})
@@ -69,12 +71,33 @@ class _RateLimited(Exception):
 
 
 class _CollectionBudget:
-    def __init__(self):
+    def __init__(self, pdf_reservation_limit: int = 2, excluded_urls: list[str] | None = None):
         self.deadline = time.monotonic() + 90
         self.next_request = 0.0
         self.next_arxiv_request = 0.0
         self.retries = 0
         self.requests = 0
+        self.pdf_reservation_limit = pdf_reservation_limit
+        self.pdf_reservations: list[dict] = []
+        self.excluded_urls = set(excluded_urls or [])
+
+    def reserve_pdf(self, source: dict, route: str, url: str) -> None:
+        if url in self.excluded_urls:
+            raise ValueError("A previously failed URL cannot consume another PDF attempt")
+        if len(self.pdf_reservations) >= self.pdf_reservation_limit:
+            raise ValueError("Shared PDF reservation budget was exhausted")
+        identity = ("doi:" + source["doi"] if source.get("doi") else "arxiv:" + source["arxiv_id"]
+                    if source.get("arxiv_id") else "publisher:" + source["publisher_url"])
+        reservation = {"source_id": source["id"], "identity": identity, "route": route,
+                       "url": url, "pdf_attempted": True}
+        if source.get("arxiv_id"):
+            reservation["arxiv_id"] = source["arxiv_id"]
+        # A selected candidate consumes its reservation before DNS, cancellation
+        # or GET. Redirects and HTTP retries belong to this same reservation.
+        self.pdf_reservations.append(reservation)
+
+    def pdf_available(self) -> bool:
+        return len(self.pdf_reservations) < self.pdf_reservation_limit
 
     def wait(self, seconds: float, cancel: Callable[[], bool] | None) -> None:
         end = time.monotonic() + seconds
@@ -165,12 +188,119 @@ def _unicode_url(url: str) -> str:
     return url
 
 
+def _openalex_url(doi: str) -> str:
+    """One identifier lookup, without arbitrary API queries or credentials."""
+    if not isinstance(doi, str) or len(doi) > 500 or _doi(doi) != doi:
+        raise ValueError("OpenAlex discovery requires a canonical DOI")
+    return OPENALEX + "/works/doi:" + quote(doi, safe="")
+
+
+def _repository_pdf_url(url: str) -> str:
+    """A bounded public anonymous HTTPS file location; its bytes must prove identity."""
+    if not isinstance(url, str) or len(url) > 2048 or any(ord(c) < 32 or ord(c) == 127 for c in url):
+        raise ValueError("Invalid repository PDF URL")
+    parts = urlsplit(url)
+    try:
+        port = parts.port
+    except ValueError as error:
+        raise ValueError("Invalid repository PDF URL port") from error
+    if (parts.scheme != "https" or not parts.hostname or "." not in parts.hostname or parts.username is not None
+            or parts.password is not None or port not in (None, 443) or parts.fragment
+            or (parts.query and (parts.hostname != "zenodo.org" or parts.query != "download=1"))):
+        raise ValueError("Repository PDF URL is outside the public record-file boundary")
+    if parts.hostname.lower().endswith((".localhost", ".local", ".internal")) or not parts.path or "\\" in url:
+        raise ValueError("Repository PDF URL is outside the public record-file boundary")
+    if any(segment in {".", ".."} for segment in unquote(parts.path).split("/")):
+        raise ValueError("Repository PDF URL cannot contain path traversal")
+    if parts.hostname in {"zenodo.org", "hal.science"}:
+        allowed_path = (r"/records/[1-9]\d{0,14}/files/[A-Za-z0-9][A-Za-z0-9_.-]{0,179}\.pdf"
+                        if parts.hostname == "zenodo.org" else r"/hal-\d{8}(?:v[1-9]\d{0,3})?/document")
+        if not re.fullmatch(allowed_path, parts.path):
+            raise ValueError("Repository PDF URL is outside the public record-file boundary")
+    try:
+        address = ipaddress.ip_address(parts.hostname)
+    except ValueError:
+        if parts.hostname.replace(".", "").isdigit() or ":" in parts.hostname:
+            raise ValueError("Repository PDF URL has an invalid public address")
+    else:
+        if not address.is_global:
+            raise ValueError("Repository PDF URL must use a public address")
+    return "https://" + parts.hostname + parts.path
+
+
+def openalex_pdf_locations(content: bytes, source: dict) -> list[dict]:
+    """Recompute discovery candidates; OA metadata does not verify their PDF."""
+    if not isinstance(content, bytes) or len(content) > MAX_JSON_BYTES:
+        raise ValueError("OpenAlex discovery requires bounded original bytes")
+    lookup_url = _openalex_url(source["doi"])
+    work = json.loads(content)
+    if (not isinstance(work, dict) or not isinstance(work.get("doi"), str)
+            or _doi(work["doi"].removeprefix("https://doi.org/")) != source["doi"]
+            or not isinstance(work.get("title"), str)
+            or _title_key(work["title"]) != _title_key(source["title"])
+            or type(work.get("publication_year")) is not int or work["publication_year"] != source["year"]):
+        raise ValueError("OpenAlex work differs from exact Crossref identity")
+    locations = work.get("locations")
+    if not isinstance(locations, list) or len(locations) > 1000:
+        raise ValueError("OpenAlex work lacks a bounded location list")
+    found = []
+    seen = set()
+    for index, location in enumerate(locations):
+        if (not isinstance(location, dict) or location.get("is_oa") is not True
+                or not isinstance(location.get("source"), dict) or location["source"].get("type") not in {"repository", "journal", "conference"}):
+            continue
+        try:
+            url = _repository_pdf_url(location.get("pdf_url"))
+        except ValueError:
+            continue
+        version, license_name = location.get("version"), location.get("license")
+        if (version not in (None, "submittedVersion", "acceptedVersion", "publishedVersion")
+                or (license_name is not None and (not isinstance(license_name, str) or len(license_name) > 100
+                    or any(ord(c) < 32 or ord(c) == 127 for c in license_name)))):
+            continue
+        if url in seen:
+            continue
+        seen.add(url)
+        found.append({"provider": "OpenAlex", "lookup_url": lookup_url, "location_index": index,
+                      "pdf_url": location["pdf_url"], "claimed_version": version, "license": license_name, "url": url})
+        if len(found) == 2:
+            break
+    return found
+
+
+def _publisher_url(url: str, *, pdf: bool = False) -> str:
+    """The official USENIX presentation and final proceedings PDF endpoints only."""
+    if not isinstance(url, str) or len(url) > 2048 or any(ord(c) < 32 or ord(c) == 127 for c in url):
+        raise ValueError("Invalid publisher URL")
+    parts = urlsplit(url)
+    pattern = (r"/system/files/usenixsecurity\d{2}-[A-Za-z0-9][A-Za-z0-9_.-]{0,179}\.pdf" if pdf else
+               r"/conference/usenixsecurity\d{2}/presentation/[a-z0-9][a-z0-9-]{0,99}")
+    if (parts.scheme != "https" or parts.netloc != "www.usenix.org" or parts.query or parts.fragment
+            or not re.fullmatch(pattern, parts.path)):
+        raise ValueError("Publisher URL is outside the official presentation/PDF boundary")
+    return url
+
+
 def _checked_url(url: str, *, pdf: bool = False, author_pdf: bool = False, author_listing: bool = False,
-                 standard_html: bool = False) -> str:
+                 standard_html: bool = False, repository_pdf: bool = False, publisher_html: bool = False,
+                 scholarly_html: bool = False) -> str:
     """Reject untrusted authorities before DNS or HTTP and private DNS answers."""
     if not isinstance(url, str) or len(url) > 2048 or any(ord(c) < 32 for c in url):
         raise ValueError("Invalid literature URL")
     parts = urlsplit(url)
+    if scholarly_html:
+        if pdf or author_pdf or author_listing or standard_html or repository_pdf or publisher_html:
+            raise ValueError("Scholarly HTML requires its separate bounded original HTML route")
+        scholarly_html_url(url)
+    if publisher_html:
+        if pdf or author_pdf or author_listing or standard_html or repository_pdf:
+            raise ValueError("Publisher metadata requires its separate bounded HTML route")
+        _publisher_url(url)
+    if repository_pdf:
+        if not pdf or author_pdf or author_listing or standard_html:
+            raise ValueError("Repository downloads require the bounded PDF route")
+        url = _repository_pdf_url(url)
+        parts = urlsplit(url)
     if standard_html:
         if pdf or author_pdf or author_listing:
             raise ValueError("Unicode HTML cannot use a PDF or author-list route")
@@ -182,8 +312,9 @@ def _checked_url(url: str, *, pdf: bool = False, author_pdf: bool = False, autho
             raise ValueError("Author-paper requests must be bounded PDF requests")
         url = _author_pdf_url(url)
         parts = urlsplit(url)
-    hosts = (frozenset({"www.unicode.org"}) if standard_html else frozenset({AUTHOR_PDF_HOST})
-             if author_pdf or author_listing else PDF_HOSTS if pdf else frozenset({"api.crossref.org", "export.arxiv.org"}))
+    hosts = (frozenset({parts.hostname}) if scholarly_html else frozenset({"www.usenix.org"}) if publisher_html else frozenset({"www.unicode.org"}) if standard_html else frozenset({AUTHOR_PDF_HOST})
+             if author_pdf or author_listing else frozenset({parts.hostname}) if repository_pdf else PDF_HOSTS
+             if pdf else frozenset({"api.crossref.org", "export.arxiv.org", "api.openalex.org"}))
     try:
         port = parts.port
     except ValueError as error:
@@ -195,7 +326,7 @@ def _checked_url(url: str, *, pdf: bool = False, author_pdf: bool = False, autho
         raise ValueError("Literature URL is outside the allowed provider boundary")
     if parts.query and pdf:
         raise ValueError("Open-access PDF URLs cannot contain credentials or query parameters")
-    if author_pdf or author_listing or standard_html:
+    if author_pdf or author_listing or standard_html or repository_pdf or publisher_html or scholarly_html:
         pass  # The fixed author directory/listing boundary was checked above.
     elif pdf:
         if parts.hostname in {"arxiv.org", "export.arxiv.org"}:
@@ -206,6 +337,10 @@ def _checked_url(url: str, *, pdf: bool = False, author_pdf: bool = False, autho
     elif parts.hostname == "export.arxiv.org":
         if parts.path != "/api/query":
             raise ValueError("Only the arXiv discovery endpoint is allowed")
+    elif parts.hostname == "api.openalex.org":
+        if (parts.query or not parts.path.startswith("/works/doi:")
+                or _openalex_url(unquote(parts.path.removeprefix("/works/doi:"))) != url):
+            raise ValueError("Only exact OpenAlex DOI endpoints are allowed")
     elif parts.path != "/works" and not parts.path.startswith("/works/10."):
         raise ValueError("Only Crossref work endpoints are allowed")
     try:
@@ -215,7 +350,7 @@ def _checked_url(url: str, *, pdf: bool = False, author_pdf: bool = False, autho
         # This exception applies only to the fixed provider allowlist above,
         # never to arbitrary publisher hosts, addresses, or redirects.
         proxies = getproxies_environment()
-        if not (author_pdf or author_listing or standard_html) and proxies.get("https") and not proxy_bypass_environment(parts.hostname, proxies):
+        if not (author_pdf or author_listing or standard_html or repository_pdf or publisher_html or scholarly_html) and proxies.get("https") and not proxy_bypass_environment(parts.hostname, proxies):
             return url
         raise ValueError("Literature provider DNS lookup failed") from error
     if not addresses or any(not ipaddress.ip_address(record[4][0]).is_global for record in addresses):
@@ -227,7 +362,8 @@ def _fetch(
     client: httpx.Client, url: str, *, budget: _CollectionBudget, pdf: bool = False,
     params: dict[str, object] | None = None, cancel: Callable[[], bool] | None = None,
     author_pdf: bool = False, author_listing: bool = False,
-    standard_html: bool = False,
+    standard_html: bool = False, repository_pdf: bool = False, publisher_html: bool = False,
+    scholarly_html: bool = False,
     retain_response: Callable[[bytes, str, str, int], None] | None = None,
     redirects: list[dict] | None = None,
 ) -> tuple[bytes, str, str]:
@@ -236,21 +372,32 @@ def _fetch(
     redirect, retried = 0, False
     while True:
         _check_cancel(cancel)
-        url = _checked_url(url, pdf=pdf, author_pdf=author_pdf, author_listing=author_listing, standard_html=standard_html)
+        if url in budget.excluded_urls:
+            raise ValueError("A previously failed literature URL cannot be fetched again")
+        url = _checked_url(url, pdf=pdf, author_pdf=author_pdf, author_listing=author_listing,
+                           standard_html=standard_html, repository_pdf=repository_pdf, publisher_html=publisher_html,
+                           scholarly_html=scholarly_html)
         timeout = budget.request_timeout(pdf=pdf, arxiv=not pdf and urlsplit(url).hostname == "export.arxiv.org", cancel=cancel)
         budget.requests += 1
         with client.stream("GET", url, params=params, follow_redirects=False, timeout=timeout) as response:
             budget.wait(0, cancel)
-            hosts = ({"www.unicode.org"} if standard_html else {AUTHOR_PDF_HOST}
-                     if author_pdf or author_listing else PDF_HOSTS if pdf else {"api.crossref.org", "export.arxiv.org"})
+            hosts = ({urlsplit(url).hostname} if scholarly_html else {"www.usenix.org"} if publisher_html else {"www.unicode.org"} if standard_html else {AUTHOR_PDF_HOST}
+                     if author_pdf or author_listing else {urlsplit(url).hostname} if repository_pdf else PDF_HOSTS
+                     if pdf else {"api.crossref.org", "export.arxiv.org", "api.openalex.org"})
             if response.url.scheme != "https" or response.url.host not in hosts:
                 raise ValueError("Literature response escaped its allowed provider boundary")
             if author_pdf:
                 _author_pdf_url(str(response.url))
+            if repository_pdf and _repository_pdf_url(str(response.url)) != url:
+                raise ValueError("Repository response escaped its exact requested file")
             if author_listing and str(response.url) != AUTHOR_PUBLICATIONS:
                 raise ValueError("Author publication-list response escaped its fixed endpoint")
             if standard_html and _unicode_url(str(response.url)) != url:
                 raise ValueError("Unicode response escaped its exact requested endpoint")
+            if publisher_html and _publisher_url(str(response.url)) != url:
+                raise ValueError("Publisher metadata escaped its exact requested endpoint")
+            if scholarly_html and scholarly_html_url(str(response.url)) != url:
+                raise ValueError("Scholarly HTML escaped its exact requested endpoint")
 
             def content() -> bytes:
                 length = response.headers.get("content-length")
@@ -267,16 +414,16 @@ def _fetch(
             if response.status_code in (301, 302, 303, 307, 308):
                 location = response.headers.get("location")
                 trace = None
-                if author_pdf and redirects is not None:
+                if (author_pdf or repository_pdf) and redirects is not None:
                     trace = {"url": str(response.url), "status": response.status_code,
                              "location": location, "next_url": None}
                     redirects.append(trace)
                 try:
-                    if author_pdf or author_listing or standard_html:
+                    if author_pdf or author_listing or standard_html or repository_pdf or publisher_html or scholarly_html or urlsplit(url).hostname == "api.openalex.org":
                         raw = content()
                         if retain_response is not None:
                             retain_response(raw, str(response.url), response.headers.get("content-type", "").lower(), response.status_code)
-                    if not pdf or not location or redirect == 3:
+                    if repository_pdf or not pdf or not location or redirect == 3:
                         raise ValueError("Literature provider redirect was refused")
                     url = author_pdf_redirect(str(response.url), location) if author_pdf else urljoin(str(response.url), location)
                     if trace is not None:
@@ -289,7 +436,7 @@ def _fetch(
                 redirect, retried = redirect + 1, False
                 continue
             if response.status_code == 429 and not pdf and not author_listing:
-                if standard_html and retain_response is not None:
+                if (standard_html or publisher_html or scholarly_html or urlsplit(url).hostname == "api.openalex.org") and retain_response is not None:
                     retain_response(content(), str(response.url), response.headers.get("content-type", "").lower(), 429)
                 delay = budget.rate_delay(response.headers.get("retry-after"))
                 response.close()
@@ -510,6 +657,14 @@ def discover_unicode_reports(content: bytes, queries: list[str]) -> list[dict]:
     matches = []
     for entry in entries:
         for query in queries:
+            heading = re.fullmatch(
+                r"(?i)Unicode®? (Standard Annex|Technical Standard) #([1-9]\d{0,2}): (.+)", query)
+            if heading is not None:
+                kind = "UAX" if heading[1].casefold() == "standard annex" else "UTS"
+                if (entry["report_id"] == kind + heading[2] and
+                        _title_key(heading[3]) == _title_key(entry["title"])):
+                    entry["queries"].append(query)
+                continue
             tokens = [kind.upper() + number for kind, number in re.findall(
                 r"(?i)(?<!\w)(UAX|UTS)\s*#?\s*([1-9]\d{0,2})(?!\w)", query)]
             if entry["report_id"] in tokens or _title_key(query) == _title_key(entry["title"]):
@@ -1081,6 +1236,263 @@ def _query_doi(query: str) -> str | None:
 class PdfCandidate(TypedDict):
     doi: str
     title: str
+    url: NotRequired[str]
+
+
+class PublisherPdfCandidate(TypedDict):
+    landing_url: str
+    pdf_url: str
+    title: str
+    authors: list[str]
+    year: int
+
+
+class ScholarlyHtmlCandidate(TypedDict):
+    landing_url: str
+    html_url: str
+    title: str
+    authors: list[str]
+    year: int
+    publication_type: str
+    publication_version: str
+
+
+def scholarly_html_url(url: str, *, landing: bool | None = None) -> str:
+    """Two verified first-party scholarly HTML host families; never a PDF URL."""
+    if not isinstance(url, str) or len(url) > 2048 or any(ord(c) < 32 or ord(c) == 127 for c in url):
+        raise ValueError("Invalid scholarly HTML URL")
+    parts = urlsplit(url)
+    if parts.scheme != "https" or parts.query or parts.fragment or parts.netloc not in {"www.usenix.org", "www.erights.org", "erights.org"}:
+        raise ValueError("Scholarly HTML escaped its public first-party boundary")
+    if parts.netloc == "www.usenix.org":
+        is_landing = bool(re.fullmatch(r"/conference/[a-z0-9-]+/[a-z0-9-]+(?:/[a-z0-9-]+)?", parts.path))
+        is_body = bool(re.fullmatch(r"/legacy/events?/[a-z0-9-]+/tech/full_papers/[a-z0-9_-]+/[a-z0-9_-]+_html/index\.html", parts.path))
+    else:
+        is_landing = parts.path in {"/elib/capability/duals/", "/elib/capability/duals/index.html"}
+        is_body = bool(re.fullmatch(r"/elib/capability/duals/(?!index\.html)[a-z][a-z0-9_-]{0,60}\.html", parts.path))
+    if not (is_landing if landing is True else is_body if landing is False else is_landing or is_body):
+        raise ValueError("Scholarly HTML URL is outside its metadata/full-body boundary")
+    return url
+
+
+def normalize_portfolio_html_candidates(value: object, queries: list[str]) -> list[ScholarlyHtmlCandidate]:
+    if not isinstance(value, list) or len(value) > 2:
+        raise ValueError("Provide at most two primary scholarly HTML candidates")
+    result = []
+    fields = {"landing_url", "html_url", "title", "authors", "year", "publication_type", "publication_version"}
+    for item in value:
+        if (not isinstance(item, dict) or set(item) != fields or not isinstance(item["title"], str)
+                or not 1 <= len(item["title"]) <= 500 or not _title_key(item["title"])
+                or any(ord(c) < 32 or ord(c) == 127 for c in item["title"])
+                or type(item["year"]) is not int or not 1900 <= item["year"] <= 2099
+                or not isinstance(item["authors"], list) or not 1 <= len(item["authors"]) <= 50
+                or any(not isinstance(author, str) or not 1 <= len(author) <= 500 or not _title_key(author)
+                       or any(ord(c) < 32 or ord(c) == 127 for c in author) for author in item["authors"])
+                or len({_title_key(author) for author in item["authors"]}) != len(item["authors"])):
+            raise ValueError("Scholarly HTML requires exact title, authors, year, type, version and URLs")
+        candidate = {**item, "title": item["title"].strip(), "authors": [author.strip() for author in item["authors"]],
+                     "landing_url": scholarly_html_url(item["landing_url"], landing=True),
+                     "html_url": scholarly_html_url(item["html_url"], landing=False)}
+        family = "usenix" if urlsplit(candidate["landing_url"]).hostname == "www.usenix.org" else "erights"
+        body_family = "usenix" if urlsplit(candidate["html_url"]).hostname == "www.usenix.org" else "erights"
+        required = ("proceedings-article", "published") if family == "usenix" else ("technical_report", "earlier_draft")
+        if family != body_family or (candidate["publication_type"], candidate["publication_version"]) != required:
+            raise ValueError("Scholarly HTML identity must preserve its publisher or earlier author-draft status")
+        if not any(query.strip() in {candidate["landing_url"], candidate["html_url"]}
+                   or _title_key(query.strip()) == _title_key(candidate["title"]) for query in queries):
+            raise ValueError("Scholarly HTML identity must be explicitly requested in the literature queries")
+        if any(previous["html_url"] == candidate["html_url"] for previous in result):
+            raise ValueError("Scholarly HTML cannot repeat a body identity")
+        result.append(candidate)
+    return result
+
+
+def _scholarly_document(raw: bytes) -> BeautifulSoup:
+    if (not isinstance(raw, bytes) or not raw or len(raw) > MAX_JSON_BYTES or raw.startswith(b"%PDF-")
+            or not re.search(br"<(?:!doctype\s+html|html)(?:\s|>)", raw[:2048], re.I)):
+        raise ValueError("Scholarly body requires complete bounded original HTML bytes")
+    soup = BeautifulSoup(raw, "html.parser")
+    if len(soup.find_all(True)) > 20_000 or soup.body is None:
+        raise ValueError("Scholarly HTML exceeds its structural bound or lacks its body")
+    for element in soup(["script", "style", "template", "noscript", "nav", "footer"]):
+        element.decompose()
+    return soup
+
+
+def _scholarly_text(soup: BeautifulSoup) -> str:
+    from bs4 import NavigableString
+    chunks = []
+    blocks = {"h1", "h2", "h3", "h4", "h5", "h6", "p", "div", "table", "tr", "li", "pre", "blockquote", "hr"}
+    def visit(node):
+        if isinstance(node, Comment):
+            return
+        if isinstance(node, NavigableString):
+            chunks.append(str(node))
+            return
+        if node.name in blocks or node.name == "br":
+            chunks.append("\n")
+        elif node.name in {"td", "th"}:
+            chunks.append("\t")
+        for child in node.children:
+            visit(child)
+        if node.name in blocks:
+            chunks.append("\n")
+        elif node.name in {"td", "th"}:
+            chunks.append("\t")
+    visit(soup.body)
+    text = "\n".join(re.sub(r"[ \t\r\f\u00a0]+", " ", line).strip() for line in "".join(chunks).splitlines())
+    text = re.sub(r"\n{3,}", "\n\n", text).strip() + "\n"
+    if len(text) > MAX_TEXT_CHARS:
+        raise ValueError("Scholarly HTML exceeds its complete extracted-text limit")
+    return text
+
+
+def _scholarly_link(url: str) -> str | None:
+    """Resolve literal historical publisher links to its current HTTPS mirror."""
+    parts = urlsplit(url)
+    if parts.scheme not in {"http", "https"} or parts.query or parts.fragment:
+        return None
+    if parts.netloc in {"usenix.org", "www.usenix.org"}:
+        path = parts.path
+        if re.match(r"/events?/", path):
+            path = "/legacy" + path
+        if path.rstrip("/").endswith("_html"):
+            path = path.rstrip("/") + "/index.html"
+        candidate = "https://www.usenix.org" + path
+    elif parts.netloc in {"erights.org", "www.erights.org"}:
+        candidate = "https://www.erights.org" + parts.path
+    else:
+        return None
+    try:
+        return scholarly_html_url(candidate, landing=False)
+    except ValueError:
+        return None
+
+
+def scholarly_html_identity(landing_raw: bytes, body_raw: bytes, candidate: ScholarlyHtmlCandidate) -> dict:
+    """Re-derive bibliography, version and complete scientific text from frozen HTML."""
+    candidate = normalize_portfolio_html_candidates([candidate], [candidate["landing_url"]])[0]
+    landing, document = _scholarly_document(landing_raw), _scholarly_document(body_raw)
+    heads = document.find_all("h1")
+    if len(heads) != 1 or _title_key(heads[0].get_text(" ", strip=True)) != _title_key(candidate["title"]):
+        raise ValueError("Scholarly HTML complete title differs from its requested identity")
+    matched = [anchor for anchor in landing.find_all("a", href=True)
+               if _scholarly_link(urljoin(candidate["landing_url"], anchor["href"])) ==
+               _scholarly_link(candidate["html_url"])]
+    if len(matched) != 1:
+        raise ValueError("Scholarly HTML lacks one literal first-party full-body selection link")
+    title, authors, year = candidate["title"], candidate["authors"], candidate["year"]
+    if urlsplit(candidate["landing_url"]).hostname == "www.usenix.org":
+        displayed = landing.find_all("h1")
+        records = re.findall(r"@inproceedings\s*\{[^@]*?\n\s*\}", landing.get_text("\n"), re.I)
+        if len(displayed) != 1 or len(records) != 1 or _title_key(displayed[0].get_text(" ", strip=True)) != _title_key(title):
+            raise ValueError("Scholarly publisher requires one displayed title and complete proceedings record")
+        def field(name):
+            values = re.findall(r"(?mi)^\s*" + name + r"\s*=\s*\{([^{}]+)\}\s*,?\s*$", records[0])
+            if len(values) != 1:
+                raise ValueError("Scholarly proceedings record lacks one exact " + name)
+            return values[0].strip()
+        authors = re.split(r"\s+and\s+", field("author"))
+        declared_year = field("year")
+        if not declared_year.isdecimal() or field("publisher") != "USENIX Association" or field("url") != candidate["landing_url"]:
+            raise ValueError("Scholarly publisher record differs from its official identity")
+        year, provider = int(declared_year), "USENIX"
+        publisher = "USENIX Association"
+    else:
+        label = matched[0].parent.get_text(" ", strip=True).casefold()
+        if "earlier" not in label or "draft" not in label:
+            raise ValueError("The author-repository body must retain its explicitly earlier draft status")
+        # An author index is not proof that the earlier HTML equals a submitted PDF.
+        # Require bibliographic front matter of this variant rather than infer it.
+        provider = publisher = "ERights author repository"
+    text = _scholarly_text(document)
+    body = full_text_body_range(text)
+    if body is None or body["end"] - body["start"] < 200:
+        raise ValueError("Scholarly HTML lacks complete substantive body and references boundaries")
+    front = _title_key(text[:body["start"]])
+    if any(_title_key(author) not in front for author in authors) or authors != candidate["authors"] or year != candidate["year"]:
+        raise ValueError("Scholarly HTML actual front matter differs from exact authors or year")
+    if provider != "USENIX" and (not re.search(r"(?i)(?:technical\s+report\s+SRL|SRL)" + str(year) + r"[- ]\d+", text[:body["start"]])
+            or not re.search(r"\b" + str(year) + r"\b", text[:body["start"]])):
+        raise ValueError("Earlier author HTML lacks its actual technical-report year identity")
+    headings = [(match.start(), match.group().strip()) for match in re.finditer(r"(?m)^\s*\d+(?:\.\d+)*\s+[^\n]{3,100}$", text)
+                if body["start"] <= match.start() < body["end"]]
+    sections = [{"id": "section-1", "heading": "Introduction", "start": body["start"]}]
+    sections.extend({"id": "section-" + str(index + 2), "heading": heading, "start": start}
+                    for index, (start, heading) in enumerate(headings))
+    for index, section in enumerate(sections):
+        section["end"] = sections[index + 1]["start"] if index + 1 < len(sections) else body["end"]
+    return {"title": title, "authors": authors, "year": year, "provider": provider, "publisher": publisher,
+            "publication_type": candidate["publication_type"], "publication_version": candidate["publication_version"],
+            "document_format": "html", "text": text, "body_range": body, "section_ranges": sections}
+
+
+def normalize_portfolio_pdf_candidates(value: object, queries: list[str]) -> list[PdfCandidate | PublisherPdfCandidate]:
+    """Admit exact DOI hints or a bounded, explicitly requested publisher identity."""
+    if not isinstance(value, list) or len(value) > 2:
+        raise ValueError("Provide at most two public PDF candidates")
+    normalized = []
+    for item in value:
+        if isinstance(item, dict) and "doi" in item:
+            candidate = normalize_pdf_candidates([item], queries)[0]
+        else:
+            if (not isinstance(item, dict) or set(item) != {"landing_url", "pdf_url", "title", "authors", "year"}
+                    or not isinstance(item.get("title"), str) or not 1 <= len(item["title"]) <= 500
+                    or any(ord(c) < 32 or ord(c) == 127 for c in item["title"])
+                    or not _title_key(item["title"]) or type(item.get("year")) is not int
+                    or not 2000 <= item["year"] <= 2099 or not isinstance(item.get("authors"), list)
+                    or not 1 <= len(item["authors"]) <= 50
+                    or any(not isinstance(author, str) or not 1 <= len(author) <= 500
+                           or not _title_key(author) or any(ord(c) < 32 or ord(c) == 127 for c in author)
+                           for author in item["authors"])
+                    or len({_title_key(author) for author in item["authors"]}) != len(item["authors"])):
+                raise ValueError("Publisher PDF candidates require exact title, authors, year and official URLs")
+            candidate = {**item, "title": item["title"].strip(), "authors": [author.strip() for author in item["authors"]],
+                         "landing_url": _publisher_url(item["landing_url"]), "pdf_url": _publisher_url(item["pdf_url"], pdf=True)}
+            if not any(query.strip() == candidate["landing_url"] or
+                       _title_key(query.strip()) == _title_key(candidate["title"]) for query in queries):
+                raise ValueError("Publisher PDF identity must be explicitly requested in the literature queries")
+            if not all("usenixsecurity" + str(candidate["year"])[-2:] in candidate[key]
+                       for key in ("landing_url", "pdf_url")):
+                raise ValueError("Publisher URLs differ from the exact requested publication year")
+        identity = candidate.get("doi") or candidate.get("landing_url")
+        if any((previous.get("doi") or previous.get("landing_url")) == identity for previous in normalized):
+            raise ValueError("Public PDF candidates cannot repeat an identity")
+        normalized.append(candidate)
+    return normalized
+
+
+def publisher_pdf_metadata(content: bytes, landing_url: str) -> dict:
+    """Reparse the original official BibTeX, displayed title and literal final PDF link."""
+    _publisher_url(landing_url)
+    if not isinstance(content, bytes) or len(content) > MAX_JSON_BYTES:
+        raise ValueError("Publisher metadata requires bounded original HTML")
+    soup = BeautifulSoup(content.decode("utf-8", errors="strict"), "html.parser")
+    headings = soup.find_all("h1")
+    bibtex = re.findall(r"@inproceedings\s*\{[^@]*?\n\s*\}", soup.get_text("\n"), re.I)
+    if len(headings) != 1 or len(bibtex) != 1:
+        raise ValueError("Publisher presentation lacks one displayed title and one complete BibTeX record")
+    def field(name: str) -> str:
+        matches = re.findall(r"(?mi)^\s*" + name + r"\s*=\s*\{([^{}]+)\}\s*,?\s*$", bibtex[0])
+        if len(matches) != 1:
+            raise ValueError("Publisher BibTeX lacks one exact " + name + " field")
+        return matches[0].strip()
+    title, author, year, publisher, url = (field(name) for name in ("title", "author", "year", "publisher", "url"))
+    if (not year.isdecimal() or not 2000 <= int(year) <= 2099 or publisher != "USENIX Association"
+            or url != landing_url or _title_key(headings[0].get_text(" ", strip=True)) != _title_key(title)
+            or re.search(r"(?mi)^\s*doi\s*=", bibtex[0])):
+        raise ValueError("Publisher presentation title, identity or DOI-free record differs from its official BibTeX")
+    urls = set()
+    for anchor in soup.find_all("a", href=True):
+        try:
+            urls.add(_publisher_url(urljoin(landing_url, anchor["href"]), pdf=True))
+        except ValueError:
+            pass
+    if len(urls) != 1:
+        raise ValueError("Publisher presentation has no unique literal final proceedings PDF link")
+    candidate = {"landing_url": landing_url, "pdf_url": urls.pop(), "title": title,
+                 "authors": re.split(r"\s+and\s+", author), "year": int(year)}
+    return normalize_portfolio_pdf_candidates([candidate], [landing_url])[0]
 
 
 def normalize_pdf_candidates(value: object, queries: list[str]) -> list[PdfCandidate]:
@@ -1090,9 +1502,9 @@ def normalize_pdf_candidates(value: object, queries: list[str]) -> list[PdfCandi
     explicit_dois = {_query_doi(query.strip()) for query in queries if isinstance(query, str)}
     candidates: list[PdfCandidate] = []
     for item in value:
-        if (not isinstance(item, dict) or set(item) != {"doi", "title"}
-                or any(not isinstance(item[key], str) for key in ("doi", "title"))):
-            raise ValueError("Public PDF candidates require only doi and title strings")
+        if (not isinstance(item, dict) or set(item) not in ({"doi", "title"}, {"doi", "title", "url"})
+                or any(not isinstance(item[key], str) for key in item)):
+            raise ValueError("Public PDF candidates require doi, title and an optional public URL")
         if any(ord(c) < 32 or ord(c) == 127 for key in ("doi", "title") for c in item[key]):
             raise ValueError("Public PDF candidate fields cannot contain control characters")
         title = item["title"].strip()
@@ -1102,6 +1514,8 @@ def normalize_pdf_candidates(value: object, queries: list[str]) -> list[PdfCandi
         if len(doi) > 500 or doi not in explicit_dois:
             raise ValueError("Public PDF candidate DOI must be explicitly requested in the literature queries")
         candidate: PdfCandidate = {"doi": doi, "title": title}
+        if "url" in item:
+            candidate["url"] = _repository_pdf_url(item["url"])
         if any(previous["doi"] == doi for previous in candidates):
             raise ValueError("Public PDF candidates cannot repeat a DOI")
         candidates.append(candidate)
@@ -1228,6 +1642,81 @@ def author_pdf_identity(text: str, source: dict) -> dict:
             "title_range": title_range, "author_ranges": author_ranges, "doi_ranges": doi_ranges}
 
 
+def public_pdf_identity(text: str, source: dict) -> dict:
+    """Bind an ordinary scholarly PDF's literal front matter, allowing a cover page.
+
+    A printed DOI must agree. An absent DOI is recorded rather than invented;
+    the exact verified metadata title and every complete author name remain mandatory.
+    A literal year is also required when no DOI is printed. No body or
+    bibliography passage can supply a title or author.
+    """
+    if (not isinstance(source, dict) or not isinstance(source.get("doi", ""), str)
+            or (bool(source.get("doi")) and _doi(source["doi"]) != source["doi"])
+            or (not source.get("doi") and not source.get("publisher_url")) or not isinstance(source.get("title"), str)
+            or not 1 <= len(source["title"]) <= 500 or not _title_key(source["title"])
+            or not isinstance(source.get("authors"), list) or not 1 <= len(source["authors"]) <= 50
+            or any(not isinstance(author, str) or not 1 <= len(author) <= 500 or not _title_key(author)
+                   for author in source["authors"])
+            or type(source.get("year")) is not int or not 1000 <= source["year"] <= 2999):
+        raise ValueError("Public PDF identity requires exact bounded bibliographic metadata")
+    if not source.get("doi"):
+        _publisher_url(source["publisher_url"])
+    author_keys = [_title_key(author).split() for author in source["authors"]]
+    if len({tuple(key) for key in author_keys}) != len(author_keys):
+        raise ValueError("Public PDF identity requires distinct complete author names")
+    if not isinstance(text, str) or len(text) > MAX_TEXT_CHARS + 1000 or not text.startswith("[Page 1]\n"):
+        raise ValueError("Public PDF extraction lacks its initial page boundary")
+    markers = list(re.finditer(r"(?m)^\[Page ([1-9]\d*)\]\n", text))
+    if not markers or any(int(marker[1]) != index for index, marker in enumerate(markers, 1)):
+        raise ValueError("Public PDF page boundaries are not consecutive")
+    prefix_end = markers[3].start() if len(markers) > 3 else len(text)
+    prefix = text[:prefix_end]
+    abstract = re.search(r"(?mi)^[ \t]*abstract(?:[ \t]*$|[ \t]*[—–:.-])", prefix)
+    if abstract is None:
+        raise ValueError("Public PDF has no Abstract within its first three pages")
+    page = max((marker for marker in markers[:3] if marker.end() <= abstract.start()), key=lambda item: item.start())
+    if abstract.start() - page.end() > 8_000:
+        raise ValueError("Public PDF front matter exceeds its bounded page scope")
+    front = text[page.end():abstract.start()]
+    words = [(token, page.end() + match.start(), page.end() + match.end())
+             for match in re.finditer(r"\w+", front)
+             for token in _title_key(match.group()).split()]
+    author_ranges = []
+    for author, key in zip(source["authors"], author_keys):
+        matches = [index for index in range(len(words) - len(key) + 1)
+                   if [word[0] for word in words[index:index + len(key)]] == key]
+        if len(matches) != 1:
+            raise ValueError("Public PDF front matter lacks one exact complete metadata author name")
+        index = matches[0]
+        author_ranges.append({"author": author, "start": words[index][1], "end": words[index + len(key) - 1][2]})
+    first_author = min(item["start"] for item in author_ranges)
+    before_authors = text[page.end():first_author]
+    title_lines = [(match.group(), page.end() + match.start(), page.end() + match.end())
+                   for match in re.finditer(r"[^\r\n]+", before_authors) if match.group().strip()]
+    if (not 1 <= len(title_lines) <= 5 or
+            _title_key(" ".join(line[0] for line in title_lines)) != _title_key(source["title"])):
+        raise ValueError("Public PDF complete title immediately before its authors differs from metadata")
+    year_matches = list(re.finditer(r"(?<!\w)" + str(source["year"]) + r"(?!\w)", prefix))
+    # Cover pages and the identified title page can print bibliographic IDs.
+    # Later body pages cannot turn a cited DOI into the paper's own identity.
+    identity_end = next((marker.start() for marker in markers if marker.start() > page.start()), len(text))
+    doi_ranges = []
+    for match in re.finditer(r"(?i)(?<![\w.])10\.\d{4,9}/[^\s<>\"()]+", text[:identity_end]):
+        literal = match.group().rstrip(",;.")
+        if _doi(literal) != source.get("doi"):
+            raise ValueError("Public PDF front matter prints a conflicting DOI")
+        doi_ranges.append({"start": match.start(), "end": match.start() + len(literal)})
+    if not doi_ranges and not year_matches:
+        raise ValueError("A DOI-absent public PDF must print its metadata publication year in its first three pages")
+    body = full_text_body_range(text)
+    if body is None or len(text[body["start"]:body["end"]].strip()) < 200:
+        raise ValueError("Public PDF lacks a bounded substantive scholarly body")
+    return {"identity_page": int(page[1]), "front_matter_range": {"start": page.end(), "end": abstract.start()},
+            "title_range": {"start": title_lines[0][1], "end": title_lines[-1][2]}, "author_ranges": author_ranges,
+            "year_ranges": [{"start": match.start(), "end": match.end()} for match in year_matches],
+            "doi_printed": bool(doi_ranges), "doi_ranges": doi_ranges}
+
+
 def _retain_full_text(source: dict, root: Path, text: str, url: str, raw_path: str, raw_digest: str) -> None:
     text_path, text_digest = _save(root, source["id"] + "-text", "txt", text.encode())
     excerpts, ranges = _full_text_excerpts(text, source["queries"])
@@ -1236,6 +1725,68 @@ def _retain_full_text(source: dict, root: Path, text: str, url: str, raw_path: s
                    "body_range": full_text_body_range(text), "text_chars": len(text),
                    "reading_scope": "Only the located literal excerpts were inspected; the complete extracted text is retained separately",
                    "text_path": text_path, "text_sha256": text_digest})
+
+
+def _promote_direct_pdf(client: httpx.Client, source: dict, hint: PdfCandidate, root: Path, *,
+                        budget: _CollectionBudget, cancel: Callable[[], bool] | None,
+                        warnings: list[str], attempts: list[dict]) -> None:
+    """An explicit URL locates bytes; exact metadata and literal PDF verify the work."""
+    attempt = {"source_id": source["id"], "candidate": hint, "route": "direct_public_pdf",
+               "status": "rejected", "redirects": [],
+               "metadata_path": source["metadata_path"], "metadata_sha256": source["metadata_sha256"]}
+    attempts.append(attempt)
+
+    def retain(raw: bytes, url: str, content_type: str, status: int) -> None:
+        path, digest = _save(root, source["id"] + "-direct-response", "pdf" if raw.startswith(b"%PDF-") else "bin", raw)
+        if status in (301, 302, 303, 307, 308):
+            attempt["redirects"][-1].update(raw_path=path, sha256=digest, content_type=content_type)
+        else:
+            attempt.update(raw_path=path, sha256=digest, retrieved_url=url, content_type=content_type, http_status=status)
+
+    try:
+        budget.wait(0, cancel)
+        if (hint["doi"] != source.get("doi") or _title_key(hint["title"]) != _title_key(source["title"])
+                or _repository_pdf_url(hint["url"]) != hint["url"]):
+            raise ValueError("Direct PDF identity differs from exact Crossref metadata")
+        selection = {"origin": "explicit_pdf_candidate", "candidate": hint,
+                     "metadata_path": source["metadata_path"], "metadata_sha256": source["metadata_sha256"]}
+        discovery_path, discovery_digest = _save(root, source["id"] + "-direct-selection", "json",
+                                                 json.dumps(selection, ensure_ascii=False, sort_keys=True).encode())
+        attempt["discovery"] = {"provider": "explicit_pdf_candidate", "url": hint["url"],
+                                "raw_path": discovery_path, "sha256": discovery_digest}
+        budget.reserve_pdf(source, "repository_copy", hint["url"])
+        attempt["pdf_attempted"] = True
+        raw, url, content_type = _fetch(client, hint["url"], pdf=True, repository_pdf=True,
+            redirects=attempt["redirects"], retain_response=retain, cancel=cancel, budget=budget)
+        if (attempt["http_status"] != 200 or url != hint["url"] or
+                content_type.split(";", 1)[0].strip() not in {"application/pdf", "application/octet-stream"}
+                or not raw.startswith(b"%PDF-")):
+            raise ValueError("Direct PDF did not return its complete original PDF response")
+        if budget.deadline - time.monotonic() < 18:
+            raise _DeadlineExceeded
+        text = _pdf_text(raw)
+        text_path, text_digest = _save(root, source["id"] + "-text", "txt", text.encode())
+        attempt.update(text_path=text_path, text_sha256=text_digest)
+        budget.wait(0, cancel)
+        attempt["identity"] = public_pdf_identity(text, source)
+        _retain_full_text(source, root, text, url, attempt["raw_path"], attempt["sha256"])
+        source.update(copy_type="repository_copy", publication_version="unknown",
+                      discovery_path=discovery_path, discovery_sha256=discovery_digest, discovery_url=hint["url"])
+        source.pop("arxiv_id", None)
+        attempt["status"] = "verified"
+    except (_Cancelled, _DeadlineExceeded, _RateLimited) as error:
+        attempt.update(status="interrupted", error=type(error).__name__)
+        raise
+    except (ValueError, OSError, httpx.HTTPError, httpx.InvalidURL) as error:
+        attempt.update(error=type(error).__name__, note=str(error)[:300] if isinstance(error, ValueError)
+                       else "Direct public PDF retrieval or extraction failed")
+        warnings.append(f"Direct PDF unavailable for {source['id']} ({type(error).__name__}); reading scope was not upgraded")
+    finally:
+        path, digest = _save(root, source["id"] + "-direct-identity", "json",
+                            json.dumps(attempt, ensure_ascii=False, sort_keys=True).encode())
+        attempt.update(identity_path=path, identity_sha256=digest)
+        if attempt["status"] == "verified":
+            source.update(identity_path=path, identity_sha256=digest)
 
 
 def _promote_hinted_pdf(client: httpx.Client, source: dict, hints: list[PdfCandidate], root: Path, *, listing: dict,
@@ -1264,10 +1815,9 @@ def _promote_hinted_pdf(client: httpx.Client, source: dict, hints: list[PdfCandi
                                         if key in {"raw_path", "sha256", "retrieved_url", "content_type", "http_status"}}
             discovered = discover_author_pdf(listing_bytes, hint)
             attempt["discovery"].update(discovered)
-            if sum(previous.get("pdf_attempted") is True for previous in attempts) >= 2:
-                raise ValueError("Public author PDF attempt budget was exhausted")
             # Reserve before DNS, cancellation checks or GET. A matched URL
             # consumes one attempt even when retrieval or identity fails.
+            budget.reserve_pdf(source, "author_copy", discovered["url"])
             attempt["pdf_attempted"] = True
             raw, url, content_type = _fetch(client, discovered["url"], pdf=True, author_pdf=True,
                                            redirects=attempt["redirects"], retain_response=retain, cancel=cancel, budget=budget)
@@ -1307,6 +1857,103 @@ def _promote_hinted_pdf(client: httpx.Client, source: dict, hints: list[PdfCandi
             break
 
 
+def _promote_openalex_pdf(client: httpx.Client, source: dict, root: Path, *, budget: _CollectionBudget,
+                         cancel: Callable[[], bool] | None, warnings: list[str], attempts: list[dict]) -> None:
+    """Discover public copies, then independently verify their literal PDF identity."""
+    candidate = {"doi": source["doi"], "title": source["title"]}
+    discovery = {"provider": "OpenAlex", "lookup_url": _openalex_url(source["doi"]),
+                 "attempted": False, "status": "not_attempted"}
+    attempt = {"source_id": source["id"], "candidate": candidate, "route": "openalex_repository",
+               "status": "rejected", "redirects": [], "discovery": discovery,
+               "metadata_path": source["metadata_path"], "metadata_sha256": source["metadata_sha256"]}
+    attempts.append(attempt)
+
+    def save_proof() -> None:
+        path, digest = _save(root, source["id"] + "-repository-identity", "json",
+                            json.dumps(attempt, ensure_ascii=False, sort_keys=True).encode())
+        attempt.update(identity_path=path, identity_sha256=digest)
+        if attempt["status"] == "verified":
+            source.update(identity_path=path, identity_sha256=digest)
+
+    def retain_discovery(raw: bytes, url: str, content_type: str, status: int) -> None:
+        path, digest = _save(root, source["id"] + "-openalex", "json", raw)
+        discovery.update(raw_path=path, sha256=digest, retrieved_url=url,
+                         content_type=content_type, http_status=status)
+
+    try:
+        budget.wait(0, cancel)
+        discovery.update(attempted=True, status="rejected")
+        raw, url, content_type = _fetch(client, discovery["lookup_url"], budget=budget, cancel=cancel,
+                                         retain_response=retain_discovery)
+        if (discovery["http_status"] != 200 or url != discovery["lookup_url"]
+                or content_type.split(";", 1)[0].strip() != "application/json"):
+            raise ValueError("OpenAlex discovery lacks its exact complete JSON response")
+        locations = openalex_pdf_locations(raw, source)
+        discovery["status"] = "succeeded"
+        if not locations:
+            raise ValueError("OpenAlex has no permitted public repository PDF location")
+        for index, location in enumerate(locations):
+            if not budget.pdf_available():
+                break
+            if index:
+                attempt = {"source_id": source["id"], "candidate": candidate, "route": "openalex_repository",
+                           "status": "rejected", "redirects": [], "discovery": dict(discovery),
+                           "metadata_path": source["metadata_path"], "metadata_sha256": source["metadata_sha256"]}
+                attempts.append(attempt)
+            attempt["discovery"].update(location)
+
+            def retain_pdf(raw: bytes, url: str, content_type: str, status: int) -> None:
+                path, digest = _save(root, source["id"] + "-repository-response",
+                                     "pdf" if raw.startswith(b"%PDF-") else "bin", raw)
+                if status in (301, 302, 303, 307, 308):
+                    attempt["redirects"][-1].update(raw_path=path, sha256=digest, content_type=content_type)
+                else:
+                    attempt.update(raw_path=path, sha256=digest, retrieved_url=url,
+                                   content_type=content_type, http_status=status)
+
+            try:
+                budget.reserve_pdf(source, "repository_copy", location["url"])
+                attempt["pdf_attempted"] = True
+                raw_pdf, pdf_url, pdf_type = _fetch(client, location["url"], pdf=True, repository_pdf=True,
+                    budget=budget, cancel=cancel, redirects=attempt["redirects"], retain_response=retain_pdf)
+                if attempt["http_status"] != 200 or pdf_type.split(";", 1)[0].strip() not in {"application/pdf", "application/octet-stream"}:
+                    raise ValueError("Repository did not return a complete PDF response")
+                if budget.deadline - time.monotonic() < 18:
+                    raise _DeadlineExceeded
+                text = _pdf_text(raw_pdf)
+                text_path, text_digest = _save(root, source["id"] + "-text", "txt", text.encode())
+                attempt.update(text_path=text_path, text_sha256=text_digest)
+                budget.wait(0, cancel)
+                attempt["identity"] = public_pdf_identity(text, source)
+                _retain_full_text(source, root, text, pdf_url, attempt["raw_path"], attempt["sha256"])
+                source.update(copy_type="repository_copy", publication_version="unknown",
+                              discovery_path=discovery["raw_path"], discovery_sha256=discovery["sha256"],
+                              discovery_url=discovery["lookup_url"])
+                source.pop("arxiv_id", None)
+                attempt["status"] = "verified"
+            except (_Cancelled, _DeadlineExceeded, _RateLimited) as error:
+                attempt.update(status="interrupted", error=type(error).__name__)
+                raise
+            except (ValueError, OSError, httpx.HTTPError, httpx.InvalidURL) as error:
+                attempt.update(error=type(error).__name__, note=str(error)[:300] if isinstance(error, ValueError)
+                               else "Public repository PDF retrieval or extraction failed")
+                warnings.append(f"Repository PDF unavailable for {source['id']} ({type(error).__name__}); reading scope was not upgraded")
+            finally:
+                save_proof()
+            if attempt["status"] == "verified":
+                break
+    except (_Cancelled, _DeadlineExceeded, _RateLimited) as error:
+        attempt.update(status="interrupted", error=type(error).__name__)
+        raise
+    except (ValueError, OSError, httpx.HTTPError, httpx.InvalidURL) as error:
+        attempt.update(error=type(error).__name__, note=str(error)[:300] if isinstance(error, ValueError)
+                       else "OpenAlex public copy discovery failed")
+        warnings.append(f"OpenAlex discovery unavailable for {source['id']} ({type(error).__name__}); reading scope was not upgraded")
+    finally:
+        if "identity_path" not in attempt:
+            save_proof()
+
+
 def _is_arxiv_query(query: str) -> bool:
     return bool(re.match(r"arxiv\s*:", query, re.I) or re.search(r"10\.48550/arxiv\.", query, re.I))
 
@@ -1320,15 +1967,62 @@ def _query_arxiv(query: str) -> str:
     return identifier
 
 
+def _excluded_identities(values: list[str] | None) -> set[str]:
+    if values is None:
+        return set()
+    if not isinstance(values, list) or len(values) > 500:
+        raise ValueError("Excluded literature identities require at most 500 canonical identifiers")
+    excluded = set()
+    for value in values:
+        if not isinstance(value, str):
+            raise ValueError("Excluded literature identity must be canonical DOI or arXiv")
+        if value.startswith("doi:") and value == "doi:" + _doi(value[4:]):
+            excluded.add(value)
+        elif value.startswith("arxiv:") and value == "arxiv:" + _query_arxiv(value):
+            excluded.add(value)
+        elif value.startswith("publisher:") and value == "publisher:" + _publisher_url(value[10:]):
+            excluded.add(value)
+        elif value.startswith("html:") and value == "html:" + scholarly_html_url(value[5:], landing=False):
+            excluded.add(value)
+        else:
+            raise ValueError("Excluded literature identity must be canonical DOI or arXiv")
+    return excluded
+
+
+def _identity_excluded(identity: str, excluded: set[str]) -> bool:
+    if identity in excluded:
+        return True
+    if identity.startswith("arxiv:"):
+        identifier = identity[6:]
+        family = re.sub(r"v[1-9]\d*$", "", identifier)
+        return ("arxiv:" + family in excluded or "doi:10.48550/arxiv." + identifier in excluded
+                or "doi:10.48550/arxiv." + family in excluded)
+    return False
+
+
+def _candidate_rejection(result: dict, identity: str | None, stage: str, reason: str, **details) -> None:
+    # Search originals remain authoritative; this bounded diagnostic only
+    # explains why a returned identity did not enter the reading pool.
+    if len(result["candidate_rejections"]) < 100:
+        result["candidate_rejections"].append({"identity": identity, "stage": stage, "reason": reason, **details})
+
+
 def _promote_full_text(client: httpx.Client, source: dict, pdf_urls: list[str], root: Path,
                        *, budget: _CollectionBudget, cancel: Callable[[], bool] | None, warnings: list[str]) -> None:
     """Use the same bounded PDF reading and evidence retention for every source."""
     for pdf_url in pdf_urls:
+        if not budget.pdf_available():
+            break
         budget.wait(0, cancel)
         try:
             def retain(raw: bytes, url: str, content_type: str, status: int) -> None:
                 _save(root, source["id"] + "-fulltext", "pdf" if raw.startswith(b"%PDF-") else "bin", raw)
 
+            # Do not reserve unsupported links from a metadata deposit. The
+            # fetcher still validates credentials, ports, DNS and redirects.
+            if urlsplit(pdf_url).scheme != "https" or urlsplit(pdf_url).hostname not in PDF_HOSTS:
+                raise ValueError("Open-access PDF URL is outside the provider boundary")
+            budget.reserve_pdf(source, "provider_pdf", pdf_url)
             raw_pdf, retrieved_url, content_type = _fetch(client, pdf_url, pdf=True, cancel=cancel, budget=budget,
                 retain_response=retain if source.get("arxiv_id") else None)
             if source.get("arxiv_id"):
@@ -1476,10 +2170,166 @@ def _collect_unicode(client: httpx.Client, queries: list[str], root: Path, resul
     return matched_queries
 
 
+def _collect_publisher_pdfs(client: httpx.Client, hints: list[PublisherPdfCandidate],
+                            root: Path, result: dict, *, limit: int, budget: _CollectionBudget,
+                            cancel: Callable[[], bool] | None, excluded: set[str]) -> None:
+    """Official metadata locates one PDF; its literal front matter and complete body prove identity."""
+    for hint in hints:
+        bound = [search for search in result["searches"] if search["query"] == hint["landing_url"] or
+                 _title_key(search["query"]) == _title_key(hint["title"])]
+        identity = "publisher:" + hint["landing_url"]
+        source_id = "source-" + hashlib.sha256(identity.encode()).hexdigest()[:20]
+        for search in bound:
+            search.update(provider="USENIX", lookup="publisher_identity", status="excluded" if identity in excluded else "failed",
+                          attempted=identity not in excluded)
+        if identity in excluded or len(result["sources"]) >= limit:
+            continue
+        source = {"id": source_id, "doi": "", "title": hint["title"], "authors": hint["authors"], "year": hint["year"],
+                  "publisher_url": hint["landing_url"], "provider": "USENIX", "publication_type": "proceedings-article",
+                  "scope": "metadata_only", "queries": [search["query"] for search in bound], "excerpts": []}
+        attempt = {"source_id": source_id, "candidate": hint, "route": "publisher_public_pdf", "status": "rejected", "redirects": []}
+        result["pdf_hint_attempts"].append(attempt)
+        def retain_metadata(raw: bytes, url: str, content_type: str, status: int) -> None:
+            path, digest = _save(root, source_id + "-publisher-metadata", "html", raw)
+            attempt.update(metadata_path=path, metadata_sha256=digest, metadata_url=url,
+                           metadata_content_type=content_type, metadata_http_status=status)
+        def retain_pdf(raw: bytes, url: str, content_type: str, status: int) -> None:
+            path, digest = _save(root, source_id + "-publisher-response", "pdf" if raw.startswith(b"%PDF-") else "bin", raw)
+            if status in (301, 302, 303, 307, 308):
+                attempt["redirects"][-1].update(raw_path=path, sha256=digest, content_type=content_type)
+            else:
+                attempt.update(raw_path=path, sha256=digest, retrieved_url=url, content_type=content_type, http_status=status)
+        try:
+            raw, url, content_type = _fetch(client, hint["landing_url"], publisher_html=True, budget=budget,
+                                           cancel=cancel, retain_response=retain_metadata)
+            if attempt["metadata_http_status"] != 200 or content_type.split(";", 1)[0].strip() != "text/html":
+                raise ValueError("Publisher metadata did not return its complete original HTML response")
+            details = publisher_pdf_metadata(raw, url)
+            if details != hint:
+                raise ValueError("Publisher metadata differs from the complete requested bibliographic identity or literal PDF link")
+            source.update(metadata_path=attempt["metadata_path"], metadata_sha256=attempt["metadata_sha256"])
+            selection = {"origin": "official_publisher", "candidate": hint, "metadata_url": url,
+                         "metadata_path": source["metadata_path"], "metadata_sha256": source["metadata_sha256"]}
+            discovery_path, discovery_digest = _save(root, source_id + "-publisher-selection", "json",
+                json.dumps(selection, ensure_ascii=False, sort_keys=True).encode())
+            attempt["discovery"] = {"provider": "official_publisher", "url": url,
+                                    "raw_path": discovery_path, "sha256": discovery_digest}
+            budget.reserve_pdf(source, "repository_copy", hint["pdf_url"])
+            attempt["pdf_attempted"] = True
+            raw, url, content_type = _fetch(client, hint["pdf_url"], pdf=True, repository_pdf=True, budget=budget,
+                cancel=cancel, retain_response=retain_pdf, redirects=attempt["redirects"])
+            if (attempt["http_status"] != 200 or url != hint["pdf_url"] or not raw.startswith(b"%PDF-") or
+                    content_type.split(";", 1)[0].strip() not in {"application/pdf", "application/octet-stream"}):
+                raise ValueError("Publisher PDF did not return its complete original PDF response")
+            if budget.deadline - time.monotonic() < 18:
+                raise _DeadlineExceeded
+            text = _pdf_text(raw)
+            text_path, text_digest = _save(root, source_id + "-text", "txt", text.encode())
+            attempt.update(text_path=text_path, text_sha256=text_digest)
+            budget.wait(0, cancel)
+            attempt["identity"] = public_pdf_identity(text, source)
+            attempt["page_count"] = len(re.findall(r"(?m)^\[Page [1-9]\d*\]\n", text))
+            _retain_full_text(source, root, text, url, attempt["raw_path"], attempt["sha256"])
+            source.update(copy_type="repository_copy", publication_version="unknown", page_count=attempt["page_count"],
+                          discovery_path=discovery_path, discovery_sha256=discovery_digest, discovery_url=hint["landing_url"])
+            attempt["status"] = "verified"
+            for search in bound:
+                search.update(status="succeeded", resolved_ids=[source_id], url=hint["landing_url"],
+                              raw_path=source["metadata_path"], sha256=source["metadata_sha256"])
+        except (_Cancelled, _DeadlineExceeded, _RateLimited) as error:
+            attempt.update(status="interrupted", error=type(error).__name__)
+            raise
+        except (ValueError, OSError, httpx.HTTPError, httpx.InvalidURL) as error:
+            attempt.update(error=type(error).__name__, note=str(error)[:300] if isinstance(error, ValueError) else "Publisher retrieval failed")
+            result["warnings"].append(f"Publisher PDF unavailable for {source_id} ({type(error).__name__}); reading scope was not upgraded")
+        finally:
+            path, digest = _save(root, source_id + "-publisher-identity", "json",
+                                json.dumps(attempt, ensure_ascii=False, sort_keys=True).encode())
+            attempt.update(identity_path=path, identity_sha256=digest)
+            if attempt["status"] == "verified":
+                source.update(identity_path=path, identity_sha256=digest)
+                result["sources"].append(source)
+
+
+def _collect_scholarly_html(client: httpx.Client, hints: list[ScholarlyHtmlCandidate], root: Path,
+                            result: dict, *, limit: int, budget: _CollectionBudget,
+                            cancel: Callable[[], bool] | None, excluded: set[str]) -> None:
+    for hint in hints:
+        identity = "html:" + hint["html_url"]
+        source_id = "source-" + hashlib.sha256(identity.encode()).hexdigest()[:20]
+        bound = [search for search in result["searches"] if search["query"] in {hint["landing_url"], hint["html_url"]}
+                 or _title_key(search["query"]) == _title_key(hint["title"])]
+        for search in bound:
+            search.update(provider="scholarly_html", lookup="exact_primary_html", status="excluded" if identity in excluded else "failed",
+                          attempted=identity not in excluded)
+        if identity in excluded or len(result["sources"]) >= limit:
+            continue
+        attempt = {"source_id": source_id, "candidate": hint, "route": "scholarly_html", "status": "rejected",
+                   "redirects": [], "html_attempted": True}
+        result["html_attempts"].append(attempt)
+        def retain(raw, url, content_type, status, *, metadata=False):
+            path, digest = _save(root, source_id + ("-html-metadata" if metadata else "-html-response"), "html", raw)
+            if metadata:
+                attempt.update(metadata_path=path, metadata_sha256=digest, metadata_url=url,
+                               metadata_content_type=content_type, metadata_http_status=status)
+            else:
+                attempt.update(raw_path=path, sha256=digest, retrieved_url=url, content_type=content_type, http_status=status)
+        try:
+            landing, _, content_type = _fetch(client, hint["landing_url"], scholarly_html=True, budget=budget,
+                cancel=cancel, retain_response=lambda *args: retain(*args, metadata=True))
+            if content_type.split(";", 1)[0].strip() not in {"text/html", "application/xhtml+xml"}:
+                raise ValueError("Scholarly metadata did not return its actual HTML response")
+            # The paired original metadata determines identity; it never consumes
+            # or replenishes the separate actual PDF reservation inventory.
+            body, _, content_type = _fetch(client, hint["html_url"], scholarly_html=True, budget=budget,
+                                           cancel=cancel, retain_response=retain)
+            if content_type.split(";", 1)[0].strip() not in {"text/html", "application/xhtml+xml"}:
+                raise ValueError("Scholarly body did not return its actual HTML response")
+            derived = scholarly_html_identity(landing, body, hint)
+            text = derived.pop("text")
+            text_path, text_digest = _save(root, source_id + "-text", "txt", text.encode())
+            selection = {"origin": "scholarly_html", "candidate": hint, "metadata_url": hint["landing_url"],
+                         "metadata_path": attempt["metadata_path"], "metadata_sha256": attempt["metadata_sha256"]}
+            discovery_path, discovery_digest = _save(root, source_id + "-html-selection", "json",
+                json.dumps(selection, ensure_ascii=False, sort_keys=True).encode())
+            attempt.update(text_path=text_path, text_sha256=text_digest, identity={**derived, "text": text},
+                           discovery={"provider": "scholarly_html", "url": hint["landing_url"],
+                                      "raw_path": discovery_path, "sha256": discovery_digest}, status="verified")
+            excerpts, ranges = _full_text_excerpts(text, [search["query"] for search in bound])
+            source = {"id": source_id, "doi": "", **derived, "copy_type": "scholarly_html", "scope": "full_text",
+                      "url": hint["html_url"], "html_url": hint["html_url"], "landing_url": hint["landing_url"],
+                      "queries": [search["query"] for search in bound], "raw_path": attempt["raw_path"], "sha256": attempt["sha256"],
+                      "metadata_path": attempt["metadata_path"], "metadata_sha256": attempt["metadata_sha256"],
+                      "text_path": text_path, "text_sha256": text_digest, "text_chars": len(text),
+                      "excerpts": excerpts, "excerpt_ranges": ranges,
+                      "reading_scope": "Literal body excerpts inspected; complete extracted scholarly HTML text retained for full reads",
+                      "discovery_path": discovery_path, "discovery_sha256": discovery_digest, "discovery_url": hint["landing_url"]}
+            for search in bound:
+                search.update(status="succeeded", resolved_ids=[source_id], url=hint["landing_url"],
+                              raw_path=source["metadata_path"], sha256=source["metadata_sha256"])
+        except (_Cancelled, _DeadlineExceeded, _RateLimited) as error:
+            attempt.update(status="interrupted", error=type(error).__name__)
+            raise
+        except (ValueError, OSError, httpx.HTTPError, httpx.InvalidURL) as error:
+            attempt.update(error=type(error).__name__, note=str(error)[:300] if isinstance(error, ValueError) else "Primary HTML retrieval failed")
+            result["warnings"].append(f"Primary scholarly HTML unavailable for {source_id} ({type(error).__name__}); body scope was not upgraded")
+        finally:
+            path, digest = _save(root, source_id + "-html-identity", "json",
+                                json.dumps(attempt, ensure_ascii=False, sort_keys=True).encode())
+            attempt.update(identity_path=path, identity_sha256=digest)
+            if attempt["status"] == "verified":
+                source.update(identity_path=path, identity_sha256=digest)
+                result["sources"].append(source)
+
+
 def collect(
     queries: list[str], root: Path, *, limit: int = 6,
     cancel: Callable[[], bool] | None = None,
-    pdf_candidates: list[PdfCandidate] | None = None,
+    pdf_candidates: list[PdfCandidate | PublisherPdfCandidate] | None = None,
+    html_candidates: list[ScholarlyHtmlCandidate] | None = None,
+    pdf_reservation_limit: int = 2,
+    excluded_identities: list[str] | None = None,
+    excluded_urls: list[str] | None = None,
 ) -> dict:
     """Collect actual fetched evidence; no network failure becomes a fake source.
 
@@ -1487,6 +2337,9 @@ def collect(
     the declared reading scope. Literal Unicode report tokens/whole titles bind
     the fixed publisher catalog and approved permanent HTML before abstract slots.
     These known standards leave the two method searches for other queries.
+    Explicit scholarly HTML candidates bind their original metadata and complete
+    first-party body separately. They preserve publication/draft identity and do
+    not reserve, replenish or relabel any PDF attempt.
     Metadata remains separately recorded when an
     allowed full text is fetched. All queries are attempted before candidates
     are resolved in round-robin order. Explicit and unique exact-title arXiv
@@ -1496,31 +2349,53 @@ def collect(
     reading before bibliographic abstracts can consume the source limit.
     Other DOIs use an exact Crossref lookup;
     bibliographic searches do not exclude records without Crossref abstracts.
-    Explicit DOI-bound author PDF hints precede generic candidates and use their
-    strict identity route exclusively, retaining completed rejected responses.
+    Explicit DOI/whole-title hints precede generic candidates and reserve only
+    that exact bibliographic identity, retaining completed rejected responses.
+    A failed author-list route may discover that same work's public repository
+    copy through its exact OpenAlex DOI endpoint; it does not run a new search.
     A fresh collection (``pdf_candidates=None``) can also discover exact Crossref
     records in the fixed official author list after generic full text fails.
-    At most two matched author PDFs are attempted; unmatched titles consume no
+    At most two PDF candidates across all routes are attempted; unmatched titles consume no
     PDF attempt. Explicit empty or reserved candidate lists disable this route.
+    If these paths fail, an exact OpenAlex DOI lookup can locate bounded public
+    public OA locations. Their original JSON and PDF are retained and literal PDF
+    identity is required. Provider, CMU and repository copies share the declared
+    remaining PDF reservations (zero to two), recorded before DNS or GET.
+    Previously attempted or retained identities can be excluded before resolution;
+    an unversioned arXiv exclusion covers every version of that same identifier.
+    A provider's version claim never establishes the publication version.
     Cancellation and the shared 90-second deadline preserve partial evidence,
     with distinct ``cancelled`` and ``timed_out`` flags. A provider cooldown
     beyond the remaining wait budget sets ``rate_limited``. Query provenance is not relevance.
     """
     if isinstance(limit, bool) or not isinstance(limit, int) or not 0 <= limit <= 12:
         raise ValueError("Literature source limit must be between 0 and 12")
+    if type(pdf_reservation_limit) is not int or not 0 <= pdf_reservation_limit <= 2:
+        raise ValueError("PDF reservation limit must be between 0 and 2")
+    if excluded_urls is not None and (not isinstance(excluded_urls, list) or len(excluded_urls) > 100 or any(
+            not isinstance(url, str) or not 12 <= len(url) <= 2048 for url in excluded_urls)):
+        raise ValueError("Excluded literature URLs must be a bounded retained failure inventory")
+    excluded = _excluded_identities(excluded_identities)
     if not isinstance(queries, list) or not 1 <= len(queries) <= 8:
         raise ValueError("Provide between 1 and 8 literature queries")
     if any(not isinstance(query, str) or not query.strip() or len(query) > 500 or any(ord(c) < 32 for c in query) for query in queries):
         raise ValueError("Literature queries must contain 1 to 500 printable characters")
     queries = list(dict.fromkeys(query.strip() for query in queries))
-    hints = normalize_pdf_candidates([] if pdf_candidates is None else pdf_candidates, queries)
+    normalized = normalize_portfolio_pdf_candidates([] if pdf_candidates is None else pdf_candidates, queries)
+    html_hints = normalize_portfolio_html_candidates([] if html_candidates is None else html_candidates, queries)
+    hints = [hint for hint in normalized if "doi" in hint]
+    publisher_hints = [hint for hint in normalized if "landing_url" in hint]
     root = _prepare_root(root)
     result: dict = {"sources": [], "searches": [
         {"query": query, "provider": "arXiv" if _is_arxiv_query(query) else "Crossref",
          "status": "not_attempted", "attempted": False, "resolved_ids": []}
-        for query in sorted(queries, key=lambda query: not _is_arxiv_query(query))], "warnings": []}
+        for query in sorted(queries, key=lambda query: not _is_arxiv_query(query))], "warnings": [],
+        "candidate_rejections": [], "pdf_reservation_limit": pdf_reservation_limit,
+        "excluded_identities": sorted(excluded), "excluded_urls": sorted(set(excluded_urls or []))}
     seen: set[str] = set()
-    if hints or pdf_candidates is None:
+    if html_hints:
+        result["html_attempts"] = []
+    if normalized or pdf_candidates is None:
         result["pdf_hint_attempts"] = []
     listing = {"record": {"provider": "CMU publications", "listing_url": AUTHOR_PUBLICATIONS,
                           "attempted": False, "status": "not_attempted"}}
@@ -1535,13 +2410,17 @@ def collect(
     exact_arxiv: dict[str, tuple[bytes, str, dict]] = {}
     method_candidates: dict[str, tuple[bytes, str, dict]] = {}
     method_searches = 0
-    budget = _CollectionBudget()
+    budget = _CollectionBudget(pdf_reservation_limit, excluded_urls)
+    result["pdf_reservations"] = budget.pdf_reservations
     try:
         with httpx.Client(timeout=httpx.Timeout(15.0, connect=5.0), follow_redirects=False,
                           headers={"User-Agent": "PaperFactory/0.6 (bounded literature collector)"}) as client:
+            _collect_scholarly_html(client, html_hints, root, result, limit=limit, budget=budget, cancel=cancel, excluded=excluded)
+            _collect_publisher_pdfs(client, publisher_hints, root, result, limit=limit,
+                                   budget=budget, cancel=cancel, excluded=excluded)
             standard_queries = _collect_unicode(client, queries, root, result, limit=limit, budget=budget, cancel=cancel)
             for search in list(result["searches"]):
-                if search["provider"] == "Unicode":
+                if search["provider"] in {"Unicode", "USENIX", "scholarly_html"}:
                     continue
                 budget.wait(0, cancel)
                 query = search["query"]
@@ -1553,6 +2432,10 @@ def collect(
                     if search["provider"] == "arXiv":
                         identifier = _query_arxiv(query)
                         search.update(lookup="arxiv_id", requested_arxiv_id=identifier)
+                        if _identity_excluded("arxiv:" + identifier, excluded):
+                            search.update(status="excluded", attempted=False)
+                            _candidate_rejection(result, "arxiv:" + identifier, "discovery", "excluded_identity")
+                            continue
                         if identifier in exact_arxiv:
                             content, url, details = exact_arxiv[identifier]
                         else:
@@ -1566,6 +2449,10 @@ def collect(
                         details = details or _arxiv_metadata(content, identifier)
                         exact_arxiv[identifier] = (content, url, details)
                         key = "arxiv:" + details["arxiv_id"]
+                        if _identity_excluded(key, excluded):
+                            search["status"] = "succeeded"
+                            _candidate_rejection(result, key, "discovery", "excluded_identity")
+                            continue
                         arxiv_metadata.setdefault(key, (content, url, details))
                         if limit:
                             query_candidates.append(key)
@@ -1573,17 +2460,24 @@ def collect(
                         search["status"] = "succeeded"
                         continue
                     exact_doi = _query_doi(query)
+                    if exact_doi and _identity_excluded("doi:" + exact_doi, excluded):
+                        search.update(lookup="doi", requested_doi=exact_doi, status="excluded", attempted=False)
+                        _candidate_rejection(result, "doi:" + exact_doi, "discovery", "excluded_identity")
+                        continue
                     if exact_doi is None:
                         resolved = _arxiv_title_lookup(client, query, root, search, budget=budget, cancel=cancel,
                                                        warnings=result["warnings"])
                         if resolved is not None:
                             content, url, details = resolved
                             key = "arxiv:" + details["arxiv_id"]
-                            arxiv_metadata.setdefault(key, (content, url, details))
-                            if limit:
-                                query_candidates.append(key)
-                                candidate_queries.setdefault(key, []).append(search)
-                            continue
+                            if _identity_excluded(key, excluded):
+                                _candidate_rejection(result, key, "discovery", "excluded_identity")
+                            else:
+                                arxiv_metadata.setdefault(key, (content, url, details))
+                                if limit:
+                                    query_candidates.append(key)
+                                    candidate_queries.setdefault(key, []).append(search)
+                                continue
                         method_eligible = query not in standard_queries and (search["provider"] != "arXiv" or search["status"] == "succeeded")
                         if search["provider"] == "arXiv":
                             # Retain negative discovery separately before the
@@ -1604,6 +2498,9 @@ def collect(
                                 discovery, discovery_url, records = resolved_methods
                                 for details in records:
                                     key = "arxiv:" + details["arxiv_id"]
+                                    if _identity_excluded(key, excluded):
+                                        _candidate_rejection(result, key, "discovery", "excluded_identity")
+                                        continue
                                     if key not in method_candidates:
                                         method_candidates[key] = (discovery, discovery_url, details)
                                         # One batch per primary candidate gives both
@@ -1654,10 +2551,16 @@ def collect(
                         if not isinstance(candidate_doi, str):
                             raise ValueError("Crossref candidate has no DOI identifier")
                         doi = _doi(candidate_doi)
+                        if _identity_excluded("doi:" + doi, excluded):
+                            _candidate_rejection(result, "doi:" + doi, "discovery", "excluded_identity",
+                                                 raw_path=search["raw_path"], sha256=search["sha256"])
+                            continue
                         if doi not in query_candidates:
                             query_candidates.append(doi)
                             candidate_queries.setdefault(doi, []).append(search)
                     except ValueError as error:
+                        _candidate_rejection(result, None, "discovery", "invalid_doi", error=str(error)[:200],
+                                             raw_path=search["raw_path"], sha256=search["sha256"])
                         result["warnings"].append(f"Crossref candidate verification failed ({type(error).__name__}); candidate was omitted")
 
             hint_dois = {hint["doi"] for hint in hints}
@@ -1674,10 +2577,19 @@ def collect(
                     if sum(source["scope"] != "metadata_only" for source in result["sources"]) >= limit:
                         break
                     candidate = query_candidates[rank]
+                    identity = candidate if candidate.startswith("arxiv:") else "doi:" + candidate
+                    metadata_path, metadata_digest = None, None
+                    rejection_reason = "metadata_invalid"
                     try:
                         if candidate in seen:
                             continue
+                        # Each discovered identity gets one resolution in this
+                        # collection, including malformed/rejected metadata.
+                        seen.add(candidate)
                         source_id = "source-" + hashlib.sha256(candidate.encode()).hexdigest()[:20]
+                        if _identity_excluded(identity, excluded):
+                            _candidate_rejection(result, identity, "resolution", "excluded_identity", source_id=source_id)
+                            continue
                         version_search = None
                         if candidate in method_candidates:
                             discovery, discovery_url, discovered = method_candidates[candidate]
@@ -1703,11 +2615,31 @@ def collect(
                                 metadata, metadata_url = exact_metadata[candidate]
                             else:
                                 metadata, metadata_url, _ = _fetch(client, CROSSREF + "/works/" + quote(candidate, safe=""), cancel=cancel, budget=budget)
-                            document = json.loads(metadata)
-                            resolved_doi, title, authors, year = _metadata(document)
-                            if resolved_doi != candidate:
-                                raise ValueError("Crossref resolved a different DOI")
                             metadata_path, metadata_digest = _save(root, source_id + "-metadata", "json", metadata)
+                            document = json.loads(metadata)
+                            try:
+                                resolved_doi, title, authors, year = _metadata(document)
+                            except ValueError as error:
+                                note = str(error)
+                                rejection_reason = ("missing_authors" if note == "Crossref work record has no authors" else
+                                                    "invalid_authors" if "author" in note.lower() else
+                                                    "missing_title" if note == "Crossref work record has no title" else "metadata_invalid")
+                                raise
+                            if resolved_doi != candidate:
+                                rejection_reason = "identity_mismatch"
+                                raise ValueError("Crossref resolved a different DOI")
+                            # Some deposits append an entire word-processor CSS
+                            # stylesheet to the title. Its font/layout vocabulary
+                            # can rank an unrelated work above method candidates.
+                            # Preserve the search response, but do not spend a
+                            # reading slot or PDF reservation on malformed titles.
+                            if len(title) > 500:
+                                rejection_reason = "title_too_long"
+                                raise ValueError("Crossref title exceeds its bound or contains stylesheet metadata")
+                            if re.search(r"\{[^{}]*\b(?:font-size|font-family|line-height|text-align)\s*:[^{}]*;"
+                                         r"[^{}]*\b(?:font-size|font-family|line-height|text-align)\s*:", title, re.I):
+                                rejection_reason = "stylesheet_title"
+                                raise ValueError("Crossref title exceeds its bound or contains stylesheet metadata")
                             abstract = _abstract(document["message"].get("abstract"))
                             source = {"doi": candidate, "title": title, "authors": authors, "year": year}
                             pdf_urls = _pdf_links(document["message"])
@@ -1725,11 +2657,31 @@ def collect(
                         try:
                             source_hints = [hint for hint in hints if hint["doi"] == candidate]
                             if source_hints:
-                                _promote_hinted_pdf(client, source, source_hints, root, listing=listing, budget=budget, cancel=cancel,
-                                                    warnings=result["warnings"], attempts=result["pdf_hint_attempts"])
-                                # A hinted DOI has one strict route, even when it
-                                # fails: it cannot become another generic search.
+                                if budget.pdf_available():
+                                    if "url" in source_hints[0]:
+                                        _promote_direct_pdf(client, source, source_hints[0], root, budget=budget, cancel=cancel,
+                                                            warnings=result["warnings"], attempts=result["pdf_hint_attempts"])
+                                    else:
+                                        _promote_hinted_pdf(client, source, source_hints, root, listing=listing, budget=budget, cancel=cancel,
+                                                            warnings=result["warnings"], attempts=result["pdf_hint_attempts"])
+                                if (source["scope"] != "full_text"
+                                        and "url" not in source_hints[0]
+                                        and _title_key(source_hints[0]["title"]) == _title_key(source["title"])
+                                        and budget.pdf_available()):
+                                    _promote_openalex_pdf(client, source, root, budget=budget, cancel=cancel,
+                                                         warnings=result["warnings"], attempts=result["pdf_hint_attempts"])
+                                # Keep the reserved DOI identity; do not turn an
+                                # unavailable copy into another generic search.
                                 continue
+                            openalex_attempted = False
+                            if (pdf_candidates is None and document is not None and candidate in exact_metadata
+                                    and not any(identity.startswith("arxiv:") for identity in excluded)
+                                    and budget.pdf_available()):
+                                openalex_attempted = True
+                                _promote_openalex_pdf(client, source, root, budget=budget, cancel=cancel,
+                                                     warnings=result["warnings"], attempts=result["pdf_hint_attempts"])
+                                if source["scope"] == "full_text":
+                                    continue
                             if (document is not None and document["message"].get("type") in {"journal-article", "proceedings-article", "posted-content"}
                                     and not any(urlsplit(url).scheme == "https" and urlsplit(url).hostname in PDF_HOSTS
                                                 for url in pdf_urls)):
@@ -1741,14 +2693,24 @@ def collect(
                                         pdf_urls = [arxiv_pdf]
                                 except (ValueError, OSError, httpx.HTTPError) as error:
                                     result["warnings"].append(f"arXiv identity-bound discovery unavailable for {source_id} ({type(error).__name__}); reading scope was not upgraded")
+                            if source.get("arxiv_id") and _identity_excluded("arxiv:" + source["arxiv_id"], excluded):
+                                _candidate_rejection(result, "arxiv:" + source["arxiv_id"], "reading", "excluded_identity",
+                                                     source_id=source_id, metadata_path=metadata_path,
+                                                     metadata_sha256=metadata_digest)
+                                # An excluded preprint alias cannot be read through
+                                # the DOI route or repackaged as an author copy.
+                                continue
                             _promote_full_text(client, source, pdf_urls, root, budget=budget, cancel=cancel, warnings=result["warnings"])
                             if (pdf_candidates is None and document is not None and source["scope"] != "full_text"
-                                    and sum(attempt.get("pdf_attempted") is True for attempt in result["pdf_hint_attempts"]) < 2):
+                                    and budget.pdf_available()):
                                 _promote_hinted_pdf(client, source, [{"doi": source["doi"], "title": source["title"]}], root,
                                                     listing=listing, budget=budget, cancel=cancel,
                                                     warnings=result["warnings"], attempts=result["pdf_hint_attempts"])
+                            if (pdf_candidates is None and document is not None and source["scope"] != "full_text"
+                                    and budget.pdf_available() and not openalex_attempted):
+                                _promote_openalex_pdf(client, source, root, budget=budget, cancel=cancel,
+                                                     warnings=result["warnings"], attempts=result["pdf_hint_attempts"])
                         finally:
-                            seen.add(candidate)
                             if len(result["sources"]) < limit:
                                 result["sources"].append(source)
                             elif source["scope"] != "metadata_only":
@@ -1761,6 +2723,9 @@ def collect(
                             if version_search is not None:
                                 version_search["resolved_ids"].append(source_id)
                     except (ValueError, OSError, httpx.HTTPError) as error:
+                        _candidate_rejection(result, identity, "resolution", rejection_reason,
+                                             source_id=source_id, metadata_path=metadata_path, metadata_sha256=metadata_digest,
+                                             error=str(error)[:200] if isinstance(error, ValueError) else type(error).__name__)
                         result["warnings"].append(f"Literature candidate verification failed ({type(error).__name__}); candidate was omitted")
             budget.wait(0, cancel)
     except (ValueError, OSError, httpx.HTTPError) as error:

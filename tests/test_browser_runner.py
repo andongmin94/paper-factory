@@ -27,7 +27,7 @@ def binding(path: Path) -> dict:
 PROTOCOL_DOUBLE = r'''
 import base64, hashlib, json, os, subprocess, sys, time
 from urllib.parse import quote
-protocol = "paper-factory-chromium-v1"
+protocol = "paper-factory-chromium-v2"
 print(json.dumps({"protocol": protocol, "phase": "awaiting-go"}), flush=True)
 r = json.loads(sys.stdin.readline())
 mode = next(iter(r["experiment_files"].values()))["text"]
@@ -53,9 +53,11 @@ manifest = {"backend":"chromium-sandbox","bridge":"controller-held-chromium-call
                       "status":"succeeded","output_sha256":hashlib.sha256(b"7").hexdigest(),"output_bytes":1}],
     "distinct_renderer_processes":True,"separate_nonpersistent_sessions":True,"sandboxed":True,
     "network_denied":True,"shutdown_windows_closed":True,"node_integration":False,
+    "measurement_renderer_isolated":True,"frozen_fonts":{},"layout_measurements":0,"layout_receipts":[],
     "fixture_count":0,"fixture_bytes":0,"retained_fixtures":[],"scientific_input_reads":0,"scientific_input_read_bytes":0,
     "renderer_capabilities": {"production":{"require":"undefined","process":"undefined"},
-                             "experiment":{"require":"undefined","process":"undefined"}}}
+                             "experiment":{"require":"undefined","process":"undefined"},
+                             "measurement":{"require":"undefined","process":"undefined"}}}
 manifest["owned_deny_proxy"] = {"host":"127.0.0.1","port":12345,"denied_connections":0,
                                "close_requested":True,"close_callback_confirmed":False}
 scripts = [{"path":name,"script_url":"pf-science://production-"+r["nonce"]+"/"+quote(name,safe="/~.-_"),
@@ -370,7 +372,7 @@ def test_real_canvas_async_gate_raw_fixture_validation_and_owned_shutdown(tmp_pa
     try:
         ready = candidate.status()
         assert ready["ready"] is True and ready["cleanup_confirmed"] is True, ready
-        assert all(ready["self_checks"].values()) and len(ready["self_checks"]) == 7
+        assert all(ready["self_checks"].values()) and len(ready["self_checks"]) == 8
         result = candidate.run(source, bundle, tmp_path / "positive", runtime="chromium", source_order=[name],
                                entrypoint="run.mjs", production_entrypoint=name + ":J.measure", timeout_seconds=15)
         assert result["status"] == "succeeded", result

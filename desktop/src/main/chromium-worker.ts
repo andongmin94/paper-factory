@@ -4,7 +4,7 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { createServer, type Server, type Socket } from 'node:net';
-import { CHROMIUM_PROTOCOL, CHROMIUM_LIMITS, boundedJson, chromiumSourceURL, sha256, validateChromiumRequest, type ChromiumRequest, type FrozenFile } from './chromium-contract.js';
+import { CHROMIUM_PROTOCOL, CHROMIUM_LIMITS, boundedJson, chromiumSourceURL, sha256, validateChromiumRequest, validateLayoutRequest, type ChromiumRequest, type FrozenFile } from './chromium-contract.js';
 import { rendererAuthority } from './chromium-authority.js';
 
 const SCHEME = 'pf-science';
@@ -39,6 +39,7 @@ async function start() {
   let request: ChromiumRequest | undefined, failure: string | undefined, finishing = false;
   let attempts = 0, completed = 0, fixtureBytes = 0, scientificReads = 0, scientificReadBytes = 0, recordBytes = 0;
   const receipts: Receipt[] = [], fixtures: Array<{ label: string; encoding: string; content: string; sha256: string }> = [], labels = new Set<string>();
+  const layoutReceipts: Array<{ index: number; input_sha256: string; output_sha256: string; fixture_label: string }> = [];
   let observation: Buffer | undefined;
   let denyProxy: Server | undefined, proxyPort: number | undefined;
   const proxySockets = new Set<Socket>();
@@ -64,6 +65,7 @@ async function start() {
     manifest.call_receipts = receipts; manifest.retained_fixtures = fixtures;
     manifest.fixture_count = fixtures.length; manifest.fixture_bytes = fixtureBytes;
     manifest.scientific_input_reads = scientificReads; manifest.scientific_input_read_bytes = scientificReadBytes;
+    manifest.layout_measurements = layoutReceipts.length; manifest.layout_receipts = layoutReceipts;
     const [path = '', fn = ''] = request?.production_entrypoint.split(':') ?? [];
     const frame: Record<string, unknown> = { protocol: CHROMIUM_PROTOCOL, phase: 'result', nonce: request?.nonce ?? null,
       status: failure || !manifest.shutdown_windows_closed ? 'failed' : status,
@@ -117,8 +119,10 @@ async function start() {
     manifest.experiment_files = Object.fromEntries(Object.entries(request.experiment_files).map(([name, item]) => [name, { sha256: item.sha256, size: Buffer.byteLength(item.text) }]));
     manifest.scientific_inputs = Object.fromEntries(Object.entries(request.scientific_inputs).map(([key, item]) => [key, { name: item.name, sha256: item.sha256, size: Buffer.byteLength(item.text) }]));
     manifest.scientific_input_bytes = Object.values(request.scientific_inputs).reduce((total, item) => total + Buffer.byteLength(item.text), 0);
+    manifest.frozen_fonts = Object.fromEntries(Object.entries(request.fonts).map(([name, item]) => [name,
+      { sha256: item.sha256, size: item.size, family: 'PF_FROZEN_' + item.sha256.slice(0, 24) }]));
     await app.whenReady();
-    let production: Realm, experiment: Realm, selectedHandle: string;
+    let production: Realm, experiment: Realm, measurement: Realm, selectedHandle: string;
     let nextId = 1, queue: Promise<void> = Promise.resolve();
     async function remote(realm: Realm, method: string, args: Array<{ value?: unknown; objectId?: string }> = [], awaitPromise = false): Promise<Remote> {
       check();
@@ -176,9 +180,29 @@ async function start() {
         if (scientificReads >= CHROMIUM_LIMITS.scientificReads || scientificReadBytes + Buffer.byteLength(text) > CHROMIUM_LIMITS.frozen) throw new Error('Scientific input read boundary exceeded');
         scientificReads++; scientificReadBytes += Buffer.byteLength(text); return text;
       }
+      if (op === 'measureLayout') {
+        if (args.length !== 1 || layoutReceipts.length >= CHROMIUM_LIMITS.layouts) throw new Error('Layout measurement boundary exceeded');
+        const input = args[0] as string, parameters = validateLayoutRequest(input, request!.fonts);
+        const returned = await remote(measurement, 'measureLayout', [{ value: parameters }], true);
+        const geometry = boundedJson(returned.value) as Record<string, unknown>;
+        const name = parameters.font.startsWith('source:') ? parameters.font.slice(7) : null;
+        const font = name ? request!.fonts[name]! : null;
+        const result = JSON.stringify({ request: parameters, ...geometry,
+          font: { identity: font ? 'frozen-file' : 'unverified-fallback', source: name,
+            sha256: font?.sha256 ?? null, size: font?.size ?? null },
+          scope: 'Pristine controlled DOM and Canvas measurement, not production-page appearance, full glyph coverage, readability or usability' });
+        boundedJson(result);
+        const label = 'controller-layout-' + String(layoutReceipts.length + 1).padStart(6, '0');
+        await dispatch('retainFixture', [label, result]);
+        const receipt = { index: layoutReceipts.length + 1, input_sha256: sha256(input), output_sha256: sha256(result), fixture_label: label };
+        recordBytes += Buffer.byteLength(JSON.stringify(receipt));
+        if (recordBytes > CHROMIUM_LIMITS.records) throw new Error('Trusted layout record byte boundary exceeded');
+        layoutReceipts.push(receipt);
+        return result;
+      }
       throw new Error('Unknown capability operation');
     }
-    async function realm(kind: 'production' | 'experiment', files: Record<string, FrozenFile>): Promise<Realm> {
+    async function realm(kind: 'production' | 'experiment' | 'measurement', files: Record<string, FrozenFile>): Promise<Realm> {
       const origin = `${SCHEME}://${kind}-${request!.nonce}`;
       const contents = new Map(Object.entries(files).map(([name, item]) => [chromiumSourceURL(origin, name), { bytes: Buffer.from(item.text), type: 'text/javascript; charset=utf-8' }]));
       contents.set(origin + '/index.html', { bytes: Buffer.from('<!doctype html><html><head><meta charset="utf-8"></head><body></body></html>'), type: 'text/html; charset=utf-8' });
@@ -205,7 +229,7 @@ async function start() {
         const item = contents.get(incoming.url);
         if (!item) { fatal('Protocol origin denied'); return new Response(null, { status: 403 }); }
         return new Response(item.bytes, { headers: { 'Content-Type': item.type,
-          'Content-Security-Policy': `default-src 'none'; script-src ${origin}; connect-src 'none'; font-src 'none'; img-src 'none'; frame-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'` } });
+          'Content-Security-Policy': `default-src 'none'; script-src ${origin}; ${kind === 'measurement' ? "style-src 'unsafe-inline'; " : ''}connect-src 'none'; font-src 'none'; img-src 'none'; frame-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'` } });
       });
       const window = new BrowserWindow({ show: false, width: 320, height: 240, skipTaskbar: true, focusable: false,
         webPreferences: { session: ses, offscreen: true, sandbox: true, contextIsolation: true, nodeIntegration: false,
@@ -271,7 +295,12 @@ async function start() {
     }
     production = await realm('production', request.source_files);
     experiment = await realm('experiment', request.experiment_files);
+    measurement = await realm('measurement', {});
+    const fonts = Object.entries(request.fonts).map(([path, item]) => ({ path, content: item.content, family: 'PF_FROZEN_' + item.sha256.slice(0, 24) }));
+    await remote(production, 'installFonts', [{ value: fonts }], true);
+    await remote(measurement, 'installFonts', [{ value: fonts }], true);
     manifest.distinct_renderer_processes = production.window.webContents.getOSProcessId() !== experiment.window.webContents.getOSProcessId();
+    manifest.measurement_renderer_isolated = ![production.window.webContents.getOSProcessId(), experiment.window.webContents.getOSProcessId()].includes(measurement.window.webContents.getOSProcessId());
     manifest.separate_nonpersistent_sessions = production.session !== experiment.session;
     const metrics = app.getAppMetrics();
     manifest.sandboxed = windows.every(window => metrics.find(item => item.pid === window.webContents.getOSProcessId())?.sandboxed === true);

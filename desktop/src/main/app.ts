@@ -5,9 +5,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ConnectionController } from './connection.js';
 import { EngineBridge, EngineError } from './engine.js';
 import { ResearchController, readSupportingEvidence } from './research.js';
-import type { CreateResearchInput } from '../shared/research.js';
+import type { AuthorMetadataInput, CreateResearchInput } from '../shared/research.js';
+import { NEW_RESEARCH_MODE } from '../shared/publication.js';
 import { listPublicRepositories } from './repositories.js';
-import { artifactFormats, readVerifiedArtifact, saveArtifactWithDialog, type ResolvedArtifact } from './artifacts.js';
+import { artifactFormat, isReadableArtifactId, readVerifiedArtifact, saveArtifactWithDialog, type ResolvedArtifact } from './artifacts.js';
 
 app.setName('Paper Factory');
 // Own standalone data only; past plugin studies are not recovered by this app.
@@ -169,7 +170,8 @@ if (!app.requestSingleInstanceLock()) {
       researchReady();
       const value = args[0] as CreateResearchInput;
       if (args.length !== 1 || !value || typeof value !== 'object' || Array.isArray(value) ||
-        Object.keys(value).sort().join(',') !== 'goal,model,reviewerModel,source' ||
+        !['goal,model,reviewerModel,source', 'goal,model,researchMode,reviewerModel,source'].includes(Object.keys(value).sort().join(',')) ||
+        (Object.hasOwn(value, 'researchMode') && value.researchMode !== NEW_RESEARCH_MODE) ||
         typeof value.source !== 'string' || !/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/?$/.test(value.source) ||
         typeof value.goal !== 'string' || value.goal.trim().length < 8 || value.goal.length > 4000 || /[\u0000]/.test(value.goal)) throw new Error('Invalid research request');
       identifier(value.model, 'model'); identifier(value.reviewerModel, 'model');
@@ -180,15 +182,46 @@ if (!app.requestSingleInstanceLock()) {
       if (args.length !== 3) throw new Error('Invalid research request');
       return research!.resume(researchId(args[0]), identifier(args[1], 'model'), identifier(args[2], 'model'));
     });
-    handle('research:revise-writing', (...args) => {
-      researchReady();
-      if (args.length !== 3) throw new Error('Invalid research request');
-      return research!.reviseWriting(researchId(args[0]), identifier(args[1], 'model'), identifier(args[2], 'model'));
-    });
     handle('research:improve', (...args) => {
       researchReady();
       if (args.length !== 3) throw new Error('Invalid research request');
       return research!.improveResearch(researchId(args[0]), identifier(args[1], 'model'), identifier(args[2], 'model'));
+    });
+    handle('research:repository-revision', (...args) => {
+      researchReady();
+      if (args.length !== 2 || typeof args[1] !== 'string' || args[1].trim().length < 12 ||
+        args[1].length > 12000 || /[\u0000]/.test(args[1])) throw new Error('Invalid revision feedback');
+      return research!.requestRepositoryRevision(researchId(args[0]), args[1]);
+    });
+    handle('research:reformat-draft', (...args) => {
+      researchReady();
+      if (args.length !== 1) throw new Error('Invalid research request');
+      return research!.reformatRepositoryDraft(researchId(args[0]));
+    });
+    handle('research:repository-portfolio', (...args) => {
+      researchReady();
+      if (args.length !== 1) throw new Error('Invalid research request');
+      return research!.requestRepositoryPortfolio(researchId(args[0]));
+    });
+    handle('research:portfolio-format', (...args) => {
+      researchReady();
+      if (args.length !== 2 || typeof args[1] !== 'string' || !/^[a-z][a-z0-9-]{2,100}$/.test(args[1])) throw new Error('Invalid portfolio format request');
+      return research!.reformatRepositoryPortfolioDraft(researchId(args[0]), args[1]);
+    });
+    handle('research:portfolio-layout', (...args) => {
+      researchReady();
+      if (args.length !== 2 || typeof args[1] !== 'string' || !/^[a-z][a-z0-9-]{2,100}$/.test(args[1])) throw new Error('Invalid portfolio layout request');
+      return research!.correctRepositoryPortfolioLayout(researchId(args[0]), args[1]);
+    });
+    handle('research:portfolio-evidence', (...args) => {
+      researchReady();
+      if (args.length !== 2) throw new Error('Invalid portfolio evidence request');
+      return research!.admitRepositoryPortfolioEvidence(researchId(args[0]), args[1] as Parameters<ResearchController['admitRepositoryPortfolioEvidence']>[1]);
+    });
+    handle('research:author-metadata', (...args) => {
+      researchReady();
+      if (args.length !== 2 || !args[1] || typeof args[1] !== 'object' || Array.isArray(args[1])) throw new Error('Invalid author metadata');
+      return research!.setAuthorMetadata(researchId(args[0]), args[1] as AuthorMetadataInput);
     });
     handle('research:cancel', (...args) => {
       if (args.length !== 1) throw new Error('Invalid research request');
@@ -208,7 +241,7 @@ if (!app.requestSingleInstanceLock()) {
       });
     });
     const verifiedArtifact = async (args: unknown[]) => {
-      if (args.length !== 2 || typeof args[1] !== 'string' || !Object.hasOwn(artifactFormats, args[1])) throw new Error('Invalid artifact request');
+      if (args.length !== 2 || !isReadableArtifactId(args[1])) throw new Error('Invalid artifact request');
       const id = researchId(args[0]);
       const artifact = await engine.request<ResolvedArtifact>('artifact.resolve', { researchId: id, artifactId: args[1] });
       return readVerifiedArtifact(artifact, engineHome);
@@ -225,7 +258,7 @@ if (!app.requestSingleInstanceLock()) {
     handle('research:save-artifact', (...args) => {
       researchReady();
       if (research!.snapshot().busy) throw new EngineError('RESEARCH_BUSY', '현재 연구 작업이 끝난 뒤 결과 파일을 저장하세요.');
-      if (args.length !== 2 || typeof args[1] !== 'string' || !Object.hasOwn(artifactFormats, args[1])) throw new Error('Invalid artifact request');
+      if (args.length !== 2 || typeof args[1] !== 'string' || !artifactFormat(args[1])) throw new Error('Invalid artifact request');
       researchId(args[0]);
       saveTask = (async () => {
         const artifact = await verifiedArtifact(args);

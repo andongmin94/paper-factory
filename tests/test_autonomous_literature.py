@@ -34,7 +34,8 @@ def record(doi="10.1234/test", *, abstract=None, links=None):
     return {"status": "ok", "message": message}
 
 
-def mocked(monkeypatch, handler, *, title_discovery=False, method_discovery=False, standard_discovery=False):
+def mocked(monkeypatch, handler, *, title_discovery=False, method_discovery=False, standard_discovery=False,
+           openalex_discovery=False):
     # Most fixtures target Crossref or explicit-ID/discovery behavior. Exact-title
     # provider tests opt into the complete multi-provider flow separately.
     if not title_discovery:
@@ -45,6 +46,9 @@ def mocked(monkeypatch, handler, *, title_discovery=False, method_discovery=Fals
         # These fixtures describe the existing PDF/Crossref providers only.
         # Unicode's complete catalog-to-primary flow has its own mock fixtures.
         monkeypatch.setattr(literature, "_collect_unicode", lambda *args, **kwargs: set())
+    if not openalex_discovery:
+        # OpenAlex's repository-copy route has a separate complete-flow fixture.
+        monkeypatch.setattr(literature, "_promote_openalex_pdf", lambda *args, **kwargs: None)
     original = httpx.Client
     requests = []
 

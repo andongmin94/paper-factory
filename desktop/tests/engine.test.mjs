@@ -23,6 +23,22 @@ async function requested(f, count = 1) {
   throw new Error('Synthetic shutdown request did not arrive');
 }
 
+test('engine rejects removed experiment mutations while retaining current repository and history operations', async () => {
+  const f = fixture();
+  for (const method of ['workflow.startExperiment', 'workflow.submitProposal', 'workflow.reviseWriting',
+    'workflow.collectSubmissionRequirements', 'workflow.confirmSubmissionReadiness']) {
+    await assert.rejects(f.bridge.request(method, {}), { code: 'ENGINE_UNAVAILABLE' });
+  }
+  assert.equal(f.requests.length, 0, 'Removed mutations must never reach the live child');
+  for (const method of ['workflow.submitRepositoryPlan', 'workflow.submitRepositoryAnalysis', 'workflow.exportRepositoryDraft',
+    'workflow.readMaterial', 'workflow.cancel', 'artifact.resolve']) {
+    const request = f.bridge.request(method, {});
+    assert.equal(f.requests.at(-1).method, method);
+    f.reply(f.requests.length - 1, { retained: true });
+    assert.deepEqual(await request, { retained: true });
+  }
+});
+
 test('engine close shares one shutdown and waits for both acknowledgement and actual zero-code exit', async () => {
   const f = fixture(); let settled = false;
   const closing = f.bridge.close(); assert.equal(f.bridge.close(), closing);

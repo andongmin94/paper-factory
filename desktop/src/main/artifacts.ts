@@ -10,6 +10,17 @@ export const artifactFormats: Record<string, { name: string; extension: string }
   reproducibility: { name: '재현 패키지', extension: 'zip' }, validation: { name: '검증 결과', extension: 'json' },
 };
 
+export function artifactFormat(artifactId: string): { name: string; extension: string } | undefined {
+  if (Object.hasOwn(artifactFormats, artifactId)) return artifactFormats[artifactId];
+  const match = /^repository-draft-(md|pdf|docx)-[1-3](?:-format-[1-3])?$/.exec(artifactId);
+  return match ? artifactFormats[`export-${match[1]}`] : undefined;
+}
+
+export function isReadableArtifactId(value: unknown): value is string {
+  return typeof value === 'string' && (artifactFormat(value) !== undefined || /^pdf-quality-[a-f0-9]{12}$/.test(value) ||
+    /^submission-requirements-[a-f0-9]{12}-text$/.test(value));
+}
+
 export function validateSaveDestination(value: unknown): string {
   if (typeof value !== 'string' || !value.trim() || value.length > 4096 || /[\u0000-\u001f\u007f]/.test(value) || !isAbsolute(value)) {
     throw new EngineError('SAVE_PATH_INVALID', '다른 저장 위치를 선택하세요.');
@@ -72,8 +83,8 @@ export async function saveArtifactWithDialog(options: {
   chooseDirectory: (options: OpenDialogOptions) => Promise<OpenDialogReturnValue>;
 }): Promise<boolean> {
   const { artifact, artifactId, researchId, documentsPath, protectedRoot, chooseFile, chooseDirectory } = options;
-  if (!Object.hasOwn(artifactFormats, artifactId)) throw new EngineError('ARTIFACT_INVALID', '결과 파일 형식을 확인할 수 없습니다.');
-  const format = artifactFormats[artifactId];
+  const format = artifactFormat(artifactId);
+  if (!format) throw new EngineError('ARTIFACT_INVALID', '결과 파일 형식을 확인할 수 없습니다.');
   if (basename(artifact.path) !== artifact.files[0]?.name || !artifact.path.toLowerCase().endsWith(`.${format.extension}`)) {
     throw new EngineError('ARTIFACT_INVALID', '결과 파일 형식을 확인할 수 없습니다.');
   }
