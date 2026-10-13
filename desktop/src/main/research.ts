@@ -4,7 +4,7 @@ import { mkdir, open, readFile, rename, readdir, lstat } from 'node:fs/promises'
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import type { AuthorMetadataInput, CreateResearchInput, ManuscriptReview, RepositoryPaperDraft, RepositoryPaperPlan, RepositoryPaperProgress, RepositoryPaperReview, RepositoryPortfolioEvidencePacket, RepositoryPortfolioFrame, RepositoryPortfolioVenue, ResearchItem, ResearchPhase, ResearchSnapshot, StudyReview, StudyRedesignReview, SupportingDocument } from '../shared/research.js';
-import { NEW_RESEARCH_MODE, inspectRepositoryArticle, inspectRepositoryPortfolioVenueWork, inspectRepositoryPortfolioWork, repositoryPortfolioReasoningReady } from '../shared/publication.js';
+import { NEW_RESEARCH_MODE, inspectRepositoryArticle, inspectRepositoryPortfolioOutputs, inspectRepositoryPortfolioVenueWork, inspectRepositoryPortfolioWork, repositoryPortfolioReasoningReady } from '../shared/publication.js';
 import { type PublicationCatalog } from '../shared/venues.js';
 import { repositoryPublicationGuidance, repositoryVenueSelectionGuidance } from './repository-prompts.js';
 import { safeError, safeHttpDiagnostics } from './connection.js';
@@ -15,9 +15,11 @@ import { portfolioBindingMarker, portfolioAnalysisPolicy, portfolioWritingPolicy
   portfolioResearchRepairPolicy } from './repository-portfolio.js';
 import type { SupportingEvidenceFile } from './supporting-evidence.js';
 import { portfolioEvidencePacket, verifyPortfolioEvidenceAdmission, verifyRepositoryRequestCapacity } from './repository-supplement.js';
+import { verifyPortfolioAuthorMetadataView, verifyPortfolioAuthorExport } from './repository-author-output.js';
 export { readSupportingEvidence } from './supporting-evidence.js';
 
 type Workflow = { id: string; goal: string; stage: string; status: string; code: string | null; message: string | null;
+  updated_at?: string;
   research_mode?: ResearchItem['researchMode']; repository_paper?: ResearchItem['repositoryPaper'];
   cleanup_pending: boolean; cleanup_confirmed?: boolean;
   resume_kind: ResearchItem['resumeKind'];
@@ -49,6 +51,7 @@ type Workflow = { id: string; goal: string; stage: string; status: string; code:
   redesign_preparation_original?: ResearchItem['preparationOriginal'];
   supporting_documents: SupportingDocument[];
   material_manifest?: { source: SourceFile[]; experiment: { name: string }[]; literature: LiteratureMaterial[];
+    evidence?: SourceFile[];
     references?: ReferenceMaterial[];
     read_costs?: { source: SourceReadCost[] } };
   schemas: Record<'repository_plan' | 'repository_analysis' | 'repository_manuscript' | 'repository_review' | 'repository_reference_selection' | 'repository_content_assessment' | 'repository_revision_feedback', unknown>; };
@@ -666,10 +669,11 @@ export class ResearchController {
       }
       const updated = await this.engine.request<Workflow>('workflow.setAuthorMetadata', { researchId: id, value });
       this.verifyRepositoryTransition(original, updated);
+      this.verifyRepositoryAuthorWorkflow(original, updated, true);
       const author = updated.author_metadata;
       if (['stage', 'status', 'code', 'proposal_attempt', 'study_literature_attempt', 'draft_attempt'].some(key =>
             updated[key as keyof Workflow] !== original[key as keyof Workflow]) ||
-          !isDeepStrictEqual(updated.repository_paper, original.repository_paper) || !author ||
+          !verifyPortfolioAuthorMetadataView(original, updated) || !author ||
           author.origin !== 'explicit_human_author_metadata' || !author.artifact_id || !author.sha256 || !author.selection_artifact_id ||
           updated.artifacts[author.artifact_id]?.sha256 !== author.sha256 || !updated.artifacts[author.selection_artifact_id] ||
           ['display_name', 'email', 'affiliation'].some(key => author.value[key as keyof AuthorMetadataInput] !== value[key as keyof AuthorMetadataInput]?.trim()) ||
@@ -858,6 +862,51 @@ export class ResearchController {
 
   correctRepositoryPortfolioLayout(id: string, venueId: string) {
     return this.correctRepositoryPortfolioOutput(id, venueId, 'layout');
+  }
+
+  async exportRepositoryPortfolioAuthor(id: string, venueId: string) {
+    this.assertIdle();
+    const job = this.jobs.get(id);
+    if (!job) throw new EngineError('RESEARCH_NOT_FOUND', '연구 기록을 찾을 수 없습니다.');
+    if (!/^[a-z][a-z0-9-]{2,100}$/.test(venueId)) throw new EngineError('INVALID_ARGUMENT', '매체 식별자가 올바르지 않습니다.');
+    this.starting = true; this.emit();
+    try {
+      if (this.state.runtime.repositoryAnalysisReady !== true) throw new EngineError('ENGINE_UNAVAILABLE', '저자 출력에 필요한 로컬 엔진을 확인하세요.');
+      await this.engine.start();
+      const original = await this.engine.request<Workflow>('workflow.status', { researchId: id });
+      const prior = original.repository_paper?.portfolio?.venues.find(venue => venue.venue_id === venueId);
+      if (original.research_mode !== NEW_RESEARCH_MODE || original.stage !== 'repository_manuscript' ||
+          !['ready', 'blocked', 'cancelled'].includes(original.status) || original.execution_attempt !== 0 || original.code_attempt !== 0 ||
+          original.cleanup_pending !== false || original.terminal_control_failure || !prior || !original.author_metadata ||
+          original.author_metadata.origin !== 'explicit_human_author_metadata') {
+        throw new EngineError('PORTFOLIO_AUTHOR_UNAVAILABLE', '현재 매체별 원고·심사·기존 출력과 실제 저자 정보를 먼저 보존하세요.');
+      }
+      if (prior.author_export_status === 'completed' && inspectRepositoryPortfolioOutputs(prior, Object.values(original.artifacts), original.author_metadata)
+          .filter(output => output.format !== 'markdown').length === 2) {
+        this.update(job, original); await this.save(); return this.snapshot();
+      }
+      if (!prior.author_export_available || !Number.isSafeInteger(prior.author_export_attempts) ||
+          prior.author_export_attempts < 0 || prior.author_export_attempts >= 3) {
+        throw new EngineError('PORTFOLIO_AUTHOR_UNAVAILABLE', '현재 원고의 저자 출력 조건이나 남은 3회 예산을 확인하세요.');
+      }
+      const updated = await this.engine.request<Workflow>('workflow.exportPortfolioAuthor', { researchId: id, venueId }, 240_000);
+      this.verifyRepositoryTransition(original, updated);
+      this.verifyRepositoryAuthorWorkflow(original, updated, false, venueId);
+      const receipt = verifyPortfolioAuthorExport(original, updated, venueId);
+      for (const output of Object.values(receipt.outputs)) {
+        const conversion = JSON.parse((await this.portfolioText(updated, output!.conversion_artifact_id, new AbortController().signal)).text);
+        if (conversion.input_sha256 !== receipt.input_sha256 || conversion.output_sha256 !== output!.sha256) {
+          throw new EngineError('RESEARCH_STATE_INVALID', '저자 출력 변환 기록이 정확한 입력·출력 SHA256과 일치하지 않습니다.');
+        }
+      }
+      this.update(job, updated);
+      job.message = receipt.status === 'completed'
+        ? '현재 저자 정보를 새 PDF·Word에 반영했습니다. 본문·심사·연구 횟수를 보존하며 최종 저자 승인과 전체 페이지 확인이 필요합니다.'
+        : '저자 출력 실패와 사용 횟수를 보존했습니다. 기존 파일·본문·심사는 유지하며 남은 예산에서 직접 다시 출력할 수 있습니다.';
+      this.state.error = null; await this.save();
+    } catch (error) { this.state.error = this.error(error); throw error; }
+    finally { this.starting = false; this.emit(); }
+    return this.snapshot();
   }
 
   async admitRepositoryPortfolioEvidence(id: string, input: RepositoryPortfolioEvidencePacket) {
@@ -1813,6 +1862,38 @@ export class ResearchController {
         updated.root_research_id !== previous.root_research_id || Object.entries(previous.artifacts).some(([key, artifact]) =>
           !isDeepStrictEqual(updated.artifacts[key], artifact))) {
       throw new EngineError('RESEARCH_STATE_INVALID', '레포 분석 흐름이 기존 원문·원고·심사·횟수를 변경하거나 실험을 실행했습니다. 후속 작업을 중단했습니다.');
+    }
+  }
+
+  private verifyRepositoryAuthorWorkflow(previous: Workflow, updated: Workflow, metadata: boolean, venueId?: string) {
+    const preserved = { ...updated, artifacts: previous.artifacts, repository_paper: previous.repository_paper };
+    if (metadata) preserved.author_metadata = previous.author_metadata;
+    // status includes the frozen context projection; native author mutations omit it.
+    if (Object.hasOwn(previous, 'source_context') && !Object.hasOwn(updated, 'source_context') &&
+        previous.artifacts.context && isDeepStrictEqual(previous.artifacts.context, updated.artifacts.context)) {
+      preserved.source_context = previous.source_context;
+    }
+    const receipt = updated.repository_paper?.portfolio?.venues.find(venue => venue.venue_id === venueId)?.author_export;
+    const prefix = receipt ? `repository-portfolio-${venueId}` : null;
+    const candidates = metadata ? [updated.author_metadata?.selection_artifact_id]
+      : receipt ? [`${prefix}-author-${receipt.attempt}-intent-${receipt.bindings.draft_attempt}`,
+        ...(['pdf', 'docx'] as const).map(format => `${prefix}-${format}-conversion-author-${receipt.attempt}-${receipt.bindings.draft_attempt}`)] : [];
+    const oldEvidence = previous.material_manifest?.evidence, newEvidence = updated.material_manifest?.evidence;
+    if (oldEvidence && newEvidence) {
+      const additions = candidates.flatMap(id => {
+        const artifact = id && !previous.artifacts[id] ? updated.artifacts[id] : undefined;
+        return artifact ? [{ name: id!, sha256: artifact.sha256, size: artifact.size }] : [];
+      });
+      if (!isDeepStrictEqual(newEvidence, [...oldEvidence, ...additions]) || metadata && additions.some(item =>
+          !/^repository-author-selection-[1-9]\d*$/.test(item.name))) {
+        throw new EngineError('RESEARCH_STATE_INVALID', '저자 작업이 기존 근거 목록을 바꾸거나 정확한 신규 저자 영수증 외의 자료를 추가했습니다.');
+      }
+      preserved.material_manifest = { ...updated.material_manifest!, evidence: oldEvidence };
+    }
+    if (Object.hasOwn(previous, 'updated_at')) preserved.updated_at = previous.updated_at;
+    else delete preserved.updated_at;
+    if (!isDeepStrictEqual(preserved, previous)) {
+      throw new EngineError('RESEARCH_STATE_INVALID', '저자 출력·정보 저장이 기존 연구·제출 승인·모델·횟수와 다른 보존 상태를 변경했습니다.');
     }
   }
 

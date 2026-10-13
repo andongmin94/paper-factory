@@ -23,7 +23,10 @@ function VenuePaperCard({ venue, job, catalog, locked, runAction }: {
 }) {
   const profile = getPublicationVenue(venue.venue_id, catalog.venues);
   const name = profile?.name ?? venue.venue_id;
-  const outputs = inspectRepositoryPortfolioOutputs(venue, job.artifacts);
+  const outputs = inspectRepositoryPortfolioOutputs(venue, job.artifacts, job.authorMetadata);
+  const authorOutputCurrent = venue.author_export_status === 'completed' && venue.author_export?.current === true &&
+    (['pdf', 'docx'] as const).every(extension => outputs.some(output => output.format === extension &&
+      output.artifact.id === venue.author_export?.outputs[extension]?.artifact_id));
   const format = venue.draft ? inspectRepositoryArticle(venue.draft, venue, catalog) : null;
   const assessment = venue.review?.content_assessment;
   const argumentReady = repositoryPortfolioReasoningReady(venue);
@@ -48,6 +51,20 @@ function VenuePaperCard({ venue, job, catalog, locked, runAction }: {
     <p className="detail-note">새 원고 작성 {venue.draft_attempts}회 · 보존한 새 원고 {venue.admitted_drafts}개 · 독립 심사 {venue.review_attempts}회</p>
     <p className="detail-note">끊긴 작성 응답 꼬리 복구 {venue.repair_attempts}/1회 · 원래 작성 실패와 횟수 보존</p>
     <p className="detail-note">현재 원고 출력 복구 {venue.export_repair_attempts}/1회 · 누적 출력 복구 {venue.export_repair_total}회 · 원래 출력 실패 기록 보존</p>
+    <p className="detail-note">현재 원고 저자 정보 출력 {venue.author_export_attempts}/3회 · 남은 {Math.max(0, 3 - venue.author_export_attempts)}회</p>
+    {job.authorMetadata && !authorOutputCurrent && <p className="detail-note" role="status">
+      현재 저자 정보가 반영된 PDF·Word가 확인되지 않았습니다. 보존된 이전 파일과 현재 저자 출력 상태를 구분해 확인하세요.
+    </p>}
+    {authorOutputCurrent && <p className="detail-note">현재 저자 정보를 새 PDF·Word에 반영했습니다. 최종 저자 승인·권리·제출 선언과 전체 페이지 확인은 별도로 필요합니다.</p>}
+    {venue.author_export_available && <Button variant="outline" disabled={locked}
+      onClick={() => void runAction('portfolio-author', () => window.paperFactory.exportRepositoryPortfolioAuthor(job.id, venue.venue_id))}>
+      {name} 저자 정보 반영해 출력</Button>}
+    {venue.author_export && <section className="detail-note space-y-2" aria-label={`${name} 저자 정보 출력 결과`}>
+      <p>저자 정보 출력 {authorOutputCurrent ? '현재본 완료' : '미완료 또는 현재 정보와 불일치'} · 모델 요청 0회 · 본문·심사·연구 횟수 보존</p>
+      {venue.author_export.errors.map((error, index) => <p key={index}>{outputLabels[error.format]}: {error.message}</p>)}
+    </section>}
+    {venue.author_export_status === 'stale' && <p className="detail-note">이전 저자 출력은 현재 저자 정보·원고·심사·출력 원문과 달라 현재 제출 파일로 선택하지 않습니다.</p>}
+    {venue.author_export_status === 'interrupted' && <p className="detail-note">저자 출력 중단 기록과 사용 횟수를 보존했습니다. 완료 파일로 표시하지 않습니다.</p>}
     <p className="detail-note">남은 새 원고 작성 {Math.max(0, 3 - venue.draft_attempts)}회 · 남은 독립 심사 {Math.max(0, 3 - venue.review_attempts)}회</p>
     {venue.draft && <p className="detail-note">{venue.revise_reason}</p>}
     {!!venue.export?.original_artifact_id && <p className="detail-note">복구 출력과 별도로 원래 변환 실패 영수증을 보존했습니다.</p>}
@@ -140,7 +157,7 @@ export function RepositoryPortfolioDetails({ job, disabled, locked, runAction }:
   const catalog = paper.publication_venues ?? PUBLICATION_CATALOG;
   const next = inspectRepositoryPortfolioWork(paper, job.portfolioUnsentRequestAvailable);
   const available = ['repository_planned', 'repository_manuscript'].includes(job.stage) && next.action !== null;
-  const outputsComplete = portfolio?.venues.every(venue => inspectRepositoryPortfolioOutputs(venue, job.artifacts).length === 3);
+  const outputsComplete = portfolio?.venues.every(venue => inspectRepositoryPortfolioOutputs(venue, job.artifacts, job.authorMetadata).length === 3);
   const finished = portfolio?.all_content_ready && outputsComplete;
   return <section className="space-y-3 rounded-base border-2 border-border p-3 text-sm" aria-label="IEEE 매체별 투고본">
     <div className="section-heading">

@@ -200,6 +200,19 @@ export interface RepositoryPortfolioLayoutExport extends RepositoryPortfolioOutp
   layout_proof: { original_markdown_sha256: string; formatted_markdown_sha256: string;
     scientific_body_sha256_before: string; scientific_body_sha256_after: string };
 }
+export interface RepositoryPortfolioAuthorExport {
+  artifact_id: string; sha256: string; status: 'completed' | 'failed'; current: boolean; attempt: number;
+  bindings: { venue_id: string; draft_attempt: number; draft_artifact_id: string; draft_sha256: string;
+    markdown_artifact_id: string; markdown_sha256: string; review_artifact_id: string; review_sha256: string;
+    base_export_artifact_id: string; base_export_sha256: string; base_input_artifact_id: string; base_input_sha256: string;
+    author_artifact_id: string; author_sha256: string };
+  input_artifact_id: string; input_sha256: string; author_artifact_id: string; author_sha256: string;
+  author_block_sha256: string; body_sha256: string;
+  draft_sha256: string; markdown_sha256: string;
+  outputs: Partial<Record<'pdf' | 'docx', { artifact_id: string; sha256: string; conversion_artifact_id: string }>>;
+  errors: Array<{ format: 'pdf' | 'docx'; message: string }>;
+  model_calls: 0; scope: 'explicit-author-block-only'; scientific_approval_changed: false;
+}
 export interface RepositoryPortfolioVenue {
   venue_id: string; article_category: string;
   draft_attempts: number; review_attempts: number; admitted_drafts: number;
@@ -217,6 +230,9 @@ export interface RepositoryPortfolioVenue {
   format_export: RepositoryPortfolioOutputCorrection | null;
   layout_export_available: boolean; layout_export_attempts: number;
   layout_export: RepositoryPortfolioLayoutExport | null;
+  author_export_attempts: number; author_export_available: boolean;
+  author_export_status: 'not_started' | 'completed' | 'failed' | 'interrupted' | 'stale' | 'unavailable';
+  author_export: RepositoryPortfolioAuthorExport | null;
   revise_available: boolean; revise_reason: string;
   analysis_current: boolean; scientific_ready: boolean; content_ready: boolean; submission_ready: false;
 }
@@ -377,6 +393,7 @@ export interface ResearchApi {
   requestRepositoryPortfolio(researchId: string): Promise<ResearchSnapshot>;
   reformatRepositoryPortfolioDraft(researchId: string, venueId: string): Promise<ResearchSnapshot>;
   correctRepositoryPortfolioLayout(researchId: string, venueId: string): Promise<ResearchSnapshot>;
+  exportRepositoryPortfolioAuthor(researchId: string, venueId: string): Promise<ResearchSnapshot>;
   admitRepositoryPortfolioEvidence(researchId: string, packet: RepositoryPortfolioEvidencePacket): Promise<ResearchSnapshot>;
   reformatResearchDraft(id: string): Promise<ResearchSnapshot>;
   setResearchAuthorMetadata(id: string, value: AuthorMetadataInput): Promise<ResearchSnapshot>;

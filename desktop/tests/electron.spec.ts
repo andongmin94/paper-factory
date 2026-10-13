@@ -169,7 +169,7 @@ test("connection window uses genuine components and exposes only limited, token-
     expect(rendererSurface.process).toBe("undefined");
     expect(rendererSurface.require).toBe("undefined");
     expect(rendererSurface.api).toEqual([
-      "addResearchEvidence", "admitRepositoryPortfolioEvidence", "cancel", "cancelResearch", "checkRuntime", "correctRepositoryPortfolioLayout", "createResearch", "disconnect", "improveResearch", "listPublicRepositories", "onResearchSnapshot", "onSnapshot",
+      "addResearchEvidence", "admitRepositoryPortfolioEvidence", "cancel", "cancelResearch", "checkRuntime", "correctRepositoryPortfolioLayout", "createResearch", "disconnect", "exportRepositoryPortfolioAuthor", "improveResearch", "listPublicRepositories", "onResearchSnapshot", "onSnapshot",
       "openArtifact", "openUsage", "reformatRepositoryPortfolioDraft", "reformatResearchDraft", "refreshModels", "requestRepositoryPortfolio", "requestRepositoryRevision", "researchSnapshot", "resumeResearch", "saveArtifact", "selectProfile", "setResearchAuthorMetadata", "showArtifactFolder", "signIn", "snapshot", "verify",
     ]);
     expect(rendererSurface.csp).toContain("script-src 'self'");
@@ -189,6 +189,12 @@ test("connection window uses genuine components and exposes only limited, token-
     for (const request of [{ id: "invalid", artifactId: "export-pdf" }, { id: "research-abcdef123456", artifactId: "unsupported" }]) {
       expect(await page.evaluate(async ({ id, artifactId }) => {
         try { await window.paperFactory.saveArtifact(id, artifactId); return false; }
+        catch { return true; }
+      }, request)).toBe(true);
+    }
+    for (const request of [{ id: 'invalid', venueId: 'ieee-software' }, { id: 'research-abcdef123456', venueId: '../ieee-software' }]) {
+      expect(await page.evaluate(async ({ id, venueId }) => {
+        try { await window.paperFactory.exportRepositoryPortfolioAuthor(id, venueId); return false; }
         catch { return true; }
       }, request)).toBe(true);
     }
@@ -1407,6 +1413,7 @@ test("two IEEE submissions show independent holds and real output identities whi
         export_repair_available: false, export_repair_attempts: 0, export_repair_total: 0,
         format_export_available: false, format_export_attempts: 0, format_export: null,
         layout_export_available: false, layout_export_attempts: 0, layout_export: null,
+        author_export_attempts: 0, author_export_available: false, author_export_status: 'unavailable', author_export: null,
         revise_available: index === 1, revise_reason: '이 매체에 필요한 추가 근거와 보존된 심사를 확인하세요.',
         export_status: index < 2 ? 'completed' : 'not_started', export: null,
         analysis_current: true, scientific_ready: index === 0, content_ready: index === 0, submission_ready: false };
@@ -1505,6 +1512,35 @@ test("two IEEE submissions show independent holds and real output identities whi
     await expect(ready.getByRole('region', { name: `${PUBLICATION_VENUES[0].name} 출력 변환 진단`, exact: true }))
       .toContainText('출력 복구 1회 한도를 사용했습니다.');
     await expect(article.getByRole('button', { name: '원고 2 · PDF 열기', exact: true })).toBeEnabled();
+    await electronApp.evaluate(({ BrowserWindow, ipcMain }) => {
+      const fixture = (globalThis as typeof globalThis & { __paperFactoryGateFixture: GateFixture & { authorCalls?: string[][] } }).__paperFactoryGateFixture;
+      fixture.authorCalls = [];
+      const job = fixture.research.jobs[0], first = job.repositoryPaper!.portfolio!.venues[0];
+      job.authorMetadata = { origin: 'explicit_human_author_metadata', artifact_id: 'author-metadata-aaaaaaaaaaaa', sha256: 'a'.repeat(64),
+        bindings: {}, scope: 'Synthetic explicit author fixture; no submission approval.',
+        value: { display_name: 'Synthetic Author', email: 'author@example.test', affiliation: 'Synthetic Institute' } };
+      first.author_export_attempts = 2; first.author_export_available = true; first.author_export_status = 'not_started';
+      ipcMain.removeHandler('research:portfolio-author');
+      ipcMain.handle('research:portfolio-author', (_event, researchId: string, venueId: string) => {
+        if (researchId !== job.id || venueId !== first.venue_id) throw new Error('Unexpected fixture author output');
+        fixture.authorCalls!.push([researchId, venueId]);
+        first.author_export_attempts = 3; first.author_export_available = false; first.author_export_status = 'interrupted';
+        BrowserWindow.getAllWindows()[0]?.webContents.send('research:changed', fixture.research);
+        return fixture.research;
+      });
+      BrowserWindow.getAllWindows()[0]?.webContents.send('research:changed', fixture.research);
+    });
+    const authorButton = ready.getByRole('button', { name: `${PUBLICATION_VENUES[0].name} 저자 정보 반영해 출력`, exact: true });
+    await expect(authorButton).toBeEnabled();
+    await expect(ready).toContainText('현재 저자 정보가 반영된 PDF·Word가 확인되지 않았습니다.');
+    await authorButton.click();
+    await expect(authorButton).toHaveCount(0);
+    await expect(ready).toContainText('현재 원고 저자 정보 출력 3/3회 · 남은 0회');
+    await expect(ready).toContainText('저자 출력 중단 기록과 사용 횟수를 보존했습니다.');
+    expect(await electronApp.evaluate(() => {
+      const fixture = (globalThis as typeof globalThis & { __paperFactoryGateFixture: GateFixture & { authorCalls: string[][] } }).__paperFactoryGateFixture;
+      return { calls: fixture.authorCalls, forbidden: fixture.forbiddenCalls, submissionReady: fixture.research.jobs[0].repositoryPaper!.portfolio!.venues[0].submission_ready };
+    })).toEqual({ calls: [[id, PUBLICATION_VENUES[0].id]], forbidden: [], submissionReady: false });
     await page.screenshot({ path: testInfo.outputPath('two-ieee-independent-submission-cards.png'), animations: 'disabled', fullPage: true });
   } finally {
     if (electronApp) await electronApp.close();

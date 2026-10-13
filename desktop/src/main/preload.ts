@@ -20,6 +20,7 @@ const api: PaperFactoryApi = {
   requestRepositoryPortfolio: (researchId) => ipcRenderer.invoke('research:repository-portfolio', researchId),
   reformatRepositoryPortfolioDraft: (researchId, venueId) => ipcRenderer.invoke('research:portfolio-format', researchId, venueId),
   correctRepositoryPortfolioLayout: (researchId, venueId) => ipcRenderer.invoke('research:portfolio-layout', researchId, venueId),
+  exportRepositoryPortfolioAuthor: (researchId, venueId) => ipcRenderer.invoke('research:portfolio-author', researchId, venueId),
   admitRepositoryPortfolioEvidence: (researchId, packet) => ipcRenderer.invoke('research:portfolio-evidence', researchId, packet),
   reformatResearchDraft: (id) => ipcRenderer.invoke('research:reformat-draft', id),
   setResearchAuthorMetadata: (id, value) => ipcRenderer.invoke('research:author-metadata', id, value),

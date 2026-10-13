@@ -61,7 +61,7 @@ export function ResearchPane({ connection, connectionBusy, onBusyChange, view, o
     setReviewerModel(available);
   }, [connection.models, connection.session.profileId]);
 
-  const active = (snapshot?.busy ?? false) || ["create", "resume", "improve", "repository-revision", "portfolio", "portfolio-format", "portfolio-layout", "reformat", "cancel", "save", "author"].includes(pending ?? "");
+  const active = (snapshot?.busy ?? false) || ["create", "resume", "improve", "repository-revision", "portfolio", "portfolio-format", "portfolio-layout", "portfolio-author", "reformat", "cancel", "save", "author"].includes(pending ?? "");
   useEffect(() => {
     onBusyChange(active);
   }, [active, onBusyChange]);

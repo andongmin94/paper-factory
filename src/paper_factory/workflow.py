@@ -3691,15 +3691,19 @@ class WorkflowService(RepositoryPortfolioMixin):
         title, separator, body = markdown.partition(b"\n")
         if not title.startswith(b"# ") or not separator:
             raise WorkflowError("REPOSITORY_FORMAT_SOURCE_INVALID", "Author formatting requires the retained manuscript's literal title boundary")
-        profile = author["value"]
+        block = self._repository_author_block(author["value"])
+        return title + separator + block + body, block, author
+
+    @staticmethod
+    def _repository_author_block(profile: dict) -> bytes:
+        """Render only explicit profile fields, without granting author approval."""
         def literal(value):
             return science._literal_text(value.replace("\r\n", "\n").replace("\r", "\n").replace("\n", " "))
         affiliation = ", ".join(profile[name] for name in ("department", "affiliation", "city", "country") if profile.get(name))
         lines = [literal(profile["display_name"]), literal(affiliation), "Email: " + literal(profile["email"])]
         if profile.get("orcid"):
             lines.append("ORCID: " + literal(profile["orcid"]))
-        block = ("\n" + "\n\n".join(lines) + "\n").encode("utf-8")
-        return title + separator + block + body, block, author
+        return ("\n" + "\n\n".join(lines) + "\n").encode("utf-8")
 
     def reformat_repository_draft(self, research_id: str) -> dict:
         """Create distinct native outputs without authoring, reviewing or changing attempt counts."""

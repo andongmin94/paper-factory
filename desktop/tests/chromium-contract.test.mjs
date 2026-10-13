@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, writeFile, readFile, realpath, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, realpath, rm, mkdir } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { runInNewContext } from 'node:vm';
+import { fileURLToPath } from 'node:url';
+import asar from '@electron/asar';
 import { CHROMIUM_PROTOCOL, validateChromiumRequest, validateLayoutRequest, boundedJson, chromiumSourceURL, sha256 } from '../dist/chromium-contract.js';
 import { chromiumBinding } from '../dist/engine.js';
 
@@ -86,7 +89,69 @@ test('explicit Chromium binding hashes only supplied trusted files and never use
     assert.equal(binding.executable.path, executable); assert.equal(binding.worker.sha256, sha256(await readFile(worker)));
     assert.equal(binding.app_entry.sha256, sha256(await readFile(app_entry))); assert.deepEqual(binding.assets, []);
     await assert.rejects(chromiumBinding({ executable: 'electron', worker, assets: [] }), /경로/);
+    for (const field of ['executable', 'worker', 'app_entry', 'assets']) {
+      await assert.rejects(chromiumBinding({ executable, worker, app_entry, assets: [],
+        [field]: field === 'assets' ? [scratch] : scratch }), /경로/);
+    }
+    await mkdir(join(scratch, 'nested'));
+    await assert.rejects(chromiumBinding({ executable: `${scratch}${sep}nested${sep}..${sep}electron.bin`, worker, assets: [] }), /경로/);
   } finally {
+    assert(resolve(scratch).startsWith(await realpath(tmpdir()) + sep));
+    await rm(scratch, { recursive: true, force: true });
+  }
+});
+
+test('Electron binds physical ASAR bytes while retaining directory and canonical-path guards', { skip: process.platform !== 'win32', timeout: 30000 }, async () => {
+  const scratch = await realpath(await mkdtemp(join(tmpdir(), 'pf-chromium-asar-')));
+  let child;
+  try {
+    const input = join(scratch, 'archive-input'), archive = join(scratch, 'fixture.asar');
+    await mkdir(input);
+    await writeFile(join(input, 'fixture.txt'), 'Synthetic archive fixture; no research or credentials.');
+    await asar.createPackage(input, archive);
+    const worker = join(scratch, 'worker.mjs');
+    await writeFile(worker, 'Synthetic trusted worker; never dispatched.');
+    const electron = fileURLToPath(new URL('../node_modules/electron/dist/electron.exe', import.meta.url));
+    const engine = new URL('../dist/engine.js', import.meta.url).href;
+    const entry = join(scratch, 'fixture.mjs');
+    await writeFile(entry, `
+import { app, BrowserWindow } from 'electron';
+import { stat } from 'node:fs/promises';
+import { chromiumBinding } from ${JSON.stringify(engine)};
+app.setPath('userData', ${JSON.stringify(scratch)});
+(async () => {
+const executable = ${JSON.stringify(electron)}, worker = ${JSON.stringify(worker)}, archive = ${JSON.stringify(archive)};
+const virtual = await stat(archive);
+if (!virtual.isDirectory() || virtual.isFile()) throw new Error('Fixture must expose Electron ASAR virtualization.');
+const binding = await chromiumBinding({ executable, worker, assets: [archive] });
+const rejected = [];
+for (const field of ['executable', 'worker', 'app_entry', 'assets']) {
+  try { await chromiumBinding({ executable, worker, assets: [archive], [field]: field === 'assets' ? [${JSON.stringify(scratch)}] : ${JSON.stringify(scratch)} }); }
+  catch { rejected.push(field); }
+}
+process.stdout.write('PF_BINDING_FIXTURE_JSON=' + JSON.stringify({ binding, rejected, windows: BrowserWindow.getAllWindows().length, models: 0, research: 0 }) + '\\n', () => app.exit(0));
+})().catch(error => { console.error(error.stack); app.exit(1); });
+`);
+    const env = { ...process.env };
+    delete env.ELECTRON_RUN_AS_NODE; delete env.NODE_OPTIONS;
+    child = spawn(electron, [entry], { env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '', stderr = '';
+    child.stdout.on('data', part => stdout += part); child.stderr.on('data', part => stderr += part);
+    const code = await new Promise((resolveExit, reject) => {
+      const timer = setTimeout(() => { child.kill(); reject(new Error('Owned Electron ASAR fixture timed out.')); }, 15_000);
+      child.once('error', error => { clearTimeout(timer); reject(error); });
+      child.once('close', code => { clearTimeout(timer); resolveExit(code); });
+    });
+    assert.equal(code, 0, stderr);
+    const line = stdout.split(/\r?\n/).find(line => line.startsWith('PF_BINDING_FIXTURE_JSON='));
+    assert(line, stderr || stdout);
+    const receipt = JSON.parse(line.slice('PF_BINDING_FIXTURE_JSON='.length));
+    const raw = await readFile(archive);
+    assert.deepEqual(receipt.binding.assets, [{ path: archive, size: raw.length, sha256: sha256(raw) }]);
+    assert.deepEqual(receipt.rejected, ['executable', 'worker', 'app_entry', 'assets']);
+    assert.equal(receipt.windows, 0); assert.equal(receipt.models, 0); assert.equal(receipt.research, 0);
+  } finally {
+    if (child && child.exitCode === null) child.kill();
     assert(resolve(scratch).startsWith(await realpath(tmpdir()) + sep));
     await rm(scratch, { recursive: true, force: true });
   }

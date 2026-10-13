@@ -1,6 +1,6 @@
 # 다음 세션: 두 IEEE 매체의 실제 Frontron 원고
 
-2026-10-11 체크포인트. 현재 목표는 GitHub 저장소에서 **IEEE Software·IEEE Security & Privacy의 적합한 Feature Article을 실제 앱으로 작성하고, 각각 투고를 권할 만한지 평가하는 것**이다. 두 매체의 범위에 맞지 않는 프로젝트를 억지로 두 원고로 만들지 않는다.
+2026-10-14 체크포인트. 현재 목표는 GitHub 저장소에서 **IEEE Software·IEEE Security & Privacy의 적합한 Feature Article을 실제 앱으로 작성하고, 각각 투고를 권할 만한지 평가하는 것**이다. 두 매체의 범위에 맞지 않는 프로젝트를 억지로 두 원고로 만들지 않는다.
 
 사용자가 기존 연구 자료·심사·횟수 전체 삭제를 명시했고 초기화했다. 과거 JIZURA·9곳 포트폴리오·인계 ZIP은 현재 복원 대상이 아니다. 이 문서와 [현재 검증 기록](standalone-verification.md), [두 매체 설계](ieee-magazine-redesign.md)가 현재 지시다.
 
@@ -14,6 +14,8 @@
 - 실제 앱 데이터: `.paper-factory/jizura-new-01420-20261008-04e3b1a0-4ee/app-data` — 디렉터리 이름만 과거 이름이며 새 Frontron 연구가 저장된다.
 - 첫 실행 증거: two-magazine-fresh-20261011 (`output/playwright/two-magazine-fresh-20261011/final-summary.json`)
 - 현재 종료 증거: resume-1 (`output/playwright/two-magazine-fresh-20261011/resume-1/final-summary.json`)
+- 최신 저자 출력·앱 정상 종료: `output/submission-preflight/frontron-20261014/app/packaged-author-final-6/proof.json`
+- 기존 341개 파일·178개 산출물 보존: `output/submission-preflight/frontron-20261014/app/after.json`
 
 첫 실제 실행은 설계 1·문헌 1·분석 요청 2, 공통 원고 0·코드/실험 0이다. **분석 1만 채택됐고 분석 2는 완료 응답의 잘못된 evidence ID 때문에 채택되지 않았다.** 두 매체 모두 원고 1·심사 1·실제 PDF/Word 출력이 있다. Software는 완전한 Electron 비교 문서와 해석 보완을 요구했다. S&P는 개별 기준을 통과했으나 비차단 조언이 `issues`에 들어가 보수적 준비도는 false다. 어느 원 심사도 수정하거나 승인으로 재해석하지 않는다.
 
@@ -21,7 +23,7 @@
 
 최종 상태 (`output/playwright/two-magazine-fresh-20261011/resume-1/final-summary.json`) · 원 파일 보존 (`output/playwright/two-magazine-fresh-20261011/resume-1/immutable-research-final.json`) · 독립 품질 감사 (`output/playwright/two-magazine-fresh-20261011/resume-1/quality-audit.md`) · 전달 파일 manifest (`output/pdf/frontron-two-ieee-20261011/manifest.json`).
 
-내용상 두 Feature Article 모두 투고 검토를 권할 수준이다. Software PDF 8쪽·S&P PDF 11쪽을 렌더링하고 전체 페이지와 표를 확인했다. Word는 본문/표 보존만 확인했으며 최종 Word 시각 검수는 남아 있다. 실제 저자 정보·승인·제출 선언은 미입력이고 실제 투고하지 않았다. 두 원고는 같은 사례의 대안 투고본이다.
+내용상 두 Feature Article 모두 투고 검토를 권할 수준이다. 최신 저자본은 Software Word 10쪽·PDF 8쪽, S&P Word 14쪽·PDF 12쪽이다. 총 44페이지의 저자 표시·표·글리프·잘림·겹침·푸터를 확인했고, 기존 과학 본문·참고문헌의 bytes/SHA와 원 Word 파일의 불변을 확인했다. 검수 기록은 `output/word-qa/frontron-two-ieee-author-20261014/final-qa-summary.json`, 전달 묶음은 `output/submission-preflight/frontron-20261014/final/manifest.json`이다. 후보 저자 정보·커버레터·제출 선언 검토서는 준비했으며 최종 저자 승인·권리·기관 확인과 Software 사진·관심사·약력 승인은 남아 있다. 실제 투고하지 않았고 두 원고는 같은 사례의 대안 투고본이다.
 
 ## 현재 앱 흐름
 
@@ -31,12 +33,14 @@
 
 문서 보완은 동일한 현재 분석·원고·심사 SHA 기준에서 한 번이며 실패·중단도 소비한다. 회당 서로 다른 비교 URL 1–3개, 전체 수집 3회와 완전 본문 120,000자 한도를 유지한다. 문헌·분석·집필·심사 예산과 실패 횟수를 초기화하지 않는다. `issues`는 차단 결함만 기록하고 통과 기준의 선택적 조언은 criterion reason에 남긴다.
 
+2026-10-14에는 같은 연구를 실제 0.14.20 Windows 패키지에서 열어 제공된 ORCID와 공식 연결 계정의 후보 저자 정보를 저장하고, 매체별 저자 출력 1회와 Word·PDF·Markdown 저장을 완료했다. Software의 먼저 완료된 저자 출력을 재사용했으며 재생성·모델 요청·새 집필·심사·실험은 0이다. 기존 파일과 산출물의 변경·누락은 0, 새 파일은 저자 선택과 출력의 22개다. 정보 저장으로 신원·권리·최종 승인이나 실제 투고를 완료 처리하지 않았다.
+
 ## 다음 작업 순서
 
-1. 두 원고는 내용 평가를 마쳤다. 작업이 없는 상태에서 새 집필·심사를 재개하지 않는다. 실제 저자 정보·승인·최종 제출 형식과 Word 시각 확인부터 이어간다.
+1. 두 원고는 내용 평가·후보 저자 출력·Word/PDF 전페이지 검수를 마쳤다. 작업이 없는 상태에서 새 집필·심사를 재개하지 않는다. 최종 저자 정보·기여·권리·제출 선언과 Software 사진·관심사·약력을 확인하고 두 매체 중 한 곳을 선택한다.
 2. 종료 상태·실제 요청 영수증·채택된 산출물·이전 파일 SHA를 확인한다. 완료 응답 수와 채택된 분석/원고 수를 구분한다.
-3. 결과 화면의 정상 **IEEE 매체별 미완료 투고본 재개** 동작으로 필요한 작업만 이어간다. 직접 원고·심사 입력, 모델 응답 주입, 삭제된 예전 자료 복원, Madi/JIZURA 재실행을 하지 않는다.
-4. 실제 매체별 원고의 기여·비교·근거·실무적 조언·한계와 PDF 전페이지·Word 보존을 확인한다. 학술지별 공식 형식 확인·저자 정보/승인·AI 공개도 별도로 확인한다. 내부 PASS를 투고·채택·교수 임용 실적 인정으로 설명하지 않는다.
+3. 실제 새 보완 요구가 있을 때만 결과 화면의 정상 **IEEE 매체별 미완료 투고본 재개** 동작으로 필요한 작업을 이어간다. 저자 정보 변경에는 정상 정보 저장과 해당 매체의 **저자 정보 반영해 출력**을 사용하고 남은 횟수를 유지한다. 직접 원고·심사 입력, 모델 응답 주입, 삭제된 예전 자료 복원, Madi/JIZURA 재실행을 하지 않는다.
+4. 제출 전에는 승인할 정확한 파일 SHA와 최신 학술지 공식 요건을 확인한다. 원고를 변경하면 해당 출력의 페이지와 저자 결속을 다시 검수한다. 내부 PASS를 투고·채택·교수 임용 실적 인정으로 설명하지 않는다.
 5. 코드 변경이 필요하면 앱 정상 종료 후 집중 회귀→Windows runtime/desktop 빌드→소스/포함 bytes 결속→숨김 Electron·Playwright 정상 UI 재개 순서로 검증한다. 현재 코드와 횟수를 보존한 같은 연구로 계속한다.
 
 Git 상태와 `origin/main`을 읽기 전용으로 대조한 뒤 현재 수정 내용을 유지한다. 다음 PC에서는 절대 경로·공식 계정 연결·포함 런타임 SHA를 새로 확인하고 이 PC의 경로를 그대로 가정하지 않는다.

@@ -91,7 +91,7 @@ export function inspectRepositoryArticle(draft: Article, target: Pick<Publicatio
     formatReady: blockers.length === 0, blockers, uncheckedRequirements };
 }
 
-export function inspectRepositoryPortfolioOutputs(venue: RepositoryPortfolioVenue, artifacts: ResearchItem['artifacts']) {
+export function inspectRepositoryPortfolioOutputs(venue: RepositoryPortfolioVenue, artifacts: ResearchItem['artifacts'], author: ResearchItem['authorMetadata'] = null) {
   const retained = new Map(artifacts.map(artifact => [artifact.id, artifact]));
   const prefix = `repository-portfolio-${venue.venue_id}`;
   const draftId = `${prefix}-draft-${venue.admitted_drafts}`;
@@ -113,13 +113,49 @@ export function inspectRepositoryPortfolioOutputs(venue: RepositoryPortfolioVenu
     correction.receipt.original_draft_sha256 === venue.draft_sha256 &&
     correctionInput?.sha256 === correction.receipt.input_sha256 && /^[a-f0-9]{64}$/.test(correction.receipt.input_sha256) &&
     Number.isSafeInteger(correctionInput.size) && correctionInput.size > 0;
-  return (['markdown', 'pdf', 'docx'] as const).flatMap(format => {
-    const id = venue.artifact_ids[format];
+  const authorExport = venue.author_export;
+  const descriptor = (id: string | null | undefined, expectedSha?: string | null) => {
     const artifact = id ? retained.get(id) : undefined;
-    const currentId = id === `${prefix}-${format}-${venue.admitted_drafts}` ||
+    return !!artifact && /^[a-f0-9]{64}$/.test(artifact.sha256) && Number.isSafeInteger(artifact.size) && artifact.size > 0 &&
+      (expectedSha === undefined || artifact.sha256 === expectedSha);
+  };
+  const baseExport = correction?.receipt ?? venue.export;
+  const baseInputId = correction?.receipt.input_artifact_id ?? `${prefix}-export-markdown${repaired ? '-repair' : ''}-${venue.admitted_drafts}`;
+  const authorBinding = authorExport?.bindings;
+  const authorCurrent = !!author && author.origin === 'explicit_human_author_metadata' &&
+    !!author.value.display_name?.trim() && !!author.value.email?.trim() && !!author.value.affiliation?.trim() &&
+    descriptor(author.artifact_id, author.sha256) && !!author.sha256 &&
+    !!authorExport && authorExport.current === true && authorExport.status === 'completed' &&
+    venue.author_export_status === 'completed' && Number.isSafeInteger(authorExport.attempt) &&
+    authorExport.attempt >= 1 && authorExport.attempt <= 3 && authorExport.attempt <= venue.author_export_attempts && venue.author_export_attempts <= 3 &&
+    authorExport.model_calls === 0 && authorExport.scope === 'explicit-author-block-only' && authorExport.scientific_approval_changed === false &&
+    authorExport.errors.length === 0 && descriptor(authorExport.artifact_id, authorExport.sha256) &&
+    authorExport.artifact_id === `${prefix}-export-author-${authorExport.attempt}-${venue.admitted_drafts}` &&
+    authorExport.input_artifact_id === `${prefix}-export-markdown-author-${authorExport.attempt}-${venue.admitted_drafts}` &&
+    descriptor(authorExport.input_artifact_id, authorExport.input_sha256) &&
+    /^[a-f0-9]{64}$/.test(authorExport.author_block_sha256) && /^[a-f0-9]{64}$/.test(authorExport.body_sha256) &&
+    authorExport.author_artifact_id === author.artifact_id && authorExport.author_sha256 === author.sha256 &&
+    authorBinding?.venue_id === venue.venue_id && authorBinding.draft_attempt === venue.admitted_drafts &&
+    authorBinding.draft_artifact_id === venue.artifact_ids.draft && authorBinding.draft_sha256 === venue.draft_sha256 &&
+    authorExport.draft_sha256 === authorBinding.draft_sha256 && authorExport.markdown_sha256 === authorBinding.markdown_sha256 &&
+    authorBinding.markdown_artifact_id === venue.artifact_ids.markdown && descriptor(authorBinding.markdown_artifact_id, authorBinding.markdown_sha256) &&
+    authorBinding.review_artifact_id === venue.artifact_ids.review && descriptor(authorBinding.review_artifact_id, authorBinding.review_sha256) &&
+    authorBinding.author_artifact_id === author.artifact_id && authorBinding.author_sha256 === author.sha256 &&
+    !!baseExport && authorBinding.base_export_artifact_id === baseExport.artifact_id &&
+    authorBinding.base_export_sha256 === baseExport.sha256 && descriptor(baseExport.artifact_id, baseExport.sha256) &&
+    authorBinding.base_input_artifact_id === baseInputId && descriptor(baseInputId, authorBinding.base_input_sha256);
+  return (['markdown', 'pdf', 'docx'] as const).flatMap(format => {
+    const id = format === 'markdown' && authorCurrent ? authorExport!.input_artifact_id : venue.artifact_ids[format];
+    const artifact = id ? retained.get(id) : undefined;
+    const currentId = format === 'markdown' && authorCurrent && id === authorExport!.input_artifact_id ||
+      id === `${prefix}-${format}-${venue.admitted_drafts}` ||
       format !== 'markdown' && (repaired && id === `${prefix}-${format}-repair-${venue.admitted_drafts}` ||
         corrected && id === `${prefix}-${format}-${correction!.kind}-${venue.admitted_drafts}` &&
-          correction!.receipt.outputs?.[format]?.artifact_id === id && correction!.receipt.outputs?.[format]?.sha256 === artifact?.sha256);
+          correction!.receipt.outputs?.[format]?.artifact_id === id && correction!.receipt.outputs?.[format]?.sha256 === artifact?.sha256 ||
+        authorCurrent && id === `${prefix}-${format}-author-${authorExport!.attempt}-${venue.admitted_drafts}` &&
+          authorExport!.outputs[format]?.artifact_id === id && descriptor(id, authorExport!.outputs[format]?.sha256) &&
+          authorExport!.outputs[format]?.conversion_artifact_id === `${prefix}-${format}-conversion-author-${authorExport!.attempt}-${venue.admitted_drafts}` &&
+          descriptor(authorExport!.outputs[format]?.conversion_artifact_id));
     return currentId && artifact &&
       /^[a-f0-9]{64}$/.test(artifact.sha256) && Number.isSafeInteger(artifact.size) && artifact.size > 0
       ? [{ format, artifact }] : [];

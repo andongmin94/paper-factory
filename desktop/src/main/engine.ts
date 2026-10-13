@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile, mkdir, stat, realpath } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 const engineMethods = [
@@ -13,7 +14,7 @@ const engineMethods = [
   'workflow.submitPortfolioReview', 'workflow.exportPortfolioDraft',
   'workflow.collectPortfolioLiterature',
   'workflow.preparePortfolioRevision', 'workflow.repairPortfolioExport', 'workflow.reformatPortfolioDraft', 'workflow.correctPortfolioLayout',
-  'workflow.admitPortfolioEvidence',
+  'workflow.admitPortfolioEvidence', 'workflow.exportPortfolioAuthor',
   'workflow.readMaterial', 'workflow.addEvidence', 'workflow.setAuthorMetadata', 'workflow.recordInference',
   'workflow.cancel', 'workflow.resume', 'artifact.resolve', 'shutdown',
 ] as const;
@@ -34,9 +35,13 @@ export type ChromiumPaths = { executable: string; worker: string; assets: string
 export type FileBinding = { path: string; size: number; sha256: string };
 
 export async function chromiumBinding(paths: ChromiumPaths) {
+  // Electron treats app.asar as a virtual directory; bind its physical file bytes.
+  const files: Pick<typeof import('node:fs/promises'), 'readFile' | 'stat' | 'realpath'> = process.versions.electron
+    ? createRequire(import.meta.url)('original-fs').promises
+    : { readFile, stat, realpath };
   async function descriptor(path: string): Promise<FileBinding> {
-    if (!isAbsolute(path) || await realpath(path) !== path || !(await stat(path)).isFile()) throw new EngineError('RUNTIME_INVALID', 'Chromium 실행 파일 경로가 올바르지 않습니다.');
-    const bytes = await readFile(path);
+    if (!isAbsolute(path) || await files.realpath(path) !== path || !(await files.stat(path)).isFile()) throw new EngineError('RUNTIME_INVALID', 'Chromium 실행 파일 경로가 올바르지 않습니다.');
+    const bytes = await files.readFile(path);
     return { path, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') };
   }
   const executable = await descriptor(paths.executable), worker = await descriptor(paths.worker);

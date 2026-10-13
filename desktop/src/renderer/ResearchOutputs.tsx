@@ -40,7 +40,7 @@ export function AuthorMetadataEditor({ job, disabled, runAction }: { job: Resear
   if (!available) return null;
   return <details className="rounded-base border-2 border-border p-3 text-sm">
     <summary className="font-semibold">실제 저자 정보 입력</summary>
-    <p className="detail-note mt-2">저자 정보를 저장한 뒤 출력 다시 생성을 누르면 새 PDF·Word에 반영합니다. 원래 본문·원고·심사·횟수와 이전 파일은 보존됩니다.</p>
+    <p className="detail-note mt-2">저자 정보를 저장한 뒤 각 매체의 ‘저자 정보 반영해 출력’을 누르면 새 PDF·Word에 반영합니다. 원래 본문·원고·심사·횟수와 이전 파일은 보존됩니다. 정보 저장은 저자 승인이나 실제 투고를 의미하지 않습니다.</p>
     <form className="mt-3 space-y-3" onSubmit={event => { event.preventDefault(); void runAction("author", () => window.paperFactory.setResearchAuthorMetadata(job.id, value)); }}>
       {([['display_name', '저자 이름'], ['email', '저자 이메일'], ['affiliation', '저자 소속'], ['orcid', 'ORCID (선택)']] as const).map(([key, label]) =>
         <div className="field" key={key}><label htmlFor={`${job.id}-${key}`}>{label}</label>

@@ -12,6 +12,9 @@ export const artifactFormats: Record<string, { name: string; extension: string }
 
 export function artifactFormat(artifactId: string): { name: string; extension: string } | undefined {
   if (Object.hasOwn(artifactFormats, artifactId)) return artifactFormats[artifactId];
+  const portfolio = /^repository-portfolio-(?:ieee-software|ieee-security-privacy)-(pdf|docx)(?:-(?:repair|format|layout|author-[1-3]))?-[1-3]$/.exec(artifactId);
+  if (portfolio) return artifactFormats[`export-${portfolio[1]}`];
+  if (/^repository-portfolio-(?:ieee-software|ieee-security-privacy)-(?:markdown-[1-3]|export-markdown(?:-(?:repair|format|layout|author-[1-3]))?-[1-3])$/.test(artifactId)) return artifactFormats['export-md'];
   const match = /^repository-draft-(md|pdf|docx)-[1-3](?:-format-[1-3])?$/.exec(artifactId);
   return match ? artifactFormats[`export-${match[1]}`] : undefined;
 }

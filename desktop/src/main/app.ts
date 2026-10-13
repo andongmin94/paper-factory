@@ -218,6 +218,11 @@ if (!app.requestSingleInstanceLock()) {
       if (args.length !== 2) throw new Error('Invalid portfolio evidence request');
       return research!.admitRepositoryPortfolioEvidence(researchId(args[0]), args[1] as Parameters<ResearchController['admitRepositoryPortfolioEvidence']>[1]);
     });
+    handle('research:portfolio-author', (...args) => {
+      researchReady();
+      if (args.length !== 2 || typeof args[1] !== 'string' || !/^[a-z][a-z0-9-]{2,100}$/.test(args[1])) throw new Error('Invalid portfolio author export request');
+      return research!.exportRepositoryPortfolioAuthor(researchId(args[0]), args[1]);
+    });
     handle('research:author-metadata', (...args) => {
       researchReady();
       if (args.length !== 2 || !args[1] || typeof args[1] !== 'object' || Array.isArray(args[1])) throw new Error('Invalid author metadata');

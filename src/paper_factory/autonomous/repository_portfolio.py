@@ -1007,6 +1007,151 @@ class RepositoryPortfolioMixin:
             raise engine.WorkflowError("ARTIFACT_CHANGED", "A portfolio review differs from its exact targeted manuscript")
         return number, keys, draft, review
 
+    @staticmethod
+    def _portfolio_selected_output(keys, exported, formatted, layout):
+        selected = (layout if layout and layout["status"] == "completed" else
+            formatted if formatted and formatted["status"] == "completed" else exported)
+        outputs = dict(keys)
+        if selected and "outputs" in selected:
+            outputs.update({kind: output["artifact_id"] for kind, output in selected["outputs"].items()})
+        return selected, outputs
+
+    def _portfolio_author_source(self, ws, record, venue_id, number, keys, draft, review, *, selected=None, author=None):
+        """Replace only the exact byline in the selected retained native input."""
+        from .. import workflow as engine
+        from ..author import load_author
+        if not draft or not review:
+            return None
+        author = author or self._repository_author_metadata(ws, record)
+        if not author:
+            return None
+        if selected is None:
+            status, exported = self._portfolio_export(ws, record, number, keys, draft)
+            if status != "completed":
+                return None
+            formatted = self._portfolio_format_export(ws, record, venue_id, number, keys, draft, review)
+            layout = self._portfolio_layout_export(ws, record, venue_id, number, keys, draft, review)
+            selected, _ = self._portfolio_selected_output(keys, exported, formatted, layout)
+        allowed = {self._portfolio_key(venue_id, kind, number) for kind in ("export", "export-repair", "export-format", "export-layout")}
+        if (selected["artifact_id"] not in allowed or selected["artifact_id"] not in record.artifacts or
+                record.artifacts[selected["artifact_id"]].sha256 != selected["sha256"]):
+            raise engine.WorkflowError("ARTIFACT_CHANGED", "Author output requires the exact selected retained export")
+        base = engine._read(ws, record, selected["artifact_id"])
+        input_key = base["input_artifact_id"]
+        if (base["draft_sha256"] != record.artifacts[keys["draft"]].sha256 or
+                base["markdown_sha256"] != record.artifacts[keys["markdown"]].sha256 or
+                input_key not in record.artifacts or record.artifacts[input_key].sha256 != base["input_sha256"] or
+                base["errors"] or set(base["outputs"]) != {"pdf", "docx"}):
+            raise engine.WorkflowError("ARTIFACT_CHANGED", "Author output differs from its current draft or complete native input")
+        original = engine._artifact(ws, record, input_key).read_bytes()
+        title, separator, remainder = original.partition(b"\n")
+        frozen_title = engine._artifact(ws, record, keys["markdown"]).read_bytes().partition(b"\n")[0]
+        old_key = base["author_artifact_id"]
+        old_block = b""
+        if old_key:
+            if old_key not in record.artifacts or record.artifacts[old_key].sha256 != base["author_sha256"]:
+                raise engine.WorkflowError("ARTIFACT_CHANGED", "The original export author receipt changed")
+            old = engine._read(ws, record, old_key)
+            profile = load_author(old["value"], environ={}, require=True).model_dump(exclude_defaults=True)
+            if (old.get("origin") != "explicit_human_author_metadata" or profile != old["value"] or
+                    old.get("bindings") != engine._submission_bindings(ws, record)):
+                raise engine.WorkflowError("ARTIFACT_CHANGED", "Original byline is not explicit validated author metadata")
+            old_block = self._repository_author_block(profile)
+        if (not separator or title != frozen_title or not remainder.startswith(old_block) or
+                hashlib.sha256(old_block).hexdigest() != base["author_block_sha256"]):
+            raise engine.WorkflowError("ARTIFACT_CHANGED", "Author output cannot replace any retained scientific or bibliography bytes")
+        body = remainder[len(old_block):]
+        block = self._repository_author_block(author["value"])
+        value = title + separator + block + body
+        binding = {"venue_id": venue_id, "draft_attempt": number,
+            "draft_artifact_id": keys["draft"], "draft_sha256": record.artifacts[keys["draft"]].sha256,
+            "markdown_artifact_id": keys["markdown"], "markdown_sha256": record.artifacts[keys["markdown"]].sha256,
+            "review_artifact_id": keys["review"], "review_sha256": record.artifacts[keys["review"]].sha256,
+            "base_export_artifact_id": selected["artifact_id"], "base_export_sha256": selected["sha256"],
+            "base_input_artifact_id": input_key, "base_input_sha256": record.artifacts[input_key].sha256,
+            "author_artifact_id": author["artifact_id"], "author_sha256": author["sha256"]}
+        return {"input": value, "receipt": {"author_artifact_id": author["artifact_id"], "author_sha256": author["sha256"],
+                "author_block_sha256": hashlib.sha256(block).hexdigest()},
+            "fields": {"bindings": binding, "body_sha256": hashlib.sha256(body).hexdigest(),
+                "original_author_block_sha256": hashlib.sha256(old_block).hexdigest(),
+                "scope": "explicit-author-block-only", "scientific_approval_changed": False}}
+
+    def _portfolio_author_state(self, ws, record, venue_id, number, keys, draft, review):
+        from .. import workflow as engine
+        from ..author import load_author
+        current = self._portfolio_author_source(ws, record, venue_id, number, keys, draft, review)
+        result = {"author_export_attempts": 0, "author_export_available": False,
+            "author_export_status": "not_started" if current else "unavailable", "author_export": None}
+        if not draft:
+            return result
+        parent = engine._artifact(ws, record, keys["draft"]).parent
+        receipts = []
+        interrupted = False
+        for attempt in range(1, 4):
+            kind = f"author-{attempt}"
+            intent_key = self._portfolio_key(venue_id, kind + "-intent", number)
+            receipt_key = self._portfolio_key(venue_id, "export-" + kind, number)
+            if not (parent / kind).exists() and intent_key not in record.artifacts and receipt_key not in record.artifacts:
+                continue
+            result["author_export_attempts"] += 1
+            if intent_key not in record.artifacts:
+                interrupted = True
+                continue
+            intent = engine._read(ws, record, intent_key)
+            binding = intent["bindings"]
+            author_key = binding["author_artifact_id"]
+            if author_key not in record.artifacts or record.artifacts[author_key].sha256 != binding["author_sha256"]:
+                raise engine.WorkflowError("ARTIFACT_CHANGED", "Author output reservation differs from its explicit author SHA")
+            author = engine._read(ws, record, author_key)
+            profile = load_author(author["value"], environ={}, require=True).model_dump(exclude_defaults=True)
+            if (author.get("origin") != "explicit_human_author_metadata" or profile != author["value"] or
+                    author.get("bindings") != engine._submission_bindings(ws, record)):
+                raise engine.WorkflowError("ARTIFACT_CHANGED", "Author output reservation is not explicit validated metadata")
+            expected = self._portfolio_author_source(ws, record, venue_id, number, keys, draft, review,
+                selected={"artifact_id": binding["base_export_artifact_id"], "sha256": binding["base_export_sha256"]},
+                author={"artifact_id": author_key, "sha256": binding["author_sha256"], "value": profile})
+            if (not expected or any(intent.get(name) != value for name, value in expected["fields"].items()) or
+                    intent.get("input_sha256") != hashlib.sha256(expected["input"]).hexdigest() or intent.get("model_calls") != 0):
+                raise engine.WorkflowError("ARTIFACT_CHANGED", "Author output reservation differs from its literal protected body")
+            if receipt_key not in record.artifacts:
+                interrupted = interrupted or bool(current and binding == current["fields"]["bindings"])
+                continue
+            receipt = engine._read(ws, record, receipt_key)
+            input_key = self._portfolio_key(venue_id, "export-markdown-" + kind, number)
+            if (any(receipt.get(name) != value for name, value in expected["fields"].items()) or
+                    any(receipt.get(name) != value for name, value in expected["receipt"].items()) or
+                    receipt.get("draft_sha256") != binding["draft_sha256"] or receipt.get("markdown_sha256") != binding["markdown_sha256"] or
+                    receipt.get("input_artifact_id") != input_key or input_key not in record.artifacts or
+                    receipt.get("input_sha256") != record.artifacts[input_key].sha256 or
+                    engine._artifact(ws, record, input_key).read_bytes() != expected["input"] or receipt.get("model_calls") != 0):
+                raise engine.WorkflowError("ARTIFACT_CHANGED", "Author export differs from its exact input, profile or frozen review")
+            for extension, output in receipt["outputs"].items():
+                output_key = self._portfolio_key(venue_id, extension + "-" + kind, number)
+                conversion_key = self._portfolio_key(venue_id, extension + "-conversion-" + kind, number)
+                if (extension not in {"pdf", "docx"} or output["artifact_id"] != output_key or output_key not in record.artifacts or
+                        record.artifacts[output_key].sha256 != output["sha256"] or output.get("conversion_artifact_id") != conversion_key):
+                    raise engine.WorkflowError("ARTIFACT_CHANGED", "Author export differs from its immutable native outputs")
+                engine._artifact(ws, record, output_key)
+                converted = engine._read(ws, record, conversion_key)
+                if converted["input_sha256"] != receipt["input_sha256"] or converted["output_sha256"] != output["sha256"]:
+                    raise engine.WorkflowError("ARTIFACT_CHANGED", "Author conversion differs from its retained input or output")
+            complete = not receipt["errors"] and set(receipt["outputs"]) == {"pdf", "docx"}
+            is_current = bool(current and binding == current["fields"]["bindings"])
+            receipts.append({**receipt, "artifact_id": receipt_key, "sha256": record.artifacts[receipt_key].sha256,
+                "attempt": attempt, "status": "completed" if complete else "failed", "current": is_current})
+        selected = next((item for item in receipts if item["current"] and item["status"] == "completed"), None)
+        if not selected and not interrupted:
+            selected = next((item for item in reversed(receipts) if item["current"]), None)
+        if selected:
+            result.update(author_export=selected, author_export_status=selected["status"])
+        elif interrupted:
+            result["author_export_status"] = "interrupted"
+        elif receipts:
+            result["author_export_status"] = "stale"
+        result["author_export_available"] = bool(current and result["author_export_attempts"] < 3 and
+            not (selected and selected["status"] == "completed"))
+        return result
+
     def _portfolio_repair_context(self, ws, record, venue_id, *, writers=None, latest=None):
         from .. import workflow as engine
         _, keys, draft, _ = latest or self._portfolio_latest(ws, record, venue_id)
@@ -1483,6 +1628,30 @@ class RepositoryPortfolioMixin:
             self._portfolio_write_export(ws, record, venue_id, number, keys, root)
             return self._public(ws, record)
 
+    def export_portfolio_author(self, research_id, venue_id):
+        """At most three immutable byline exports per current draft, without model calls."""
+        from .. import workflow as engine
+        with self._operation(research_id) as (ws, record):
+            self._require(ws, record, {"repository_manuscript"}, allow_cancelled=True)
+            self._portfolio_start(ws, record)
+            number, keys, draft, review = self._portfolio_latest(ws, record, venue_id)
+            state = self._portfolio_author_state(ws, record, venue_id, number, keys, draft, review)
+            if state["author_export_status"] == "completed":
+                return self._public(ws, record)
+            if state["author_export_attempts"] >= 3:
+                raise engine.WorkflowError("PORTFOLIO_AUTHOR_LIMIT", "At most three byline-only exports are available per current journal manuscript; preserve failed and interrupted attempts")
+            source = self._portfolio_author_source(ws, record, venue_id, number, keys, draft, review)
+            if not source:
+                raise engine.WorkflowError("PORTFOLIO_AUTHOR_UNAVAILABLE", "Author export requires explicit validated metadata, an exact current review and successful retained native exports")
+            parent = engine._artifact(ws, record, keys["draft"]).parent
+            attempt = next(attempt for attempt in range(1, 4) if not (parent / f"author-{attempt}").exists() and
+                self._portfolio_key(venue_id, f"author-{attempt}-intent", number) not in record.artifacts and
+                self._portfolio_key(venue_id, f"export-author-{attempt}", number) not in record.artifacts)
+            kind = f"author-{attempt}"
+            output_keys = {**keys, **{extension: self._portfolio_key(venue_id, extension + "-" + kind, number) for extension in ("pdf", "docx")}}
+            self._portfolio_write_export(ws, record, venue_id, number, output_keys, parent / kind, formatting=source, correction_kind=kind)
+            return self._public(ws, record)
+
     def repair_portfolio_export(self, research_id, venue_id):
         from .. import workflow as engine
         with self._operation(research_id) as (ws, record):
@@ -1657,10 +1826,10 @@ class RepositoryPortfolioMixin:
             layout_attempts = self._portfolio_layout_attempts(ws, record, venue_id, number, keys, draft)
             layout_export = self._portfolio_layout_export(ws, record, venue_id, number, keys, draft, review)
             layout_available = bool(not layout_attempts and self._portfolio_layout_source(ws, record, venue_id, number, keys, draft, review))
-            output_keys = {**keys, **({kind: self._portfolio_key(venue_id, kind + "-format", number) for kind in ("pdf", "docx")}
-                if format_export and format_export["status"] == "completed" else {})}
-            if layout_export and layout_export["status"] == "completed":
-                output_keys.update({kind: self._portfolio_key(venue_id, kind + "-layout", number) for kind in ("pdf", "docx")})
+            _, output_keys = self._portfolio_selected_output(keys, exported, format_export, layout_export)
+            author_state = self._portfolio_author_state(ws, record, venue_id, number, keys, draft, review)
+            if author_state["author_export_status"] == "completed":
+                output_keys.update({kind: output["artifact_id"] for kind, output in author_state["author_export"]["outputs"].items()})
             status = "pending_analysis" if not analysis else "pending_draft" if not draft else "pending_review" if not review else "content_ready" if content_ready else "needs_revision"
             if status == "pending_draft" and writers:
                 status = "writing_interrupted"
@@ -1678,6 +1847,7 @@ class RepositoryPortfolioMixin:
                 "export_repair_total": self._portfolio_export_repair_total(ws, record, venue_id),
                 "format_export_attempts": format_attempts, "format_export_available": format_available, "format_export": format_export,
                 "layout_export_attempts": layout_attempts, "layout_export_available": layout_available, "layout_export": layout_export,
+                **author_state,
                 "revise_available": revise_available, "revise_reason": revise_reason,
                 "analysis_current": analysis_current, "scientific_ready": ready, "content_ready": content_ready, "submission_ready": False})
         _, actions = self._portfolio_revision_reviews(ws, record)

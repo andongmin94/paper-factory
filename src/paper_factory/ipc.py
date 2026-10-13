@@ -43,6 +43,7 @@ METHODS = {
     "workflow.submitPortfolioManuscript": {"researchId", "value"},
     "workflow.submitPortfolioReview": {"researchId", "value"},
     "workflow.exportPortfolioDraft": {"researchId", "venueId"},
+    "workflow.exportPortfolioAuthor": {"researchId", "venueId"},
     "workflow.repairPortfolioExport": {"researchId", "venueId"},
     "workflow.reformatPortfolioDraft": {"researchId", "venueId"},
     "workflow.correctPortfolioLayout": {"researchId", "venueId"},
@@ -262,6 +263,8 @@ class Dispatcher:
             return self.service.submit_portfolio_review(p["researchId"], p["value"])
         if method == "workflow.exportPortfolioDraft":
             return self.service.export_portfolio_draft(p["researchId"], p["venueId"])
+        if method == "workflow.exportPortfolioAuthor":
+            return self.service.export_portfolio_author(p["researchId"], p["venueId"])
         if method == "workflow.repairPortfolioExport":
             return self.service.repair_portfolio_export(p["researchId"], p["venueId"])
         if method == "workflow.reformatPortfolioDraft":
