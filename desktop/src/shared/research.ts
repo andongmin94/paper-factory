@@ -1,5 +1,6 @@
 import type { RepositoryArticleFormat } from './publication.js';
 import type { PublicationCatalog, PublicationTarget } from './venues.js';
+import type { PortfolioSubmissionState, PortfolioSubmissionPreparationInput, PortfolioSubmissionConfirmationInput, PortfolioSubmissionRecordInput } from './submission.js';
 
 export type ResearchPhase = 'idle' | 'submission-plan' | 'source-selection' | 'source-analysis' | 'venue-manuscript' | 'venue-manuscript-repair' | 'venue-manuscript-review' | 'research-questions' | 'question-search-plan' | 'question-literature' | 'question-selection' | 'question-reframing' | 'question-reframing-selection' | 'plan' | 'redesign' | 'redesign-plan' | 'redesign-review' | 'literature-plan' | 'literature' | 'study-review' | 'code' | 'code-review' | 'experiment' | 'evidence-selection' | 'manuscript-claim' | 'manuscript' | 'manuscript-repair' | 'manuscript-review' | 'export';
 
@@ -263,6 +264,7 @@ export interface RepositoryPortfolioSupplement {
     results: Array<{ claim: string; evidence_ids: string[]; limitations: string }> } | null;
 }
 export interface RepositoryPortfolioProgress {
+  submission?: PortfolioSubmissionState;
   artifact_id: string; sha256: string; bindings: Record<string, unknown>;
   targets: Array<{ venue_id: string; article_category: string }>;
   analysis: RepositoryAnalysis | null; analysis_sha256: string | null; analysis_binding: RepositoryPortfolioFrame | null;
@@ -396,6 +398,10 @@ export interface CreateResearchInput { source: string; goal: string; model: stri
 export interface PublicRepository { name: string; url: string }
 
 export interface ResearchApi {
+  preparePortfolioSubmission(id: string, venueId: string, value: PortfolioSubmissionPreparationInput): Promise<ResearchSnapshot>;
+  confirmPortfolioSubmission(id: string, value: PortfolioSubmissionConfirmationInput): Promise<ResearchSnapshot>;
+  recordPortfolioSubmission(id: string, value: PortfolioSubmissionRecordInput): Promise<ResearchSnapshot>;
+  openPortfolioSubmissionSite(id: string, venueId: string, kind: 'portal' | 'guidelines'): Promise<void>;
   researchSnapshot(): Promise<ResearchSnapshot>;
   checkRuntime(): Promise<ResearchSnapshot>;
   createResearch(input: CreateResearchInput): Promise<ResearchSnapshot>;

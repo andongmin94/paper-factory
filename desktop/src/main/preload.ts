@@ -3,6 +3,10 @@ import type { AppSnapshot, PaperFactoryApi } from '../shared/contracts.js';
 import type { ResearchSnapshot } from '../shared/research.js';
 
 const api: PaperFactoryApi = {
+  preparePortfolioSubmission: (id, venueId, value) => ipcRenderer.invoke('research:submission-prepare', id, venueId, value),
+  confirmPortfolioSubmission: (id, value) => ipcRenderer.invoke('research:submission-confirm', id, value),
+  recordPortfolioSubmission: (id, value) => ipcRenderer.invoke('research:submission-record', id, value),
+  openPortfolioSubmissionSite: (id, venueId, kind) => ipcRenderer.invoke('research:submission-site', id, venueId, kind),
   snapshot: () => ipcRenderer.invoke('connection:snapshot'),
   signIn: (profileId) => ipcRenderer.invoke('connection:sign-in', profileId),
   cancel: () => ipcRenderer.invoke('connection:cancel'),

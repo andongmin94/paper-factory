@@ -11,6 +11,8 @@ import type { CreateResearchInput, ManuscriptReview, RepositoryPaperDraft, Repos
 import { NEW_RESEARCH_MODE, inspectRepositoryArticle } from "../src/shared/publication";
 import { PUBLICATION_VENUES, type PublicationTarget } from '../src/shared/venues';
 import type { OpenDialogOptions, SaveDialogOptions } from "electron";
+import type { PortfolioSubmissionConfirmationInput, PortfolioSubmissionPreparation, PortfolioSubmissionPreparationInput,
+  PortfolioSubmissionRecordInput, PortfolioSubmissionState } from '../src/shared/submission';
 
 declare global {
   interface Window {
@@ -169,8 +171,8 @@ test("connection window uses genuine components and exposes only limited, token-
     expect(rendererSurface.process).toBe("undefined");
     expect(rendererSurface.require).toBe("undefined");
     expect(rendererSurface.api).toEqual([
-      "addResearchEvidence", "admitRepositoryPortfolioEvidence", "cancel", "cancelResearch", "checkRuntime", "correctRepositoryPortfolioLayout", "createResearch", "disconnect", "exportRepositoryPortfolioAuthor", "improveResearch", "listPublicRepositories", "onResearchSnapshot", "onSnapshot",
-      "openArtifact", "openUsage", "reformatRepositoryPortfolioDraft", "reformatResearchDraft", "refreshModels", "requestRepositoryPortfolio", "requestRepositoryRevision", "researchSnapshot", "resumeResearch", "saveArtifact", "selectProfile", "setResearchAuthorMetadata", "showArtifactFolder", "signIn", "snapshot", "verify",
+      "addResearchEvidence", "admitRepositoryPortfolioEvidence", "cancel", "cancelResearch", "checkRuntime", "confirmPortfolioSubmission", "correctRepositoryPortfolioLayout", "createResearch", "disconnect", "exportRepositoryPortfolioAuthor", "improveResearch", "listPublicRepositories", "onResearchSnapshot", "onSnapshot",
+      "openArtifact", "openPortfolioSubmissionSite", "openUsage", "preparePortfolioSubmission", "recordPortfolioSubmission", "reformatRepositoryPortfolioDraft", "reformatResearchDraft", "refreshModels", "requestRepositoryPortfolio", "requestRepositoryPortfolioRevision", "requestRepositoryRevision", "researchSnapshot", "resumeResearch", "saveArtifact", "selectProfile", "setResearchAuthorMetadata", "showArtifactFolder", "signIn", "snapshot", "verify",
     ]);
     expect(rendererSurface.csp).toContain("script-src 'self'");
     expect(rendererSurface.csp).toContain("object-src 'none'");
@@ -1357,6 +1359,187 @@ test("new research supports two IEEE venues while historical studies retain thei
     expect(await electronApp.evaluate(() =>
       (globalThis as typeof globalThis & { __paperFactoryGateFixture: GateFixture }).__paperFactoryGateFixture.forbiddenCalls)).toEqual([]);
     await page.screenshot({ path: testInfo.outputPath("ieee-software-historical-read-only.png"), animations: "disabled", fullPage: true });
+  } finally {
+    if (electronApp) await electronApp.close();
+    await removeOwnedTemp(dataDir);
+  }
+});
+
+test("submission wizard reviews only newly generated files and never treats portal opening as actual submission", async ({}, testInfo) => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'paper-factory-electron-'));
+  let electronApp: ElectronApplication | undefined;
+  const id = 'research-abcdef555555';
+  const connection: AppSnapshot = { version: 'synthetic-ui', session: { connected: true, sharing: true }, profiles: [],
+    models: [{ slug: 'fixture-model', displayName: 'Synthetic model' }], busy: null, error: null, verification: null };
+  const originalBinding = { expected_draft_sha256: '1'.repeat(64), expected_review_sha256: '2'.repeat(64),
+    expected_author_sha256: '3'.repeat(64), expected_pdf_sha256: '4'.repeat(64), expected_docx_sha256: '5'.repeat(64) };
+  const submission: PortfolioSubmissionState = { status: 'not_started', selected_venue_id: null, preparation: null, portal_record: null, history: [],
+    candidates: PUBLICATION_VENUES.map(venue => ({ venue_id: venue.id, name: venue.name,
+      portal_url: `https://ieee.atyponrex.com/journal/${venue.id === 'ieee-software' ? 'sw' : 'sp'}-cs`, guidelines_url: venue.guidelines_url,
+      requirements_checked_at: '2026-10-15', limits: { min_words: venue.id === 'ieee-software' ? undefined : 4900,
+        max_words: venue.id === 'ieee-software' ? 4200 : 7200, max_abstract_words: venue.id === 'ieee-software' ? 150 : 50,
+        max_references: 15, visual_word_cost: 250 }, expected_binding: originalBinding, prepare_available: true, missing: [] })) };
+  const preparation: PortfolioSubmissionPreparation = { artifact_id: 'repository-portfolio-submission-preparation-1', sha256: 'a'.repeat(64),
+    at: '2026-10-15T00:00:00Z', venue_id: 'ieee-security-privacy', current: true, generation_status: 'completed', errors: [],
+    source_artifact_id: 'repository-portfolio-submission-source-1', md_artifact_id: 'repository-portfolio-submission-md-1',
+    docx_artifact_id: 'repository-portfolio-submission-docx-1', pdf_artifact_id: 'repository-portfolio-submission-pdf-1',
+    docx_sha256: 'b'.repeat(64), pdf_sha256: 'c'.repeat(64), package_artifact_id: null, package_sha256: null,
+    manifest_artifact_id: null, metadata_artifact_id: null, cover_letter_artifact_id: null, confirmation: null,
+    author_biography: 'Synthetic UI biography; no real credentials or human approval are asserted.', keywords: ['synthetic', 'static analysis'],
+    funding_statement: 'Synthetic funding input only.', conflicts_statement: 'Synthetic conflict input only.', cover_letter_note: '', photo: null,
+    origin: 'explicit_human_submission_preparation', externally_verified: false };
+  const research: ResearchSnapshot = { runtime: { state: 'ready', message: 'Synthetic UI fixture only.', repositoryAnalysisReady: true },
+    busy: false, cleanupResearchIds: [], error: null, jobs: [{ ...researchFixture(id), id, source: 'https://github.com/fixture-owner/submission-ui',
+      goal: 'Synthetic UI workflow, never actual submission or author approval.', researchMode: NEW_RESEARCH_MODE, model: 'fixture-model',
+      reviewerModel: 'fixture-model', phase: 'idle', pipeline: 'paused', stage: 'repository_manuscript', status: 'ready', resumeKind: null,
+      code: null, message: null, updatedAt: '2026-10-15T00:00:00Z', proposalAttempt: 1, manuscriptAvailable: true,
+      authorMetadata: { origin: 'explicit_human_author_metadata', value: { display_name: 'Synthetic Author', affiliation: 'Synthetic Institute',
+        email: 'author@example.test' }, bindings: {}, scope: 'Synthetic UI fixture only.', artifact_id: 'author-metadata-aaaaaaaaaaaa', sha256: '3'.repeat(64) },
+      artifacts: [], supportingDocuments: [], studyReview: null, manuscriptReview: null,
+      repositoryPaper: { plan: null, analysis: null, draft: null, review: null, analysis_attempts: 2, next_actions: [],
+        artifact_ids: {}, portfolio: { venues: [], total: 0, completed: 0, all_content_ready: false, targets: [], analysis: null,
+          literature_collections: [], literature_budget: { used: 1, limit: 3 }, supplementary_evidence_budget: { used: 0, limit: 1 },
+          pdf_budget: { base_used: 0, additional_used: 0, additional_limit: 2, total_used: 0, base_reservations_sha256: 'd'.repeat(64) },
+          submission } } as unknown as ResearchSnapshot['jobs'][number]['repositoryPaper'] }] };
+  type SubmissionFixture = GateFixture & { administrativeCalls: Array<{ kind: string; value: unknown }> };
+  try {
+    electronApp = await launch(dataDir);
+    const page = await electronApp.firstWindow();
+    await expect.poll(async () => (await page.evaluate(() => window.paperFactory.researchSnapshot())).runtime.state, { timeout: 60_000 }).not.toBe('checking');
+    await installGateFixture(electronApp, connection, research);
+    await electronApp.evaluate(({ ipcMain, BrowserWindow }, preparation) => {
+      const fixture = (globalThis as typeof globalThis & { __paperFactoryGateFixture: SubmissionFixture }).__paperFactoryGateFixture;
+      fixture.administrativeCalls = [];
+      const state = () => fixture.research.jobs[0].repositoryPaper!.portfolio!.submission!;
+      const publish = () => { BrowserWindow.getAllWindows()[0]?.webContents.send('research:changed', fixture.research); return fixture.research; };
+      for (const channel of ['research:submission-prepare', 'research:submission-confirm', 'research:submission-record', 'research:submission-site', 'research:open-artifact']) {
+        ipcMain.removeHandler(channel);
+      }
+      ipcMain.handle('research:submission-prepare', (_event, researchId: string, venueId: string, value: PortfolioSubmissionPreparationInput) => {
+        if (researchId !== fixture.research.jobs[0].id || venueId !== 'ieee-security-privacy') throw new Error('Unexpected synthetic submission');
+        fixture.administrativeCalls.push({ kind: 'prepare', value });
+        state().status = 'awaiting_file_check'; state().selected_venue_id = venueId; state().preparation = preparation;
+        return publish();
+      });
+      ipcMain.handle('research:submission-site', (_event, researchId: string, venueId: string, kind: string) => {
+        fixture.administrativeCalls.push({ kind: 'site', value: { researchId, venueId, kind } });
+      });
+      ipcMain.handle('research:open-artifact', (_event, _id: string, artifactId: string) => {
+        fixture.administrativeCalls.push({ kind: 'open', value: artifactId });
+      });
+      ipcMain.handle('research:submission-confirm', (_event, _id: string, value: PortfolioSubmissionConfirmationInput) => {
+        fixture.administrativeCalls.push({ kind: 'confirm', value });
+        const prepared = state().preparation!;
+        prepared.confirmation = { artifact_id: 'repository-portfolio-submission-confirmation-1', sha256: 'd'.repeat(64),
+          at: '2026-10-15T00:00:00Z', qa: value.qa, declarations: value.declarations,
+          metrics: { biography_words: 10, visual_words: 250, effective_words: 6250, abstract_words: 50, reference_count: 8, count_scope: 'whole_article' } };
+        prepared.package_artifact_id = 'repository-portfolio-submission-package-1'; prepared.package_sha256 = 'e'.repeat(64);
+        prepared.cover_letter_artifact_id = 'repository-portfolio-submission-cover-letter-1'; prepared.metadata_artifact_id = 'repository-portfolio-submission-metadata-1';
+        prepared.manifest_artifact_id = 'repository-portfolio-submission-manifest-1'; state().status = 'prepared';
+        return publish();
+      });
+      ipcMain.handle('research:submission-record', (_event, _id: string, value: PortfolioSubmissionRecordInput) => {
+        fixture.administrativeCalls.push({ kind: 'record', value });
+        const record = { ...value, artifact_id: `repository-portfolio-submission-event-${state().history.length + 1}`, sha256: 'f'.repeat(64),
+          at: '2026-10-15T00:00:00Z', venue_id: 'ieee-security-privacy', portal_url: 'https://ieee.atyponrex.com/journal/sp-cs',
+          origin: 'explicit_human_submission_record' as const, externally_verified: false as const };
+        state().portal_record = record; state().history.push(record); state().status = value.status;
+        return publish();
+      });
+    }, preparation);
+    await selectView(page, '결과');
+    const wizard = page.getByRole('region', { name: '실제 학술지 투고', exact: true });
+    await wizard.getByRole('radio', { name: 'IEEE Security & Privacy', exact: true }).check();
+    await expect(wizard.getByRole('checkbox')).toHaveCount(0);
+    await wizard.getByLabel('실제 저자 약력 (영문)', { exact: true }).fill('Synthetic UI biography only; no actual credentials or author approval are asserted.');
+    await wizard.getByLabel('키워드 (영문, 쉼표로 구분)', { exact: true }).fill('synthetic, static analysis');
+    await wizard.getByLabel('연구비·지원 내역 (영문, 없으면 없다고 명시)', { exact: true }).fill('Synthetic funding input only.');
+    await wizard.getByLabel('이해충돌 선언 (영문, 없으면 없다고 명시)', { exact: true }).fill('Synthetic conflict input only.');
+    const jpegBytes = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0xff, 0xd9]);
+    await wizard.getByLabel('실제 저자 사진 (선택)', { exact: true }).setInputFiles({
+      name: '한글 저자 프로필.JPG', mimeType: 'image/jpeg', buffer: jpegBytes,
+    });
+    await wizard.getByRole('button', { name: '키워드·약력 포함한 새 제출 파일 만들기', exact: true }).click();
+    await expect(wizard).toContainText('새 제출 파일 · 직접 검수 대기');
+    await expect(wizard.getByRole('button', { name: '미제출 준비 취소하고 학술지 다시 선택', exact: true })).toBeEnabled();
+    for (const radio of await wizard.getByRole('radio').all()) await expect(radio).toBeDisabled();
+    const fileCheck = wizard.getByRole('region', { name: '새 제출 파일 검수', exact: true });
+    await expect(fileCheck.getByRole('checkbox')).toHaveCount(7);
+    for (const checkbox of await fileCheck.getByRole('checkbox').all()) await expect(checkbox).not.toBeChecked();
+    await expect(fileCheck.getByLabel('실제 Word에서 확인한 단어 수', { exact: true })).toHaveValue('');
+    await expect(fileCheck.getByRole('button', { name: '새 파일 검수·저자 확인 저장하고 투고 패키지 만들기', exact: true })).toBeDisabled();
+    await fileCheck.getByRole('button', { name: '열기', exact: true }).first().click();
+    await wizard.getByRole('button', { name: '공식 사이트의 유형·필수 항목 확인', exact: true }).click();
+    let calls = await electronApp.evaluate(() => (globalThis as typeof globalThis & { __paperFactoryGateFixture: SubmissionFixture }).__paperFactoryGateFixture.administrativeCalls);
+    expect(calls.filter(call => call.kind === 'record')).toEqual([]);
+    expect(calls.find(call => call.kind === 'open')?.value).toBe(preparation.docx_artifact_id);
+    expect(calls.find(call => call.kind === 'prepare')?.value).toMatchObject(originalBinding);
+    expect((calls.find(call => call.kind === 'prepare')?.value as PortfolioSubmissionPreparationInput).photo).toEqual({
+      filename: 'author-photo.jpg', media_type: 'image/jpeg', base64: jpegBytes.toString('base64'),
+    });
+    const metrics = { '실제 Word에서 확인한 단어 수': '6000', '확인한 Word 전체 페이지 수': '12',
+      '확인한 PDF 전체 페이지 수': '10', '표 개수': '1', '그림 개수': '0' };
+    for (const [label, value] of Object.entries(metrics)) await fileCheck.getByLabel(label, { exact: true }).fill(value);
+    for (const checkbox of await fileCheck.getByRole('checkbox').all()) await checkbox.check();
+    await fileCheck.getByRole('button', { name: '새 파일 검수·저자 확인 저장하고 투고 패키지 만들기', exact: true }).click();
+    await expect(wizard).toContainText('투고 패키지 준비됨');
+    await wizard.getByRole('button', { name: 'IEEE Security & Privacy 공식 투고 사이트 열기', exact: true }).click();
+    calls = await electronApp.evaluate(() => (globalThis as typeof globalThis & { __paperFactoryGateFixture: SubmissionFixture }).__paperFactoryGateFixture.administrativeCalls);
+    expect(calls.filter(call => call.kind === 'record')).toEqual([]);
+    expect(calls.find(call => call.kind === 'confirm')?.value).toMatchObject({ preparation_sha256: preparation.sha256,
+      expected_docx_sha256: preparation.docx_sha256, expected_pdf_sha256: preparation.pdf_sha256 });
+    const receipt = wizard.getByRole('region', { name: '실제 접수 결과 기록', exact: true });
+    await expect(receipt.getByRole('checkbox')).not.toBeChecked();
+    await expect(receipt.getByRole('button', { name: '실제 접수 완료 정보 기록', exact: true })).toBeDisabled();
+    await receipt.getByLabel('공식 사이트의 원고 접수 번호', { exact: true }).fill('SYNTHETIC-UI-ONLY-001');
+    await receipt.getByLabel('실제 접수 완료 일시 (현재 시간대)', { exact: true }).fill('2026-10-14T16:00');
+    await receipt.getByLabel('접수 화면·공식 이메일에서 확인한 내용', { exact: true }).fill('Synthetic UI transition only, not an actual publisher receipt.');
+    await receipt.getByRole('checkbox').check();
+    await receipt.getByRole('button', { name: '실제 접수 완료 정보 기록', exact: true }).click();
+    for (const radio of await wizard.getByRole('radio').all()) await expect(radio).toBeDisabled();
+    await expect(receipt.getByRole('checkbox')).not.toBeChecked();
+    await expect(wizard).toContainText('학술지의 접수·철회·심사 결과를 외부에서 검증한 것은 아닙니다.');
+    // A later author change invalidates the current package, not the old publisher
+    // receipt. Recording a real rejection/withdrawal must remain available.
+    await electronApp.evaluate(({ BrowserWindow }) => {
+      const fixture = (globalThis as typeof globalThis & { __paperFactoryGateFixture: SubmissionFixture }).__paperFactoryGateFixture;
+      fixture.research.jobs[0].repositoryPaper!.portfolio!.submission!.preparation!.current = false;
+      BrowserWindow.getAllWindows()[0]?.webContents.send('research:changed', fixture.research);
+    });
+    await expect(receipt.getByLabel('학술지에서 확인한 결과', { exact: true })).toBeVisible();
+    await expect(wizard.getByRole('button', { name: '미제출 준비 취소하고 학술지 다시 선택', exact: true })).toHaveCount(0);
+    await receipt.getByLabel('학술지에서 확인한 결과', { exact: true }).selectOption('rejected');
+    await receipt.getByLabel('공식 사이트의 원고 접수 번호', { exact: true }).fill('SYNTHETIC-UI-ONLY-001');
+    await receipt.getByLabel('학술지 결과 확인 일시 (현재 시간대)', { exact: true }).fill('2026-10-14T17:00');
+    await receipt.getByLabel('접수 화면·공식 이메일에서 확인한 내용', { exact: true }).fill('Synthetic rejection UI transition only, not an actual publisher result.');
+    await receipt.getByRole('checkbox').check();
+    await receipt.getByRole('button', { name: '확인한 학술지 결과 기록', exact: true }).click();
+    await expect(wizard.getByRole('radio', { name: 'IEEE Software', exact: true })).toBeEnabled();
+    await expect(wizard.getByLabel('실제 저자 약력 (영문)', { exact: true })).toHaveValue('');
+    await expect(wizard.getByRole('button', { name: '실제 접수 완료 정보 기록', exact: true })).toHaveCount(0);
+    // A new, still-unsubmitted file set can be released locally without
+    // fabricating a journal manuscript ID or a publisher withdrawal.
+    await electronApp.evaluate(({ BrowserWindow }) => {
+      const fixture = (globalThis as typeof globalThis & { __paperFactoryGateFixture: SubmissionFixture }).__paperFactoryGateFixture;
+      const state = fixture.research.jobs[0].repositoryPaper!.portfolio!.submission!;
+      state.status = 'awaiting_file_check'; state.preparation!.current = true; state.preparation!.confirmation = null;
+      state.preparation!.package_artifact_id = null;
+      BrowserWindow.getAllWindows()[0]?.webContents.send('research:changed', fixture.research);
+    });
+    await wizard.getByRole('button', { name: '미제출 준비 취소하고 학술지 다시 선택', exact: true }).click();
+    await expect(wizard).toContainText('미제출 준비 해제됨');
+    await expect(wizard.getByRole('radio', { name: 'IEEE Software', exact: true })).toBeEnabled();
+    calls = await electronApp.evaluate(() => (globalThis as typeof globalThis & { __paperFactoryGateFixture: SubmissionFixture }).__paperFactoryGateFixture.administrativeCalls);
+    expect(calls.filter(call => call.kind === 'record').at(-1)?.value).toMatchObject({ status: 'withdrawn', manuscript_id: '',
+      confirmed: true, note: '사용자가 미제출 투고 준비를 해제했습니다.' });
+    const final = await electronApp.evaluate(() => {
+      const fixture = (globalThis as typeof globalThis & { __paperFactoryGateFixture: SubmissionFixture }).__paperFactoryGateFixture;
+      return { forbidden: fixture.forbiddenCalls, proposal: fixture.research.jobs[0].proposalAttempt,
+        code: fixture.research.jobs[0].codeAttempt, execution: fixture.research.jobs[0].executionAttempt,
+        history: fixture.research.jobs[0].repositoryPaper!.portfolio!.submission!.history.length };
+    });
+    expect(final).toEqual({ forbidden: [], proposal: 1, code: 0, execution: 0, history: 3 });
+    await page.screenshot({ path: testInfo.outputPath('submission-wizard-synthetic-terminal-history.png'), animations: 'disabled', fullPage: true });
   } finally {
     if (electronApp) await electronApp.close();
     await removeOwnedTemp(dataDir);

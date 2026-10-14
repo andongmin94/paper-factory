@@ -6,6 +6,7 @@ import { Badge } from './components/ui/badge';
 import { Button } from './components/ui/button';
 import { repositoryCriterionLabels, type ResearchAction } from './research-ui';
 import { RepositoryAnalysisDetails } from './RepositoryEvidenceDetails';
+import { PortfolioSubmission } from './PortfolioSubmission';
 
 const statusLabels: Record<RepositoryPortfolioVenue['status'], string> = {
   pending_analysis: '공통 분석 대기', pending_draft: '원고 작성 대기', writing_interrupted: '작성 요청 기록·결과 대기',
@@ -279,6 +280,7 @@ export function RepositoryPortfolioDetails({ job, disabled, locked, runAction }:
         </li>)}</ul>
       </details>}
       {portfolio.venues.map(venue => <VenuePaperCard key={venue.venue_id} venue={venue} job={job} catalog={catalog} locked={locked} runAction={runAction} />)}
+      <PortfolioSubmission job={job} locked={locked} runAction={runAction} />
     </>}
   </section>;
 }

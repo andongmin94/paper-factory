@@ -46,6 +46,9 @@ METHODS = {
     "workflow.submitPortfolioRevisionFeedback": {"researchId", "venueId", "feedback"},
     "workflow.exportPortfolioDraft": {"researchId", "venueId"},
     "workflow.exportPortfolioAuthor": {"researchId", "venueId"},
+    "workflow.preparePortfolioSubmission": {"researchId", "venueId", "value"},
+    "workflow.confirmPortfolioSubmission": {"researchId", "value"},
+    "workflow.recordPortfolioSubmission": {"researchId", "value"},
     "workflow.repairPortfolioExport": {"researchId", "venueId"},
     "workflow.reformatPortfolioDraft": {"researchId", "venueId"},
     "workflow.correctPortfolioLayout": {"researchId", "venueId"},
@@ -271,6 +274,12 @@ class Dispatcher:
             return self.service.export_portfolio_draft(p["researchId"], p["venueId"])
         if method == "workflow.exportPortfolioAuthor":
             return self.service.export_portfolio_author(p["researchId"], p["venueId"])
+        if method == "workflow.preparePortfolioSubmission":
+            return self.service.prepare_portfolio_submission(p["researchId"], p["venueId"], p["value"])
+        if method == "workflow.confirmPortfolioSubmission":
+            return self.service.confirm_portfolio_submission(p["researchId"], p["value"])
+        if method == "workflow.recordPortfolioSubmission":
+            return self.service.record_portfolio_submission(p["researchId"], p["value"])
         if method == "workflow.repairPortfolioExport":
             return self.service.repair_portfolio_export(p["researchId"], p["venueId"])
         if method == "workflow.reformatPortfolioDraft":

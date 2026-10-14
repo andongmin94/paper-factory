@@ -6,6 +6,7 @@ import { ConnectionController } from './connection.js';
 import { EngineBridge, EngineError } from './engine.js';
 import { ResearchController, readSupportingEvidence } from './research.js';
 import type { AuthorMetadataInput, CreateResearchInput } from '../shared/research.js';
+import type { PortfolioSubmissionPreparationInput, PortfolioSubmissionConfirmationInput, PortfolioSubmissionRecordInput } from '../shared/submission.js';
 import { NEW_RESEARCH_MODE } from '../shared/publication.js';
 import { listPublicRepositories } from './repositories.js';
 import { artifactFormat, isReadableArtifactId, readVerifiedArtifact, saveArtifactWithDialog, type ResolvedArtifact } from './artifacts.js';
@@ -210,6 +211,32 @@ if (!app.requestSingleInstanceLock()) {
         throw new Error('Invalid portfolio revision feedback');
       }
       return research!.requestRepositoryPortfolioRevision(researchId(args[0]), args[1], args[2]);
+    });
+    const submissionInput = (value: unknown) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid submission input');
+      return value;
+    };
+    handle('research:submission-prepare', (...args) => {
+      researchReady();
+      if (args.length !== 3 || !['ieee-software', 'ieee-security-privacy'].includes(args[1] as string)) throw new Error('Invalid submission venue');
+      return research!.preparePortfolioSubmission(researchId(args[0]), args[1] as string,
+        submissionInput(args[2]) as PortfolioSubmissionPreparationInput);
+    });
+    handle('research:submission-confirm', (...args) => {
+      researchReady();
+      if (args.length !== 2) throw new Error('Invalid submission confirmation');
+      return research!.confirmPortfolioSubmission(researchId(args[0]), submissionInput(args[1]) as PortfolioSubmissionConfirmationInput);
+    });
+    handle('research:submission-record', (...args) => {
+      researchReady();
+      if (args.length !== 2) throw new Error('Invalid submission record');
+      return research!.recordPortfolioSubmission(researchId(args[0]), submissionInput(args[1]) as PortfolioSubmissionRecordInput);
+    });
+    handle('research:submission-site', async (...args) => {
+      researchReady();
+      if (args.length !== 3 || !['portal', 'guidelines'].includes(args[2] as string)) throw new Error('Invalid submission site');
+      const url = await research!.portfolioSubmissionSite(researchId(args[0]), args[1] as string, args[2] as 'portal' | 'guidelines');
+      await shell.openExternal(url);
     });
     handle('research:portfolio-format', (...args) => {
       researchReady();

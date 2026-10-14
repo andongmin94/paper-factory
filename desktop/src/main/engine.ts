@@ -16,6 +16,7 @@ const engineMethods = [
   'workflow.collectPortfolioLiterature',
   'workflow.preparePortfolioRevision', 'workflow.preparePortfolioAnalysisRepair', 'workflow.repairPortfolioExport', 'workflow.reformatPortfolioDraft', 'workflow.correctPortfolioLayout',
   'workflow.admitPortfolioEvidence', 'workflow.exportPortfolioAuthor',
+  'workflow.preparePortfolioSubmission', 'workflow.confirmPortfolioSubmission', 'workflow.recordPortfolioSubmission',
   'workflow.readMaterial', 'workflow.addEvidence', 'workflow.setAuthorMetadata', 'workflow.recordInference',
   'workflow.cancel', 'workflow.resume', 'artifact.resolve', 'shutdown',
 ] as const;

@@ -16,6 +16,8 @@ import { portfolioBindingMarker, portfolioAnalysisPolicy, portfolioWritingPolicy
 import type { SupportingEvidenceFile } from './supporting-evidence.js';
 import { portfolioEvidencePacket, verifyPortfolioEvidenceAdmission, verifyRepositoryRequestCapacity } from './repository-supplement.js';
 import { verifyPortfolioAuthorMetadataView, verifyPortfolioAuthorExport } from './repository-author-output.js';
+import { portfolioScience, portfolioSubmissionSite, submissionRecordsPreserved, verifyPortfolioSubmissionChange } from './portfolio-submission.js';
+import type { PortfolioSubmissionPreparationInput, PortfolioSubmissionConfirmationInput, PortfolioSubmissionRecordInput } from '../shared/submission.js';
 export { readSupportingEvidence } from './supporting-evidence.js';
 
 type Workflow = { id: string; goal: string; stage: string; status: string; code: string | null; message: string | null;
@@ -908,6 +910,61 @@ export class ResearchController {
     return this.correctRepositoryPortfolioOutput(id, venueId, 'format');
   }
 
+  preparePortfolioSubmission(id: string, venueId: string, value: PortfolioSubmissionPreparationInput) {
+    return this.changePortfolioSubmission(id, 'workflow.preparePortfolioSubmission', { venueId, value });
+  }
+
+  confirmPortfolioSubmission(id: string, value: PortfolioSubmissionConfirmationInput) {
+    return this.changePortfolioSubmission(id, 'workflow.confirmPortfolioSubmission', { value });
+  }
+
+  recordPortfolioSubmission(id: string, value: PortfolioSubmissionRecordInput) {
+    return this.changePortfolioSubmission(id, 'workflow.recordPortfolioSubmission', { value });
+  }
+
+  async portfolioSubmissionSite(id: string, venueId: string, kind: 'portal' | 'guidelines') {
+    this.assertIdle();
+    if (!this.jobs.has(id)) throw new EngineError('RESEARCH_NOT_FOUND', '연구 기록을 찾을 수 없습니다.');
+    if (!['portal', 'guidelines'].includes(kind)) throw new EngineError('SUBMISSION_SITE_INVALID', '공식 투고 사이트 종류를 확인하세요.');
+    await this.engine.start();
+    const workflow = await this.engine.request<Workflow>('workflow.status', { researchId: id });
+    return portfolioSubmissionSite(workflow.repository_paper, venueId, kind);
+  }
+
+  private async changePortfolioSubmission(id: string,
+    method: 'workflow.preparePortfolioSubmission' | 'workflow.confirmPortfolioSubmission' | 'workflow.recordPortfolioSubmission',
+    input: { venueId?: string; value: PortfolioSubmissionPreparationInput | PortfolioSubmissionConfirmationInput | PortfolioSubmissionRecordInput }) {
+    this.assertIdle();
+    const job = this.jobs.get(id);
+    if (!job) throw new EngineError('RESEARCH_NOT_FOUND', '연구 기록을 찾을 수 없습니다.');
+    if (!input.value || typeof input.value !== 'object' || Array.isArray(input.value) ||
+        Buffer.byteLength(JSON.stringify(input)) > 1024 * 1024) {
+      throw new EngineError('INVALID_ARGUMENT', '투고 정보와 사진의 입력 크기를 확인하세요.');
+    }
+    this.starting = true; this.emit();
+    try {
+      if (!this.state.runtime.repositoryAnalysisReady) throw new EngineError('ENGINE_UNAVAILABLE', '투고 파일을 확인할 로컬 엔진을 먼저 확인하세요.');
+      await this.engine.start();
+      const original = await this.engine.request<Workflow>('workflow.status', { researchId: id });
+      if (original.research_mode !== NEW_RESEARCH_MODE || original.stage !== 'repository_manuscript' ||
+          !['ready', 'blocked'].includes(original.status) || original.cleanup_pending || original.terminal_control_failure ||
+          original.code_attempt !== 0 || original.execution_attempt !== 0 || !original.repository_paper?.portfolio) {
+        throw new EngineError('PORTFOLIO_SUBMISSION_UNAVAILABLE', '현재 연구의 보존된 매체별 원고와 정리 상태를 확인하세요.');
+      }
+      const updated = await this.engine.request<Workflow>(method, { researchId: id, ...input }, 240_000);
+      this.verifyRepositoryTransition(original, updated);
+      verifyPortfolioSubmissionChange(original, updated);
+      if (['stage', 'status', 'code', 'proposal_attempt', 'study_literature_attempt', 'draft_attempt', 'redesign_attempt',
+        'submission_contract', 'submission_readiness', 'submission_confirmation'].some(field =>
+          !isDeepStrictEqual(updated[field as keyof Workflow], original[field as keyof Workflow]))) {
+        throw new EngineError('RESEARCH_STATE_INVALID', '투고 작업이 연구 단계·요청 횟수·기존 제출 판정을 변경했습니다.');
+      }
+      this.update(job, updated); this.state.error = null; await this.save();
+    } catch (error) { this.state.error = this.error(error); throw error; }
+    finally { this.starting = false; this.emit(); }
+    return this.snapshot();
+  }
+
   correctRepositoryPortfolioLayout(id: string, venueId: string) {
     return this.correctRepositoryPortfolioOutput(id, venueId, 'layout');
   }
@@ -1020,11 +1077,12 @@ export class ResearchController {
         [`${kind}_export`]: prior[`${kind}_export`], [`${kind}_export_attempts`]: attempts };
       const preservedPaper = updated.repository_paper && { ...updated.repository_paper,
         portfolio: updated.repository_paper.portfolio && { ...updated.repository_paper.portfolio,
-          venues: updated.repository_paper.portfolio.venues.map(item => item.venue_id === venueId ? preservedVenue : item) } };
+          venues: updated.repository_paper.portfolio.venues.map(item => item.venue_id === venueId && preservedVenue ? preservedVenue : item) } };
       if (['stage', 'status', 'code', 'proposal_attempt', 'study_literature_attempt', 'draft_attempt', 'code_attempt', 'execution_attempt', 'redesign_attempt'].some(key =>
             updated[key as keyof Workflow] !== original[key as keyof Workflow]) ||
           !venue || newAttempts !== 1 || !formatted ||
-          !isDeepStrictEqual(preservedPaper, original.repository_paper) ||
+          !isDeepStrictEqual(portfolioScience(preservedPaper), portfolioScience(original.repository_paper)) ||
+          !submissionRecordsPreserved(original.repository_paper, updated.repository_paper) ||
           formatted.original_draft_sha256 !== prior.draft_sha256 ||
           formatted.original_markdown_sha256 !== original.artifacts[prior.artifact_ids.markdown!]?.sha256 ||
           formatted.original_review_sha256 !== original.artifacts[prior.artifact_ids.review!]?.sha256 ||

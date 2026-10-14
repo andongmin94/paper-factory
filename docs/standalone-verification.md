@@ -20,8 +20,8 @@
 | 실제 데이터 | `.paper-factory/jizura-new-01420-20261008-04e3b1a0-4ee/app-data` |
 | 최초 executable | `desktop/release/final-ready-0.14.20-20261014/win-unpacked/Paper Factory.exe` |
 | 최초 executable SHA256 | `6a655a7f33264a75cbeb9841c58a162f08da0c2d23e5d5608ce58a6392726a3d` |
-| 현재 executable | `desktop/release/frontron-final-20261015/win-unpacked/Paper Factory.exe` |
-| 현재 executable SHA256 | `19a317399d676183e04f52a4cecd57f19c0f39343aac017dcf3bb9dfe8b62b84` |
+| 현재 executable | `desktop/release/submission-ready-20261015/win-unpacked/Paper Factory.exe` |
+| 현재 executable SHA256 | `3a4f024ed629bf986d76a57bd546b3f0f3069fa429252c34f4a88db1bc639ab3` |
 | 정상 입력 | `normal-user-input.json` |
 | 공식 연결·모델 목록 | `official-connection-proof.json` |
 | 숨김 packaged 창 | `window-launch-proof.json` |
@@ -76,18 +76,34 @@ S&P 제목은 *What a Compromised Renderer Can Still Ask For: Authorizing Native
 
 앱 흐름은 저장소 확보→범위·기여 설계→적합한 매체 선정→문헌·완전한 비교 문서 확보→공통 정적 분석→매체별 원고→Word/PDF와 형식 선검사→독립 내용 심사→실제 지적에 따른 보완이다. 내용 PASS 이후에도 실제 출력의 외부 검수 지적을 정상 UI로 입력해 해당 매체의 원고·독립 심사를 추가할 수 있다. 원 심사와 이력을 고치지 않고 남은 매체별 예산을 사용한다. 프로젝트 코드 실행은 원고 생성의 필수 조건이 아니며 실행·효과·성능 근거를 꾸며내지 않는다. 완료 응답 수와 검증을 통과한 분석·원고 수를 구분한다.
 
+## 실제 제출 파일 준비와 승인 경계
+
+새 [투고 흐름](submission-workflow.md)은 연구 원고 생성 이후의 제출 행정을 별도 native 모듈에 저장한다. 한 매체 선택·약력/키워드/지원/이해관계 입력→새 제출용 Word/PDF 생성→그 새 파일 QA와 저자 명시적 확인→제출 ZIP/manifest/편지/포털 입력 정보→고정 공식 Author Portal→사용자 확인 접수 기록 순서다. 파일 생성은 `awaiting_file_check`, 확인한 묶음은 `prepared`, 실제 접수번호·시각을 사용자가 기록해야 `submitted`다. 상태와 원고·저자·파일 SHA를 결속하며 포털 열기·파일 저장은 접수가 아니다. 준비 취소와 실제 학술지 철회를 구분하고 제출 후 원고가 바뀌어도 제출 당시 접수 기록은 유지한다.
+
+이번 실제 연구는 S&P 준비 2의 `awaiting_file_check`까지 검증했다. 후보 약력·키워드를 새 제출 파일에 추가했으며 기존 과학 본문을 그대로 복원할 수 있다. 지원·이해관계는 `저자 확인 대기`, 저자 확인 7개는 모두 false, 앱의 파일 QA 입력 5개는 빈 값이고 최종 확인 버튼은 비활성이다. 최종 제출 ZIP·편지·확인·접수 기록은 생성하지 않았으며 공식 사이트 버튼도 누르지 않았다. IEEE 로그인·업로드·최종 제출과 저자 승인을 완료 처리하지 않는다.
+
+증빙 루트는 `output/submission-design/actual-app-20261015/`다. 준비 1은 provenance 경계 검사에서 변환 helper 입력과 소스 경계 차이를 발견해 실패했고, 준비 2는 새 파일 생성은 완료했으나 저장 검증의 atomic temp 파일 조회가 실패했다. 원 두 failed proof와 `first-run-diagnosis.json`, `run-2-diagnosis.json`을 보존했다. 준비 2의 등록 산출물 10개와 이전 연구를 유지하고 새 생성 없이 저장만 다시 검증했다.
+
+`ui-run-3/proof.json`은 2026-10-14 16:45:12 UTC / 10-15 01:45:12 KST passed·정상 종료 exit 0을 확인한다. 기존 준비 2의 실제 제출 Word·PDF·Markdown 3개를 정상 저장했고 native descriptor SHA와 일치한다. 재생성·새 행정 산출물·연구 초기화·추가 모델 요청·저자 승인·포털/접수 동작은 0이다. 이전 과학 자료·두 준비·실패·12개 모델 요청·기존 원고 ZIP/manifest와 실행 build 결속은 모두 불변이다.
+
+새 제출 Word는 실제 Microsoft Word 16에서 5,217단어이며 표 1개 allowance 250을 더한 5,467단어가 S&P 4,900–7,200 범위 안이다. Word 14쪽·native PDF 12쪽, 모든 26페이지를 각각 시각 검수해 잘림·겹침·글리프·표·캡션·키워드·후보 약력 표시가 통과했다. 원 DOCX/PDF를 저장·변경하지 않았다. 이 QA는 앞선 과학 원고 44페이지 QA와 별도이며 신원·권리·실제 약력·저자 승인·투고 완료를 확인하지 않는다. 증거는 `output/word-qa/submission-flow-20261015/preparation-2/word-render-proof.json`, `visual-qa-report.json`이다.
+
+실제 새 DOCX SHA256은 `a8d9fda6bf0b0dbf71e2a5d26b8096389b6b2a5c8d108ac89286d75f9c325b2f`, PDF SHA256은 `4961d1d11e366b3024d2e8d4a0a76319f4095be1a640b0d5a67192e28e705df3`이다. 저장본은 `output/submission-design/actual-app-20261015/ui-run-3/saved/`에 있다. 지원/이해관계와 실제 약력·사진·7개 저자 확인, 새 파일 QA 입력은 사람의 다음 작업이며 확인 값을 자동으로 만들지 않는다.
+
 ## 현재 미배포 로컬 패키지
 
-공개 릴리스를 덮어쓰지 않고 분석 계약·외부 검수 보완 흐름과 확인한 새 연구 안내가 포함된 Windows 패키지를 `desktop/release/frontron-final-20261015/win-unpacked/`에 만들었다. 버전 표기는 0.14.20이지만 공개 설치본과 bytes가 다르며 이 수정은 아직 배포하지 않았다. 현재 결속 기록은 `output/playwright/frontron-fresh-20261014/final-build-proof.json`이다. 첫 원고 재개에 사용한 앞선 로컬 패키지 증거 `repair-build-proof.json`도 보존한다.
+공개 릴리스를 덮어쓰지 않고 분석 계약·외부 검수 보완·실제 투고 준비 흐름과 사진 파일명 처리가 포함된 Windows 패키지를 `desktop/release/submission-ready-20261015/win-unpacked/`에 만들었다. 버전 표기는 0.14.20이지만 공개 설치본과 bytes가 다르며 아직 배포하지 않았다. 현재 결속 기록은 `output/submission-design/actual-app-20261015/ready-build-proof.json`이다. 실제 준비 생성·저장을 검증한 앞선 제출 패키지의 `final-build-proof.json`과 원고 생성 패키지의 `output/playwright/frontron-fresh-20261014/repair-build-proof.json`, `final-build-proof.json`도 보존한다.
 
 | 로컬 패키지 결속 항목 | SHA256 |
 | --- | --- |
-| executable | `19a317399d676183e04f52a4cecd57f19c0f39343aac017dcf3bb9dfe8b62b84` |
-| ASAR | `3b0635b45eff2e6ad2b14da577b2b08f9d318049976f2cb4f29946f59d206031` |
-| runtime inventory | `0f8c9464d98d8ccdd316eeff550ee106aeb17dc52b43a5f98c1e08a894cf2747` |
-| production 입력 114개 | `20c3969759b922e266f870d863ff657ac0f274e8383e68fada22b61c709ceb2d` |
+| executable | `3a4f024ed629bf986d76a57bd546b3f0f3069fa429252c34f4a88db1bc639ab3` |
+| ASAR | `76a28f2fe5fd4ec569e6c1e63337b45f0bd64d176d2a9fd6f67ad835f7a1987d` |
+| runtime inventory | `942b77c0ab8860f40bb73bbe4ac36b51a600ca71db8e3576235546487308b829` |
+| production 입력 118개 | `0ddaf5ec4caf584f7a6cdc0034fe3946bd8ca4b330169fee44d260d174bc988f` |
 
-runtime 2,230개 파일·474,612,048 bytes의 전체 SHA와 소스·데이터·폰트 결속 38개가 일치한다. 이 패키지로 S&P 외부 피드백 보완·정상 저장·정상 종료를 완료했고 실행 전후 build 결속은 불변이다. 첫 로컬 수정 패키지의 재개와 아래 공개 배포본의 소프트웨어 검증을 구분한다.
+runtime 2,231개 파일·474,654,240 bytes의 전체 SHA와 native 소스·데이터·폰트 결속 39개, production 입력 118개와 모든 ASAR asset 결속이 일치한다. 새 제출 준비의 변환 입력은 동결돼 있으며 기존 runtime SHA와 준비 2·저장 파일·26페이지 QA는 불변이다. 현재 패키지에서는 아래 읽기 전용 실제 실행으로 확인했고 앞선 패키지의 준비 생성·저장 검증 및 합성 준비/접수 검사와 구분한다.
+
+`output/submission-design/actual-app-20261015/ui-run-5-readonly/proof.json`은 2026-10-14 16:55:53 UTC / 10-15 01:55:53 KST passed·정상 종료 exit 0이다. 공식 계정 connected/sharing, 숨김 창·sandbox·context isolation·Node integration off와 기존 준비 2의 `awaiting_file_check`, 저자 확인 7개 false·QA 입력 5개 빈 값을 확인했다. 새 준비·행정 산출물·저장·모델 요청·공식 사이트·확인·접수 동작은 모두 0이며 전체 workflow·12개 모델 요청·기존 원고 ZIP/manifest를 유지했다. `ui-run-4-readonly`는 entry 실행 전 prelude 이름 allowlist 불일치로 실패했고 원 증거·exit 0·모델 0·자료 보존을 별도로 기록했다. 이 실패를 최신 통과로 덮어쓰지 않았다.
 
 ## 보존한 공개 0.14.20 Windows 배포본
 
@@ -109,10 +125,14 @@ NSIS 압축 무결성과 핵심 payload 4개, ASAR 7,668 members, runtime 2,230�
 
 ## 소프트웨어 회귀 검증 범위
 
-현재 외부 피드백 구현의 desktop 집중 138개, native 피드백 15개와 기존 portfolio·분석 보정 49개가 통과했다. 실제 수정 패키지와 소스의 전체 해시 결속을 확인한 뒤 앱 보완 실행을 시작했다. 아래 이전 배포본의 회귀 수를 이번 변경을 다시 검사한 수로 합산하지 않는다.
+현재 제출 흐름의 native 43개와 converter helper 1개, desktop 집중 159개·최종 guard 5개 부분집합, 숨김 합성 UI 1개가 통과했다. 합성 자료로 준비·파일 QA·저자 확인·ZIP/편지·사용자 확인 접수 기록의 전체 흐름을 검사했다. 실제 Frontron 연구는 파일 생성·정상 저장·별도 시각 검수까지만 진행했으며 사람의 승인·공식 포털 접수는 검증하지 않았다.
+
+마지막 사진 입력 수정은 한글·`.JPG` 파일명을 MIME에 맞는 `author-photo.jpg`/`.png`로 정규화하며 파일 bytes를 유지한다. 기존 합성 UI 시나리오를 이 JPEG 경우까지 확장해 1/1 통과(11.1초)와 TypeScript 검사를 완료했다. 동일 시나리오의 확장 재검증이며 합성 UI 수를 2개로 합산하지 않는다. 실제 연구에 사진이나 저자 승인을 추가하지 않았다.
+
+앞선 외부 피드백 구현의 desktop 138개, native 피드백 15개와 기존 portfolio·분석 보정 49개도 통과했다. 아래 이전 배포본의 회귀 수를 현재 변경을 다시 검사한 수로 합산하지 않는다.
 
 2026-10-12 정리 후 타입·빌드, desktop Node 425개, SDK 48개(운영체제 전용 1개 제외), 숨김 Chromium 29개, Electron 13개가 통과했다. Python 선택 목록의 완료 보고·분할 검사·정정 재검사를 합산한 결과는 3,113 통과·macOS 전용 2 제외이며 누락·미해결 실패는 0이다. 초기 실패와 정정 이력은 로컬 `tmp/cleanup-native-final-coverage-20261012.json`, `tmp/cleanup-native-final-node-outcomes-20261012.json`, `tmp/cleanup-native-repaired-files-pass-receipts-20261012.json`에 유지한다. 합성 자료의 검사 수를 실제 연구·심사·실험 횟수에 합산하지 않는다.
 
 공개 배포본의 저자 출력 관련 native 41개, author/shared 집중 61개, Chromium contract 22개와 TypeScript·빌드도 통과했다. desktop Node 전체 434개는 그 이전 수정 단계에서 통과했고 당시 마지막 한정 수정은 위 집중 검사로 검증했다. 합성 Electron 두 시나리오는 최초 부하 시간 초과 후 단독 재검사에서 통과했으며 원 로그를 유지했다. 이 결과는 소프트웨어 검사이고 이번 분석 계약 수정이나 새 원고의 품질을 직접 증명하지 않는다.
 
-두 실제 원고의 생성·평가·별도 내용/형식/전페이지 검수와 전달 묶음은 완료했다. 다음 작업은 저자의 최종 신원·권리·해석·선언·약력/사진 확인과 한 투고처 선택이며 실제 제출 승인은 아직 없다. 새로운 실제 지적 없이 연구·집필·심사를 재실행하거나 횟수를 초기화하지 않는다. 추가 코드 수정이 필요하면 실제 앱 정상 종료 후 집중 검사와 Windows runtime/desktop 빌드를 수행하고 현재 소스·포함 bytes·패키지 결속을 확인한 뒤 같은 연구의 정상 UI를 사용한다.
+두 실제 과학 원고의 생성·평가·검수·전달 묶음과 현재 S&P 새 제출 파일의 준비·저장·별도 페이지 검수는 완료했다. 다음 작업은 저자의 실제 약력·사진·지원/이해관계와 7개 승인·새 파일 QA 5개를 확인해 제출 묶음을 만들고 한 공식 포털에서 실제 제출한 뒤 접수번호·시각을 기록하는 것이다. 현재 준비는 `awaiting_file_check`이며 제출 승인이나 접수 기록은 없다. 새로운 실제 지적 없이 연구·집필·심사를 재실행하거나 횟수를 초기화하지 않는다. 추가 코드 수정은 앱 정상 종료 후 집중 검사·빌드·결속을 확인하고 같은 연구에서 검증한다.

@@ -12,6 +12,11 @@ export const artifactFormats: Record<string, { name: string; extension: string }
 
 export function artifactFormat(artifactId: string): { name: string; extension: string } | undefined {
   if (Object.hasOwn(artifactFormats, artifactId)) return artifactFormats[artifactId];
+  const submission = /^repository-portfolio-submission-(md|pdf|docx|package|manifest|metadata|cover-letter)-[1-9]\d*$/.exec(artifactId);
+  if (submission) return submission[1] === 'package' ? { name: '투고 제출 파일 묶음', extension: 'zip' }
+    : submission[1] === 'cover-letter' ? { name: '투고 편지', extension: 'txt' }
+    : ['manifest', 'metadata'].includes(submission[1]) ? { name: '투고 정보', extension: 'json' }
+    : artifactFormats[`export-${submission[1]}`];
   const portfolio = /^repository-portfolio-(?:ieee-software|ieee-security-privacy)-(pdf|docx)(?:-(?:repair|format|layout|author-[1-3]))?-[1-3]$/.exec(artifactId);
   if (portfolio) return artifactFormats[`export-${portfolio[1]}`];
   if (/^repository-portfolio-(?:ieee-software|ieee-security-privacy)-(?:markdown-[1-3]|export-markdown(?:-(?:repair|format|layout|author-[1-3]))?-[1-3])$/.test(artifactId)) return artifactFormats['export-md'];

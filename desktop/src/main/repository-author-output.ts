@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from 'node:util';
 import type { RepositoryPaperProgress, RepositoryPortfolioVenue, ResearchItem } from '../shared/research.js';
 import { inspectRepositoryPortfolioOutputs } from '../shared/publication.js';
 import { EngineError } from './engine.js';
+import { portfolioScience, submissionRecordsPreserved } from './portfolio-submission.js';
 
 type AuthorOutputState = { repository_paper?: RepositoryPaperProgress | null; author_metadata?: ResearchItem['authorMetadata'];
   artifacts: Record<string, { id: string; sha256: string; size: number }> };
@@ -44,7 +45,8 @@ export function verifyPortfolioAuthorMetadataView(previous: AuthorOutputState, u
         (prior.author_export_status === 'completed' ? ids[format] : prior.artifact_ids[format])))) return venue;
     return restoreAuthorView(venue, prior, false);
   });
-  return isDeepStrictEqual({ ...after, portfolio: { ...after.portfolio, venues } }, before);
+  return isDeepStrictEqual(portfolioScience({ ...after, portfolio: { ...after.portfolio, venues } }), portfolioScience(before)) &&
+    submissionRecordsPreserved(before, after);
 }
 
 /** Permit only the requested byline receipt and output view while retaining every other venue field. */
@@ -101,7 +103,8 @@ export function verifyPortfolioAuthorExport(previous: AuthorOutputState, updated
     outputs.filter(output => output.format !== 'markdown').length === 2;
   const failed = receipt.status === 'failed' && venue.author_export_status === 'failed' && receipt.errors.length > 0 &&
     isDeepStrictEqual(venue.artifact_ids, prior.artifact_ids) && venue.author_export_available === (venue.author_export_attempts < 3);
-  if (!isDeepStrictEqual(restored, before) || !(completed || failed)) {
+  if (!isDeepStrictEqual(portfolioScience(restored), portfolioScience(before)) ||
+      !submissionRecordsPreserved(before, after) || !(completed || failed)) {
     throw new EngineError('RESEARCH_STATE_INVALID', '저자 출력이 과학 본문·심사·준비도·기존 출력·다른 매체·횟수를 변경했습니다.');
   }
   return receipt;
