@@ -12,7 +12,7 @@ import { EngineBridge, EngineError } from './engine.js';
 import { retainedScientificSections, completeManuscriptTail, manuscriptTailCompletionPolicy, manuscriptTailSchema } from './repository-recovery.js';
 import { portfolioBindingMarker, portfolioAnalysisPolicy, portfolioWritingPolicy, portfolioReviewPolicy,
   portfolioVenueGuidance, portfolioScientificContext, portfolioLiteraturePolicy, portfolioLiteratureSchema, portfolioVenueRepairPolicy,
-  portfolioResearchRepairPolicy } from './repository-portfolio.js';
+  portfolioResearchRepairPolicy, portfolioAnalysisSchemaRepairPolicy, portfolioExternalFeedbackPolicy } from './repository-portfolio.js';
 import type { SupportingEvidenceFile } from './supporting-evidence.js';
 import { portfolioEvidencePacket, verifyPortfolioEvidenceAdmission, verifyRepositoryRequestCapacity } from './repository-supplement.js';
 import { verifyPortfolioAuthorMetadataView, verifyPortfolioAuthorExport } from './repository-author-output.js';
@@ -856,6 +856,54 @@ export class ResearchController {
     return this.snapshot();
   }
 
+  async requestRepositoryPortfolioRevision(id: string, venueId: string, feedback: string) {
+    this.assertIdle();
+    const job = this.jobs.get(id), retainedFeedback = feedback.trim();
+    if (!job) throw new EngineError('RESEARCH_NOT_FOUND', '연구 기록을 찾을 수 없습니다.');
+    if (retainedFeedback.length < 12 || feedback.length > 12000 || /[\u0000]/.test(feedback)) {
+      throw new EngineError('INVALID_ARGUMENT', '투고 품질 보완 의견은 12~12,000자로 입력하세요.');
+    }
+    this.starting = true; this.emit();
+    try {
+      if (this.state.runtime.repositoryAnalysisReady !== true) throw new EngineError('ENGINE_UNAVAILABLE', '로컬 연구 엔진을 먼저 확인하세요.');
+      await this.engine.start();
+      const original = await this.engine.request<Workflow>('workflow.status', { researchId: id });
+      const prior = original.repository_paper?.portfolio?.venues.find(venue => venue.venue_id === venueId);
+      if (original.research_mode !== NEW_RESEARCH_MODE || original.stage !== 'repository_manuscript' ||
+          !['ready', 'blocked'].includes(original.status) || original.cleanup_pending || original.terminal_control_failure ||
+          original.execution_attempt !== 0 || original.code_attempt !== 0 || !prior?.draft || !prior.revision_feedback_available) {
+        throw new EngineError('PORTFOLIO_REVISION_FEEDBACK_UNAVAILABLE', '현재 학술지별 원고와 남은 작성·심사 횟수를 확인하세요. 원고마다 보완 의견을 한 번 제출할 수 있습니다.');
+      }
+      await this.validateModels(job.model, job.reviewerModel);
+      const updated = await this.engine.request<Workflow>('workflow.submitPortfolioRevisionFeedback', {
+        researchId: id, venueId, feedback: retainedFeedback });
+      this.verifyRepositoryTransition(original, updated);
+      const venue = updated.repository_paper!.portfolio!.venues.find(item => item.venue_id === venueId)!, receipt = venue.revision_feedback;
+      if (['proposal_attempt', 'study_literature_attempt', 'draft_attempt', 'code_attempt', 'execution_attempt', 'redesign_attempt']
+          .some(field => updated[field as keyof Workflow] !== original[field as keyof Workflow]) ||
+          updated.repository_paper!.analysis_attempts !== original.repository_paper!.analysis_attempts ||
+          !isDeepStrictEqual(updated.repository_paper!.portfolio!.analysis, original.repository_paper!.portfolio!.analysis) ||
+          !receipt || receipt.feedback !== retainedFeedback || receipt.draft_sha256 !== prior.draft_sha256 ||
+          receipt.markdown_sha256 !== original.artifacts[prior.artifact_ids.markdown!]?.sha256 ||
+          receipt.review_sha256 !== (prior.artifact_ids.review ? original.artifacts[prior.artifact_ids.review]?.sha256 : null) ||
+          receipt.portfolio_analysis_sha256 !== original.repository_paper!.portfolio!.analysis_sha256 ||
+          updated.artifacts[receipt.artifact_id]?.sha256 !== receipt.sha256 || !venue.revision_feedback_pending ||
+          venue.writer_binding?.revision_feedback_sha256 !== receipt.sha256 ||
+          updated.repository_paper!.portfolio!.venues.some(item => {
+            const before = original.repository_paper!.portfolio!.venues.find(value => value.venue_id === item.venue_id);
+            return !before || (item.venue_id !== venueId ? !isDeepStrictEqual(item, before) :
+              ['draft', 'review', 'draft_sha256', 'artifact_ids', 'draft_attempts', 'review_attempts', 'admitted_drafts',
+                'scientific_ready', 'content_ready'].some(field => !isDeepStrictEqual(item[field as keyof RepositoryPortfolioVenue], before[field as keyof RepositoryPortfolioVenue])));
+          })) {
+        throw new EngineError('RESEARCH_STATE_INVALID', '학술지별 보완 의견이 현재 원고·심사·분석에 결속되지 않았거나 기존 자료·횟수를 변경했습니다.');
+      }
+      this.update(job, updated); await this.save();
+      this.launch(job, signal => this.runRepositoryPortfolio(job, updated, signal));
+    } catch (error) { this.state.error = this.error(error); throw error; }
+    finally { this.starting = false; this.emit(); }
+    return this.snapshot();
+  }
+
   reformatRepositoryPortfolioDraft(id: string, venueId: string) {
     return this.correctRepositoryPortfolioOutput(id, venueId, 'format');
   }
@@ -1077,9 +1125,29 @@ export class ResearchController {
     const reviewId = venue?.review ? venue.artifact_ids.review : null;
     const portfolioPriorReview = reviewId ? { artifact_id: reviewId, sha256: workflow.artifacts[reviewId]!.sha256,
       ...await this.portfolioText(workflow, reviewId, signal) } : null;
+    let portfolioRevisionFeedback = null;
+    if (frame?.revision_feedback_sha256) {
+      const feedback = venue?.revision_feedback;
+      if (!feedback || feedback.sha256 !== frame.revision_feedback_sha256 ||
+          workflow.artifacts[feedback.artifact_id]?.sha256 !== feedback.sha256) {
+        throw new EngineError('ARTIFACT_CHANGED', '현재 원고·심사에 결속된 보완 의견을 찾을 수 없습니다.');
+      }
+      portfolioRevisionFeedback = { artifact_id: feedback.artifact_id, sha256: feedback.sha256,
+        ...await this.portfolioText(workflow, feedback.artifact_id, signal) };
+    }
     const revision = portfolio.analysis_revision?.status === 'planned' ? portfolio.analysis_revision : null;
     const portfolioRevision = revision ? { artifact_id: revision.artifact_id, sha256: revision.sha256,
       ...await this.portfolioText(workflow, revision.artifact_id, signal) } : null;
+    let portfolioAnalysisRepair = null;
+    if (frame?.analysis_schema_repair_sha256) {
+      const repair = portfolio.analysis_repair;
+      if (venueId || !repair || repair.status !== 'planned' || repair.sha256 !== frame.analysis_schema_repair_sha256 ||
+          workflow.artifacts[repair.artifact_id]?.sha256 !== repair.sha256) {
+        throw new EngineError('ARTIFACT_CHANGED', '분석 형식 보완이 보존된 원 응답·검증 오류와 결속되지 않았습니다.');
+      }
+      portfolioAnalysisRepair = { artifact_id: repair.artifact_id, sha256: repair.sha256,
+        ...await this.portfolioText(workflow, repair.artifact_id, signal) };
+    }
     let portfolioSupplement = null;
     if (frame?.supplementary_evidence_sha256) {
       const supplement = portfolio.supplementary_evidence;
@@ -1101,10 +1169,12 @@ export class ResearchController {
     }
     const text = materials.header + JSON.stringify({ ...materials.content, retainedGuidance,
       ...(portfolioDraft ? { portfolioDraft } : {}), ...(portfolioPriorReview ? { portfolioPriorReview } : {}),
-      ...(portfolioRevision ? { portfolioRevision } : {}), ...(portfolioSupplement ? { portfolioSupplement } : {}) });
+      ...(portfolioRevision ? { portfolioRevision } : {}), ...(portfolioAnalysisRepair ? { portfolioAnalysisRepair } : {}),
+      ...(portfolioRevisionFeedback ? { portfolioRevisionFeedback } : {}),
+      ...(portfolioSupplement ? { portfolioSupplement } : {}) });
     // Review-bound revisions include complete retained reviews and supplementary bodies.
     // The model-specific complete-request guard runs before any UUID or SDK call.
-    if (!portfolioRevision && !portfolioSupplement && text.length > 500_000) throw new EngineError('REVIEW_CONTEXT_TOO_LARGE', '공통 분석·공식 안내를 포함한 전체 자료의 문맥 한도를 초과했습니다.');
+    if (!portfolioRevision && !portfolioAnalysisRepair && !portfolioSupplement && text.length > 500_000) throw new EngineError('REVIEW_CONTEXT_TOO_LARGE', '공통 분석·공식 안내를 포함한 전체 자료의 문맥 한도를 초과했습니다.');
     return text;
   }
 
@@ -1147,7 +1217,8 @@ export class ResearchController {
     let workflow = initial;
     const persist = async (method: 'workflow.startPortfolio' | 'workflow.submitPortfolioAnalysis' | 'workflow.submitPortfolioManuscript' |
       'workflow.submitPortfolioReview' | 'workflow.exportPortfolioDraft' | 'workflow.collectPortfolioLiterature' |
-      'workflow.preparePortfolioRevision' | 'workflow.repairPortfolioExport', params: Record<string, unknown> = {}) => {
+      'workflow.preparePortfolioRevision' | 'workflow.preparePortfolioAnalysisRepair' | 'workflow.submitPortfolioRevisionFeedback' |
+      'workflow.repairPortfolioExport', params: Record<string, unknown> = {}) => {
       signal.throwIfAborted();
       const updated = await this.engine.request<Workflow>(method, { researchId: job.id, ...params }, 240_000);
       this.verifyRepositoryTransition(workflow, updated); workflow = updated;
@@ -1177,6 +1248,26 @@ export class ResearchController {
       await persist('workflow.preparePortfolioRevision');
       portfolio = workflow.repository_paper!.portfolio!;
     }
+    const prepareAnalysisRepair = async () => {
+      const prior = workflow.repository_paper!.portfolio!, attempts = workflow.repository_paper!.analysis_attempts;
+      const inferenceArtifactId = prior.analysis_repair_candidate_artifact_id;
+      if (!prior.analysis_repair_available || prior.analysis || prior.analysis_repair || prior.analysis_outcome !== 'completed' ||
+          !prior.analysis_binding || !inferenceArtifactId || !workflow.artifacts[inferenceArtifactId] || attempts >= 3) {
+        throw new EngineError('SOURCE_ANALYSIS_REPAIR_UNAVAILABLE', '완료된 첫 분석의 검증 가능한 형식 보완이 없습니다. 원 기록과 횟수는 보존했습니다.');
+      }
+      const originalSha = workflow.artifacts[inferenceArtifactId]?.sha256;
+      await persist('workflow.preparePortfolioAnalysisRepair', { inferenceArtifactId });
+      portfolio = workflow.repository_paper!.portfolio!;
+      const repair = portfolio.analysis_repair;
+      if (workflow.repository_paper!.analysis_attempts !== attempts || !repair || repair.status !== 'planned' ||
+          repair.original_inference_artifact_id !== inferenceArtifactId || repair.original_inference_sha256 !== originalSha ||
+          portfolio.analysis_binding?.analysis_schema_repair_sha256 !== repair.sha256 ||
+          portfolio.analysis_binding?.attempt !== attempts + 1 || portfolio.analysis_outcome !== null ||
+          workflow.artifacts[repair.artifact_id]?.sha256 !== repair.sha256) {
+        throw new EngineError('RESEARCH_STATE_INVALID', '분석 형식 보완 준비가 원 응답·보완 1회·기존 분석 예산과 일치하지 않습니다.');
+      }
+    };
+    if (work.action === 'repair_analysis') await prepareAnalysisRepair();
     if ((!portfolio.analysis && !portfolio.literature_collections.length || work.action === 'collect_literature') &&
         workflow.study_literature_attempt < 3) {
         const paper = workflow.repository_paper!;
@@ -1201,20 +1292,38 @@ export class ResearchController {
         throw new EngineError('PORTFOLIO_LITERATURE_INCOMPLETE', '새 선행 본문 수집이 중단됐습니다. 실패·횟수를 보존했고 같은 수집을 반복하지 않습니다.');
       }
       if (!portfolio.analysis_binding) throw new EngineError('SOURCE_ANALYSIS_LIMIT', '공통 분석의 남은 횟수가 없습니다. 기존 분석과 실패는 보존했습니다.');
-      const materials = await this.portfolioMaterials(workflow, signal);
-      const prefix = `Perform the common repository portfolio source analysis for retained attempt ${portfolio.analysis_binding.attempt}.`;
-      const binding = portfolioBindingMarker + JSON.stringify(portfolio.analysis_binding) + materials;
-      const generated = await this.repositoryGenerationOnce(job, workflow, 'source-analysis', prefix,
-        prefix + portfolioAnalysisPolicy + (portfolio.analysis_revision ? portfolioResearchRepairPolicy : '') +
-        '\nPreserved study, prior analysis and all venue obligations:\n' +
-        JSON.stringify({ ...portfolioScientificContext(workflow.repository_paper!.plan!, portfolio.analysis ?? workflow.repository_paper!.analysis ?? null,
-          portfolio.analysis_revision ? null : workflow.repository_paper!.draft, null, workflow.repository_paper!.publication_venues!, job.model, job.reviewerModel),
-          targets: portfolio.targets, ...(portfolio.analysis_revision ? {} : { catalog: workflow.repository_paper!.publication_venues }),
-          revisionPlan: portfolio.analysis_revision ? { artifact_id: portfolio.analysis_revision.artifact_id,
-            sha256: portfolio.analysis_revision.sha256 } : null }) +
-        '\nReturn only JSON matching:\n' + JSON.stringify(workflow.schemas.repository_analysis) + binding, binding, signal);
-      workflow = generated.workflow;
-      await persist('workflow.submitPortfolioAnalysis', { value: { inference_artifact_id: generated.inferenceArtifactId, analysis: generated.value } });
+      const analyze = async () => {
+        portfolio = workflow.repository_paper!.portfolio!;
+        const frame = portfolio.analysis_binding!;
+        const materials = await this.portfolioMaterials(workflow, signal, undefined, frame);
+        const prefix = frame.analysis_schema_repair_sha256
+          ? `Repair only the native-rejected common repository portfolio analysis for retained attempt ${frame.attempt}.`
+          : `Perform the common repository portfolio source analysis for retained attempt ${frame.attempt}.`;
+        const binding = portfolioBindingMarker + JSON.stringify(frame) + materials;
+        const generated = await this.repositoryGenerationOnce(job, workflow, 'source-analysis', prefix,
+          prefix + portfolioAnalysisPolicy + (frame.analysis_schema_repair_sha256 ? portfolioAnalysisSchemaRepairPolicy : '') +
+          (portfolio.analysis_revision ? portfolioResearchRepairPolicy : '') +
+          '\nPreserved study, prior analysis and all venue obligations:\n' +
+          JSON.stringify({ ...portfolioScientificContext(workflow.repository_paper!.plan!, portfolio.analysis ?? workflow.repository_paper!.analysis ?? null,
+            portfolio.analysis_revision ? null : workflow.repository_paper!.draft, null, workflow.repository_paper!.publication_venues!, job.model, job.reviewerModel),
+            targets: portfolio.targets, ...(portfolio.analysis_revision ? {} : { catalog: workflow.repository_paper!.publication_venues }),
+            revisionPlan: portfolio.analysis_revision ? { artifact_id: portfolio.analysis_revision.artifact_id,
+              sha256: portfolio.analysis_revision.sha256 } : null }) +
+          '\nReturn only JSON matching:\n' + JSON.stringify(workflow.schemas.repository_analysis) + binding, binding, signal);
+        workflow = generated.workflow;
+        await persist('workflow.submitPortfolioAnalysis', { value: { inference_artifact_id: generated.inferenceArtifactId, analysis: generated.value } });
+      };
+      const repairing = !!portfolio.analysis_repair;
+      try { await analyze(); }
+      catch (error) {
+        if (repairing || signal.aborted) throw error;
+        const refreshed = await this.engine.request<Workflow>('workflow.status', { researchId: job.id });
+        this.verifyRepositoryTransition(workflow, refreshed); workflow = refreshed;
+        this.update(job, workflow); await this.save();
+        if (inspectRepositoryPortfolioWork(workflow.repository_paper!).action !== 'repair_analysis') throw error;
+        await prepareAnalysisRepair();
+        await analyze();
+      }
     }
     const failures: string[] = [];
     const venueIds = workflow.repository_paper!.portfolio!.targets.map(target => target.venue_id);
@@ -1249,7 +1358,8 @@ export class ResearchController {
           const prefix = `Write the complete repository portfolio manuscript for ${venueId} attempt ${venue.writer_binding.attempt}.`;
           const binding = portfolioBindingMarker + JSON.stringify(venue.writer_binding) + materials;
           const generated = await this.repositoryGenerationOnce(job, workflow, 'venue-manuscript', prefix,
-            prefix + guidance + portfolioWritingPolicy + (next.action === 'revision' ? portfolioVenueRepairPolicy : '') +
+            prefix + guidance + portfolioWritingPolicy + (next.action === 'revision' && venue.review ? portfolioVenueRepairPolicy : '') +
+            (venue.writer_binding.revision_feedback_sha256 ? portfolioExternalFeedbackPolicy : '') +
             '\nFrozen scientific context:\n' + JSON.stringify(context) +
             '\nReturn only JSON matching:\n' + JSON.stringify(workflow.schemas.repository_manuscript) + binding, binding, signal);
           workflow = generated.workflow;
@@ -1261,8 +1371,14 @@ export class ResearchController {
           venue = workflow.repository_paper!.portfolio!.venues.find(item => item.venue_id === venueId)!;
         }
         const target = { ...paper.plan!.publication_target, venue_id: venueId, article_category: venue.article_category };
-        const venueFormat = venue.draft ? inspectRepositoryArticle(venue.draft, target, catalog) : null;
+        const rendered = venue.artifact_ids.markdown ? await this.portfolioText(workflow, venue.artifact_ids.markdown, signal) : null;
+        const venueFormat = venue.draft ? inspectRepositoryArticle(venue.draft, target, catalog, rendered?.text) : null;
         if (venueFormat && !venueFormat.formatReady) {
+          if (venueFormat.numericGuidanceVerified && venue.revision_feedback_available) {
+            await persist('workflow.submitPortfolioRevisionFeedback', { venueId,
+              feedback: `이 원고의 동결된 투고처 형식 점검에서 확인한 항목을 기존 근거와 원고에 맞게 보완해 주세요. 새 실험이나 근거를 꾸미지 말고 실질적인 설명·적용 조건·한계로 분량과 구성을 조정하세요.\n${venueFormat.blockers.map(item => `- ${item}`).join('\n')}` });
+            continue;
+          }
           failures.push(`${venueId}: ${venueFormat.blockers.join(' ')}`);
           continue;
         }

@@ -22,6 +22,9 @@ export function repositoryPublicationGuidance(target?: PublicationTarget | null,
   return commonGuidance + `The frozen publication target is ${venue.name}, article category ${target.article_category}. Do not switch it during writing or remediation. ` +
     `Audience/scope: ${venue.scope}. Required contribution: ${venue.contribution_expectation}. Analysis: ${venue.analysis_expectation}. ` +
     'The catalog records inspected scope and any verified numerical rules separately from editorial working budgets; do not claim working budgets are official limits. ' +
+    (venue.verified_limits.word_count_scope === 'whole_article'
+      ? 'The verified word range counts the complete article, including abstract, keywords, references, author biographies and table text, plus the fixed allowance for each table or figure. Allocate a margin inside both the minimum and maximum; substantive evidence-based explanation must meet the minimum without filler. '
+      : 'When a fixed visual allowance applies to this body-word profile, replace table/figure text with that allowance and exclude references and author biographies. ') +
     'Apply this exact publication profile: ' + JSON.stringify(venue) + '. ';
 }
 
@@ -40,6 +43,7 @@ export const repositoryAnalysisGuidance =
   'Perform the planned source analysis now, using the complete retained source and relevant inspected comparisons. Return ANALYSIS RESULTS, not another plan or a manuscript. ' +
   'Define a small codebook whose dimensions match the preserved comparison_dimensions. Identify concrete analytical units and apply the defined dimensions to actual literal source witnesses. ' +
   'For every observation and finding, provide source evidence IDs and a bounded interpretation; every source evidence ID must resolve to an unchanged literal quote/path/SHA256 from the supplied complete source. ' +
+  'Evidence IDs form an explicit hierarchy: each observation evidence_ids must be a subset of its enclosing unit evidence_ids; each finding evidence_ids must be a subset of the union of evidence_ids of the units named in its unit_ids. Every evidence_ids array and unit_ids array must contain unique existing identifiers. Declare each required source witness in source_evidence, then include it in the enclosing unit before an observation uses it. ' +
   'Link findings to the units that demonstrate them. Evaluate meaningful counterexamples or boundary cases with the retained evidence; distinguish an analytical hypothetical condition from an observed implementation. ' +
   'Compare with the actually inspected primary literature or comparison-purpose documentation using exact text hashes and quotes. Venue guidance is never scientific evidence. ' +
   'Develop the contribution from the comparison and findings, including when it applies and why it changes a design decision. A table of unrelated feature names is insufficient. ' +

@@ -203,6 +203,14 @@ if (!app.requestSingleInstanceLock()) {
       if (args.length !== 1) throw new Error('Invalid research request');
       return research!.requestRepositoryPortfolio(researchId(args[0]));
     });
+    handle('research:portfolio-revision', (...args) => {
+      researchReady();
+      if (args.length !== 3 || typeof args[1] !== 'string' || !/^[a-z][a-z0-9-]{2,100}$/.test(args[1]) ||
+          typeof args[2] !== 'string' || args[2].trim().length < 12 || args[2].length > 12000 || /[\u0000]/.test(args[2])) {
+        throw new Error('Invalid portfolio revision feedback');
+      }
+      return research!.requestRepositoryPortfolioRevision(researchId(args[0]), args[1], args[2]);
+    });
     handle('research:portfolio-format', (...args) => {
       researchReady();
       if (args.length !== 2 || typeof args[1] !== 'string' || !/^[a-z][a-z0-9-]{2,100}$/.test(args[1])) throw new Error('Invalid portfolio format request');

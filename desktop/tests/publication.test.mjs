@@ -232,6 +232,48 @@ test('unchecked S&P guidance reports actual table text without borrowing Softwar
   assert.equal(format.blockers.length, 0, 'An unverified official numerical limit cannot become a blocking rule.');
 });
 
+test('whole-article S&P scope adds actual table text and visual allowance while Software substitutes its allowance', () => {
+  const catalog = structuredClone(PUBLICATION_CATALOG), profile = catalog.venues.find(venue => venue.id === 'ieee-security-privacy');
+  profile.verified_limits = { min_words: 4900, max_words: 7200, max_abstract_words: 50, max_references: 15,
+    visual_word_cost: 250, word_count_scope: 'whole_article' };
+  profile.requirements_status = 'checked_numeric_guidance';
+  const draft = article(), target = { venue_id: profile.id, article_category: 'Feature Article' };
+  const before = inspectRepositoryArticle(draft, target, catalog);
+  draft.sections[1].text += '\n\n| Decision | Condition |\n| --- | --- |\n| ' + 'cell '.repeat(800) + ' | trace |';
+  const format = inspectRepositoryArticle(draft, target, catalog);
+  assert.equal(format.tables, 1);
+  assert.equal(format.estimatedWords, before.estimatedWords + 803 + 250);
+  assert.match(format.blockers.join(' '), /4900/);
+  assert.equal(format.numericGuidanceVerified, true);
+});
+
+test('minimum words use whitespace rather than inflating code identifiers and paths into evidence of sufficient length', () => {
+  const catalog = structuredClone(PUBLICATION_CATALOG), profile = catalog.venues.find(venue => venue.id === 'ieee-security-privacy');
+  profile.verified_limits = { min_words: 4900, max_words: 30000, word_count_scope: 'whole_article' };
+  const draft = article();
+  draft.sections[1].text = '`src/main/native_bridge.open_file` '.repeat(1300);
+  const format = inspectRepositoryArticle(draft, { venue_id: profile.id, article_category: 'Feature Article' }, catalog);
+  assert.ok(format.estimatedWords < 1400);
+  assert.ok(format.maximumWordsEstimate > 4900);
+  assert.match(format.blockers.join(' '), /최소 분량.*4900/);
+});
+
+test('exact native Markdown supplies canonical reference and bio text for whole-article count without inventing their lengths', () => {
+  const catalog = structuredClone(PUBLICATION_CATALOG), profile = catalog.venues.find(venue => venue.id === 'ieee-security-privacy');
+  profile.verified_limits = { word_count_scope: 'whole_article' };
+  const draft = article(), target = { venue_id: profile.id, article_category: 'Feature Article' };
+  const body = '# ' + draft.title + '\n' + draft.sections.map(section => '## ' + section.heading + '\n' + section.text).join('\n');
+  const references = '\n## References\n[1] A real supplied reference title with author and year.\n## Author Biographies\nA supplied author biography.';
+  const before = inspectRepositoryArticle(draft, target, catalog, body);
+  const after = inspectRepositoryArticle(draft, target, catalog, body + references);
+  assert.ok(after.estimatedWords > before.estimatedWords);
+  profile.verified_limits.min_words = before.estimatedWords + 1;
+  assert.equal(inspectRepositoryArticle(draft, target, catalog).formatReady, false);
+  assert.equal(inspectRepositoryArticle(draft, target, catalog, body + references).formatReady, true);
+  assert.equal(inspectRepositoryArticle(draft, selectedTarget, catalog, body).estimatedWords,
+    inspectRepositoryArticle(draft, selectedTarget, catalog, body + references).estimatedWords, 'Software excludes those same reference and biography sections');
+});
+
 test('missing or unknown target cannot silently acquire an IEEE publication policy', () => {
   for (const value of [null, { ...selectedTarget, venue_id: 'unlisted-journal' }]) {
     const format = inspectRepositoryArticle(article(), value);
@@ -574,6 +616,58 @@ test('the common analysis uses the original budget and cannot hide a failed or i
   assert.equal(inspectRepositoryPortfolioWork(paper, true).action, 'analysis');
   paper.portfolio.literature_collections.push({ status: 'interrupted' });
   assert.equal(inspectRepositoryPortfolioWork(paper, true).action, null);
+});
+
+test('initial analysis schema repair requires native availability, its exact binding and the original shared budget', () => {
+  const { paper } = portfolioWorkFixture();
+  Object.assign(paper.portfolio, { analysis: null, analysis_binding: { phase: 'source-analysis', attempt: 1 },
+    analysis_outcome: 'completed', analysis_repair_available: true,
+    analysis_repair_candidate_artifact_id: 'model-evidence-synthetic-completed', analysis_repair: null });
+  paper.analysis_attempts = 1;
+  assert.equal(inspectRepositoryPortfolioWork(paper).action, 'repair_analysis');
+  paper.analysis_attempts = 3;
+  assert.equal(inspectRepositoryPortfolioWork(paper).action, 'analysis', 'Only a retained completion may be read at the exhausted limit; no new repair is available');
+  const repair = { artifact_id: 'repository-portfolio-analysis-schema-repair', sha256: 'e'.repeat(64), status: 'planned' };
+  Object.assign(paper.portfolio, { analysis_repair: repair, analysis_repair_available: false,
+    analysis_repair_candidate_artifact_id: null, analysis_outcome: null,
+    analysis_binding: { phase: 'source-analysis', attempt: 2, analysis_schema_repair_sha256: repair.sha256 } });
+  paper.analysis_attempts = 1;
+  assert.equal(inspectRepositoryPortfolioWork(paper).action, 'analysis');
+  paper.portfolio.analysis_binding.analysis_schema_repair_sha256 = 'f'.repeat(64);
+  assert.equal(inspectRepositoryPortfolioWork(paper).action, null);
+  paper.portfolio.analysis_binding.analysis_schema_repair_sha256 = repair.sha256;
+  paper.analysis_attempts = 3;
+  assert.equal(inspectRepositoryPortfolioWork(paper).action, null);
+  paper.portfolio.analysis_outcome = 'completed';
+  assert.equal(inspectRepositoryPortfolioWork(paper).action, 'analysis', 'A valid completed repair is admitted without another model request');
+  for (const outcome of ['failed', 'interrupted', 'started']) {
+    paper.portfolio.analysis_outcome = outcome;
+    assert.equal(inspectRepositoryPortfolioWork(paper).action, null);
+  }
+  assert.equal(inspectRepositoryPortfolioWork(paper, true).action, 'analysis', 'Only a proven undispatched reservation may send its original UUID');
+  paper.portfolio.analysis_repair.status = 'incomplete';
+  assert.equal(inspectRepositoryPortfolioWork(paper, true).action, null, 'Schema-valid but unsupported source admission cannot reopen repair');
+});
+
+test('positive or unreviewed venue feedback requires its native pending binding and cannot replay failed revision requests', () => {
+  const { paper, venue } = portfolioWorkFixture();
+  paper.portfolio.all_content_ready = false;
+  const receipt = { artifact_id: 'repository-portfolio-ieee-security-privacy-revision-feedback-1', sha256: 'e'.repeat(64) };
+  Object.assign(venue, { revision_feedback_pending: true, revision_feedback: receipt,
+    writer_binding: { phase: 'venue-manuscript', attempt: 2, revision_feedback_sha256: receipt.sha256 }, writer_outcome: null });
+  assert.equal(inspectRepositoryPortfolioVenueWork(venue).action, 'revision', 'An old positive review cannot suppress the explicitly bound correction');
+  venue.review = null;
+  assert.equal(inspectRepositoryPortfolioVenueWork(venue).action, 'revision', 'Unreviewed numeric preflight can correct prose before spending its first review');
+  venue.writer_binding.revision_feedback_sha256 = 'f'.repeat(64);
+  assert.equal(inspectRepositoryPortfolioVenueWork(venue).action, null);
+  venue.writer_binding.revision_feedback_sha256 = receipt.sha256;
+  for (const outcome of ['failed', 'interrupted', 'started']) {
+    venue.writer_outcome = outcome;
+    assert.equal(inspectRepositoryPortfolioVenueWork(venue).action, null);
+  }
+  assert.equal(inspectRepositoryPortfolioVenueWork(venue, true).action, 'revision');
+  venue.writer_binding.attempt = 4;
+  assert.equal(inspectRepositoryPortfolioVenueWork(venue, true).action, null);
 });
 
 function commonRevisionFixture() {

@@ -1383,6 +1383,7 @@ test("two IEEE submissions show independent holds and real output identities whi
   const portfolio: RepositoryPortfolioProgress = { artifact_id: 'repository-portfolio-start', sha256: 'a'.repeat(64), bindings: {},
     targets: PUBLICATION_VENUES.map(venue => ({ venue_id: venue.id, article_category: venue.article_categories[0] })),
     analysis, analysis_sha256: 'a'.repeat(64), analysis_binding: null, analysis_outcome: null, literature: null, literature_sha256: null, literature_collections: [],
+    analysis_repair_available: false, analysis_repair_candidate_artifact_id: null, analysis_repair: null,
     analysis_revision_required: false, analysis_revision_available: false, analysis_revision: null,
           literature_followup_available: false, documentation_followup_available: false, literature_budget: { used: 2, limit: 3 },
           supplementary_evidence: null, supplementary_evidence_budget: { used: 0, limit: 1 }, supplementary_evidence_available: false,
@@ -1415,6 +1416,7 @@ test("two IEEE submissions show independent holds and real output identities whi
         layout_export_available: false, layout_export_attempts: 0, layout_export: null,
         author_export_attempts: 0, author_export_available: false, author_export_status: 'unavailable', author_export: null,
         revise_available: index === 1, revise_reason: '이 매체에 필요한 추가 근거와 보존된 심사를 확인하세요.',
+        revision_feedback_available: false, revision_feedback_pending: false, revision_feedback: null,
         export_status: index < 2 ? 'completed' : 'not_started', export: null,
         analysis_current: true, scientific_ready: index === 0, content_ready: index === 0, submission_ready: false };
     }) };

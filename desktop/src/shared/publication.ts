@@ -21,6 +21,7 @@ export interface RepositoryArticleFormat {
   venueId: string | null;
   numericGuidanceVerified: boolean;
   estimatedWords: number;
+  maximumWordsEstimate: number;
   abstractWords: number;
   references: number;
   tables: number;
@@ -31,46 +32,66 @@ export interface RepositoryArticleFormat {
   uncheckedRequirements: string[];
 }
 
-function words(text: string) {
-  return (text.replace(/\{\{(?:source|citation|document):[^{}]+\}\}/g, '')
+function plainText(text: string) {
+  return text.replace(/\{\{(?:source|citation|document):[^{}]+\}\}/g, '')
     .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
-    .match(/[\p{L}\p{N}]+(?:['’\-][\p{L}\p{N}]+)*/gu) ?? []).length;
+    .replace(/\[\d+(?:\s*[,–-]\s*\d+)*\]/g, '')
+    .replace(/^\s*(?:```|~~~).*$/gm, '')
+    .replace(/<[^>]+>/g, '')
+    .replace(/[|]/g, ' ')
+    .replace(/[`*#]/g, '');
+}
+
+function words(text: string) {
+  return plainText(text).split(/\s+/u).filter(word => /[\p{L}\p{N}]/u.test(word)).length;
+}
+
+function maximumWords(text: string) {
+  return (plainText(text).match(/[\p{L}\p{N}]+(?:['’\-][\p{L}\p{N}]+)*/gu) ?? []).length;
 }
 
 /** Estimate the saved article, separately from scientific and author approval.
- * References match the native renderer's deduplicated bibliography. Markdown
- * table contents are replaced by the venue's fixed allowance, rather than counted twice.
+ * References match the native renderer's deduplicated bibliography.
+ * Software replaces table text with its fixed visual allowance. Whole-article
+ * profiles retain table text, references and bios as well as their visual allowance.
+ * Whitespace words are a conservative minimum estimate; punctuation-separated
+ * words provide the more conservative maximum check. Final Word/PDF counts remain separate.
  */
-export function inspectRepositoryArticle(draft: Article, target: Pick<PublicationTarget, 'venue_id' | 'article_category'> | null | undefined, catalog: PublicationCatalog = PUBLICATION_CATALOG): RepositoryArticleFormat {
+export function inspectRepositoryArticle(draft: Article, target: Pick<PublicationTarget, 'venue_id' | 'article_category'> | null | undefined, catalog: PublicationCatalog = PUBLICATION_CATALOG, renderedMarkdown?: string): RepositoryArticleFormat {
   const venue = getPublicationVenue(target?.venue_id, catalog.venues);
   const limits = venue?.verified_limits ?? {};
+  const wholeArticle = limits.word_count_scope === 'whole_article';
   let tables = 0, figures = 0;
-  const text = draft.sections.filter(section => !['References', 'Author Biographies'].includes(section.heading))
-    .map(section => {
-      const lines = section.text.split(/\r?\n/);
-      const prose: string[] = [];
-      let fenced = false;
-      for (let index = 0; index < lines.length; index++) {
-        if (/^\s*(```|~~~)/.test(lines[index])) fenced = !fenced;
-        const cells = (lines[index + 1] ?? '').trim().replace(/^\|/, '').replace(/\|$/, '').split('|');
-        const table = !fenced && lines[index].includes('|') && cells.length > 1 &&
-          cells.every(cell => /^\s*:?-{3,}:?\s*$/.test(cell));
-        if (table) {
-          tables++;
-          if (limits.visual_word_cost === undefined) prose.push(lines[index], lines[index + 1]);
-          index++;
-          while (index + 1 < lines.length && lines[index + 1].trim() && lines[index + 1].includes('|')) {
-            index++;
-            if (limits.visual_word_cost === undefined) prose.push(lines[index]);
-          }
-        } else prose.push(lines[index]);
+  const excluded = ['References', 'Bibliography', 'Author Biographies', 'Author Information'];
+  const source = renderedMarkdown === undefined ? '# ' + draft.title + '\n' + draft.sections
+    .filter(section => wholeArticle || !excluded.includes(section.heading))
+    .map(section => '## ' + section.heading + '\n' + section.text).join('\n')
+    : wholeArticle ? renderedMarkdown : renderedMarkdown.split(/(?=^##\s+)/m)
+      .filter(section => !excluded.includes(/^##\s+([^\r\n]+)/.exec(section)?.[1]?.trim() ?? '')).join('');
+  const lines = source.split(/\r?\n/), prose: string[] = [];
+  let fenced = false;
+  for (let index = 0; index < lines.length; index++) {
+    if (/^\s*(```|~~~)/.test(lines[index])) fenced = !fenced;
+    const cells = (lines[index + 1] ?? '').trim().replace(/^\|/, '').replace(/\|$/, '').split('|');
+    const table = !fenced && lines[index].includes('|') && cells.length > 1 &&
+      cells.every(cell => /^\s*:?-{3,}:?\s*$/.test(cell));
+    if (table) {
+      tables++;
+      if (wholeArticle || limits.visual_word_cost === undefined) prose.push(lines[index], lines[index + 1]);
+      index++;
+      while (index + 1 < lines.length && lines[index + 1].trim() && lines[index + 1].includes('|')) {
+        index++;
+        if (wholeArticle || limits.visual_word_cost === undefined) prose.push(lines[index]);
       }
-      return prose.join('\n').replace(/!\[([^\]]*)\]\([^)]*\)/g, (_match, caption: string) => {
-        figures++;
-        return limits.visual_word_cost === undefined ? caption : '';
-      });
-    }).join('\n');
-  const estimatedWords = words(draft.title + '\n' + text) + (tables + figures) * (limits.visual_word_cost ?? 0);
+    } else prose.push(lines[index]);
+  }
+  const text = prose.join('\n').replace(/!\[([^\]]*)\]\([^)]*\)/g, (_match, caption: string) => {
+    figures++;
+    return wholeArticle || limits.visual_word_cost === undefined ? caption : '';
+  });
+  const visualWords = (tables + figures) * (limits.visual_word_cost ?? 0);
+  const estimatedWords = words(text) + visualWords;
+  const maximumWordsEstimate = maximumWords(text) + visualWords;
   const abstractWords = words(draft.sections.find(section => section.heading === 'Abstract')?.text ?? '');
   const references = new Set(draft.source_evidence.map(item => item.path + ':' + item.sha256)).size +
     new Set(draft.literature_evidence.map(item => item.source_id)).size +
@@ -80,14 +101,15 @@ export function inspectRepositoryArticle(draft: Article, target: Pick<Publicatio
   const blockers: string[] = [];
   if (!venue || !target) blockers.push('투고처 선택 기록이 없습니다. 학술지와 논문 유형을 먼저 선택해야 합니다.');
   else if (!venue.article_categories.includes(target.article_category)) blockers.push(`${venue.name}의 지원 논문 유형을 선택해야 합니다.`);
-  if (limits.max_words !== undefined && estimatedWords > limits.max_words) blockers.push(`본문 추산 ${estimatedWords}단어: ${limits.max_words}단어 이하로 줄여야 합니다.`);
+  if (limits.min_words !== undefined && estimatedWords < limits.min_words) blockers.push(`최소 분량 추산 ${estimatedWords}단어: ${limits.min_words}단어 이상이 되도록 근거 있는 설명을 보완하고 실제 Word 분량을 확인해야 합니다.`);
+  if (limits.max_words !== undefined && maximumWordsEstimate > limits.max_words) blockers.push(`최대 분량 추산 ${maximumWordsEstimate}단어: ${limits.max_words}단어 이하인지 실제 Word에서 확인하고 초과하면 줄여야 합니다.`);
   if (!abstractWords) blockers.push('초록을 작성해야 합니다.');
   else if (limits.max_abstract_words !== undefined && abstractWords > limits.max_abstract_words) blockers.push(`초록 ${abstractWords}단어: ${limits.max_abstract_words}단어 이하로 작성해야 합니다.`);
   if (limits.max_references !== undefined && references > limits.max_references) blockers.push(`참고문헌 ${references}개: ${limits.max_references}개 이하로 정리해야 합니다.`);
   if (limits.insight_count !== undefined && insights !== limits.insight_count) blockers.push(`Actionable Insights에 실천적 시사점 ${limits.insight_count}개를 목록으로 작성해야 합니다.`);
   const numericGuidanceVerified = venue?.requirements_status === 'checked_numeric_guidance';
   const uncheckedRequirements = numericGuidanceVerified ? [] : ['이 투고처의 최신 분량·초록·참고문헌·제출 형식은 공식 안내에서 최종 확인해야 합니다. 앱의 집필 권장 분량은 공식 제한이 아닙니다.'];
-  return { venueId: venue?.id ?? null, numericGuidanceVerified, estimatedWords, abstractWords, references, tables, figures, insights,
+  return { venueId: venue?.id ?? null, numericGuidanceVerified, estimatedWords, maximumWordsEstimate, abstractWords, references, tables, figures, insights,
     formatReady: blockers.length === 0, blockers, uncheckedRequirements };
 }
 
@@ -162,13 +184,19 @@ export function inspectRepositoryPortfolioOutputs(venue: RepositoryPortfolioVenu
   });
 }
 
-type PortfolioWork = { action: 'start' | 'analysis' | 'revise_analysis' | 'collect_literature' | 'collect_documentation' | 'draft' | 'repair' | 'review' | 'revision' | 'export' | 'repair_export' | null; reason: string };
+type PortfolioWork = { action: 'start' | 'analysis' | 'repair_analysis' | 'revise_analysis' | 'collect_literature' | 'collect_documentation' | 'draft' | 'repair' | 'review' | 'revision' | 'export' | 'repair_export' | null; reason: string };
 function retainedPortfolioRequestAvailable(binding: RepositoryPortfolioFrame | null, outcome: RepositoryPortfolioOutcome, unsentRequestAvailable: boolean, limit = 3) {
   return !!binding && binding.attempt >= 1 && binding.attempt <= limit && (outcome === null || outcome === 'completed' || outcome === 'started' && unsentRequestAvailable);
 }
 
 /** Choose only a supported task; a failed reservation cannot become a fresh model request. */
 export function inspectRepositoryPortfolioVenueWork(venue: RepositoryPortfolioVenue, unsentRequestAvailable = false): PortfolioWork {
+  if (venue.revision_feedback_pending) {
+    return venue.revision_feedback && venue.writer_binding?.revision_feedback_sha256 === venue.revision_feedback.sha256 &&
+      retainedPortfolioRequestAvailable(venue.writer_binding, venue.writer_outcome, unsentRequestAvailable)
+      ? { action: 'revision', reason: '이 투고본의 보존된 보완 의견을 반영한 새 원고·출력·독립 심사를 진행합니다. 이전 원고·심사와 횟수는 유지합니다.' }
+      : { action: null, reason: '보완 의견에 결속된 작성이 실패·중단되었거나 남은 횟수가 없습니다. 원 의견·원고·심사를 보존하며 같은 요청을 다시 보내지 않습니다.' };
+  }
   const repair = venue.repair_binding;
   if (venue.repair_attempts <= 1 && repair?.phase === 'venue-manuscript-repair' && repair.repair &&
       retainedPortfolioRequestAvailable(repair, venue.repair_outcome, unsentRequestAvailable, 1)) {
@@ -217,6 +245,18 @@ export function inspectRepositoryPortfolioWork(paper: RepositoryPaperProgress, u
   if (!portfolio.analysis) {
     if (portfolio.literature_collections.some(item => item.status === 'interrupted')) {
       return { action: null, reason: '공통 문헌 확보가 중단됐습니다. 같은 수집을 반복하지 않습니다.' };
+    }
+    const repair = portfolio.analysis_repair;
+    if (repair) {
+      return repair.status === 'planned' && portfolio.analysis_binding?.analysis_schema_repair_sha256 === repair.sha256 &&
+        retainedPortfolioRequestAvailable(portfolio.analysis_binding, portfolio.analysis_outcome, unsentRequestAvailable) &&
+        (paper.analysis_attempts < 3 || portfolio.analysis_outcome !== null)
+        ? { action: 'analysis', reason: '보존된 원 응답과 네이티브 검증 오류에 결속된 분석 형식 보완을 1회 수행하거나 완료 보완 응답을 제출합니다. 원래 분석·실패·횟수는 유지합니다.' }
+        : { action: null, reason: '분석 형식 보완 1회 기록을 보존했습니다. 실패·중단·미완료 보완을 다시 요청하지 않습니다.' };
+    }
+    if (portfolio.analysis_repair_available && portfolio.analysis_repair_candidate_artifact_id &&
+        portfolio.analysis_outcome === 'completed' && paper.analysis_attempts < 3) {
+      return { action: 'repair_analysis', reason: '완료된 첫 분석에서 근거 연결 오류를 확인했습니다. 원 응답·검증 오류를 보존하고 남은 분석 예산에서 형식 보완을 1회 준비합니다.' };
     }
     return retainedPortfolioRequestAvailable(portfolio.analysis_binding, portfolio.analysis_outcome, unsentRequestAvailable) &&
       (paper.analysis_attempts < 3 || portfolio.analysis_outcome !== null)

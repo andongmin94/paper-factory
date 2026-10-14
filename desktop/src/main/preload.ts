@@ -18,6 +18,7 @@ const api: PaperFactoryApi = {
   improveResearch: (id, model, reviewerModel) => ipcRenderer.invoke('research:improve', id, model, reviewerModel),
   requestRepositoryRevision: (researchId, feedback) => ipcRenderer.invoke('research:repository-revision', researchId, feedback),
   requestRepositoryPortfolio: (researchId) => ipcRenderer.invoke('research:repository-portfolio', researchId),
+  requestRepositoryPortfolioRevision: (researchId, venueId, feedback) => ipcRenderer.invoke('research:portfolio-revision', researchId, venueId, feedback),
   reformatRepositoryPortfolioDraft: (researchId, venueId) => ipcRenderer.invoke('research:portfolio-format', researchId, venueId),
   correctRepositoryPortfolioLayout: (researchId, venueId) => ipcRenderer.invoke('research:portfolio-layout', researchId, venueId),
   exportRepositoryPortfolioAuthor: (researchId, venueId) => ipcRenderer.invoke('research:portfolio-author', researchId, venueId),

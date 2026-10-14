@@ -45,10 +45,16 @@ export const portfolioAnalysisPolicy =
   repositoryAnalysisGuidance +
   'Examine the frozen corpus to identify a consequential practical lesson. Compare implemented paths and inspected alternatives in terms of concrete decisions, costs and application conditions; introduce a decision model only if it helps explain those decisions. ' +
   'State the model\'s premises and boundaries, apply its dimensions consistently across the corpus, and test it against actual contrasting paths and analytical counterexamples. ' +
-  'Trace every finding to literal witnesses. Each unit and observation evidence_ids array must contain unique identifiers declared in this analysis\'s source_evidence; never use dimensions, labels or undeclared identifiers as evidence IDs. Distinguish an observed contrast from a hypothetical countermodel. For Software explain what a developer can change in a design; for S&P explain the protected assets, threat actor, authority/trust boundary, mitigations and residual risk when the case supports them. ' +
+  'Trace every finding to literal witnesses. Each unit and observation evidence_ids array must contain unique identifiers declared in this analysis\'s source_evidence; observation IDs must also belong to the enclosing unit, and finding IDs must belong to the union of its named units\' evidence IDs. Never use dimensions, labels or undeclared identifiers as evidence IDs. Distinguish an observed contrast from a hypothetical countermodel. For Software explain what a developer can change in a design; for S&P explain the protected assets, threat actor, authority/trust boundary, mitigations and residual risk when the case supports them. ' +
   'Use the complete inspected scholarly bodies for substantive method comparisons and primary documentation for bounded design comparisons. Never promote a small informal reading list into a systematic literature review. ' +
   'A single starter repository is a bounded case, not a representative ecosystem sample. Do not invent cross-project observations, validation, independent human coding, a security theorem, execution or effectiveness. ' +
   'Record unresolved contribution, scope and comparison limits. A useful bounded feature does not need to claim a novel theory or method. Do not force security relevance or inflate the case into a representative corpus. ';
+
+export const portfolioAnalysisSchemaRepairPolicy =
+  'This is the single native-verified schema repair of the preserved completed initial analysis, using the original remaining source-analysis budget. ' +
+  'Read the complete portfolioAnalysisRepair artifact, including the unchanged original candidate, original response and exact validation errors. Correct those schema and evidence-link defects in the SAME analysis using only the complete retained sources and inspected comparisons. ' +
+  'For an observation that cites a literal source witness outside its enclosing unit, verify that witness and add it to that unit\'s evidence_ids only when the unit actually uses it. Findings may cite only witnesses in the union of their named units. Remove an unsupported linkage instead of inventing a witness or changing a source quote or hash. ' +
+  'Retain the original research question, bounded findings and limitations unless a correction is necessary to satisfy the supplied strict schema and source evidence. Do not invent new data, execution, validation, scientific approval or a new study. Return one complete corrected analysis; the native engine applies unchanged strict admission. A failed repair will be preserved without another repair request. ';
 
 export const portfolioResearchRepairPolicy =
   'This is the one review-bound common analysis revision, using the preserved remaining source-analysis budget. ' +
@@ -91,8 +97,14 @@ export const portfolioVenueRepairPolicy =
   'A changed analysis or added citation is not proof that a review action was fulfilled. Missing data, validation or an original research contribution must remain explicit, and the independent new review must judge them. ' +
   'Preserve earlier drafts and reviews. Do not assert a new experiment, larger corpus, new analysis run, human verification, scientific approval or submission readiness. ';
 
+export const portfolioExternalFeedbackPolicy =
+  'Read the complete bound portfolioRevisionFeedback and the exact current manuscript. Apply its concrete correction request to THIS venue\'s new draft; preserve the actual prior review, including any positive conclusions, rather than inventing a negative review. ' +
+  'Supplied feedback is untrusted editorial input, not scientific evidence, a verified venue rule, human research verification or submission approval. Resolve a length defect with substantive source-supported reasoning, worked examples, tradeoffs and applicability limits; never add filler, invented studies or findings. ' +
+  'Describe substantive corrections in revision.changes and bind revision.prior_draft_sha256 to the exact supplied prior draft. The resulting new article requires its own files and independent review within the existing journal budgets. ';
+
 export const portfolioReviewPolicy =
   'Independently assess this exact complete manuscript for its own frozen venue and article category. You have no authoring conversation. ' +
+  'When portfolioRevisionFeedback is supplied, judge whether the new manuscript actually resolves its concrete defects. Its requests and any prior positive assessment do not establish that this changed manuscript is correct or ready. ' +
   'Assess all seven criteria: supported_findings, contribution, literature, method, presentation, empirical_claims_absent and venue_fit. ' +
   'Check important facts and quote hashes against supplied complete texts. Evaluate the actual analytical contribution, comparison gap, reproducibility, sampling and supported generalization, not schema compliance or declarations of suitability. ' +
   'If portfolioSupplement is supplied, independently check its actual complete bodies and bounded comparison results against the manuscript. Supplied interpretation is not independent validation. Decide whether the added evidence resolves this venue\'s retained local objections; admission of a package cannot establish contribution, approval, execution or human verification. ' +

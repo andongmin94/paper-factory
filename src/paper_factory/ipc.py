@@ -39,9 +39,11 @@ METHODS = {
     "workflow.startPortfolio": {"researchId", "value"},
     "workflow.collectPortfolioLiterature": {"researchId", "queries", "pdfCandidates", "htmlCandidates"},
     "workflow.preparePortfolioRevision": {"researchId"},
+    "workflow.preparePortfolioAnalysisRepair": {"researchId", "inferenceArtifactId"},
     "workflow.submitPortfolioAnalysis": {"researchId", "value"},
     "workflow.submitPortfolioManuscript": {"researchId", "value"},
     "workflow.submitPortfolioReview": {"researchId", "value"},
+    "workflow.submitPortfolioRevisionFeedback": {"researchId", "venueId", "feedback"},
     "workflow.exportPortfolioDraft": {"researchId", "venueId"},
     "workflow.exportPortfolioAuthor": {"researchId", "venueId"},
     "workflow.repairPortfolioExport": {"researchId", "venueId"},
@@ -123,7 +125,7 @@ def request(raw: bytes) -> dict:
     if (("offset" in params and params["offset"] < 0) or
             ("limit" in params and not 1 <= params["limit"] <= 32000)):
         raise ValueError("Material bounds are outside the declared limit")
-    for name in ("goal", "area", "name", "artifactId", "source", "venue", "venueId", "url"):
+    for name in ("goal", "area", "name", "artifactId", "inferenceArtifactId", "source", "venue", "venueId", "url", "feedback"):
         if name in params and not isinstance(params[name], str):
             raise ValueError("Text parameters must be strings")
     for name in ("value", "review", "receipt", "repair", "claim", "preparationRepair", "selection"):
@@ -255,12 +257,16 @@ class Dispatcher:
             return self.service.collect_portfolio_literature(p["researchId"], p["queries"], p.get("pdfCandidates"), p.get("htmlCandidates"))
         if method == "workflow.preparePortfolioRevision":
             return self.service.prepare_portfolio_revision(p["researchId"])
+        if method == "workflow.preparePortfolioAnalysisRepair":
+            return self.service.prepare_portfolio_analysis_repair(p["researchId"], p["inferenceArtifactId"])
         if method == "workflow.submitPortfolioAnalysis":
             return self.service.submit_portfolio_analysis(p["researchId"], p["value"])
         if method == "workflow.submitPortfolioManuscript":
             return self.service.submit_portfolio_manuscript(p["researchId"], p["value"])
         if method == "workflow.submitPortfolioReview":
             return self.service.submit_portfolio_review(p["researchId"], p["value"])
+        if method == "workflow.submitPortfolioRevisionFeedback":
+            return self.service.submit_portfolio_revision_feedback(p["researchId"], p["venueId"], p["feedback"])
         if method == "workflow.exportPortfolioDraft":
             return self.service.export_portfolio_draft(p["researchId"], p["venueId"])
         if method == "workflow.exportPortfolioAuthor":

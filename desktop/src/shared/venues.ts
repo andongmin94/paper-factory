@@ -4,8 +4,9 @@ export interface PublicationVenue {
   id: string; name: string; publisher: string; scope: string; article_categories: string[];
   contribution_expectation: string; analysis_expectation: string; evidence_modes: string[];
   guidelines_url: string; scope_url: string;
-  verified_limits: { max_words?: number; max_abstract_words?: number; max_references?: number;
-    visual_word_cost?: number; insight_count?: number };
+  verified_limits: { min_words?: number; max_words?: number; max_abstract_words?: number; max_references?: number;
+    visual_word_cost?: number; insight_count?: number;
+    word_count_scope?: 'body_excluding_references_and_bios' | 'whole_article' };
   editorial_budget: { target_words: number; abstract_words: number };
   requirements_status: 'checked_scope' | 'checked_numeric_guidance';
 }

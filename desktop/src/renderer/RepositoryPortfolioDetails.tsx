@@ -1,4 +1,5 @@
 import { inspectRepositoryArticle, inspectRepositoryPortfolioOutputs, inspectRepositoryPortfolioVenueWork, inspectRepositoryPortfolioWork, repositoryPortfolioReasoningReady } from '../shared/publication';
+import { useState } from 'react';
 import type { RepositoryPortfolioEvidencePacket, RepositoryPortfolioVenue, ResearchItem } from '../shared/research';
 import { getPublicationVenue, PUBLICATION_CATALOG, type PublicationCatalog } from '../shared/venues';
 import { Badge } from './components/ui/badge';
@@ -21,6 +22,8 @@ function VenuePaperCard({ venue, job, catalog, locked, runAction }: {
   venue: RepositoryPortfolioVenue; job: ResearchItem; catalog: PublicationCatalog;
   locked: boolean; runAction: ResearchAction;
 }) {
+  const [feedback, setFeedback] = useState('');
+  const validFeedback = feedback.trim().length >= 12 && feedback.length <= 12000;
   const profile = getPublicationVenue(venue.venue_id, catalog.venues);
   const name = profile?.name ?? venue.venue_id;
   const outputs = inspectRepositoryPortfolioOutputs(venue, job.artifacts, job.authorMetadata);
@@ -33,7 +36,7 @@ function VenuePaperCard({ venue, job, catalog, locked, runAction }: {
   const layoutComplete = venue.layout_export?.status === 'completed' &&
     (['pdf', 'docx'] as const).every(extension => outputs.some(output => output.format === extension &&
       output.artifact.id === venue.layout_export?.outputs?.[extension]?.artifact_id));
-  const assessmentLabel = argumentReady && !venue.review!.criteria.presentation.passed
+  const assessmentLabel = venue.revision_feedback_pending ? '보완 의견 반영 대기' : argumentReady && !venue.review!.criteria.presentation.passed
     ? '논증·근거 평가 충족 · 표현·형식 보완 필요' : statusLabels[venue.status];
   const next = inspectRepositoryPortfolioVenueWork(venue, job.portfolioUnsentRequestAvailable);
   const actions = [...new Map([...venue.review?.next_actions ?? [], ...assessment?.next_actions ?? []]
@@ -101,8 +104,24 @@ function VenuePaperCard({ venue, job, catalog, locked, runAction }: {
         <p className="detail-note whitespace-pre-wrap">확인 방법: {action.verification}</p>
       </div>)}
     </section>}
+    {venue.revision_feedback && <details className="detail-note"><summary>보존된 투고 품질 보완 의견</summary>
+      <p className="mt-2 whitespace-pre-wrap">{venue.revision_feedback.feedback}</p>
+      <p className="mt-2">현재 원고·분석과 당시 심사에 결속된 의견입니다. 보완 의견은 근거나 심사 승인을 대신하지 않습니다.</p>
+    </details>}
+    {venue.revision_feedback_available && <form className="space-y-3" onSubmit={event => {
+      event.preventDefault();
+      if (!validFeedback || locked) return;
+      void runAction('portfolio-revision', () => window.paperFactory.requestRepositoryPortfolioRevision(job.id, venue.venue_id, feedback));
+    }}>
+      <p className="detail-note">확인한 원고 문제를 적으면 이 학술지용 새 원고·출력·독립 심사를 이어갑니다. 원고마다 한 번 제출하며 이전 원고·심사와 작성·심사 횟수는 보존합니다.</p>
+      <div className="field"><label htmlFor={`${job.id}-${venue.venue_id}-revision-feedback`}>투고 품질 보완 의견 (12~12,000자)</label>
+        <textarea id={`${job.id}-${venue.venue_id}-revision-feedback`} required minLength={12} maxLength={12000}
+          value={feedback} disabled={locked} onChange={event => setFeedback(event.target.value)} /></div>
+      <Button type="submit" variant="outline" disabled={locked || !validFeedback}>의견 반영해 이 투고본 보완</Button>
+    </form>}
     {format && <details className="detail-note"><summary>투고처 형식 점검 · 본문 추산 {format.estimatedWords}단어</summary>
       <p className="mt-2">초록 {format.abstractWords}단어 · 참고문헌 {format.references}개</p>
+      <p className="mt-2">분량은 추산입니다. 참고문헌·저자 소개의 포함 범위와 표·그림 환산을 학술지 안내에 맞춰 실제 저장한 Word에서 확인하세요.</p>
       <ul className="mt-2 list-disc space-y-1 pl-5">{[...format.blockers, ...format.uncheckedRequirements].map((item, index) => <li key={index}>{item}</li>)}</ul>
     </details>}
     {outputs.length ? <div className="space-y-2" aria-label={`${name} 실제 출력 파일`}>
@@ -174,6 +193,23 @@ export function RepositoryPortfolioDetails({ job, disabled, locked, runAction }:
     {portfolio && <>
       <p className="detail-note">논증·근거 평가 충족 {portfolio.venues.filter(repositoryPortfolioReasoningReady).length}/{portfolio.total} · 보존된 전체 심사 기준 충족 {portfolio.venues.filter(venue => venue.scientific_ready && venue.content_ready).length}/{portfolio.total}</p>
       <p className="detail-note">공통 소스 분석 {portfolio.analysis ? '보존됨' : '대기'} · {portfolio.all_content_ready ? '생성한 개별 원고의 내용 심사 충족' : '매체별 준비도와 필요한 근거를 아래에서 확인하세요.'}</p>
+      {(portfolio.analysis_repair_available || portfolio.analysis_repair) && <section className="space-y-2" aria-label="공통 분석 형식 보완">
+        <h5 className="font-semibold">공통 분석 근거 연결 형식 보완 · 1회 한도</h5>
+        <p className="detail-note">완료된 원 분석과 검증 오류를 보존하고 같은 연구의 남은 분석 예산에서 보완합니다. 원자료·기존 횟수는 유지합니다.</p>
+        {portfolio.analysis_repair ? <>
+          <p className="detail-note">{portfolio.analysis_repair.status === 'completed' ? '검증을 통과한 보완 분석 보존'
+            : portfolio.analysis_repair.status === 'planned' ? '원 응답·검증 오류에 결속된 보완 대기' : '미완료 보완 기록 보존 · 추가 보완 요청 불가'}</p>
+          <details className="detail-note"><summary>보존된 분석 검증 오류</summary>
+            <ul className="mt-2 list-disc space-y-1 pl-5">{portfolio.analysis_repair.validation_errors.map((error, index) =>
+              <li key={index}>{error.loc.join('.')} · {error.msg}</li>)}</ul>
+            {!!portfolio.analysis_repair.repair_validation_errors.length && <>
+              <p className="mt-2">보완 응답에서 남은 오류</p>
+              <ul className="mt-2 list-disc space-y-1 pl-5">{portfolio.analysis_repair.repair_validation_errors.map((error, index) =>
+                <li key={index}>{error.loc.join('.')} · {error.msg}</li>)}</ul>
+            </>}
+          </details>
+        </> : <p className="detail-note">분석 검증에서 첫 완료 분석의 근거 연결 오류를 확인했습니다. 미완료 투고본 재개로 보완을 이어갑니다.</p>}
+      </section>}
       {(portfolio.analysis_revision_required || portfolio.analysis_revision) && <section className="space-y-3" aria-label="공통 연구 보완 계획">
         <h5 className="font-semibold">실제 독립 심사에 따른 공통 연구 보완</h5>
         <p className="detail-note">전체 분석 예산 남은 {Math.max(0, 3 - paper.analysis_attempts)}회 · 기존 분석·원고·심사·실험 기록 보존</p>

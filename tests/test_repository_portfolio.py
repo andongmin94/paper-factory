@@ -141,7 +141,7 @@ def retain_portfolio_response(service, rid, value, phase, venue_id=None, *, mate
         text = service.artifact_path(rid, venue["artifact_ids"]["markdown"]).read_bytes().decode("utf-8")
         materials["portfolioDraft"] = {"artifact_id": venue["artifact_ids"]["markdown"], "text": text,
             "sha256": status["artifacts"][venue["artifact_ids"]["markdown"]]["sha256"], **_inference_read(text)}
-        if phase == "venue-manuscript":
+        if phase == "venue-manuscript" and venue["review"]:
             review_key = venue["artifact_ids"]["review"]
             text = service.artifact_path(rid, review_key).read_bytes().decode("utf-8")
             materials["portfolioPriorReview"] = {"artifact_id": review_key, "sha256": status["artifacts"][review_key]["sha256"],

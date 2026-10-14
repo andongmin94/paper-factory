@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "checked_at": "2026-10-11",
+  "checked_at": "2026-10-15",
   "recognition": {
     "status": "conditional",
     "scope": "컴퓨터공학·컴퓨터교육 교수 임용의 연구 실적",
@@ -29,6 +29,7 @@
       "scope_url": "https://www.computer.org/digital-library/magazines/so/cfp-ieee-software",
       "guidelines_url": "https://www.computer.org/digital-library/magazines/so/cfp-ieee-software",
       "verified_limits": {
+        "word_count_scope": "body_excluding_references_and_bios",
         "max_words": 4200,
         "max_abstract_words": 150,
         "max_references": 15,
@@ -57,13 +58,25 @@
         "comparative_analysis"
       ],
       "scope_url": "https://www.computer.org/digital-library/magazines/sp/cfp-ieee-security-and-privacy",
-      "guidelines_url": "https://www.computer.org/digital-library/magazines/sp/cfp-ieee-security-and-privacy",
-      "verified_limits": {},
+      "guidelines_url": "https://www.computer.org/csdl/magazine/sp/write-for-us/14680?title=Author%20Information&periodical=IEEE%20Security%20%26%20Privacy",
+      "numeric_guidance_sources": [
+        "https://www.computer.org/digital-library/magazines/sp/cfp-real-world-security-impact",
+        "https://www.computer.org/digital-library/magazines/sp/cfp-one-decade-gdpr-challenges"
+      ],
+      "numeric_guidance_note": "These official calls explicitly restate the general Author Information limits; they do not select a special issue. Direct general author-page body retrieval was unavailable during this check.",
+      "verified_limits": {
+        "word_count_scope": "whole_article",
+        "min_words": 4900,
+        "max_words": 7200,
+        "max_abstract_words": 50,
+        "max_references": 15,
+        "visual_word_cost": 250
+      },
       "editorial_budget": {
         "target_words": 5500,
         "abstract_words": 50
       },
-      "requirements_status": "checked_scope"
+      "requirements_status": "checked_numeric_guidance"
     }
   ]
 }

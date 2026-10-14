@@ -21,6 +21,10 @@ const { ResearchController } = await import('data:text/javascript;base64,' + Buf
 
 // Independent synthetic controller fixture. It establishes no real research or publication quality.
 const catalog = JSON.parse(await readFile(new URL('../../src/paper_factory/publication_venues.json', import.meta.url), 'utf8'));
+// Retained workflow fixtures freeze the earlier scope-only S&P profile; a current
+// catalog update must not retroactively turn these admitted synthetic drafts into failures.
+catalog.venues.find(venue => venue.id === 'ieee-security-privacy').verified_limits = {};
+catalog.venues.find(venue => venue.id === 'ieee-security-privacy').requirements_status = 'checked_scope';
 const digest = text => createHash('sha256').update(text).digest('hex');
 const source = { 'src/choice.ts': 'export const choice = "synthetic-local";',
   'src/retained-analysis.ts': 'export const priorAnalysisOnly = "complete previously inspected synthetic witness";' };
@@ -41,7 +45,8 @@ const review = () => ({ criteria: Object.fromEntries(['supported_findings', 'con
 
 async function fixture(t, { failedWriter = null, partialWriter = null, failedRepair = false, alteredRepair = false,
   interruptedAdmission = null, globalError = null, rejectStartOnce = false, failedExport = null, failedExportRepair = false,
-  revisionBodyChars = 0, negativeVenueReview = null } = {}) {
+  revisionBodyChars = 0, negativeVenueReview = null, invalidAnalysis = false, failedAnalysisRepair = false,
+  invalidAnalysisRepair = false, unsupportedAnalysisRepair = false } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'pf-independent-portfolio-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const requests = [], modelCalls = [], texts = new Map(), reservations = new Set();
@@ -69,6 +74,7 @@ async function fixture(t, { failedWriter = null, partialWriter = null, failedRep
   retain('repository-draft-pdf-2', 'Synthetic preserved PDF bytes');
   const portfolio = workflow.repository_paper.portfolio = { artifact_id: 'repository-portfolio-start', sha256: digest('synthetic start'),
     bindings: {}, targets, analysis: null, analysis_sha256: null, analysis_binding: null, analysis_outcome: null,
+    analysis_repair_available: false, analysis_repair_candidate_artifact_id: null, analysis_repair: null,
     analysis_revision: null, analysis_revision_available: false, analysis_revision_required: false,
     literature_followup_available: false, documentation_followup_available: false, literature_budget: { used: 2, limit: 3 },
     literature: null, literature_sha256: null, literature_collections: [{ artifact_id: 'synthetic-collection', sha256: digest('collection'),
@@ -91,6 +97,7 @@ async function fixture(t, { failedWriter = null, partialWriter = null, failedRep
     draft: null, review: null, draft_sha256: null, artifact_ids: { draft: null, markdown: null, review: null, pdf: null, docx: null },
     status: 'pending_analysis', scientific_ready: false, content_ready: false, submission_ready: false, analysis_current: true,
     revise_available: false, revise_reason: 'No changed scientific basis in this synthetic fixture.',
+    revision_feedback_available: false, revision_feedback_pending: false, revision_feedback: null,
     writer_binding: frame('venue-manuscript', target), reviewer_binding: null, writer_outcome: null, reviewer_outcome: null,
     repair_attempts: 0, repair_binding: null, repair_outcome: null,
     export_repair_available: false, export_repair_attempts: 0, export_repair_total: 0,
@@ -127,7 +134,12 @@ async function fixture(t, { failedWriter = null, partialWriter = null, failedRep
       const outcome = ['completed', 'failed', 'interrupted'].find(value => workflow.artifacts[`model-evidence-${receipt.id}-${value}`]) ?? 'started';
       const venueId = /for ([\w-]+) attempt/.exec(receipt.prompt)?.[1];
       const venue = portfolio.venues.find(item => item.venue_id === venueId);
-      if (receipt.phase === 'source-analysis') portfolio.analysis_outcome = outcome;
+      if (receipt.phase === 'source-analysis') {
+        portfolio.analysis_outcome = outcome;
+        if (portfolio.analysis_repair && ['failed', 'interrupted'].includes(outcome)) {
+          portfolio.analysis_repair.status = 'incomplete'; portfolio.analysis_binding = null;
+        }
+      }
       else if (receipt.phase === 'venue-manuscript') venue.writer_outcome = outcome;
       else if (receipt.phase === 'venue-manuscript-review') venue.reviewer_outcome = outcome;
       else if (receipt.phase === 'venue-manuscript-repair') venue.repair_outcome = outcome;
@@ -149,15 +161,64 @@ async function fixture(t, { failedWriter = null, partialWriter = null, failedRep
     if (method === 'workflow.submitPortfolioAnalysis') {
       assert.deepEqual(Object.keys(params.value).sort(), ['analysis', 'inference_artifact_id']);
       assert.ok(workflow.artifacts[params.value.inference_artifact_id]);
+      if (invalidAnalysis && !portfolio.analysis_repair || invalidAnalysisRepair && portfolio.analysis_repair) {
+        if (portfolio.analysis_repair) {
+          portfolio.analysis_repair.status = 'incomplete'; portfolio.analysis_binding = null;
+        } else {
+          portfolio.analysis_repair_available = true;
+          portfolio.analysis_repair_candidate_artifact_id = params.value.inference_artifact_id;
+        }
+        throw new EngineError('INVALID_ARGUMENT', 'Synthetic strict validator: observation evidence must belong to its enclosing unit.');
+      }
+      if (unsupportedAnalysisRepair && portfolio.analysis_repair) {
+        portfolio.analysis_repair.status = 'incomplete'; portfolio.analysis_binding = null;
+        portfolio.analysis_repair.repair_validation_errors = [{ loc: ['source_evidence', 0, 'quote'],
+          msg: 'Synthetic unchanged strict admission rejected a quote absent from the retained source.', type: 'SOURCE_EVIDENCE_INVALID' }];
+        throw new EngineError('SOURCE_EVIDENCE_INVALID', 'Synthetic completed schema-valid response failed literal-source admission.');
+      }
       const revised = portfolio.analysis_revision?.status === 'planned';
       portfolio.analysis = params.value.analysis;
       portfolio.analysis_sha256 = retain(revised ? 'repository-portfolio-analysis-revision-3' : 'repository-portfolio-analysis', params.value.analysis).sha256;
       portfolio.analysis_binding = null; portfolio.analysis_outcome = null;
+      if (portfolio.analysis_repair) portfolio.analysis_repair.status = 'completed';
       if (revised) {
         portfolio.analysis_revision.status = 'incomplete';
         portfolio.analysis_revision_available = false;
         for (const venue of portfolio.venues) { venue.analysis_current = false; venue.scientific_ready = venue.content_ready = false; }
       } else for (const venue of portfolio.venues) { venue.writer_binding = frame('venue-manuscript', venue); venue.status = 'pending_draft'; }
+    } else if (method === 'workflow.preparePortfolioAnalysisRepair') {
+      assert.equal(portfolio.analysis_repair, null);
+      assert.equal(portfolio.analysis_repair_available, true);
+      assert.equal(params.inferenceArtifactId, portfolio.analysis_repair_candidate_artifact_id);
+      assert.ok(workflow.repository_paper.analysis_attempts < 3);
+      const original = JSON.parse(texts.get(params.inferenceArtifactId));
+      const validation_errors = [{ loc: ['units', 0, 'observations', 0, 'evidence_ids'],
+        msg: 'Observation evidence IDs must belong to the enclosing unit.', type: 'value_error' }];
+      const artifact = retain('repository-portfolio-analysis-schema-repair', { original_response: original.text,
+        original_candidate: JSON.parse(original.text), validation_errors, validation_details: [{ unit_id: 'synthetic-unit', missing_evidence_ids: ['witness-1'] }] });
+      portfolio.analysis_repair = { artifact_id: artifact.id, sha256: artifact.sha256, status: 'planned',
+        original_inference_artifact_id: params.inferenceArtifactId, original_inference_sha256: workflow.artifacts[params.inferenceArtifactId].sha256,
+        validation_errors, validation_details: [{ unit_id: 'synthetic-unit', missing_evidence_ids: ['witness-1'] }], repair_validation_errors: [] };
+      portfolio.analysis_repair_available = false; portfolio.analysis_repair_candidate_artifact_id = null;
+      portfolio.analysis_binding = { ...frame('source-analysis'), attempt: workflow.repository_paper.analysis_attempts + 1,
+        analysis_schema_repair_sha256: artifact.sha256 };
+      portfolio.analysis_outcome = null;
+    } else if (method === 'workflow.submitPortfolioRevisionFeedback') {
+      const venue = portfolio.venues.find(item => item.venue_id === params.venueId);
+      assert.equal(venue.revision_feedback_available, true);
+      assert.equal(venue.revision_feedback_pending, false);
+      assert.ok(venue.draft_attempts < 3 && venue.review_attempts < 3);
+      const original = { feedback: params.feedback, draft_sha256: venue.draft_sha256,
+        review_sha256: venue.artifact_ids.review ? workflow.artifacts[venue.artifact_ids.review].sha256 : null,
+        markdown_sha256: workflow.artifacts[venue.artifact_ids.markdown].sha256, portfolio_analysis_sha256: portfolio.analysis_sha256 };
+      const artifact = retain(`repository-portfolio-${venue.venue_id}-revision-feedback-${venue.admitted_drafts}`, original);
+      venue.revision_feedback = { artifact_id: artifact.id, sha256: artifact.sha256, ...original };
+      venue.revision_feedback_available = false; venue.revision_feedback_pending = true;
+      venue.writer_binding = { ...frame('venue-manuscript', venue), attempt: venue.draft_attempts + 1,
+        prior_draft_sha256: venue.draft_sha256, ...(original.review_sha256 ? { prior_review_sha256: original.review_sha256 } : {}),
+        revision_feedback_sha256: artifact.sha256 };
+      venue.reviewer_binding = null; venue.writer_outcome = null;
+      portfolio.all_content_ready = false;
     } else if (method === 'workflow.preparePortfolioRevision') {
       assert.equal(portfolio.analysis_revision, null);
       const artifact = retain('repository-portfolio-analysis-revision-plan', { prior_analysis_sha256: portfolio.analysis_sha256,
@@ -189,6 +250,7 @@ async function fixture(t, { failedWriter = null, partialWriter = null, failedRep
         throw new EngineError('INVALID_ARGUMENT', 'Synthetic transient post-completion admission failure.');
       }
       const venue = portfolio.venues.find(item => item.venue_id === params.value.venue_id);
+      const feedback = venue.revision_feedback_pending ? venue.revision_feedback : null;
       venue.draft = params.value.manuscript; venue.admitted_drafts++;
       venue.review = null; venue.analysis_current = true; venue.revise_available = false;
       venue.scientific_ready = venue.content_ready = false;
@@ -197,13 +259,16 @@ async function fixture(t, { failedWriter = null, partialWriter = null, failedRep
       const prefix = `repository-portfolio-${venue.venue_id}`;
       venue.artifact_ids.draft = `${prefix}-draft-${venue.admitted_drafts}`; venue.artifact_ids.markdown = `${prefix}-markdown-${venue.admitted_drafts}`;
       venue.draft_sha256 = retain(venue.artifact_ids.draft, venue.draft).sha256;
-      retain(venue.artifact_ids.markdown, `# ${venue.draft.title}\nComplete synthetic candidate prose.`);
+      retain(venue.artifact_ids.markdown, `# ${venue.draft.title}\nComplete synthetic candidate prose.\n` +
+        venue.draft.sections.map(section => `## ${section.heading}\n${section.text}`).join('\n'));
       venue.reviewer_binding = { ...frame('venue-manuscript-review', venue), attempt: venue.review_attempts + 1, draft_sha256: venue.draft_sha256,
-        markdown_sha256: workflow.artifacts[venue.artifact_ids.markdown].sha256 };
+        markdown_sha256: workflow.artifacts[venue.artifact_ids.markdown].sha256,
+        ...(feedback ? { revision_feedback_sha256: feedback.sha256 } : {}) };
       venue.status = 'pending_review';
       venue.writer_outcome = null;
       venue.repair_binding = null;
       venue.repair_outcome = null;
+      venue.revision_feedback_pending = false;
     } else if (method === 'workflow.submitPortfolioReview') {
       assert.deepEqual(Object.keys(params.value).sort(), ['inference_artifact_id', 'review', 'venue_id']);
       const venue = portfolio.venues.find(item => item.venue_id === params.value.venue_id);
@@ -214,6 +279,7 @@ async function fixture(t, { failedWriter = null, partialWriter = null, failedRep
       venue.content_ready = venue.scientific_ready;
       venue.status = venue.content_ready ? 'content_ready' : 'needs_revision'; venue.writer_binding = venue.reviewer_binding = null;
       venue.writer_outcome = venue.reviewer_outcome = null;
+      venue.revision_feedback_available = venue.draft_attempts < 3 && venue.review_attempts < 3;
       portfolio.completed = portfolio.venues.filter(venue => venue.review).length;
       portfolio.all_content_ready = portfolio.venues.every(venue => venue.content_ready);
     } else if (method === 'workflow.exportPortfolioDraft') {
@@ -233,6 +299,7 @@ async function fixture(t, { failedWriter = null, partialWriter = null, failedRep
         retain(venue.artifact_ids[format], `Synthetic ${format} bytes for ${venue.venue_id}`);
       }
       venue.export_status = 'completed';
+      venue.revision_feedback_available = venue.draft_attempts < 3 && venue.review_attempts < 3;
     } else if (method === 'workflow.repairPortfolioExport') {
       const venue = portfolio.venues.find(item => item.venue_id === params.venueId);
       assert.equal(venue.export_repair_attempts, 0);
@@ -263,6 +330,18 @@ async function fixture(t, { failedWriter = null, partialWriter = null, failedRep
           title: 'Synthetic exact primary HTML paper', authors: ['Synthetic Author'], year: 2026,
           publication_type: 'proceedings-article', publication_version: 'published' }], reason: 'Synthetic retrieval planning only.' }) };
       const venueId = /for ([\w-]+) attempt/.exec(prompt)?.[1];
+      if (prompt.startsWith('Repair only the native-rejected common')) {
+        const materials = JSON.parse(prompt.split('\n').at(-1));
+        const delivered = materials.portfolioAnalysisRepair;
+        assert.equal(delivered.artifact_id, portfolio.analysis_repair.artifact_id);
+        assert.equal(delivered.text, texts.get(delivered.artifact_id));
+        assert.equal(digest(delivered.text), portfolio.analysis_repair.sha256);
+        assert.equal(delivered.pages.at(-1).nextOffset, null);
+        assert.equal(delivered.pages.reduce((total, page) => total + page.chars, 0), delivered.totalChars);
+        assert.ok(prompt.includes('each observation evidence_ids must be a subset of its enclosing unit evidence_ids'));
+        if (failedAnalysisRepair) throw new ChatGPTError('stream_interrupted', 'Synthetic analysis repair interruption', false);
+        return { text: JSON.stringify(analysis) };
+      }
       if (prompt.startsWith('Perform the common')) {
         if (portfolio.analysis_revision) {
           assert.ok(prompt.includes('"portfolioRevision"'));
@@ -274,7 +353,8 @@ async function fixture(t, { failedWriter = null, partialWriter = null, failedRep
           assert.ok(!prompt.includes(JSON.stringify('Preserved original draft 2')));
           return { text: JSON.stringify({ ...analysis, method: 'Synthetic corrected common decision rule, not new research data.' }) };
         }
-        return { text: JSON.stringify(analysis) };
+        return { text: JSON.stringify(invalidAnalysis ? { ...analysis, units: [{ id: 'synthetic-unit', evidence_ids: ['witness-0'],
+          observations: [{ evidence_ids: ['witness-1'], interpretation: 'Literal witness outside the enclosing unit.' }] }] } : analysis) };
       }
       if (prompt.startsWith('Complete only the interrupted portfolio manuscript tail')) {
         assert.equal(request.model, 'synthetic-writer');
@@ -290,6 +370,12 @@ async function fixture(t, { failedWriter = null, partialWriter = null, failedRep
         const actual = portfolio.venues.find(venue => venue.venue_id === venueId).draft;
         const venue = portfolio.venues.find(venue => venue.venue_id === venueId);
         const delivered = JSON.parse(prompt.split('\n').at(-1)).portfolioDraft;
+        if (venue.reviewer_binding?.revision_feedback_sha256) {
+          const supplied = JSON.parse(prompt.split('\n').at(-1)).portfolioRevisionFeedback;
+          assert.equal(supplied.text, texts.get(venue.revision_feedback.artifact_id));
+          assert.equal(supplied.sha256, venue.revision_feedback.sha256);
+          assert.equal(supplied.pages.at(-1).nextOffset, null);
+        }
         assert.equal(delivered.artifact_id, venue.artifact_ids.markdown);
         assert.equal(delivered.text, texts.get(venue.artifact_ids.markdown));
         assert.equal(delivered.sha256, workflow.artifacts[venue.artifact_ids.markdown].sha256);
@@ -304,6 +390,20 @@ async function fixture(t, { failedWriter = null, partialWriter = null, failedRep
         return { text: JSON.stringify(assessed) };
       }
       assert.equal(request.model, 'synthetic-writer');
+      const venue = portfolio.venues.find(item => item.venue_id === venueId);
+      if (venue?.revision_feedback_pending) {
+        const materials = JSON.parse(prompt.split('\n').at(-1)), supplied = materials.portfolioRevisionFeedback;
+        assert.equal(supplied.text, texts.get(venue.revision_feedback.artifact_id));
+        assert.equal(supplied.sha256, venue.writer_binding.revision_feedback_sha256);
+        assert.equal(supplied.pages.at(-1).nextOffset, null);
+        assert.equal(materials.portfolioDraft.text, texts.get(venue.artifact_ids.markdown));
+        if (venue.review) assert.equal(materials.portfolioPriorReview.text, texts.get(venue.artifact_ids.review));
+        else assert.equal(materials.portfolioPriorReview, undefined);
+        const corrected = manuscript(`Synthetic corrected feature for ${venueId}`);
+        corrected.sections[1].text += ' Synthetic source-grounded decision conditions.'.repeat(300);
+        corrected.revision = { prior_draft_sha256: venue.draft_sha256, changes: ['Addressed the supplied concrete synthetic length defect.'] };
+        return { text: JSON.stringify(corrected) };
+      }
       if (venueId === partialWriter) {
         const value = { title: 'Protected synthetic title', sections: ['Abstract', 'Introduction', 'Related Work', 'Method',
           'Repository Analysis', 'Discussion', 'Limitations', 'Conclusion'].map(heading => ({ heading,
@@ -632,6 +732,83 @@ test('post-analysis primary HTML collection uses the last retained collection wi
   await f.run(); assert.equal(f.modelCalls.length, 2 + 2 * catalog.venues.length);
 });
 
+test('public external feedback revises only the selected positive-reviewed feature and independently reviews its new draft', async t => {
+  const f = await fixture(t);
+  await f.run();
+  const venueId = 'ieee-security-privacy', target = f.portfolio.venues.find(venue => venue.venue_id === venueId);
+  const before = structuredClone(f.workflow), other = structuredClone(f.portfolio.venues.find(venue => venue.venue_id !== venueId));
+  const originalDraftId = target.artifact_ids.draft, originalReviewId = target.artifact_ids.review;
+  assert.equal(target.scientific_ready, true); assert.equal(target.content_ready, true);
+  f.controller.restoring = false;
+  f.controller.state.runtime = { state: 'ready', repositoryAnalysisReady: true, message: 'Synthetic ready engine.' };
+  const calls = f.modelCalls.length;
+  await f.controller.requestRepositoryPortfolioRevision(f.job.id, venueId,
+    'The actual exported article is below the minimum word requirement. Expand its supported decision conditions and residual-risk discussion.');
+  const task = f.controller.current?.task;
+  assert.ok(task); await task;
+  assert.equal(f.controller.snapshot().error, null);
+  assert.equal(target.draft_attempts, 2); assert.equal(target.review_attempts, 2); assert.equal(target.admitted_drafts, 2);
+  assert.equal(target.revision_feedback_pending, false);
+  assert.equal(f.modelCalls.length, calls + 2, 'Only one selected-venue writer and one new independent review may dispatch');
+  assert.equal(f.requests.filter(request => request.method === 'workflow.submitPortfolioRevisionFeedback').length, 1);
+  assert.equal(target.draft.revision.prior_draft_sha256, before.artifacts[originalDraftId].sha256);
+  assert.deepEqual(f.workflow.artifacts[originalDraftId], before.artifacts[originalDraftId]);
+  assert.deepEqual(f.workflow.artifacts[originalReviewId], before.artifacts[originalReviewId]);
+  assert.equal(JSON.parse(f.texts.get(originalReviewId)).criteria.presentation.passed, true, 'Positive original review must stay positive');
+  assert.deepEqual(f.portfolio.venues.find(venue => venue.venue_id !== venueId), other);
+  assert.equal(f.workflow.repository_paper.analysis_attempts, before.repository_paper.analysis_attempts);
+  f.assertPreserved();
+});
+
+test('a frozen verified numeric preflight defect retains feedback then writes a changed feature before its first independent review', async t => {
+  const f = await fixture(t);
+  f.workflow.repository_paper.publication_venues = structuredClone(catalog);
+  const profile = f.workflow.repository_paper.publication_venues.venues.find(venue => venue.id === 'ieee-security-privacy');
+  profile.verified_limits = { min_words: 1000, max_words: 7200, max_abstract_words: 50, max_references: 15,
+    visual_word_cost: 250, word_count_scope: 'whole_article' };
+  profile.requirements_status = 'checked_numeric_guidance';
+  await f.run();
+  const target = f.portfolio.venues.find(venue => venue.venue_id === profile.id);
+  assert.equal(target.draft_attempts, 2); assert.equal(target.admitted_drafts, 2);
+  assert.equal(target.review_attempts, 1, 'The undersized first draft must not receive an independent review');
+  const feedback = JSON.parse(f.texts.get(target.revision_feedback.artifact_id));
+  assert.equal(feedback.review_sha256, null);
+  assert.match(feedback.feedback, /최소 분량.*1000/);
+  const selected = f.requests.filter(request => request.params?.venueId === profile.id || request.params?.value?.venue_id === profile.id);
+  const originalExport = selected.findIndex(request => request.method === 'workflow.exportPortfolioDraft');
+  const retainedFeedback = selected.findIndex(request => request.method === 'workflow.submitPortfolioRevisionFeedback');
+  assert.ok(originalExport < retainedFeedback, 'Real files must exist before the format defect is retained');
+  assert.equal(f.portfolio.all_content_ready, true);
+  assert.equal(f.portfolio.venues.find(venue => venue.venue_id !== profile.id).draft_attempts, 1);
+  assert.equal(f.workflow.repository_paper.analysis_attempts, 2);
+  f.assertPreserved();
+});
+
+test('a failed external-feedback writer cannot replay its selected draft or replace the retained positive original review', async t => {
+  const f = await fixture(t); await f.run();
+  const target = f.portfolio.venues.find(venue => venue.venue_id === 'ieee-security-privacy');
+  const original = structuredClone(target), stream = f.client.streamResponse;
+  f.client.streamResponse = async request => {
+    if (request.input[0].content.startsWith(`Write the complete repository portfolio manuscript for ${target.venue_id} attempt 2.`)) {
+      f.modelCalls.push(request);
+      throw new ChatGPTError('stream_interrupted', 'Synthetic selected feedback revision failed before a complete article.', false);
+    }
+    return stream(request);
+  };
+  f.controller.restoring = false;
+  f.controller.state.runtime = { state: 'ready', repositoryAnalysisReady: true, message: 'Synthetic ready engine.' };
+  await f.controller.requestRepositoryPortfolioRevision(f.job.id, target.venue_id, 'Expand the actual unsupported minimum-length explanation using the retained source only.');
+  await f.controller.current.task;
+  assert.equal(target.draft_attempts, 2); assert.equal(target.review_attempts, 1);
+  assert.deepEqual(target.draft, original.draft); assert.deepEqual(target.review, original.review);
+  const calls = f.modelCalls.length;
+  await f.run();
+  assert.equal(f.modelCalls.length, calls);
+  assert.equal(f.requests.filter(request => request.method === 'workflow.submitPortfolioRevisionFeedback').length, 1);
+  assert.equal(f.portfolio.all_content_ready, false);
+  f.assertPreserved();
+});
+
 for (const entrypoint of ['requestRepositoryPortfolio', 'resume']) test(`${entrypoint} resumes a cancelled retained portfolio without restarting common authoring`, async t => {
   const f = await fixture(t);
   f.workflow.status = 'cancelled'; f.workflow.code = 'CANCELLED'; f.workflow.resume_kind = 'authoring';
@@ -729,6 +906,96 @@ test('a review-bound source-analysis repair appends one real result within the o
   assert.equal(f.modelCalls.length, 2 + 2 * catalog.venues.length);
   assert.equal(f.requests.filter(request => request.method === 'workflow.preparePortfolioRevision').length, 1);
   f.assertPreserved();
+});
+
+test('a completed invalid initial analysis admits one bound schema repair while preserving original evidence and all other counts', async t => {
+  const f = await fixture(t, { invalidAnalysis: true });
+  await f.run();
+  const repair = f.portfolio.analysis_repair;
+  assert.equal(repair.status, 'completed');
+  assert.equal(f.workflow.repository_paper.analysis_attempts, 3, 'Original analysis + initial portfolio request + one repair share the existing three-request budget');
+  assert.equal(f.requests.filter(request => request.method === 'workflow.preparePortfolioAnalysisRepair').length, 1);
+  const original = JSON.parse(f.texts.get(repair.original_inference_artifact_id));
+  assert.equal(original.outcome, 'completed');
+  assert.deepEqual(JSON.parse(original.text).units[0].evidence_ids, ['witness-0']);
+  assert.deepEqual(JSON.parse(original.text).units[0].observations[0].evidence_ids, ['witness-1']);
+  assert.equal(f.workflow.artifacts[repair.original_inference_artifact_id].sha256, repair.original_inference_sha256);
+  assert.equal(f.portfolio.completed, catalog.venues.length);
+  assert.equal(f.modelCalls.filter(request => /^(Perform the common|Repair only the native-rejected common)/.test(request.input[0].content)).length, 2);
+  const count = f.modelCalls.length, artifacts = structuredClone(f.workflow.artifacts);
+  await f.run();
+  assert.equal(f.modelCalls.length, count);
+  for (const [id, artifact] of Object.entries(artifacts)) assert.deepEqual(f.workflow.artifacts[id], artifact);
+  f.assertPreserved();
+});
+
+test('the normal public portfolio resume uses the preserved invalid completion without dispatching that original request again', async t => {
+  const f = await fixture(t, { invalidAnalysis: true }), request = f.engine.request.bind(f.engine);
+  let unavailableOnce = true;
+  f.engine.request = async (method, params) => {
+    if (method === 'workflow.preparePortfolioAnalysisRepair' && unavailableOnce) {
+      unavailableOnce = false;
+      throw new EngineError('ENGINE_UNAVAILABLE', 'Synthetic application closed before preparing the available repair.');
+    }
+    return request(method, params);
+  };
+  await assert.rejects(f.run(), error => error.code === 'ENGINE_UNAVAILABLE');
+  assert.equal(f.modelCalls.length, 1);
+  assert.equal(f.workflow.repository_paper.analysis_attempts, 2);
+  const originalId = f.portfolio.analysis_repair_candidate_artifact_id, original = structuredClone(f.workflow.artifacts[originalId]);
+  f.controller.restoring = false;
+  f.controller.state.runtime = { state: 'ready', repositoryAnalysisReady: true, message: 'Synthetic ready engine.' };
+  await f.controller.requestRepositoryPortfolio(f.job.id);
+  const task = f.controller.current?.task;
+  assert.ok(task, 'The same public action used by the actual app must install the repair lifecycle');
+  await task;
+  assert.equal(f.controller.snapshot().error, null);
+  assert.equal(f.portfolio.analysis_repair.status, 'completed');
+  assert.deepEqual(f.workflow.artifacts[originalId], original);
+  assert.equal(f.modelCalls.filter(request => request.input[0].content.startsWith('Perform the common')).length, 1);
+  assert.equal(f.modelCalls.filter(request => request.input[0].content.startsWith('Repair only the native-rejected common')).length, 1);
+  assert.equal(f.workflow.repository_paper.analysis_attempts, 3);
+  f.assertPreserved();
+});
+
+test('a completed valid repair can resume strict admission without a second repair model call', async t => {
+  const f = await fixture(t, { invalidAnalysis: true }), request = f.engine.request.bind(f.engine);
+  let admissionClosedOnce = true;
+  f.engine.request = async (method, params) => {
+    if (method === 'workflow.submitPortfolioAnalysis' && f.portfolio.analysis_repair && admissionClosedOnce) {
+      admissionClosedOnce = false;
+      throw new EngineError('ENGINE_TIMEOUT', 'Synthetic interruption before strict repair admission.');
+    }
+    return request(method, params);
+  };
+  await assert.rejects(f.run(), error => error.code === 'ENGINE_TIMEOUT');
+  assert.equal(f.modelCalls.length, 2);
+  assert.equal(f.portfolio.analysis_outcome, 'completed');
+  const original = structuredClone(f.workflow.artifacts[f.portfolio.analysis_repair.original_inference_artifact_id]);
+  await f.run();
+  assert.equal(f.portfolio.analysis_repair.status, 'completed');
+  assert.equal(f.modelCalls.filter(request => request.input[0].content.startsWith('Repair only the native-rejected common')).length, 1);
+  assert.equal(f.workflow.repository_paper.analysis_attempts, 3);
+  assert.deepEqual(f.workflow.artifacts[f.portfolio.analysis_repair.original_inference_artifact_id], original);
+  f.assertPreserved();
+});
+
+test('an interrupted, schema-invalid or source-unsupported repair cannot allocate another repair or overwrite the initial response', async t => {
+  for (const option of ['failedAnalysisRepair', 'invalidAnalysisRepair', 'unsupportedAnalysisRepair']) await t.test(option, async t => {
+    const f = await fixture(t, { invalidAnalysis: true, [option]: true });
+    await assert.rejects(f.run());
+    const originalId = f.portfolio.analysis_repair.original_inference_artifact_id;
+    const original = structuredClone(f.workflow.artifacts[originalId]), calls = f.modelCalls.length;
+    assert.equal(f.portfolio.analysis_repair.status, 'incomplete');
+    assert.equal(f.portfolio.analysis_binding, null);
+    assert.equal(f.workflow.repository_paper.analysis_attempts, 3);
+    await assert.rejects(f.run(), error => error.code === 'SOURCE_ANALYSIS_LIMIT');
+    assert.equal(f.modelCalls.length, calls);
+    assert.equal(f.requests.filter(request => request.method === 'workflow.preparePortfolioAnalysisRepair').length, 1);
+    assert.deepEqual(f.workflow.artifacts[originalId], original);
+    assert.equal(f.portfolio.analysis, null);
+    f.assertPreserved();
+  });
 });
 
 test('two complete IEEE reviews use the final request limit without truncation or consuming a rejected analysis attempt', async t => {

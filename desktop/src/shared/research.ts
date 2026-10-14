@@ -177,8 +177,10 @@ export interface RepositoryPortfolioFrame {
   literature_sha256: string | null;
   portfolio_analysis_sha256: string | null;
   analysis_revision_sha256?: string;
+  analysis_schema_repair_sha256?: string;
   prior_review_sha256?: string;
   supplementary_evidence_sha256?: string;
+  revision_feedback_sha256?: string;
   phase: 'source-analysis' | 'venue-manuscript' | 'venue-manuscript-repair' | 'venue-manuscript-review';
   venue_id: string | null; article_category: string | null; attempt: number;
   prior_draft_sha256: string | null; draft_sha256: string | null; markdown_sha256: string | null;
@@ -234,6 +236,9 @@ export interface RepositoryPortfolioVenue {
   author_export_status: 'not_started' | 'completed' | 'failed' | 'interrupted' | 'stale' | 'unavailable';
   author_export: RepositoryPortfolioAuthorExport | null;
   revise_available: boolean; revise_reason: string;
+  revision_feedback_available: boolean; revision_feedback_pending: boolean;
+  revision_feedback: { artifact_id: string; sha256: string; feedback: string; draft_sha256: string;
+    review_sha256: string | null; markdown_sha256: string; portfolio_analysis_sha256: string } | null;
   analysis_current: boolean; scientific_ready: boolean; content_ready: boolean; submission_ready: false;
 }
 export type RepositoryPortfolioOutcome = 'started' | 'completed' | 'failed' | 'interrupted' | null;
@@ -262,6 +267,13 @@ export interface RepositoryPortfolioProgress {
   targets: Array<{ venue_id: string; article_category: string }>;
   analysis: RepositoryAnalysis | null; analysis_sha256: string | null; analysis_binding: RepositoryPortfolioFrame | null;
   analysis_outcome: RepositoryPortfolioOutcome;
+  analysis_repair_available: boolean;
+  analysis_repair_candidate_artifact_id: string | null;
+  analysis_repair: { artifact_id: string; sha256: string; status: 'planned' | 'completed' | 'incomplete';
+    original_inference_artifact_id: string; original_inference_sha256: string;
+    validation_errors: Array<{ loc: Array<string | number>; msg: string; type: string }>;
+    validation_details: Array<Record<string, unknown>>;
+    repair_validation_errors: Array<{ loc: Array<string | number>; msg: string; type: string }> } | null;
   analysis_revision_required: boolean; analysis_revision_available: boolean;
   analysis_revision: { artifact_id: string; sha256: string; prior_analysis_sha256: string;
     actions: RepositoryAction[]; affected_venues: string[]; status: 'planned' | 'completed' | 'incomplete' } | null;
@@ -391,6 +403,7 @@ export interface ResearchApi {
   improveResearch(id: string, model: string, reviewerModel: string): Promise<ResearchSnapshot>;
   requestRepositoryRevision(researchId: string, feedback: string): Promise<ResearchSnapshot>;
   requestRepositoryPortfolio(researchId: string): Promise<ResearchSnapshot>;
+  requestRepositoryPortfolioRevision(researchId: string, venueId: string, feedback: string): Promise<ResearchSnapshot>;
   reformatRepositoryPortfolioDraft(researchId: string, venueId: string): Promise<ResearchSnapshot>;
   correctRepositoryPortfolioLayout(researchId: string, venueId: string): Promise<ResearchSnapshot>;
   exportRepositoryPortfolioAuthor(researchId: string, venueId: string): Promise<ResearchSnapshot>;

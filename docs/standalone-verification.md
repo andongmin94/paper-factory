@@ -1,134 +1,118 @@
 # Windows 독립 앱 검증: IEEE Software·Security & Privacy
 
-2026-10-14 현재 체크포인트. 검증 대상은 Docker 없이 실행하는 실제 Electron 앱과 공식 계정 모델 호출이다. 합성 fixture 통과, runtime 빌드, 실제 원고 생성, 학술지 투고 가능성은 서로 다른 증거로 기록한다. 최신 실행 결과는 [다음 세션](next-session.md)과 함께 갱신한다.
+2026-10-15 KST 현재 체크포인트. 검증 대상은 Docker 없이 실행하는 실제 Electron 앱과 공식 계정 모델 호출이다. 합성 회귀·패키지 무결성·실제 원고 생성·투고 준비도는 각각의 증거로 기록한다. 이번 새 연구의 최신 상태는 [다음 세션](next-session.md)과 함께 갱신한다.
 
-이 문서는 실제 실행 결과의 요약이다. `output/`·`.paper-factory/`와 빌드·runtime 경로는 해당 Windows PC의 로컬 자료이며 Git에서 제외된다. 원고·인증·모델 요청을 저장소에 게시하지 않는다. 아래 상대 경로는 저장소 루트 기준이고 새 복제본에는 증빙 파일이 없다.
+`output/`·`.paper-factory/`와 빌드 경로는 이 Windows PC의 로컬 자료이며 Git에서 제외한다. 원고·개인정보·인증·실제 모델 요청을 저장소나 릴리스에 게시하지 않는다. 상대 경로는 저장소 루트 기준이고 새 복제본에는 증빙 파일이 없다.
 
-## 초기화와 현재 연구
+## 초기화와 새 연구
 
-사용자의 전체 삭제 요청에 따라 설치 앱 `%APPDATA%/Paper Factory Standalone`와 개발 앱 `.paper-factory/jizura-new-01420-20261008-04e3b1a0-4ee/app-data`의 이전 연구·워크플로·횟수를 삭제했다. 예전 출력·독립 연구 ZIP도 삭제했으며 복원을 전제로 재개하지 않는다. 자체 계정 저장소·연결 설정·포함 런타임은 유지했다.
+사용자의 최신 전체 삭제 요청에 따라 2026-10-14 14:06:17 UTC 이전 연구·원자료·원고·심사·횟수·전달 ZIP 760개 파일, 60,455,815 bytes를 삭제했다. 대상은 설치 앱 `%APPDATA%/Paper Factory Standalone`과 실제 검증 앱 `.paper-factory/jizura-new-01420-20261008-04e3b1a0-4ee/app-data`의 연구·워크플로 및 과거 실제 출력이다. 자체 계정 저장소·연결 설정·소스·포함 런타임·설치 파일은 유지했다.
 
-초기화 검사 (`output/playwright/two-magazine-fresh-20261011/reset-verification.json`), 앱 시작 전 빈 저장소 (`output/playwright/two-magazine-fresh-20261011/empty-stores-before-app.json`), 연결된 빈 앱 (`output/playwright/two-magazine-fresh-20261011/empty-app-before-start.json`)이 새 연구 이전의 증거다. 현재는 새 연구가 있으므로 저장소가 계속 비어 있다고 설명하지 않는다.
+이번 증빙 루트는 `output/playwright/frontron-fresh-20261014/`다. `reset-verification.json`은 삭제 대상 없음과 보존 항목을, `empty-stores-before-app.json`은 두 저장소의 jobs/workflows 0을, `empty-app-before-start.json`은 실제 앱의 빈 연구·엔진 ready·오류 없음 상태를 확인한다. 연구 시작 후 저장소가 계속 비어 있다고 설명하지 않는다.
 
-새 실제 연구는 `research-100e940ea80b`, 입력은 `https://github.com/andongmin94/frontron`이다. 원문은 실제 앱 데이터의 `engine/workflows/research-100e940ea80b`에 저장된다. active catalog는 IEEE Software·IEEE Security & Privacy의 Feature Article 두 곳이며 부적합 판정 매체는 집필 대상에서 제외한다.
+새 연구는 `research-7008ca97102a`, 입력은 `https://github.com/andongmin94/frontron`이다. 14:09:19 UTC 실제 앱의 정상 입력과 **연구 시작** 한 번으로 생성했다. 고정 commit `3a7da2822721801db88ea059d204c8c6c622fab4`에서 189개 파일을 내려받고 분석용 161개 파일, 1,121,077 bytes를 보존했으며 해시가 모두 일치한다. 이전 연구나 원고를 가져오지 않았다.
 
-## 실제 앱과 공식 연결
+## 실제 패키지와 공식 연결
 
-| 항목 | 현재 경로/증거 |
+| 항목 | 이번 실행 경로/증거 |
 | --- | --- |
-| 저장소 | `C:/Users/Andongmin/Desktop/repository/paper-factory` |
-| 개발 앱 자체 데이터 | `.paper-factory/jizura-new-01420-20261008-04e3b1a0-4ee/app-data` |
-| 개발 Electron | `desktop/node_modules/electron/dist/electron.exe` |
-| 포함 runtime | `desktop/runtime/win32-x64` |
-| Python / Node | `python/python.exe` / `node/node.exe` (runtime 기준 상대 경로) |
-| 문서 변환 | 포함 Pandoc·Typst·폰트; 시스템 Docker·TeX 설치를 요구하지 않음 |
-| 초기 정상 입력 | normal-user-input.json (`output/playwright/two-magazine-fresh-20261011/normal-user-input.json`) |
-| 재개 정상 입력 | resume-1/normal-resume-input.json (`output/playwright/two-magazine-fresh-20261011/resume-1/normal-resume-input.json`) |
-| 공식 연결/모델 목록 | resume-1/official-connection-proof.json (`output/playwright/two-magazine-fresh-20261011/resume-1/official-connection-proof.json`) |
-| 숨김/offscreen 창 | resume-1/window-launch-proof.json (`output/playwright/two-magazine-fresh-20261011/resume-1/window-launch-proof.json`) |
+| 작업공간 | `C:/Users/Andongmin/Desktop/repository/paper-factory` |
+| 실제 데이터 | `.paper-factory/jizura-new-01420-20261008-04e3b1a0-4ee/app-data` |
+| 최초 executable | `desktop/release/final-ready-0.14.20-20261014/win-unpacked/Paper Factory.exe` |
+| 최초 executable SHA256 | `6a655a7f33264a75cbeb9841c58a162f08da0c2d23e5d5608ce58a6392726a3d` |
+| 현재 executable | `desktop/release/frontron-final-20261015/win-unpacked/Paper Factory.exe` |
+| 현재 executable SHA256 | `19a317399d676183e04f52a4cecd57f19c0f39343aac017dcf3bb9dfe8b62b84` |
+| 정상 입력 | `normal-user-input.json` |
+| 공식 연결·모델 목록 | `official-connection-proof.json` |
+| 숨김 packaged 창 | `window-launch-proof.json` |
+| 첫 원고 생성 결과·정상 UI·저장·종료 | `resume-2/final-summary.json` / `resume-2/proof.json` |
+| 후보 저자 출력·6개 저장·정상 종료 | `author-2/proof.json` |
 
-실제 자체 계정의 `connected=true`, `sharing=true`, 공식 모델 목록을 확인했으며 `sdkMocked=false`다. 작성·검토 모델은 `gpt-6.1-sol`이다. 계정 토큰·다른 앱 인증 파일을 읽거나 복사하지 않는다. 연결 목록 확인은 추가 연구나 고정 응답 probe가 아니다.
+증거 JSON은 위 이번 증빙 루트 기준이다. 공식 자체 계정의 `connected=true`, `sharing=true`, 실제 모델 목록과 작성·독립 평가 모델 `gpt-6.1-sol`을 확인했고 `sdkMocked=false`다. 계정 토큰이나 다른 앱 인증 파일을 읽거나 복사하지 않는다.
 
-검증 당시의 일회용 숨김 launcher는 창에 `show:false`, `offscreen:true`, `backgroundThrottling:false`만 적용했다. production controller·모델·IPC는 바꾸지 않았다. Playwright Electron API로 정상 입력·모델 선택·결과 재개 버튼을 조작하고 DOM/Chromium 화면을 기록했다. `PF_DESKTOP_DATA_DIR`는 위 개발 데이터 경로였다. 재검증 시에는 보존한 종료 상태와 연구 SHA를 확인하고 정상 UI를 사용한다. 새 helper를 PowerShell `Start-Process`로 실행하면 `-WindowStyle Hidden`을 사용한다.
+최초 실행은 공개 NSIS와 같은 unpacked payload, 완료 재개는 아래 계약 수정을 포함한 미배포 로컬 패키지다. 두 실행 모두 `isPackaged=true`, 버전 0.14.20과 runtime/repository analysis ready를 확인했다. 일회용 검증 prelude는 패키지 entry 실행 전 데이터 경로를 자체 연구 저장소로 매핑하고 창에 `show:false`, `offscreen:true`, `backgroundThrottling:false`를 적용했다. production controller·SDK·engine·모델·IPC와 native 변환을 사용했다. sandbox·context isolation·web security와 Node isolation을 유지하며 Playwright로 정상 입력·모델 선택·시작·재개를 조작했다. 원고·심사·모델 응답은 주입하지 않았다. PowerShell에서 숨김 helper를 시작할 때는 `-WindowStyle Hidden`을 사용한다.
 
-## 현재 소스와 포함 빌드
+## 새 원고 결과와 실제 외부 보완
 
-resume-1은 소스/runtime 결속 (`output/playwright/two-magazine-fresh-20261011/resume-1/source-runtime-build-proof.json`)에 기록한 빌드로 실행했고 정상 종료했다. 종료 시 빌드 SHA도 불변이다. 아래 SHA는 이 실제 연구 검증 시점의 스냅샷이며 이후 소스 정리·새 빌드의 최종 SHA를 나타내지 않는다.
+첫 분석 응답은 `INVALID_ARGUMENT: Analysis observation evidence must bind unique existing identifiers`로 수락되지 않았다. 첫 정상 UI 재개는 같은 완료 응답을 재검증해 추가 모델 호출이나 횟수 증가 없이 정상 종료했다. 원인은 분석 스키마 계층과 근거 ID 계약의 불일치였다. 스키마를 수정하고 원 응답·원 자료·횟수를 보존한 채 엄격한 native 검증을 통과해야 하는 보정 요청을 한 번 허용했다. 보정도 실제 분석 요청 횟수에 포함하며 반복 보정이나 검증 조건 완화는 하지 않는다.
 
-| 항목 | 값 |
+수정된 실제 패키지의 같은 연구에서 정상 **IEEE 매체별 미완료 투고본 재개**를 한 번 눌렀다. 2026-10-14 15:03:34 UTC / 10-15 00:03:34 KST 최종 생성 스냅샷은 `busy=false`, `error=null`, `phase=idle`, `pipeline=paused`다. 분석 보정 요청을 수락했고 두 매체 원고·독립 평가·실제 출력이 완료됐다.
+
+| 실제 누적 요청/산출물 | S&P 보완 완료 시점 |
 | --- | --- |
-| runtime inventory SHA256 | `820913ed3eb8c8fa08f513f2fe116f7444aec8648d7d8cc9ac11609543164c42` |
-| `desktop/dist/app.js` SHA256 | `1d742c5dcb6c3aed163d8a192dac7e9a0a2114d615373e9a81b8b2344fdc04cb` |
-| runtime 파일/bytes | 2,230 / 474,575,535 |
-| 실제 Windows host probe | `actualHostTested=true` |
-| builder receipt | `.paper-factory/standalone-runtime-builder/build-win32-x64-7e15cf1d-96e7-45ad-ad55-e48dd2b97f11/build-receipt.json` |
+| 설계 / 문헌 | 1 / 1 |
+| 공통 분석 요청 / 채택된 분석 | 2 / 1 |
+| 공통 원고 / 코드 / 실제 실행 | 0 / 0 / 0 |
+| Software 집필 / 독립 심사 / 채택 원고 | 1 / 1 / 1 |
+| S&P 집필 / 독립 심사 / 채택 원고 | 2 / 2 / 2 |
+| 실제 매체별 Word/PDF/Markdown | 생성·정상 저장 완료 |
+| 앱 scientific/content ready | 두 매체 모두 true / true |
+| 별도 내용·확인한 수치·전페이지 검수 | 두 매체 통과 |
+| 최종 저자·권리·제출 승인 | 미확인, 실제 투고 없음 |
 
-IPC·workflow·models·catalog·repository paper/portfolio/supplement의 소스 SHA와 포함 파일 SHA를 대조했다. builder receipt 자체의 `applicationLaunchTested=false`는 별도 실제 Electron 실행 증거로 보완된다. 이 개발 실행을 새로운 NSIS 설치본 배포나 macOS 실행으로 주장하지 않는다.
+두 새 심사의 7개 기준·비교·기여는 모두 통과했고 차단 문제·후속 작업은 비어 있으며 native `allContentReady=true`다. Word·PDF·Markdown 6개를 정상 저장 버튼으로 내보내 bytes/SHA를 대조하고 앱 정상 종료 exit 0을 확인했다. 재개 전 원 파일의 변경·누락은 0이며 `resume-2/immutable-research-final.json`에 기록했다. 첫 실패와 분석 요청 1회를 삭제하거나 승인으로 바꾸지 않았다. 과거 삭제한 연구의 원고·심사·페이지 검수·저자 ZIP을 이번 결과로 사용하지 않는다.
 
-앱을 정상 종료하고 소스 변경을 마친 뒤에만 `desktop`에서 다음 작업을 한다. 빌드 도중 실제 연구를 실행하지 않는다.
+정상 후보 저자 정보 출력 `author-2/proof.json`은 Word·PDF·Markdown 6개 저장·정상 종료 exit 0과 추가 모델 호출 0을 확인한다. 최종 저자·권리·선언 승인은 추정하지 않는다.
 
-```powershell
-npm run build:runtime -- --platform win32 --arch x64
-npm run build
-```
+Software 제목은 *Authorize the Operation, Not Just the Renderer: Maintaining Native Bridges in Frontron*이다. 별도 내용 감사 `quality-software-audit.json`과 `.md`는 단일 사례의 근거·비교·실무 교훈과 확인한 수치 형식을 통과시켜 저자 최종 검토와 투고 결정을 권한다. 실제 Microsoft Word의 3,199단어에 표 1개 allowance 250을 더한 3,449단어는 한도 안이다. Word 10쪽·native PDF 8쪽을 각각 전페이지 시각 검수했고 잘림·겹침·누락 글리프·표 문제는 없다. 별도 숨김 Word read-only COM으로 렌더링하고 원 DOCX를 저장·변경하지 않았다. canonical renderer의 LibreOffice 미설치 실패도 기록하고 실제 Word 대안 검수를 사용했다. 증거는 `output/word-qa/frontron-fresh-20261014/author-2/word-render-proof.json`과 `visual-qa-report.json`이다. `output/pdf/frontron-fresh-20261014/IEEE-Software.docx`, `.pdf`, `.md`는 앱 native bytes와 일치한다.
 
-필요한 집중 테스트를 먼저 수행하고 builder receipt·runtime inventory·현재 native 소스/포함 bytes·생성된 app hash를 확인한다. 검증의 일회용 marker는 실행 증빙에 보존했다. marker를 지워 새 요청을 만들지 않는다. 새 실행에서는 고유 검증 디렉터리를 만들고 정상 UI의 같은 연구 재개 동작을 사용한다.
+S&P 제목은 *What a Compromised Renderer Can Still Ask For: Authorizing Native Operations in Electron Bridges*이다. 첫 원고의 앱 내용 평가는 통과했고 별도 내용 감사에서도 실질적인 근거 없는 보안 주장은 발견하지 않았다. 그러나 실제 저자 Word는 4,455단어·표 1개 allowance 250으로 4,705단어다. 일반 최소 4,900단어보다 195단어 부족해 최종 형식 검수에서 차단됐다. 앱의 내용 PASS를 최종 제출 준비 완료로 해석하지 않는다.
 
-## 첫 실행 결과와 수정한 흐름
+현재 공식 CFP [Real-world Security Impact](https://www.computer.org/digital-library/magazines/sp/cfp-real-world-security-impact)와 [One Decade of GDPR Challenges](https://www.computer.org/digital-library/magazines/sp/cfp-one-decade-gdpr-challenges)가 일반 Author Information을 명시적으로 재명시한 규정을 읽어 확인했다. 요구는 본문·초록·키워드·참고문헌·약력·표 텍스트를 포함한 4,900–7,200단어에 시각 자료당 250단어를 더하는 방식, 초록 최대 50단어·참고문헌 최대 15개다. 이번에 일반 Author Information 본문을 직접 다시 읽었다고 주장하지 않으며 특정 특별호를 투고처로 선택하지 않았다. 확인 기록은 `official-sp-numeric-verification.json`이다. 새 연구의 안내에는 확인한 일반 수치를 반영하지만 기존 연구의 동결 catalog는 바꾸지 않았다.
 
-첫 실행 최종 상태 (`output/playwright/two-magazine-fresh-20261011/final-summary.json`), 정상 종료/저장 횟수 (`output/playwright/two-magazine-fresh-20261011/normal-close-and-stored-counts.json`), 실제 요청 원장 (`output/playwright/two-magazine-fresh-20261011/fresh-model-request-journal.json`)을 기준으로 기록한다.
+이 실제 분량 결함과 필요한 실질 보완을 `sp-external-feedback.txt`에 기록해 정상 앱의 외부 검수 보완 UI에 한 번 입력했다. 보완은 현재 S&P 원고·원 심사에 결속하고 같은 채택 분석과 원자료를 사용하며 기존 긍정 심사·원고·실패·횟수와 Software 1/1을 보존했다. 제안된 정책 사례·권한 만료·회수·비용·잔여 위험을 근거 범위 안에서 보완하는 새 집필·독립 평가를 각각 한 번 완료했다. 실험이나 구현 효과를 만들어 분량을 늘리지 않았다.
 
-- 설계 1·문헌 1·분석 요청 2·범용 원고 0·코드/실험 0이다. 채택된 분석은 1개다. 분석 2의 완료 응답은 존재하지만 observation evidence ID가 잘못돼 채택되지 않았다. 그 응답과 사용 횟수는 유지한다.
-- Software와 S&P 각각 실제 원고 1·독립 심사 1·Word/PDF 출력이 있다. 첫 PDF는 각각 8·11페이지이며 품질 감사 (`output/playwright/two-magazine-fresh-20261011/quality-audit.md`)에 내용을 기록했다. 최신 수정본의 전페이지 검수 완료로 소급하지 않는다.
-- Software는 완전한 외부 비교 문서와 standing authority의 전체 정책 조건을 요구했다. S&P는 개별 과학/내용 기준이 통과했으나 선택적 조언을 issues에 넣어 준비도는 false다. 원 심사 bytes·보수적 판정은 그대로 유지한다.
-- 수집된 PDF 두 개는 body range가 검증되지 않았으므로 모델에 검증된 완전 본문으로 전달하지 않았다. metadata/full_text 표기만으로 실제 본문 읽기를 주장하지 않는다.
+2026-10-14 15:43:32 UTC / 10-15 00:43:32 KST `sp-revision-1/proof.json`은 status passed·정상 종료 exit 0, 모든 이전 과학 자료·Software bytes·후보 저자 정보의 불변을 확인한다. 새 실제 모델 요청은 집필 `130e33f0-879f-4ee4-83dc-ff3f3ae078b8`과 독립 심사 `264b4046-25e3-46eb-ba7a-5f573cec67ca` 두 개다. 전체 연구는 journal의 별칭·상태 중복을 제외한 실제 UUID 12개이며, 후보 저자 출력 모델 호출은 0이다. 누적 S&P 집필·심사·채택 원고는 2/2/2, Software는 1/1/1, 공통 분석 요청은 2로 유지됐다. 새 심사의 7개 기준·비교·기여가 통과하고 차단 문제·후속 작업은 없다.
 
-보완 구현은 설계 후 비교 문서를 먼저 수집하고, 이후 실제 부정 심사에 요청이 있으면 같은 분석·원고·심사 SHA에 결속한 문서 수집 한 번을 허용한다. 동일 기준의 실패·중단도 소비하며 URL 재수집·예산 초기화는 거부한다. 새 완전 문서는 공통 분석 1을 유지한 원고 수정과 새 독립 심사에 사용한다. 과거 수정 계획의 요구로 현재 통과한 원고를 계속 재분석하지 않는다. `issues`는 차단 결함만, 비차단 조언은 criterion reason에 쓰도록 계약을 명확히 했다.
+기존 정상 UI에서 저장한 후보 저자 정보를 재사용해 수정 원고의 Word·PDF·Markdown 3개를 정상 저장했다. 실제 Microsoft Word 16의 5,192단어에 표 1개 allowance 250을 더한 5,442단어는 4,900–7,200 범위 안이다. Word 14쪽·native PDF 12쪽을 각각 모든 페이지 시각 검수했고 잘림·겹침·누락 글리프·표·캡션 문제는 없다. read-only 렌더링 전후 원 DOCX와 native PDF SHA는 불변이다. Software까지 총 44쪽을 확인했다. S&P의 분량·렌더·전페이지 증거는 `output/word-qa/frontron-fresh-20261014/sp-revision-1/word-render-proof.json`과 `visual-qa-report.json`이다.
 
-이 변경의 집중 native 검증 21개와 shared/controller의 집중 검사·typecheck가 통과했다. 합성 테스트의 원고·심사·출력은 실제 연구 수에 합산하지 않는다.
+별도 수정본 내용 감사 `quality-sp-revision-audit.json`과 `.md`는 차단 결함·근거 없는 주장 0, 소스 근거 13개·문서 근거 7개 일치, 초록 50단어·참고문헌 8개를 확인했다. 내용과 확인한 수치 기준에서 저자 최종 검토와 투고 검토를 권한다. 두 원고 모두 이 수준에 도달했으며 학술지 채택은 예측하지 않는다. 후보 저자 정보는 정상 앱 출력에 반영됐지만 신원·저자 해석·권리·지원/이해관계·최종 제출 승인과 필요한 약력·사진은 남아 있다. 두 원고는 같은 연구의 대안 투고본으로 두 곳에 동시에 독립 논문으로 제출하지 않는다.
 
-## resume-1 최종 결과
+## 최종 전달 묶음
 
-2026-10-11 13:50:24 UTC 정상 종료했다. 최종 상태 (`output/playwright/two-magazine-fresh-20261011/resume-1/final-summary.json`), 정상 종료 (`output/playwright/two-magazine-fresh-20261011/resume-1/normal-close.json`), 횟수·원 심사 보존 (`output/playwright/two-magazine-fresh-20261011/resume-1/final-counts-and-first-drafts-proof.json`), 282개 원 파일 보존 (`output/playwright/two-magazine-fresh-20261011/resume-1/immutable-research-final.json`)이 실제 증거다. 기존 파일의 SHA/크기 변경 0, 새 파일 59, 같은 연구 ID·모델·계획·원자료 유지, 추가 연구·횟수 초기화·프로젝트 실행 0이다.
+전달 루트는 `output/pdf/frontron-fresh-20261014/`다. 두 매체의 Word·PDF·Markdown 6개와 최종 native 독립 심사 2개는 bytes 그대로 전달하고 최종 manifest의 SHA와 대조했다. 정상 저장 증거는 `author-2/proof.json`과 `sp-revision-1/proof.json`, S&P 전달 복사는 `native-delivery-copy-proof.json`이다. 별도 내용 감사·QA·공식 수치 확인과 원고를 구분했다. 인증·SDK 원 응답은 묶음에 포함하지 않았다.
 
-| 실제 최신 산출물 | IEEE Software | IEEE Security & Privacy |
-| --- | --- | --- |
-| 집필 / 독립 평가 | 2 / 2 | 2 / 2 |
-| native scientific/content ready | true / true | true / true |
-| 7개 기준 / 비교·기여 | 모두 통과 | 모두 통과 |
-| 차단 문제 / 다음 작업 | 없음 / 없음 | 없음 / 없음 |
-| 실제 Word·PDF | 생성, 오류 없음 | 생성, 오류 없음 |
-| PDF | 8쪽 | 11쪽 |
-| 초록 / 참고문헌 | 133단어 / 8개 | 50단어 / 8개 |
+`Frontron-IEEE-manuscripts.zip`은 259,316 bytes, 16개 member의 모든 해시를 대조했으며 `bundle-verification.json` status passed다. ZIP SHA256은 `3468916fe6b0568d11646684220540ea4bbe0c31e454505296bc545ed4301fe4`, `manifest.json` SHA256은 `af75d68e68db703ebc135e824f77e14a42e99f47663ebf8fc25b9766e728db42`다. 이 ZIP은 전달 원고 묶음이며 앱 계정·전체 연구 저장소의 복원 패키지가 아니다.
 
-문서 수집 1회에서 공식 Electron security·context isolation·IPC 본문 3개, 총 63,615자를 HTTP200으로 실제 확보했다. 완전 본문·SHA·literal 인용을 수정 원고에 연결했다. 공통 분석 요청 2·채택된 분석 1을 그대로 유지하며 두 매체의 비교·정책 설명만 수정했다. 새 심사는 문서 admission 자체와 실제 분석의 타당성을 구분해 판정했다.
+앱 흐름은 저장소 확보→범위·기여 설계→적합한 매체 선정→문헌·완전한 비교 문서 확보→공통 정적 분석→매체별 원고→Word/PDF와 형식 선검사→독립 내용 심사→실제 지적에 따른 보완이다. 내용 PASS 이후에도 실제 출력의 외부 검수 지적을 정상 UI로 입력해 해당 매체의 원고·독립 심사를 추가할 수 있다. 원 심사와 이력을 고치지 않고 남은 매체별 예산을 사용한다. 프로젝트 코드 실행은 원고 생성의 필수 조건이 아니며 실행·효과·성능 근거를 꾸며내지 않는다. 완료 응답 수와 검증을 통과한 분석·원고 수를 구분한다.
 
-독립 품질 감사 (`output/playwright/two-magazine-fresh-20261011/resume-1/quality-audit.md`)는 두 실제 원고 모두 내용상 투고 검토를 권할 수준으로 판단한다. PDF 검수 (`output/playwright/two-magazine-fresh-20261011/resume-1/pdf-qa`)는 총 19쪽을 렌더링해 전체 페이지와 표를 확인했으며 눈에 띄는 잘림·겹침·누락 글리프가 없다. Word는 OOXML 본문 보존과 실제 파일 생성을 확인했으며 Word의 최종 시각 검수는 미완료다.
+## 현재 미배포 로컬 패키지
 
-Software의 확인한 수치 규정을 충족한다. S&P는 별도 숨김 Playwright에서 [일반 Author Information](https://www.computer.org/csdl/magazine/sp/write-for-us/14680?title=Author%20Information&periodical=IEEE%20Security%20%26%20Privacy)을 직접 읽었다. 전체 본문·초록·키워드·참고문헌·소개·표 4,900–7,200단어, 시각 자료당 250단어, 초록 50단어, 참고문헌 15개를 확인했다. 현재 Word 약 5,004단어와 표 allowance를 보수적으로 더한 약 5,254단어·초록50·참고8이 해당 수치 안이다. 브라우저 snapshot (`output/playwright/two-magazine-fresh-20261011/resume-1/sp-author-information-browser-snapshot.txt`)이 별도 검증이며, 연구 시작 시 동결한 catalog의 `checked_scope`를 소급 수정하지 않았다.
+공개 릴리스를 덮어쓰지 않고 분석 계약·외부 검수 보완 흐름과 확인한 새 연구 안내가 포함된 Windows 패키지를 `desktop/release/frontron-final-20261015/win-unpacked/`에 만들었다. 버전 표기는 0.14.20이지만 공개 설치본과 bytes가 다르며 이 수정은 아직 배포하지 않았다. 현재 결속 기록은 `output/playwright/frontron-fresh-20261014/final-build-proof.json`이다. 첫 원고 재개에 사용한 앞선 로컬 패키지 증거 `repair-build-proof.json`도 보존한다.
 
-전달 파일 (`output/pdf/frontron-two-ieee-20261011/manifest.json`)은 앱의 최신 Word·PDF·Markdown·원 심사를 bytes 그대로 복사해 SHA를 대조했다. manifest SHA256은 `c4b881e272401f5af15e39886e9316be5457bede110b61d3ef5c04ab6e8013dc`다. 실제 저자 정보·승인·권리와 제출 선언은 미입력이며 실제 투고하지 않았다. 두 버전은 같은 사례의 대안 투고본이다.
+| 로컬 패키지 결속 항목 | SHA256 |
+| --- | --- |
+| executable | `19a317399d676183e04f52a4cecd57f19c0f39343aac017dcf3bb9dfe8b62b84` |
+| ASAR | `3b0635b45eff2e6ad2b14da577b2b08f9d318049976f2cb4f29946f59d206031` |
+| runtime inventory | `0f8c9464d98d8ccdd316eeff550ee106aeb17dc52b43a5f98c1e08a894cf2747` |
+| production 입력 114개 | `20c3969759b922e266f870d863ff657ac0f274e8383e68fada22b61c709ceb2d` |
 
-수정 후 native 집중 21개, shared/portfolio/recovery 148개, research/routing 167개, 문서 selector 6개가 통과했다. 앱 빌드·타입 검사·Windows runtime host probe·diff 검사를 완료했다. 설치 파일을 새로 배포하지 않았다. 일회용 launcher와 브라우저·테스트 임시 파일은 Git에서 제외했다. 2026-10-12 이 로컬 파일의 삭제 명령이 자동 검토에서 `blocked by policy`로 거절돼 남아 있으며 실제 앱·연구·인증에 사용하지 않는다.
+runtime 2,230개 파일·474,612,048 bytes의 전체 SHA와 소스·데이터·폰트 결속 38개가 일치한다. 이 패키지로 S&P 외부 피드백 보완·정상 저장·정상 종료를 완료했고 실행 전후 build 결속은 불변이다. 첫 로컬 수정 패키지의 재개와 아래 공개 배포본의 소프트웨어 검증을 구분한다.
 
-활성 앱 동안 소스/runtime를 수정하거나 live engine을 별도 CLI로 열지 않는다. 현재 연구 실패를 숨기려고 새 연구·횟수 초기화·Madi 재실행을 하지 않는다. 다음 PC에서는 계정 연결과 절대 경로를 다시 확인한다.
+## 보존한 공개 0.14.20 Windows 배포본
 
-## 2026-10-12 푸시 전 정리와 보존 확인
+이번 초기화는 소프트웨어 배포·합성 검증 자료를 삭제하지 않았다. 최종 NSIS와 포함 파일의 무결성 기록은 `output/playwright/package-smoke-20261013-8e4bfa7/final-ready/`에 남아 있다.
 
-현재 두 IEEE 매체에 맞춰 문서와 검사 잔재를 정리했다. 폐기된 9곳 계획·이전 Software 단독 설계·이미 실행한 특정 PC용 초기화 스크립트는 제거했다. 개인 JIZURA 캐시에 의존하던 optional 검사는 제거하고 재현 가능한 합성 Chromium 검사를 유지했다. 브라우저 캡처·일회용 launcher·임시 검사 파일은 Git에서 제외했다. 실제 원고·연구·인증 파일은 커밋에 포함하지 않는다.
+| 패키지 항목 | 값 |
+| --- | --- |
+| NSIS | `desktop/release/final-ready-0.14.20-20261014/Paper Factory Setup 0.14.20.exe` |
+| NSIS 크기 / SHA256 | 213,342,831 bytes / `968f7bd258858eccb5ecf45675099c3caa5851373fec2f9487fe2ec78c9c523e` |
+| ASAR SHA256 | `518fc837a3c2e4f2226204f0a2ecab03bf6d5d2f6e631da6069d4da2e838b3bb` |
+| runtime inventory SHA256 | `f5a2d7cf7fcbef5949ad613b7f1bc073bf4ca0becd25f279c5e85d40914ada77` |
+| 최종 production 입력 114개 SHA256 | `f3e9ddca05ad03edf1748a263a470682907f5c927089cbc84a5d45f4fb259183` |
 
-앱이나 엔진을 실행하지 않고 기존 최종 증빙과 실제 파일을 읽기·해시로 대조했다. 같은 연구의 기존 282개 파일은 SHA·크기 변경과 누락 0, 최종 등록 산출물 178개는 기록 차이와 실제 bytes 변경·누락 0, 추가 파일은 기존 증빙과 같은 59개다. 설계 1·문헌 1·분석 요청 2·범용 원고 0·코드/실험 0, 매체별 집필 2·심사 2와 내용 준비도 true를 유지한다. 현재 `paused`, `cleanupRequired=false`이며 새 연구나 모델 요청을 만들지 않았다.
+NSIS 압축 무결성과 핵심 payload 4개, ASAR 7,668 members, runtime 2,230개 파일·474,589,236 bytes의 전체 SHA, Python 소스 33개와 포함 bytes의 일치를 확인했다. 포함 Python·Node·Pandoc·Typst·폰트로 동작하며 시스템 Docker·TeX 설치를 요구하지 않는다. Setup과 unpacked 앱은 `NotSigned`다. 실제 시스템 설치·제거와 macOS 실행은 검증하지 않았다.
 
-정리 후 앱 빌드·타입 검사, desktop Node 425개, SDK 48개(운영체제 전용 1개 제외), 숨김 Chromium 통합 29개가 통과했다. Playwright Electron은 최초 12개 통과·1개 실패였고, 변경된 preload API 목록을 반영하지 않은 기대값을 수정한 뒤 해당 검사가 통과해 13개 모두 검증했다. 이 회귀 검사는 합성 자료를 사용하며 실제 계정 연결·모델 호출·연구 재개를 수행하지 않았다.
+짧은 자체 데이터 경로 `tmp/ps14-2`에서 숨김 packaged 앱의 전체 runtime/repository analysis ready, 보안 설정, 빈 계정·모델·연구와 정상 종료 exit 0을 확인했다. 같은 binary/runtime의 긴 데이터 경로 검사에서 발생한 GPU cache 오류·Chromium 종료 시간 초과는 원 실패로 보존했고 짧은 경로의 통과로 덮어쓰지 않았다. 실제 패키지의 `app.asar` 물리 파일 SHA는 내장 `original-fs`로, ASAR 내부 runtime binding JSON은 기존 Electron 가상 fs로 확인한다.
 
-Python 비네트워크 회귀 검사는 오래 걸리는 파일 보존 검증을 병렬로 마무리하기 위해 완료한 1,823개와 전체 선택 목록 3,115개를 기록한 뒤 남은 파일을 세 그룹으로 나눴다. 최초 실패 25개 중 24개는 변경된 스키마·문헌 수집 인자·공개 HTTPS URL 허용·버전 지정 계산·최신 ledger 별칭을 반영하지 않은 테스트였다. 함수 인자는 실제 구현에 전달하고, 잘못된 HTTP URL의 호출 전 거절과 이전 파일·이력의 bytes 보존 검사는 유지했다. 변경된 검사와 관련 파일을 재검증했고 원 실패 보고는 삭제하지 않았다.
+검증한 설치 파일·blockmap·공개 checksum manifest는 [0.14.20 릴리스](https://github.com/andongmin94/paper-factory/releases/tag/v0.14.20)에 게시했다. 공개 태그 commit은 `aa75606c01772d8df45a48d90753bbaabc20f455`이며 익명 다운로드와 세 asset digest가 일치한다. 공개 checksum manifest SHA256은 `4ab81c9fba39b37553a0dc9707d5d219c157ec29d6aafcc18c7608c5840d6711`이다. 공개 확인 기록은 `output/releases/0.14.20/final-public-verification.json`이다. 연구 원고나 인증은 배포하지 않았다.
 
-Windows owned-process 검사 1개는 최초 실행에서 실패했고, 수정 없이 단독 재검사와 파일 전체 61개가 통과했다. 원 worker frame은 성공, owned-worker 목록은 비어 있었으나 빈 profile 디렉터리가 남았다. 당시 실패 사유 receipt가 없어 원인을 단정하지 않으며 원 frame·목록·해시 증거를 보존한다. 병렬 보고 도구의 상대 경로 때문에 workspace 검사 도중 별도 INTERNALERROR가 발생한 것은 절대 경로로 수정하고 workspace 파일 전체 38개 통과로 보완했다.
+## 소프트웨어 회귀 검증 범위
 
-최종 선택 목록과 완료 보고·분할 검사·정정 재검사를 합산한 결과는 3,113 통과·macOS 전용 2 제외이며 누락·예상 밖 검사·미해결 실패는 모두 0이다. workflow는 최초 288개 완료 결과와 변경된 4개 집중 검사의 통과를 사용했다. 불필요한 전체 파일 반복은 중단하고 그중 완료된 209개만 반영했다. 최종 합산은 로컬 `tmp/cleanup-native-final-coverage-20261012.json`, 검사별 이력은 `tmp/cleanup-native-final-node-outcomes-20261012.json`, 전체 파일·집중 검사 receipt는 `tmp/cleanup-native-repaired-files-pass-receipts-20261012.json`에 보존하며 Git에는 포함하지 않는다.
+현재 외부 피드백 구현의 desktop 집중 138개, native 피드백 15개와 기존 portfolio·분석 보정 49개가 통과했다. 실제 수정 패키지와 소스의 전체 해시 결속을 확인한 뒤 앱 보완 실행을 시작했다. 아래 이전 배포본의 회귀 수를 이번 변경을 다시 검사한 수로 합산하지 않는다.
 
-## 2026-10-14 실제 패키지 저자 출력과 배포 검증
+2026-10-12 정리 후 타입·빌드, desktop Node 425개, SDK 48개(운영체제 전용 1개 제외), 숨김 Chromium 29개, Electron 13개가 통과했다. Python 선택 목록의 완료 보고·분할 검사·정정 재검사를 합산한 결과는 3,113 통과·macOS 전용 2 제외이며 누락·미해결 실패는 0이다. 초기 실패와 정정 이력은 로컬 `tmp/cleanup-native-final-coverage-20261012.json`, `tmp/cleanup-native-final-node-outcomes-20261012.json`, `tmp/cleanup-native-repaired-files-pass-receipts-20261012.json`에 유지한다. 합성 자료의 검사 수를 실제 연구·심사·실험 횟수에 합산하지 않는다.
 
-0.14.20 Windows x64 NSIS를 생성했다. 최신 파일은 `desktop/release/final-ready-0.14.20-20261014/Paper Factory Setup 0.14.20.exe`, 213,342,831 bytes, SHA256 `968f7bd258858eccb5ecf45675099c3caa5851373fec2f9487fe2ec78c9c523e`다. Setup과 unpacked 앱은 `NotSigned`이며 실제 시스템 설치·제거 및 macOS 실행은 이번 검증에 포함하지 않는다.
+공개 배포본의 저자 출력 관련 native 41개, author/shared 집중 61개, Chromium contract 22개와 TypeScript·빌드도 통과했다. desktop Node 전체 434개는 그 이전 수정 단계에서 통과했고 당시 마지막 한정 수정은 위 집중 검사로 검증했다. 합성 Electron 두 시나리오는 최초 부하 시간 초과 후 단독 재검사에서 통과했으며 원 로그를 유지했다. 이 결과는 소프트웨어 검사이고 이번 분석 계약 수정이나 새 원고의 품질을 직접 증명하지 않는다.
 
-NSIS 압축 무결성과 핵심 payload 4개의 SHA, ASAR 7,668 members, runtime 2,230개 파일의 전체 SHA, 현재 Python 소스 33개와 포함 bytes의 일치를 확인했다. runtime inventory SHA는 `f5a2d7cf7fcbef5949ad613b7f1bc073bf4ca0becd25f279c5e85d40914ada77`, ASAR SHA는 `518fc837a3c2e4f2226204f0a2ecab03bf6d5d2f6e631da6069d4da2e838b3bb`다. 최종 production 114개 파일의 결속 SHA는 `f3e9ddca05ad03edf1748a263a470682907f5c927089cbc84a5d45f4fb259183`이며 새 저자 출력 helper도 포함한다. 기존 release 7개 파일과 npm Electron 44.5.1 원본 73개 파일의 변경은 0이다.
-
-패키지 검증 기록은 `output/playwright/package-smoke-20261013-8e4bfa7/final-ready/`다. 짧은 자체 검증 데이터 경로 `tmp/ps14-2`에서 숨김/offscreen packaged 앱의 전체 runtime ready, repository analysis ready, sandbox·context isolation·web security와 Node isolation, 빈 계정·모델·연구, 정상 종료 exit 0을 확인했다. NSIS payload와 같은 unpacked 앱을 실행했으며 계정·연구·모델을 주입하지 않았다. 긴 검증 데이터 경로의 GPU cache 오류·Chromium 종료 시간 초과는 별도 원 실패로 보존했다. 같은 binary/runtime에서 짧은 경로로 검사했을 때 9.38초에 전체 검사·정상 종료가 통과했으며 긴 경로의 실패를 성공으로 바꾸지 않았다.
-
-실제 패키지의 `app.asar`는 Electron 가상 fs에서 디렉터리로 보이므로 Chromium 결속에서만 내장 `original-fs`로 물리 파일·canonical path·전체 SHA를 검증한다. ASAR 내부 runtime binding JSON 읽기는 기존 가상 fs를 유지한다. 실제 저자 선택·출력 영수증이 공개 근거 목록에 추가되는 경우 정확한 ID·SHA·크기와 순서를 확인하고, 조회에서만 포함되는 `source_context`의 누락은 동결 context artifact가 불변일 때만 허용한다. 제공된 변경값·null·기존 원문/근거 변경은 계속 거부한다.
-
-저자 출력 native 관련 검사는 서로 다른 41개가 통과했고, 현재 소스의 author/shared 집중 검사 61개와 Chromium contract 22개, TypeScript와 빌드가 통과했다. 전체 desktop Node 434개는 그 이전 수정 단계에서 통과했으며 마지막 한정 수정은 위 집중 검사로 검증했다. 합성 Electron 두 관련 시나리오는 최초 부하 시간 초과 후 단독 재검사에서 모두 통과했고 원 로그를 유지했다.
-
-실제 연구 검증은 `output/submission-preflight/frontron-20261014/app/packaged-author-final-6/proof.json`이다. 패키지 entry 실행 전에 데이터 경로를 기존 Frontron 저장소로 매핑하고 창만 숨겼다. production controller·SDK·engine·native 변환과 저장을 사용했으며 원고·모델 응답을 주입하지 않았다. 공식 자체 계정의 연결·공유 상태를 확인하고 제공된 ORCID와 연결 계정에 근거한 후보 정보를 정상 저자 입력 UI에서 보존했다. 최종 신원·저자 승인·권리·제출 선언은 추정하지 않는다.
-
-두 매체의 현재 저자 Word·PDF·Markdown 6개를 실제 저장 버튼으로 내보내 해시·크기를 대조하고 정상 종료 exit 0을 확인했다. Software의 완료 저자 출력 1회를 재사용하고 S&P만 새 저자 출력 1회를 수행했다. Markdown은 파일 선택이 아닌 원고·그림 저장 폴더 선택 동작을 그대로 사용했다. 실패한 일회용 검증과 먼저 저장된 파일은 삭제하거나 덮어쓰지 않았다.
-
-`output/submission-preflight/frontron-20261014/app/after.json`은 기존 341개 파일·178개 등록 산출물의 SHA·크기·기록 변경/누락 0, 새 저자 관련 파일 22개를 확인한다. 같은 연구 ID·계획·문헌·분석 요청 2·채택 분석 1·매체별 집필 2·심사 2·내용 준비도 true를 유지했다. 새 연구·집필·심사·실험·모델 요청과 횟수 초기화는 0이다.
-
-최신 저자본의 Word는 별도 숨김 Microsoft Word read-only COM 인스턴스로 PDF를 렌더링했고, 앱 native PDF도 별도로 PNG를 생성해 총 44페이지를 확인했다. Software Word 10쪽·native PDF 8쪽, S&P Word 14쪽·native PDF 12쪽이다. 네 가지 저자 문자열이 출력에 존재하고, 표·글리프·잘림·겹침·푸터 검수와 두 기존 본문·참고문헌의 bytes/SHA 대조가 통과했다. Word 열기로 원 DOCX bytes를 저장·변경하지 않았다. canonical renderer의 LibreOffice 미설치 실패와 실제 Word 대안 검수 기록을 함께 보존한다. S&P 첫 PDF 푸터 간격의 의심은 실제 좌표의 37.350526 pt 빈 간격과 확대 확인으로 오인임을 정정했으며 재출력하거나 본문을 고치지 않았다.
-
-검수 기록은 `output/word-qa/frontron-two-ieee-author-20261014/final-qa-summary.json`과 `.md`다. 최종 출력·원 심사와 커버레터·후보 약력·미서명 제출 선언 검토서 및 해시 결속은 `output/submission-preflight/frontron-20261014/final/manifest.json`에 담는다. 저자 정보는 후보이며 최종 승인·기관/권리·지원과 이해관계·관련 공개·비동시투고 선언은 확인되지 않았고, Software 사진·관심사와 최종 약력 승인은 남아 있다. 외부 투고·서명·메일 발송은 하지 않았다.
-
-검증한 설치 파일·blockmap·공개 checksum manifest만 [0.14.20 릴리스](https://github.com/andongmin94/paper-factory/releases/tag/v0.14.20)에 게시한다. 원고·개인정보·실행 증빙·인증·모델 요청은 커밋하거나 릴리스에 포함하지 않는다.
-
-로컬 전달 묶음은 `output/submission-preflight/frontron-20261014/Frontron-IEEE-final-20261014.zip`이며 17개 파일의 CRC와 모든 member bytes를 확인했다. ZIP SHA256은 `00a0db9f61d624984ec3b21dec17646a97e33ea0e7d0b1c8fcc2dec4848571b0`, 원고·선언·검수 manifest SHA256은 `490c7c4a9dae08befdc32889ff9c30fa746f3b0b22c3da782e981b9d690ef3b0`이다. 이 묶음은 원고 전달본이며 앱 인증이나 전체 연구 저장소의 복원 패키지가 아니다.
+두 실제 원고의 생성·평가·별도 내용/형식/전페이지 검수와 전달 묶음은 완료했다. 다음 작업은 저자의 최종 신원·권리·해석·선언·약력/사진 확인과 한 투고처 선택이며 실제 제출 승인은 아직 없다. 새로운 실제 지적 없이 연구·집필·심사를 재실행하거나 횟수를 초기화하지 않는다. 추가 코드 수정이 필요하면 실제 앱 정상 종료 후 집중 검사와 Windows runtime/desktop 빌드를 수행하고 현재 소스·포함 bytes·패키지 결속을 확인한 뒤 같은 연구의 정상 UI를 사용한다.
