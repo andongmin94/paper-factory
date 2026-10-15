@@ -6,7 +6,7 @@ import re
 from collections.abc import Mapping
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class AuthorProfile(BaseModel):
@@ -24,6 +24,7 @@ class AuthorProfile(BaseModel):
     scholar_id: str = ""
     github: str = ""
     homepage: str = ""
+    biography: str = Field(default="", max_length=4000)
 
     @field_validator("*", mode="before")
     @classmethod

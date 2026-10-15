@@ -3,7 +3,7 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from paper_factory.author import AuthorProfile, load_author
+from paper_factory.author import AuthorProfile, load_author, submission_author_status
 
 
 def test_author_precedence_and_empty_value_fallback():
@@ -39,6 +39,7 @@ def test_supports_every_documented_individual_variable():
         "affiliation": "Example University", "department": "Computing",
         "city": "London", "country": "UK", "scholar_id": "example-id",
         "github": "https://github.com/example", "homepage": "https://example.org/ada",
+        "biography": "Ada Lovelace is a researcher at Example University.",
     }
     profile = load_author(environ={f"PF_AUTHOR_{field.upper()}": value for field, value in expected.items()}, require=True)
     assert profile.model_dump() == expected
@@ -160,7 +161,30 @@ def test_default_environment_reads_exported_author(monkeypatch):
     assert load_author().display_name == "Exported Author"
 
 
-@pytest.mark.parametrize("field", ["display_name", "affiliation", "email"])
+@pytest.mark.parametrize("field", ["display_name", "affiliation", "email", "biography"])
 def test_author_metadata_rejects_control_characters(field):
     with pytest.raises(ValidationError, match="control characters"):
         AuthorProfile(**{field: "Example\x00Author"})
+
+
+def test_optional_biography_preserves_existing_canonical_metadata():
+    original = {"display_name": "Example Author", "email": "author@example.org", "affiliation": "Example University"}
+    profile = load_author(explicit=original, environ={})
+    assert profile.biography == ""
+    assert profile.model_dump(exclude_defaults=True) == original
+    assert submission_author_status(original)["declarations_status"] == "author_confirmation_pending"
+
+
+def test_biography_round_trips_without_inferring_author_approval():
+    original = {"display_name": "Example Author", "email": "author@example.org", "affiliation": "Example University",
+                "biography": "Researcher at Example University.\nStudies software engineering."}
+    profile = load_author(explicit={**original, "biography": "  " + original["biography"] + "  "}, environ={})
+    assert profile.model_dump(exclude_defaults=True) == original
+    assert submission_author_status(original)["verified"] is False
+    assert submission_author_status(original)["declarations_status"] == "author_confirmation_pending"
+
+
+def test_biography_has_the_same_bound_as_submission_biography():
+    assert AuthorProfile(biography="a" * 4000).biography == "a" * 4000
+    with pytest.raises(ValidationError, match="4000"):
+        AuthorProfile(biography="a" * 4001)

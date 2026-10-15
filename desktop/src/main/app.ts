@@ -9,6 +9,7 @@ import type { AuthorMetadataInput, CreateResearchInput } from '../shared/researc
 import type { PortfolioSubmissionPreparationInput, PortfolioSubmissionConfirmationInput, PortfolioSubmissionRecordInput } from '../shared/submission.js';
 import { NEW_RESEARCH_MODE } from '../shared/publication.js';
 import { listPublicRepositories } from './repositories.js';
+import { lookupPublicOrcidProfile } from './orcid.js';
 import { artifactFormat, isReadableArtifactId, readVerifiedArtifact, saveArtifactWithDialog, type ResolvedArtifact } from './artifacts.js';
 
 app.setName('Paper Factory');
@@ -165,6 +166,10 @@ if (!app.requestSingleInstanceLock()) {
     handle('research:repositories', (...args) => {
       if (args.length !== 1 || typeof args[0] !== 'string') throw new Error('Invalid account request');
       return listPublicRepositories(args[0]);
+    });
+    handle('research:orcid-profile', (...args) => {
+      if (args.length !== 1 || typeof args[0] !== 'string' || args[0].length > 256) throw new Error('Invalid ORCID request');
+      return lookupPublicOrcidProfile(args[0]);
     });
     handle('research:runtime', noArgs(() => research!.checkRuntime()));
     handle('research:create', (...args) => {

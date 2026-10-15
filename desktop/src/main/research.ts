@@ -679,6 +679,7 @@ export class ResearchController {
           author.origin !== 'explicit_human_author_metadata' || !author.artifact_id || !author.sha256 || !author.selection_artifact_id ||
           updated.artifacts[author.artifact_id]?.sha256 !== author.sha256 || !updated.artifacts[author.selection_artifact_id] ||
           ['display_name', 'email', 'affiliation'].some(key => author.value[key as keyof AuthorMetadataInput] !== value[key as keyof AuthorMetadataInput]?.trim()) ||
+          (author.value.biography ?? '') !== (value.biography?.trim() ?? '') ||
           (author.value.orcid ?? '') !== (value.orcid?.trim().toUpperCase() ?? '')) {
         throw new EngineError('RESEARCH_STATE_INVALID', '저자 정보 저장 응답이 입력 정보와 다르거나 보존된 원고·심사·판정·횟수를 변경했습니다.');
       }

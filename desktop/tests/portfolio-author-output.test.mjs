@@ -234,7 +234,8 @@ test('controller author export runs offline with native conversions and repeated
 
 test('actual native metadata evidence projection appends only the selected author receipt without changing research', async t => {
   const f = await controllerFixture(t), previous = structuredClone(f.state.material_manifest);
-  const value = { display_name: 'Synthetic Updated Author', email: 'updated@example.test', affiliation: 'Synthetic Updated Institute' };
+  const value = { display_name: 'Synthetic Updated Author', email: 'updated@example.test', affiliation: 'Synthetic Updated Institute',
+    biography: 'A supplied public biography retained as plain text, without author approval.' };
   await f.controller.setAuthorMetadata(f.state.id, value);
   assert.deepEqual(f.controller.snapshot().jobs[0].authorMetadata.value, value);
   assert.deepEqual(f.state.material_manifest.evidence.slice(0, previous.evidence.length), previous.evidence);
@@ -242,6 +243,15 @@ test('actual native metadata evidence projection appends only the selected autho
   for (const key of ['source', 'experiment', 'literature', 'references', 'read_costs']) assert.deepEqual(f.state.material_manifest[key], previous[key]);
   assert.equal(f.prompts.length, 0);
   for (const venue of f.state.repository_paper.portfolio.venues) { assert.equal(venue.draft_attempts, 2); assert.equal(venue.review_attempts, 2); }
+});
+
+test('author metadata response cannot silently discard the supplied biography', async t => {
+  const f = await controllerFixture(t, undefined, false, next => { delete next.author_metadata.value.biography; });
+  await assert.rejects(f.controller.setAuthorMetadata(f.state.id, {
+    display_name: 'Synthetic Updated Author', email: 'updated@example.test', affiliation: 'Synthetic Updated Institute',
+    biography: 'A supplied biography that must remain exact.',
+  }), error => error.code === 'RESEARCH_STATE_INVALID');
+  assert.equal(f.prompts.length, 0);
 });
 
 test('native context projection omission permits metadata and author output while retaining the exact frozen context', async t => {

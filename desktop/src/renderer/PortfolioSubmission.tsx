@@ -46,7 +46,7 @@ async function photoInput(file: File | null) {
 function SubmissionAuthorForm({ job, candidate, locked, runAction }: {
   job: ResearchItem; candidate: PortfolioSubmissionCandidate; locked: boolean; runAction: ResearchAction;
 }) {
-  const [value, setValue] = useState({ author_biography: '', keywords: '', funding_statement: '',
+  const [value, setValue] = useState({ author_biography: job.authorMetadata?.value.biography ?? '', keywords: '', funding_statement: '',
     conflicts_statement: '', cover_letter_note: '' });
   const [photo, setPhoto] = useState<File | null>(null);
   const keywords = value.keywords.split(',').map(word => word.trim()).filter(Boolean);

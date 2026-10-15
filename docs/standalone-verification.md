@@ -20,8 +20,8 @@
 | 실제 데이터 | `.paper-factory/jizura-new-01420-20261008-04e3b1a0-4ee/app-data` |
 | 최초 executable | `desktop/release/final-ready-0.14.20-20261014/win-unpacked/Paper Factory.exe` |
 | 최초 executable SHA256 | `6a655a7f33264a75cbeb9841c58a162f08da0c2d23e5d5608ce58a6392726a3d` |
-| 현재 executable | `desktop/release/submission-ready-20261015/win-unpacked/Paper Factory.exe` |
-| 현재 executable SHA256 | `3a4f024ed629bf986d76a57bd546b3f0f3069fa429252c34f4a88db1bc639ab3` |
+| 현재 executable | `desktop/release/orcid-autofill-20261015/win-unpacked/Paper Factory.exe` |
+| 현재 executable SHA256 | `1d96593555e63505059d8fc767052d3f8a4af69ca8a4cfb9ef3a84592a0916ab` |
 | 정상 입력 | `normal-user-input.json` |
 | 공식 연결·모델 목록 | `official-connection-proof.json` |
 | 숨김 packaged 창 | `window-launch-proof.json` |
@@ -90,20 +90,32 @@ S&P 제목은 *What a Compromised Renderer Can Still Ask For: Authorizing Native
 
 실제 새 DOCX SHA256은 `a8d9fda6bf0b0dbf71e2a5d26b8096389b6b2a5c8d108ac89286d75f9c325b2f`, PDF SHA256은 `4961d1d11e366b3024d2e8d4a0a76319f4095be1a640b0d5a67192e28e705df3`이다. 저장본은 `output/submission-design/actual-app-20261015/ui-run-3/saved/`에 있다. 지원/이해관계와 실제 약력·사진·7개 저자 확인, 새 파일 QA 입력은 사람의 다음 작업이며 확인 값을 자동으로 만들지 않는다.
 
+## ORCID 공개 정보 자동채움 구현
+
+저자 입력에 ORCID 번호나 공식 프로필 주소를 넣으면 공개 이름·현재 소속·이메일·약력을 조회해 빈 항목에만 반영한다. 저장된 값·직접 입력한 값은 유지하며 복수 현재 소속·이메일은 사용자가 선택한다. 공개 약력이 없을 때 직위·학력으로 새 약력을 만들지 않는다. 조회 결과는 저장 전 초안이며 본인 인증·동의·저자 승인이나 제출 확인이 아니다. 조회만으로 연구·심사·횟수·원고·제출 준비를 바꾸지 않는다.
+
+공개 API의 person/employments/educations 고정 경로를 인증 없이 읽는다. 요청은 20초·응답 1MiB 한도로 제한하고 프로필의 현재 기관을 중복 제거한다. 저자 약력은 선택 값이며 빈 약력을 추가해 기존 저자 해시를 바꾸지 않는다. ORCID 구현의 native 저자 64개·기존 저자 출력 10개, desktop 집중 81개(ORCID 9·저자 14·제출 5·publication 53)와 타입·빌드가 통과했다. 합성 검사 통과를 사용자의 실제 ORCID 조회나 새 패키지 실행 통과로 설명하지 않는다.
+
+새 Windows 패키지에서 사용자가 제공한 ORCID의 실제 공개 API·정상 UI를 검증했다. `output/playwright/orcid-autofill-20261015/actual-app/proof.json`은 2026-10-15 12:17:57 UTC / 21:17:57 KST passed·정상 종료 exit 0이다. 실제 SDK·native·ORCID API를 사용했고 mock 없이 숨김/offscreen·sandbox·context isolation·Node integration off를 유지했다.
+
+공개 이름·현재 기관은 빈 항목에 자동으로 채워졌고 중복 기관은 하나로 표시됐다. 공개 이메일·약력은 없어 빈 편집 항목으로 남았다. 저장 전 수기 값 4개를 넣고 재조회해도 보존됐으며 화면을 다시 열면 저장 전 변경을 버리고 기존 저장 저자 정보가 그대로 복원됐다. 이를 본인 인증이나 최종 저자 동의로 해석하지 않는다.
+
+기존 workflow 381개 파일의 변경·추가 0, 모델 요청 12개·기존 원고 ZIP/manifest·저장 저자 정보·제출 준비 2와 실행 build는 불변이다. 새 모델 요청·저자 저장·출력·준비·포털·확인·접수는 모두 0이며 저자 확인 7개 false·QA 입력 5개 빈 값을 유지했다. 앞선 제출 패키지의 실제 준비·저장·26페이지 QA와 원고 생성·44페이지 QA 증거는 별도로 보존한다.
+
 ## 현재 미배포 로컬 패키지
 
-공개 릴리스를 덮어쓰지 않고 분석 계약·외부 검수 보완·실제 투고 준비 흐름과 사진 파일명 처리가 포함된 Windows 패키지를 `desktop/release/submission-ready-20261015/win-unpacked/`에 만들었다. 버전 표기는 0.14.20이지만 공개 설치본과 bytes가 다르며 아직 배포하지 않았다. 현재 결속 기록은 `output/submission-design/actual-app-20261015/ready-build-proof.json`이다. 실제 준비 생성·저장을 검증한 앞선 제출 패키지의 `final-build-proof.json`과 원고 생성 패키지의 `output/playwright/frontron-fresh-20261014/repair-build-proof.json`, `final-build-proof.json`도 보존한다.
+공개 릴리스를 덮어쓰지 않고 ORCID 자동채움·분석 계약·외부 검수 보완·실제 투고 준비 흐름이 포함된 Windows 패키지를 `desktop/release/orcid-autofill-20261015/win-unpacked/`에 만들었다. 버전 표기는 0.14.20이지만 공개 설치본과 bytes가 다르며 아직 배포하지 않았다. 현재 결속 기록은 `output/playwright/orcid-autofill-20261015/build-proof.json`이다. 앞선 제출 패키지의 `output/submission-design/actual-app-20261015/ready-build-proof.json`, `final-build-proof.json`과 원고 생성 패키지의 증거도 보존한다.
 
 | 로컬 패키지 결속 항목 | SHA256 |
 | --- | --- |
-| executable | `3a4f024ed629bf986d76a57bd546b3f0f3069fa429252c34f4a88db1bc639ab3` |
-| ASAR | `76a28f2fe5fd4ec569e6c1e63337b45f0bd64d176d2a9fd6f67ad835f7a1987d` |
-| runtime inventory | `942b77c0ab8860f40bb73bbe4ac36b51a600ca71db8e3576235546487308b829` |
-| production 입력 118개 | `0ddaf5ec4caf584f7a6cdc0034fe3946bd8ca4b330169fee44d260d174bc988f` |
+| executable | `1d96593555e63505059d8fc767052d3f8a4af69ca8a4cfb9ef3a84592a0916ab` |
+| ASAR | `961779f55649ba16a465e046e7c4285d48b916e25ece1a969b3a2698e5b52864` |
+| runtime inventory | `da8e10d274b0de291b166daa1579808a730a530b30c976bb20dc66f67bf0cef8` |
+| production 입력 121개 | `e88c6dd0b11209e2269af54e3e4a4fe6ea4b9242fd534a284f373dcfa1091261` |
 
-runtime 2,231개 파일·474,654,240 bytes의 전체 SHA와 native 소스·데이터·폰트 결속 39개, production 입력 118개와 모든 ASAR asset 결속이 일치한다. 새 제출 준비의 변환 입력은 동결돼 있으며 기존 runtime SHA와 준비 2·저장 파일·26페이지 QA는 불변이다. 현재 패키지에서는 아래 읽기 전용 실제 실행으로 확인했고 앞선 패키지의 준비 생성·저장 검증 및 합성 준비/접수 검사와 구분한다.
+runtime 2,231개 파일·474,654,303 bytes의 전체 SHA와 native 소스·데이터·폰트 결속 39개, production 입력 121개와 ASAR asset 결속이 일치한다. 이 패키지의 실제 ORCID UI 검증·정상 종료와 실행 전후 결속 불변을 확인했다. 기존 제출 준비 2·저장 파일·26페이지 QA와 앞선 패키지의 아래 읽기 전용 실행 증거도 유지하며 새 ORCID 검증과 구분한다.
 
-`output/submission-design/actual-app-20261015/ui-run-5-readonly/proof.json`은 2026-10-14 16:55:53 UTC / 10-15 01:55:53 KST passed·정상 종료 exit 0이다. 공식 계정 connected/sharing, 숨김 창·sandbox·context isolation·Node integration off와 기존 준비 2의 `awaiting_file_check`, 저자 확인 7개 false·QA 입력 5개 빈 값을 확인했다. 새 준비·행정 산출물·저장·모델 요청·공식 사이트·확인·접수 동작은 모두 0이며 전체 workflow·12개 모델 요청·기존 원고 ZIP/manifest를 유지했다. `ui-run-4-readonly`는 entry 실행 전 prelude 이름 allowlist 불일치로 실패했고 원 증거·exit 0·모델 0·자료 보존을 별도로 기록했다. 이 실패를 최신 통과로 덮어쓰지 않았다.
+앞선 `submission-ready` 패키지의 `output/submission-design/actual-app-20261015/ui-run-5-readonly/proof.json`은 2026-10-14 16:55:53 UTC / 10-15 01:55:53 KST passed·정상 종료 exit 0이다. 공식 계정 connected/sharing, 숨김 창·sandbox·context isolation·Node integration off와 기존 준비 2의 `awaiting_file_check`, 저자 확인 7개 false·QA 입력 5개 빈 값을 확인했다. 새 준비·행정 산출물·저장·모델 요청·공식 사이트·확인·접수 동작은 모두 0이며 전체 workflow·12개 모델 요청·기존 원고 ZIP/manifest를 유지했다. `ui-run-4-readonly`는 entry 실행 전 prelude 이름 allowlist 불일치로 실패했고 원 증거·exit 0·모델 0·자료 보존을 별도로 기록했다. 이 실패를 통과로 덮어쓰지 않았으며 새 ORCID 기능의 실행 증거로 사용하지 않는다.
 
 ## 보존한 공개 0.14.20 Windows 배포본
 

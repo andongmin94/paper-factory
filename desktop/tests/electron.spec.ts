@@ -171,7 +171,7 @@ test("connection window uses genuine components and exposes only limited, token-
     expect(rendererSurface.process).toBe("undefined");
     expect(rendererSurface.require).toBe("undefined");
     expect(rendererSurface.api).toEqual([
-      "addResearchEvidence", "admitRepositoryPortfolioEvidence", "cancel", "cancelResearch", "checkRuntime", "confirmPortfolioSubmission", "correctRepositoryPortfolioLayout", "createResearch", "disconnect", "exportRepositoryPortfolioAuthor", "improveResearch", "listPublicRepositories", "onResearchSnapshot", "onSnapshot",
+      "addResearchEvidence", "admitRepositoryPortfolioEvidence", "cancel", "cancelResearch", "checkRuntime", "confirmPortfolioSubmission", "correctRepositoryPortfolioLayout", "createResearch", "disconnect", "exportRepositoryPortfolioAuthor", "improveResearch", "listPublicRepositories", "lookupPublicOrcidProfile", "onResearchSnapshot", "onSnapshot",
       "openArtifact", "openPortfolioSubmissionSite", "openUsage", "preparePortfolioSubmission", "recordPortfolioSubmission", "reformatRepositoryPortfolioDraft", "reformatResearchDraft", "refreshModels", "requestRepositoryPortfolio", "requestRepositoryPortfolioRevision", "requestRepositoryRevision", "researchSnapshot", "resumeResearch", "saveArtifact", "selectProfile", "setResearchAuthorMetadata", "showArtifactFolder", "signIn", "snapshot", "verify",
     ]);
     expect(rendererSurface.csp).toContain("script-src 'self'");

@@ -1,6 +1,7 @@
 import type { RepositoryArticleFormat } from './publication.js';
 import type { PublicationCatalog, PublicationTarget } from './venues.js';
 import type { PortfolioSubmissionState, PortfolioSubmissionPreparationInput, PortfolioSubmissionConfirmationInput, PortfolioSubmissionRecordInput } from './submission.js';
+import type { OrcidPublicProfile } from './orcid.js';
 
 export type ResearchPhase = 'idle' | 'submission-plan' | 'source-selection' | 'source-analysis' | 'venue-manuscript' | 'venue-manuscript-repair' | 'venue-manuscript-review' | 'research-questions' | 'question-search-plan' | 'question-literature' | 'question-selection' | 'question-reframing' | 'question-reframing-selection' | 'plan' | 'redesign' | 'redesign-plan' | 'redesign-review' | 'literature-plan' | 'literature' | 'study-review' | 'code' | 'code-review' | 'experiment' | 'evidence-selection' | 'manuscript-claim' | 'manuscript' | 'manuscript-repair' | 'manuscript-review' | 'export';
 
@@ -30,6 +31,7 @@ export interface AuthorMetadataInput {
   display_name: string; email: string; affiliation: string;
   given_name?: string; family_name?: string; orcid?: string; department?: string;
   city?: string; country?: string; scholar_id?: string; github?: string; homepage?: string;
+  biography?: string;
 }
 export interface SubmissionRequirements {
   origin: string; bindings: Record<string, unknown>; venue: string; url: string;
@@ -398,6 +400,7 @@ export interface CreateResearchInput { source: string; goal: string; model: stri
 export interface PublicRepository { name: string; url: string }
 
 export interface ResearchApi {
+  lookupPublicOrcidProfile(input: string): Promise<OrcidPublicProfile>;
   preparePortfolioSubmission(id: string, venueId: string, value: PortfolioSubmissionPreparationInput): Promise<ResearchSnapshot>;
   confirmPortfolioSubmission(id: string, value: PortfolioSubmissionConfirmationInput): Promise<ResearchSnapshot>;
   recordPortfolioSubmission(id: string, value: PortfolioSubmissionRecordInput): Promise<ResearchSnapshot>;

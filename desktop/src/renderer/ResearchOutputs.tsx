@@ -5,6 +5,8 @@ import type { RepositoryPublicationStatus } from "../shared/publication";
 import type { AuthorMetadataInput, ResearchItem } from "../shared/research";
 import { Button } from "./components/ui/button";
 import type { ResearchAction } from "./research-ui";
+import { normalizeOrcidInput } from '../shared/orcid';
+import { OrcidAuthorFields } from './OrcidAuthorFields';
 
 const outputLabels: Record<string, string> = {
   "export-pdf": "PDF", "export-docx": "Word", "export-md": "Markdown",
@@ -41,12 +43,14 @@ export function AuthorMetadataEditor({ job, disabled, runAction }: { job: Resear
   return <details className="rounded-base border-2 border-border p-3 text-sm">
     <summary className="font-semibold">실제 저자 정보 입력</summary>
     <p className="detail-note mt-2">저자 정보를 저장한 뒤 각 매체의 ‘저자 정보 반영해 출력’을 누르면 새 PDF·Word에 반영합니다. 원래 본문·원고·심사·횟수와 이전 파일은 보존됩니다. 정보 저장은 저자 승인이나 실제 투고를 의미하지 않습니다.</p>
-    <form className="mt-3 space-y-3" onSubmit={event => { event.preventDefault(); void runAction("author", () => window.paperFactory.setResearchAuthorMetadata(job.id, value)); }}>
-      {([['display_name', '저자 이름'], ['email', '저자 이메일'], ['affiliation', '저자 소속'], ['orcid', 'ORCID (선택)']] as const).map(([key, label]) =>
-        <div className="field" key={key}><label htmlFor={`${job.id}-${key}`}>{label}</label>
-          <input id={`${job.id}-${key}`} type={key === "email" ? "email" : "text"} required={key !== "orcid"} value={value[key] ?? ""} disabled={disabled}
-            onChange={event => setValue(current => ({ ...current, [key]: event.target.value }))} /></div>)}
-      <Button type="submit" variant="outline" disabled={disabled || !value.display_name.trim() || !value.email.trim() || !value.affiliation.trim()}>저자 정보 저장</Button>
+    <form className="mt-3 space-y-3" onSubmit={event => {
+      event.preventDefault();
+      void runAction("author", () => window.paperFactory.setResearchAuthorMetadata(job.id,
+        { ...value, orcid: normalizeOrcidInput(value.orcid ?? '') ?? value.orcid }));
+    }}>
+      <OrcidAuthorFields key={`${job.id}:${job.authorMetadata?.sha256 ?? 'new'}`} id={job.id} value={value} setValue={setValue} disabled={disabled} />
+      <Button type="submit" variant="outline" disabled={disabled || !value.display_name.trim() || !value.email.trim() || !value.affiliation.trim() ||
+        (value.biography?.length ?? 0) > 4000 || (!!value.orcid?.trim() && !normalizeOrcidInput(value.orcid))}>저자 정보 저장</Button>
     </form>
   </details>;
 }

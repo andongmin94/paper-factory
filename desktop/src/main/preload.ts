@@ -3,6 +3,7 @@ import type { AppSnapshot, PaperFactoryApi } from '../shared/contracts.js';
 import type { ResearchSnapshot } from '../shared/research.js';
 
 const api: PaperFactoryApi = {
+  lookupPublicOrcidProfile: input => ipcRenderer.invoke('research:orcid-profile', input),
   preparePortfolioSubmission: (id, venueId, value) => ipcRenderer.invoke('research:submission-prepare', id, venueId, value),
   confirmPortfolioSubmission: (id, value) => ipcRenderer.invoke('research:submission-confirm', id, value),
   recordPortfolioSubmission: (id, value) => ipcRenderer.invoke('research:submission-record', id, value),
