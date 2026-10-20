@@ -9,6 +9,7 @@ import { AuthorMetadataEditor, ResearchOutputs } from "./ResearchOutputs";
 import { attemptCount, type ResearchAction } from "./research-ui";
 
 const phaseLabels: Record<ResearchPhase, string> = {
+  'quality-plan': '기여·근거 보완 설계', 'quality-write': '근거를 반영한 원고 보완', 'quality-review': '항목별 독립 품질 평가',
   "submission-plan": "투고 목표 설정", "manuscript-claim": "실제 관측 결론", "manuscript-repair": "원고 수정 근거",
   "venue-manuscript": "학술지별 원고 작성", "venue-manuscript-repair": "학술지별 작성 응답 꼬리 복구", "venue-manuscript-review": "학술지별 독립 심사",
   "research-questions": "연구 질문 후보", "question-search-plan": "검색 실패 보완 계획", "question-literature": "질문 근거 회수", "question-selection": "연구 질문 선택",
@@ -115,6 +116,11 @@ function QualityReview({ title, review, criteria, selectedSources, kind, manuscr
 }
 
 function statusLabel(job: ResearchItem, publication: RepositoryPublicationStatus | null): string {
+  const quality = job.repositoryPaper?.manuscript_improvement;
+  if (quality) return job.pipeline === 'running' ? `진행 중 · ${phaseLabels[job.phase]}`
+    : !quality.finished ? '원고 품질 보완 진행 기록' : quality.target_achieved ? '항목별 목표 달성 · 투고 전 최종 확인'
+      : Object.values(quality.recommendations ?? {}).some(item => item.recommendation === 'consider_submission')
+        ? '목표 일부 미달 · 매체별 투고 권고 확인' : '항목별 목표 미달 · 투고 전 보완 필요';
   const portfolio = job.repositoryPaper?.portfolio;
   if (portfolio && job.pipeline !== 'running') return portfolio.all_content_ready
     ? 'IEEE 매체별 내용 심사 충족' : `매체별 심사 기록 ${portfolio.completed}/${portfolio.total}`;

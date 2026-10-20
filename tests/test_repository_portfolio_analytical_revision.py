@@ -96,7 +96,7 @@ def test_completed_local_review_and_export_resume_exact_remaining_portfolio_with
     before = local_second_review(service, rid)
     venue_id = before["repository_paper"]["portfolio"]["venues"][0]["venue_id"]
     calls = []
-    def convert(source, output):
+    def convert(source, output, **kwargs):
         calls.append(output.suffix)
         raw = b"Synthetic export fixture only; no usable PDF or DOCX is claimed."
         output.write_bytes(raw)

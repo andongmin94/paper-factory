@@ -209,6 +209,26 @@ if (!app.requestSingleInstanceLock()) {
       if (args.length !== 1) throw new Error('Invalid research request');
       return research!.requestRepositoryPortfolio(researchId(args[0]));
     });
+    handle('research:manuscript-improvement', (...args) => {
+      researchReady();
+      if (args.length !== 1) throw new Error('Invalid manuscript improvement request');
+      return research!.continueManuscriptImprovement(researchId(args[0]));
+    });
+    handle('research:focused-manuscript-improvement', (...args) => {
+      researchReady();
+      if (args.length !== 1) throw new Error('Invalid focused manuscript improvement request');
+      return research!.focusManuscriptImprovement(researchId(args[0]));
+    });
+    handle('research:research-development', (...args) => {
+      researchReady();
+      if (args.length !== 1) throw new Error('Invalid research development request');
+      return research!.developManuscriptImprovement(researchId(args[0]));
+    });
+    handle('research:research-development-extension', (...args) => {
+      researchReady();
+      if (args.length !== 2 || typeof args[1] !== 'string') throw new Error('Invalid research development extension request');
+      return research!.extendResearchDevelopmentRound(researchId(args[0]), args[1]);
+    });
     handle('research:portfolio-revision', (...args) => {
       researchReady();
       if (args.length !== 3 || typeof args[1] !== 'string' || !/^[a-z][a-z0-9-]{2,100}$/.test(args[1]) ||

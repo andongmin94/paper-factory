@@ -134,6 +134,9 @@ def test_actual_changed_analysis_uses_last_shared_attempt_and_old_passes_become_
         held = service._portfolio_binding(ws, record, "venue-manuscript", portfolio["venues"][0]["venue_id"], 2)
     prior = service.status(rid)
     _, materials = portfolio_frame(started["prompt"])
+    text = service.artifact_path(rid, result_key).read_bytes().decode("utf-8")
+    materials["portfolioResearchWork"] = {"artifact_id": result_key,
+        "sha256": held["portfolio_analysis_sha256"], "text": text, **_inference_read(text)}
     prompt = "Synthetic held targeted writer. " + PORTFOLIO_MARKER + json.dumps(held) + MATERIAL_HEADER + json.dumps(materials)
     with pytest.raises(WorkflowError) as held_writer:
         service.record_inference(rid, {**started, "id": str(uuid4()), "phase": "venue-manuscript",

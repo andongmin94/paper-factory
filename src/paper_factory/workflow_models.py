@@ -114,7 +114,7 @@ class ModelEvidenceDiagnostics(Record):
 class ModelEvidenceReceipt(Record):
     """Main-process SDK evidence; no credentials or execution authority."""
     id: str = Field(pattern=r"^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$")
-    phase: Literal["source-selection", "source-analysis", "venue-manuscript", "venue-manuscript-review", "venue-manuscript-repair", "submission-plan", "research-questions", "question-selection", "question-search-plan", "question-reframing", "question-reframing-selection", "plan", "study-review", "redesign-plan", "redesign-review", "code", "code-review", "literature-plan", "evidence-selection", "manuscript-claim", "manuscript-repair", "manuscript", "manuscript-review"]
+    phase: Literal["source-selection", "source-analysis", "venue-manuscript", "venue-manuscript-review", "venue-manuscript-repair", "quality-plan", "quality-write", "quality-review", "submission-plan", "research-questions", "question-selection", "question-search-plan", "question-reframing", "question-reframing-selection", "plan", "study-review", "redesign-plan", "redesign-review", "code", "code-review", "literature-plan", "evidence-selection", "manuscript-claim", "manuscript-repair", "manuscript", "manuscript-review"]
     at: str = Field(max_length=40)
     model: str = Field(min_length=1, max_length=100)
     profileId: str = Field(min_length=1, max_length=128)
@@ -172,6 +172,7 @@ class Workflow(Record):
     code_attempt: int = Field(default=0, ge=0)
     execution_attempt: int = Field(default=0, ge=0)
     draft_attempt: int = Field(default=0, ge=0)
+    manuscript_improvement_snapshot: int = Field(default=0, ge=0)
     artifacts: dict[str, FrozenArtifact] = Field(default_factory=dict)
     active_handle: dict = Field(default_factory=dict)
     cancellation_requested: bool = False

@@ -31,7 +31,7 @@ test('engine rejects removed experiment mutations while retaining current reposi
   }
   assert.equal(f.requests.length, 0, 'Removed mutations must never reach the live child');
   for (const method of ['workflow.submitRepositoryPlan', 'workflow.submitRepositoryAnalysis', 'workflow.exportRepositoryDraft',
-    'workflow.readMaterial', 'workflow.cancel', 'artifact.resolve']) {
+    'workflow.readMaterial', 'workflow.cancel', 'artifact.resolve', 'workflow.grantResearchDevelopmentRound', 'workflow.extendResearchDevelopmentRound']) {
     const request = f.bridge.request(method, {});
     assert.equal(f.requests.at(-1).method, method);
     f.reply(f.requests.length - 1, { retained: true });

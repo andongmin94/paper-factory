@@ -24,7 +24,7 @@ PINS = {
     "pypandoc-binary": "1.17", "httpx": "0.28.1", "httpcore": "1.0.9",
     "anyio": "4.15.1", "certifi": "2026.7.22", "h11": "0.16.0",
     "idna": "3.20", "socksio": "1.0.0", "beautifulsoup4": "4.15.0",
-    "soupsieve": "2.10",
+    "soupsieve": "2.10", "pypdfium2": "5.14.0", "pillow": "12.3.0",
 }
 NODE_VERSION = "24.21.0"
 PANDOC_VERSION = "3.9"

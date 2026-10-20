@@ -74,7 +74,7 @@ def layout_export(portfolio, monkeypatch, request):
     monkeypatch.setattr(service, "_repository_byline", lambda ws, record, text: (text.partition(b"\n")[0] + b"\n" + block + text.partition(b"\n")[2], block, None))
     calls = []
 
-    def convert(source, output):
+    def convert(source, output, **kwargs):
         calls.append((source, output))
         numbered = output.parent.name == "layout-1" or condition in {"labels", "none"}
         output.write_bytes(docx_bytes("Table 1: Witness boundary." if numbered else "Witness boundary.") if output.suffix == ".docx" else b"Synthetic fixture PDF only.")
@@ -155,7 +155,7 @@ def test_layout_failed_or_unknown_conversion_keeps_old_format_output_and_one_att
     old = before["repository_paper"]["portfolio"]["venues"][0]
     originals = {key: service.artifact_path(rid, key).read_bytes() for key in before["artifacts"]}
     prior_calls = len(calls)
-    def fail(source, output):
+    def fail(source, output, **kwargs):
         calls.append((source, output))
         if failure == "interrupted":
             raise RuntimeError("Synthetic unknown outcome after immutable layout intent")
@@ -197,7 +197,7 @@ def test_layout_caption_postcondition_failure_keeps_prior_outputs(layout_export,
     service, rid, venue_id, before, calls = layout_export
     old = before["repository_paper"]["portfolio"]["venues"][0]
     original = {key: service.artifact_path(rid, key).read_bytes() for key in before["artifacts"]}
-    def defective_conversion(source, output):
+    def defective_conversion(source, output, **kwargs):
         calls.append((source, output))
         if output.suffix == ".docx":
             raw = docx_bytes(new_caption) if new_caption else None

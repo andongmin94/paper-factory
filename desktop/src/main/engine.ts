@@ -17,6 +17,12 @@ const engineMethods = [
   'workflow.preparePortfolioRevision', 'workflow.preparePortfolioAnalysisRepair', 'workflow.repairPortfolioExport', 'workflow.reformatPortfolioDraft', 'workflow.correctPortfolioLayout',
   'workflow.admitPortfolioEvidence', 'workflow.exportPortfolioAuthor',
   'workflow.preparePortfolioSubmission', 'workflow.confirmPortfolioSubmission', 'workflow.recordPortfolioSubmission',
+  'workflow.startManuscriptImprovement', 'workflow.reserveManuscriptImprovement',
+  'workflow.submitManuscriptImprovement', 'workflow.finishManuscriptImprovement',
+  'workflow.repairManuscriptImprovement',
+  'workflow.grantFocusedManuscriptRound',
+  'workflow.grantResearchDevelopmentRound',
+  'workflow.extendResearchDevelopmentRound',
   'workflow.readMaterial', 'workflow.addEvidence', 'workflow.setAuthorMetadata', 'workflow.recordInference',
   'workflow.cancel', 'workflow.resume', 'artifact.resolve', 'shutdown',
 ] as const;

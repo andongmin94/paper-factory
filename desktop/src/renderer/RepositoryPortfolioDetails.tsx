@@ -7,6 +7,7 @@ import { Button } from './components/ui/button';
 import { repositoryCriterionLabels, type ResearchAction } from './research-ui';
 import { RepositoryAnalysisDetails } from './RepositoryEvidenceDetails';
 import { PortfolioSubmission } from './PortfolioSubmission';
+import { ManuscriptImprovement } from './ManuscriptImprovement';
 
 const statusLabels: Record<RepositoryPortfolioVenue['status'], string> = {
   pending_analysis: '공통 분석 대기', pending_draft: '원고 작성 대기', writing_interrupted: '작성 요청 기록·결과 대기',
@@ -186,13 +187,14 @@ export function RepositoryPortfolioDetails({ job, disabled, locked, runAction }:
     </div>
     <p className="detail-note">공통 소스 분석에서 적합한 IEEE Software·Security &amp; Privacy Feature Article을 작성합니다. 각 매체의 독자·실무 문제·교훈에 맞춰 설명하고 별도로 평가합니다. 보안·프라이버시 소재가 없으면 해당 원고를 강제로 만들지 않습니다.</p>
     <p className="detail-note">아래 횟수는 학술지별 새 작업이며 실패·중단한 모델 요청도 포함합니다. 내용 심사 충족은 저자 승인·최신 제출 요건 확인·학술지 채택을 의미하지 않습니다.</p>
+    <ManuscriptImprovement job={job} disabled={disabled || locked} runAction={runAction} />
     {!finished && <Button variant="outline" disabled={disabled || !available}
       onClick={() => void runAction('portfolio', () => window.paperFactory.requestRepositoryPortfolio(job.id))}>
       {portfolio ? 'IEEE 매체별 미완료 투고본 재개' : 'IEEE 매체별 투고본 작성 시작'}
     </Button>}
     {!available && <p className="detail-note">{next.reason}</p>}
     {portfolio && <>
-      <p className="detail-note">논증·근거 평가 충족 {portfolio.venues.filter(repositoryPortfolioReasoningReady).length}/{portfolio.total} · 보존된 전체 심사 기준 충족 {portfolio.venues.filter(venue => venue.scientific_ready && venue.content_ready).length}/{portfolio.total}</p>
+      <p className="detail-note">{paper.manuscript_improvement ? '보존된 이전 방식의 심사 기록: ' : ''}논증·근거 평가 충족 {portfolio.venues.filter(repositoryPortfolioReasoningReady).length}/{portfolio.total} · 보존된 전체 심사 기준 충족 {portfolio.venues.filter(venue => venue.scientific_ready && venue.content_ready).length}/{portfolio.total}</p>
       <p className="detail-note">공통 소스 분석 {portfolio.analysis ? '보존됨' : '대기'} · {portfolio.all_content_ready ? '생성한 개별 원고의 내용 심사 충족' : '매체별 준비도와 필요한 근거를 아래에서 확인하세요.'}</p>
       {(portfolio.analysis_repair_available || portfolio.analysis_repair) && <section className="space-y-2" aria-label="공통 분석 형식 보완">
         <h5 className="font-semibold">공통 분석 근거 연결 형식 보완 · 1회 한도</h5>
@@ -266,6 +268,11 @@ export function RepositoryPortfolioDetails({ job, disabled, locked, runAction }:
       {portfolio.analysis && <details className="space-y-3"><summary className="font-semibold">IEEE 매체용 공통 소스 분석</summary>
         <div className="mt-3"><RepositoryAnalysisDetails paper={portfolio} /></div>
       </details>}
+      {typeof portfolio.work_products_report?.markdown === 'string' && <details className="space-y-3">
+        <summary className="font-semibold">첫 집필 전에 만든 설계·대안 비교·바뀐 결정</summary>
+        <p className="detail-note">실제 분석 원본과 함께 보존된 연구 작업입니다. 내부 일관성 확인과 게재 가치의 독립 평가는 별개입니다.</p>
+        <pre className="whitespace-pre-wrap text-sm">{portfolio.work_products_report.markdown}</pre>
+      </details>}
       {!!portfolio.literature_collections.length && <details className="detail-note"><summary>공통 보강 문헌 확보 기록</summary>
         <ul className="mt-2 space-y-2">{portfolio.literature_collections.map(collection => <li key={collection.artifact_id}>
           <p>보강 문헌 회수 {collection.attempt}회 · {collection.status === 'completed' ? '자료 확보 기록 보존' : '중단 기록 보존'}</p>
@@ -279,7 +286,10 @@ export function RepositoryPortfolioDetails({ job, disabled, locked, runAction }:
           {source.failure && <p className="whitespace-pre-wrap">{source.failure}</p>}
         </li>)}</ul>
       </details>}
-      {portfolio.venues.map(venue => <VenuePaperCard key={venue.venue_id} venue={venue} job={job} catalog={catalog} locked={locked} runAction={runAction} />)}
+      {paper.manuscript_improvement ? <details><summary className="font-semibold">보존된 이전 원고·당시 심사와 출력</summary>
+        <p className="detail-note mt-2">당시의 내부 심사를 그대로 보존합니다. 현재 품질 권고는 위 항목별 평가에서 확인하세요.</p>
+        {portfolio.venues.map(venue => <VenuePaperCard key={venue.venue_id} venue={venue} job={job} catalog={catalog} locked={locked} runAction={runAction} />)}
+      </details> : portfolio.venues.map(venue => <VenuePaperCard key={venue.venue_id} venue={venue} job={job} catalog={catalog} locked={locked} runAction={runAction} />)}
       <PortfolioSubmission job={job} locked={locked} runAction={runAction} />
     </>}
   </section>;

@@ -141,7 +141,7 @@ def test_format_export_failure_or_unknown_output_uses_the_only_attempt_without_r
     service, rid, venue_id, before, calls = duplicate_export
     old = before["repository_paper"]["portfolio"]["venues"][0]
     original = {key: service.artifact_path(rid, key).read_bytes() for key in before["artifacts"]}
-    def fail(source, output):
+    def fail(source, output, **kwargs):
         calls.append((source, output))
         if failure == "interrupted":
             raise RuntimeError("Synthetic unknown converter outcome after immutable formatting intent")

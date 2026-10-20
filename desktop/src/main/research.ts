@@ -6,15 +6,17 @@ import { isDeepStrictEqual } from 'node:util';
 import type { AuthorMetadataInput, CreateResearchInput, ManuscriptReview, RepositoryPaperDraft, RepositoryPaperPlan, RepositoryPaperProgress, RepositoryPaperReview, RepositoryPortfolioEvidencePacket, RepositoryPortfolioFrame, RepositoryPortfolioVenue, ResearchItem, ResearchPhase, ResearchSnapshot, StudyReview, StudyRedesignReview, SupportingDocument } from '../shared/research.js';
 import { NEW_RESEARCH_MODE, inspectRepositoryArticle, inspectRepositoryPortfolioOutputs, inspectRepositoryPortfolioVenueWork, inspectRepositoryPortfolioWork, repositoryPortfolioReasoningReady } from '../shared/publication.js';
 import { type PublicationCatalog } from '../shared/venues.js';
+import { developmentReasonLabels } from '../shared/manuscript-improvement.js';
 import { repositoryPublicationGuidance, repositoryVenueSelectionGuidance } from './repository-prompts.js';
 import { safeError, safeHttpDiagnostics } from './connection.js';
 import { EngineBridge, EngineError } from './engine.js';
 import { retainedScientificSections, completeManuscriptTail, manuscriptTailCompletionPolicy, manuscriptTailSchema } from './repository-recovery.js';
 import { portfolioBindingMarker, portfolioAnalysisPolicy, portfolioWritingPolicy, portfolioReviewPolicy,
-  portfolioVenueGuidance, portfolioScientificContext, portfolioLiteraturePolicy, portfolioLiteratureSchema, portfolioVenueRepairPolicy,
+  portfolioVenueGuidance, portfolioScientificContext, portfolioLiteraturePolicy, portfolioLiteraturePlanningSchema, portfolioVenueRepairPolicy,
+  portfolioResearchAgendaPolicy, portfolioResearchSynthesisPolicy, portfolioResearchWritingPolicy,
   portfolioResearchRepairPolicy, portfolioAnalysisSchemaRepairPolicy, portfolioExternalFeedbackPolicy } from './repository-portfolio.js';
 import type { SupportingEvidenceFile } from './supporting-evidence.js';
-import { portfolioEvidencePacket, verifyPortfolioEvidenceAdmission, verifyRepositoryRequestCapacity } from './repository-supplement.js';
+import { portfolioEvidencePacket, verifyPortfolioEvidenceAdmission, verifyRepositoryRequestCapacity, verifyQualityRequestCapacity } from './repository-supplement.js';
 import { verifyPortfolioAuthorMetadataView, verifyPortfolioAuthorExport } from './repository-author-output.js';
 import { portfolioScience, portfolioSubmissionSite, submissionRecordsPreserved, verifyPortfolioSubmissionChange } from './portfolio-submission.js';
 import type { PortfolioSubmissionPreparationInput, PortfolioSubmissionConfirmationInput, PortfolioSubmissionRecordInput } from '../shared/submission.js';
@@ -56,7 +58,7 @@ type Workflow = { id: string; goal: string; stage: string; status: string; code:
     evidence?: SourceFile[];
     references?: ReferenceMaterial[];
     read_costs?: { source: SourceReadCost[] } };
-  schemas: Record<'repository_plan' | 'repository_analysis' | 'repository_manuscript' | 'repository_review' | 'repository_reference_selection' | 'repository_content_assessment' | 'repository_revision_feedback', unknown>; };
+  schemas: Record<'repository_plan' | 'repository_analysis' | 'repository_manuscript' | 'repository_review' | 'repository_reference_selection' | 'repository_content_assessment' | 'repository_revision_feedback' | 'research_agenda', unknown>; };
 
 type StoredJob = ResearchItem & { experimentDispatched: boolean; cleanupRequired: boolean };
 type Receipt = { id: string; phase: ResearchPhase; at: string; model: string; profileId: string;
@@ -911,6 +913,105 @@ export class ResearchController {
     return this.correctRepositoryPortfolioOutput(id, venueId, 'format');
   }
 
+  focusManuscriptImprovement(id: string) {
+    return this.continueManuscriptImprovement(id, 'focused');
+  }
+
+  developManuscriptImprovement(id: string) {
+    return this.continueManuscriptImprovement(id, 'development');
+  }
+
+  extendResearchDevelopmentRound(id: string, priorRoundId: string) {
+    if (!/^research-development-round-[1-9]\d*$/.test(priorRoundId)) throw new EngineError('INVALID_ARGUMENT', '연장할 정확한 이전 연구 보완 회차를 확인하세요.');
+    return this.continueManuscriptImprovement(id, { kind: 'development-extension', priorRoundId });
+  }
+
+  async continueManuscriptImprovement(id: string, grant?: 'focused' | 'development' | { kind: 'development-extension'; priorRoundId: string }) {
+    this.assertIdle();
+    const job = this.jobs.get(id);
+    if (!job) throw new EngineError('RESEARCH_NOT_FOUND', '연구 기록을 찾을 수 없습니다.');
+    this.starting = true; this.emit();
+    try {
+      if (!this.state.runtime.repositoryAnalysisReady) throw new EngineError('ENGINE_UNAVAILABLE', '원고를 보완할 로컬 엔진을 확인하세요.');
+      await this.engine.start();
+      await this.validateModels(job.model, job.reviewerModel);
+      await this.reconcileReceipts(job);
+      const before = await this.engine.request<Workflow>('workflow.status', { researchId: id });
+      if (grant) {
+        const granted = typeof grant === 'object'
+          ? await this.engine.request<Workflow>('workflow.extendResearchDevelopmentRound', { researchId: id, priorRoundId: grant.priorRoundId })
+          : await this.engine.request<Workflow>(grant === 'focused' ? 'workflow.grantFocusedManuscriptRound' : 'workflow.grantResearchDevelopmentRound', { researchId: id });
+        this.verifyRepositoryTransition(before, granted);
+      }
+      const started = await this.engine.request<Workflow>('workflow.startManuscriptImprovement', { researchId: id });
+      this.verifyRepositoryTransition(before, started);
+      const workflow = await this.engine.request<Workflow>('workflow.repairManuscriptImprovement', { researchId: id }, 600_000);
+      this.verifyRepositoryTransition(started, workflow);
+      this.update(job, workflow); await this.save();
+      this.launch(job, signal => this.runManuscriptImprovement(job, workflow, signal));
+    } catch (error) { this.state.error = this.error(error); throw error; }
+    finally { this.starting = false; this.emit(); }
+    return this.snapshot();
+  }
+
+  private async runManuscriptImprovement(job: StoredJob, initial: Workflow, signal: AbortSignal) {
+    let workflow = initial;
+    // The native engine owns the permanent global budget, next action and stop decisions.
+    // This local bound also prevents a faulty engine response from creating an unbounded loop.
+    for (let step = 0; step < 9; step++) {
+      signal.throwIfAborted();
+      const state = workflow.repository_paper?.manuscript_improvement;
+      if (!state) throw new EngineError('RESEARCH_STATE_INVALID', '보존된 원고 품질 보완 계획이 없습니다.');
+      if (!state.next_task) {
+        const finished = await this.engine.request<Workflow>('workflow.finishManuscriptImprovement', { researchId: job.id }, 300_000);
+        this.verifyRepositoryTransition(workflow, finished);
+        this.update(job, finished); job.pipeline = 'paused'; job.phase = 'idle';
+        const result = finished.repository_paper?.manuscript_improvement;
+        const development = result?.research_development;
+        const written = Object.keys(development?.write_versions ?? {}).length > 0;
+        const assessed = written && Object.entries(development!.write_versions!).every(([venue, version]) =>
+          result?.reviews[venue]?.some(review => review.manuscript_sha256 === version.markdown_sha256));
+        job.message = development
+          ? assessed ? '새 연구 원고와 해당 원고의 독립 평가를 보존했습니다. 연구 산출물·남은 문제·투고 권고를 확인하세요.'
+            : written ? '새 연구 원고를 보존하고 작업을 종료했습니다. 독립 평가가 끝나지 않은 이유와 남은 작업을 확인하세요.'
+              : '연구 보완 작업을 종료했습니다. 집필 준비 판단·완성한 근거·남은 작업과 중단 사유를 확인하세요.'
+          : '원고 보완 작업을 종료했습니다. 보존된 원고·실제 평가 여부·중단 사유와 공식 출력 결과를 확인하세요.';
+        const reason = development?.stop_reason;
+        if (reason) job.message += ' 종료 사유: ' + (developmentReasonLabels[reason] ??
+          (reason.startsWith('bounded_stage_failed:') ? '보완 단계 검증이 실패했습니다. 원래 오류와 산출물을 보존했습니다.' : reason));
+        await this.save(); return;
+      }
+      const pending = state.calls.find(call => call.outcome === 'reserved');
+      const reserved = await this.engine.request<{ workflow: Workflow; task: { call_id: string; phase: ResearchPhase; prompt: string } }>(
+        'workflow.reserveManuscriptImprovement', { researchId: job.id, value: { call_id: pending?.call_id ?? randomUUID(), ...state.next_task } });
+      this.verifyRepositoryTransition(workflow, reserved.workflow); workflow = reserved.workflow;
+      this.update(job, workflow); await this.save();
+      const task = reserved.task;
+      if (!['quality-plan', 'quality-write', 'quality-review'].includes(task.phase) ||
+          !/^[a-f0-9-]{36}$/.test(task.call_id) || typeof task.prompt !== 'string' || task.prompt.length > 700_000) {
+        throw new EngineError('RESEARCH_STATE_INVALID', '네이티브 품질 보완 요청의 종류·식별자·입력을 확인할 수 없습니다.');
+      }
+      verifyQualityRequestCapacity(task.prompt, task.phase === 'quality-review' ? job.reviewerModel : job.model);
+      let generationError: unknown;
+      const terminal = ['completed', 'failed', 'interrupted'].some(outcome => workflow.artifacts[`model-evidence-${task.call_id}-${outcome}`]);
+      const started = workflow.artifacts[`model-evidence-${task.call_id}-started`];
+      if (started && !terminal) throw new EngineError('INFERENCE_ALREADY_DISPATCHED', '이 품질 보완 요청은 전송 기록이 있습니다. 완료 여부가 불명확한 요청을 다시 보내지 않습니다.');
+      try { if (!terminal) await this.generate(job, task.phase, task.prompt, signal, undefined, false, task.call_id); }
+      catch (error) { generationError = error; }
+      signal.throwIfAborted();
+      const observed = await this.engine.request<Workflow>('workflow.status', { researchId: job.id });
+      this.verifyRepositoryTransition(workflow, observed); workflow = observed;
+      const inferenceArtifactId = ['completed', 'failed', 'interrupted'].map(outcome => `model-evidence-${task.call_id}-${outcome}`)
+        .find(key => workflow.artifacts[key]);
+      if (!inferenceArtifactId) throw generationError ?? new EngineError('INFERENCE_EVIDENCE_INVALID', '요청의 완료·실패 기록이 보존되지 않았습니다.');
+      const longSubmission = ['focused-write', 'develop-question', 'develop-design', 'develop-strengthen', 'develop-evidence', 'develop-repair', 'develop-re-audit', 'develop-write'].includes(state.next_task.purpose);
+      const updated = await this.engine.request<Workflow>('workflow.submitManuscriptImprovement', { researchId: job.id, inferenceArtifactId }, longSubmission ? 600_000 : 240_000);
+      this.verifyRepositoryTransition(workflow, updated); workflow = updated;
+      this.update(job, workflow); await this.save();
+    }
+    throw new EngineError('MANUSCRIPT_IMPROVEMENT_LIMIT', '품질 보완의 전체 요청 한도에 도달했습니다. 기존 원고와 사용 횟수를 보존했습니다.');
+  }
+
   preparePortfolioSubmission(id: string, venueId: string, value: PortfolioSubmissionPreparationInput) {
     return this.changePortfolioSubmission(id, 'workflow.preparePortfolioSubmission', { venueId, value });
   }
@@ -1163,9 +1264,28 @@ export class ResearchController {
   private async portfolioMaterials(workflow: Workflow, signal: AbortSignal, venueId?: string, frame?: RepositoryPortfolioFrame) {
     const paper = workflow.repository_paper!, portfolio = paper.portfolio!;
     if (!portfolio.guidance) throw new EngineError('PORTFOLIO_GUIDANCE_INCOMPLETE', '학술지 공식 안내 수집 기록이 아직 없습니다.');
+    let portfolioResearchAgenda = null;
+    const agendaSha = frame?.research_agenda_sha256 ?? portfolio.research_agenda?.sha256;
+    if (agendaSha) {
+      const key = Object.keys(workflow.artifacts).find(key => key.startsWith('repository-portfolio-research-agenda-') &&
+        workflow.artifacts[key]?.sha256 === agendaSha);
+      if (!key) throw new EngineError('ARTIFACT_CHANGED', '연구 질문과 실제 근거 수집에 결속된 설계 원본을 찾을 수 없습니다.');
+      portfolioResearchAgenda = { artifact_id: key, sha256: agendaSha, ...await this.portfolioText(workflow, key, signal) };
+    }
     const files = [...new Set([...paper.plan!.source_files, ...(paper.draft?.source_evidence.map(item => item.path) ?? []),
       ...(paper.analysis?.source_evidence.map(item => item.path) ?? []),
       ...(portfolio.analysis?.source_evidence.map(item => item.path) ?? [])])];
+    const agenda = portfolioResearchAgenda ? JSON.parse(portfolioResearchAgenda.text).value as {
+      candidates: Array<{ evidence_needs: Array<{ kind: string; target: string }> }> } : null;
+    const requestedPaths = [...new Set(agenda?.candidates.flatMap(candidate => candidate.evidence_needs
+      .filter(need => need.kind === 'source_inspection').map(need => need.target)) ?? [])];
+    const inventory = verifiedSourceInventory(workflow);
+    const extraPaths = requestedPaths.filter(path => inventory.has(path) && !files.includes(path)).slice(0, Math.max(0, 20 - files.length));
+    files.push(...extraPaths);
+    const sourceAcquisition = agenda ? { requested_source_paths: requestedPaths,
+      supplied_source_paths: requestedPaths.filter(path => files.includes(path)),
+      unavailable_source_paths: requestedPaths.filter(path => !files.includes(path)),
+      scope: 'Complete frozen files selected within the existing twenty-file boundary; unavailable paths remain evidence gaps, not observed absence.' } : null;
     const materials = await this.materials(workflow, 'plan', files, signal);
     const retainedGuidance = [];
     for (const source of portfolio.guidance.sources.filter(item => item.status === 'retained')) {
@@ -1184,6 +1304,15 @@ export class ResearchController {
     const reviewId = venue?.review ? venue.artifact_ids.review : null;
     const portfolioPriorReview = reviewId ? { artifact_id: reviewId, sha256: workflow.artifacts[reviewId]!.sha256,
       ...await this.portfolioText(workflow, reviewId, signal) } : null;
+    let portfolioResearchWork = null;
+    if (frame?.portfolio_analysis_sha256 && portfolio.research_workproducts_contract) {
+      const key = Object.keys(workflow.artifacts).find(key =>
+        (key === 'repository-portfolio-analysis' || /^repository-portfolio-analysis-revision-[1-3]$/.test(key)) &&
+        workflow.artifacts[key]?.sha256 === frame.portfolio_analysis_sha256);
+      if (!key) throw new EngineError('ARTIFACT_CHANGED', '집필에 사용할 연구 작업 산출물의 원본을 찾을 수 없습니다.');
+      portfolioResearchWork = { artifact_id: key, sha256: frame.portfolio_analysis_sha256,
+        ...await this.portfolioText(workflow, key, signal) };
+    }
     let portfolioRevisionFeedback = null;
     if (frame?.revision_feedback_sha256) {
       const feedback = venue?.revision_feedback;
@@ -1227,6 +1356,9 @@ export class ResearchController {
         ...await this.portfolioText(workflow, supplement.artifact_id, signal), materials: registered };
     }
     const text = materials.header + JSON.stringify({ ...materials.content, retainedGuidance,
+      ...(portfolioResearchWork ? { portfolioResearchWork } : {}),
+      ...(portfolioResearchAgenda ? { portfolioResearchAgenda } : {}),
+      ...(sourceAcquisition ? { sourceAcquisition } : {}),
       ...(portfolioDraft ? { portfolioDraft } : {}), ...(portfolioPriorReview ? { portfolioPriorReview } : {}),
       ...(portfolioRevision ? { portfolioRevision } : {}), ...(portfolioAnalysisRepair ? { portfolioAnalysisRepair } : {}),
       ...(portfolioRevisionFeedback ? { portfolioRevisionFeedback } : {}),
@@ -1337,13 +1469,18 @@ export class ResearchController {
           literature_sha256: portfolio.literature_sha256, pdf_budget: portfolio.pdf_budget,
           literature_history: portfolio.literature,
           analysis_sha256: portfolio.analysis_sha256, revision: portfolio.analysis_revision,
+          prior_research_agenda: portfolio.research_agenda ?? null,
           plan: paper.plan }) + materials;
         const generated = await this.repositoryGenerationOnce(job, workflow, 'portfolio-literature-plan', prefix,
-          prefix + portfolioLiteraturePolicy + '\nReturn only JSON matching:\n' + JSON.stringify(portfolioLiteratureSchema) + binding, binding, signal);
+          prefix + portfolioLiteraturePolicy + (portfolio.research_design_contract ? portfolioResearchAgendaPolicy : '') +
+          '\nReturn only JSON matching:\n' + JSON.stringify(portfolioLiteraturePlanningSchema(
+            portfolio.research_design_contract ? workflow.schemas.research_agenda as Record<string, unknown> : undefined)) + binding, binding, signal);
         workflow = generated.workflow;
         await this.phase(job, 'literature');
         await persist('workflow.collectPortfolioLiterature', { queries: generated.value.queries,
-          pdfCandidates: generated.value.pdf_candidates, htmlCandidates: generated.value.html_candidates });
+          pdfCandidates: generated.value.pdf_candidates, htmlCandidates: generated.value.html_candidates,
+          ...(portfolio.research_design_contract ? { researchAgenda: generated.value.research_agenda,
+            inferenceArtifactId: generated.inferenceArtifactId } : {}) });
         portfolio = workflow.repository_paper!.portfolio!;
     }
     if (!portfolio.analysis || work.action === 'analysis' || work.action === 'revise_analysis') {
@@ -1361,6 +1498,7 @@ export class ResearchController {
         const binding = portfolioBindingMarker + JSON.stringify(frame) + materials;
         const generated = await this.repositoryGenerationOnce(job, workflow, 'source-analysis', prefix,
           prefix + portfolioAnalysisPolicy + (frame.analysis_schema_repair_sha256 ? portfolioAnalysisSchemaRepairPolicy : '') +
+          (portfolio.research_design_contract ? portfolioResearchSynthesisPolicy : '') +
           (portfolio.analysis_revision ? portfolioResearchRepairPolicy : '') +
           '\nPreserved study, prior analysis and all venue obligations:\n' +
           JSON.stringify({ ...portfolioScientificContext(workflow.repository_paper!.plan!, portfolio.analysis ?? workflow.repository_paper!.analysis ?? null,
@@ -1401,6 +1539,7 @@ export class ResearchController {
         }
         const paper = workflow.repository_paper!, catalog = paper.publication_venues!;
         const context = { ...portfolioScientificContext(paper.plan!, portfolio.analysis, null, venueId, catalog, job.model, job.reviewerModel),
+          researchBasis: portfolio.research_design_report ?? null,
           literatureRetrieval: { collections: workflow.study_literature_attempt, history: portfolio.literature_collections,
             retainedPacketSha256: portfolio.literature_sha256 },
           priorVenueDraftSha256: venue.draft_sha256, priorVenueReviewSha256: venue.writer_binding?.prior_review_sha256 ?? null };
@@ -1417,7 +1556,8 @@ export class ResearchController {
           const prefix = `Write the complete repository portfolio manuscript for ${venueId} attempt ${venue.writer_binding.attempt}.`;
           const binding = portfolioBindingMarker + JSON.stringify(venue.writer_binding) + materials;
           const generated = await this.repositoryGenerationOnce(job, workflow, 'venue-manuscript', prefix,
-            prefix + guidance + portfolioWritingPolicy + (next.action === 'revision' && venue.review ? portfolioVenueRepairPolicy : '') +
+            prefix + guidance + portfolioWritingPolicy + (portfolio.research_design_contract ? portfolioResearchWritingPolicy : '') +
+            (next.action === 'revision' && venue.review ? portfolioVenueRepairPolicy : '') +
             (venue.writer_binding.revision_feedback_sha256 ? portfolioExternalFeedbackPolicy : '') +
             '\nFrozen scientific context:\n' + JSON.stringify(context) +
             '\nReturn only JSON matching:\n' + JSON.stringify(workflow.schemas.repository_manuscript) + binding, binding, signal);
@@ -1634,9 +1774,10 @@ export class ResearchController {
     }
   }
 
-  private async generate(job: StoredJob, phase: ResearchPhase, prompt: string, signal: AbortSignal, recovered?: Receipt, supplementBound = false) {
+  private async generate(job: StoredJob, phase: ResearchPhase, prompt: string, signal: AbortSignal, recovered?: Receipt, supplementBound = false, reservedId?: string) {
     const model = phase.endsWith('review') || phase === 'question-selection' || phase === 'question-reframing-selection' ? job.reviewerModel : job.model;
     verifyRepositoryRequestCapacity(prompt, model, supplementBound);
+    if (reservedId) verifyQualityRequestCapacity(prompt, model);
     await this.phase(job, phase); signal.throwIfAborted();
     const profileId = await this.validateModels(job.model, job.reviewerModel);
     if (recovered && (recovered.phase !== phase || recovered.model !== model || recovered.profileId !== profileId ||
@@ -1644,7 +1785,10 @@ export class ResearchController {
         this.undispatchedStarts.get(recovered.id)?.jobId !== job.id)) {
       throw new EngineError('INFERENCE_EVIDENCE_INVALID', '아직 전송되지 않은 원 요청의 계정·모델·입력이 현재 요청과 다릅니다.');
     }
-    const receipt: Receipt = recovered ?? { id: randomUUID(), phase, at: new Date().toISOString(), model, profileId, prompt,
+    if (reservedId && (recovered || !['quality-plan', 'quality-write', 'quality-review'].includes(phase) || !/^[a-f0-9-]{36}$/.test(reservedId))) {
+      throw new EngineError('INFERENCE_EVIDENCE_INVALID', '품질 보완의 사전 예약 식별자가 올바르지 않습니다.');
+    }
+    const receipt: Receipt = recovered ?? { id: reservedId ?? randomUUID(), phase, at: new Date().toISOString(), model, profileId, prompt,
       promptSha256: sha(prompt), outcome: 'started' };
     if (!recovered) await this.receipt(job, receipt);
     signal.throwIfAborted();
@@ -1661,7 +1805,7 @@ export class ResearchController {
     }
     this.undispatchedStarts.delete(receipt.id);
     const timeout = new AbortController();
-    const timer = setTimeout(() => timeout.abort(), 10 * 60_000); timer.unref();
+    const timer = setTimeout(() => timeout.abort(), (phase.startsWith('quality-') ? 25 : 10) * 60_000); timer.unref();
     let partial = '';
     let result: { text: string };
     try {
@@ -2243,6 +2387,13 @@ export class ResearchController {
       throw new EngineError('RESEARCH_STATE_INVALID', '보존된 레포 분석 설계가 없습니다.');
     }
     await this.runRepositoryPortfolio(job, workflow, signal);
+    const completed = await this.engine.request<Workflow>('workflow.status', { researchId: job.id });
+    if (completed.repository_paper?.portfolio?.venues.every(venue => !!venue.draft && !!venue.review) &&
+        !completed.repository_paper.manuscript_improvement?.finished) {
+      const improvement = await this.engine.request<Workflow>('workflow.startManuscriptImprovement', { researchId: job.id });
+      this.verifyRepositoryTransition(completed, improvement);
+      await this.runManuscriptImprovement(job, improvement, signal);
+    }
   }
 
   private async run(job: StoredJob, signal: AbortSignal) {

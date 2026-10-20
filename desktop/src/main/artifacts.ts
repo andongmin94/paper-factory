@@ -12,6 +12,18 @@ export const artifactFormats: Record<string, { name: string; extension: string }
 
 export function artifactFormat(artifactId: string): { name: string; extension: string } | undefined {
   if (Object.hasOwn(artifactFormats, artifactId)) return artifactFormats[artifactId];
+  const improvement = /^manuscript-improvement-(?:ieee-software|ieee-security-privacy)-official-(docx|pdf|markdown)(?:-[1-9]\d*)?$/.exec(artifactId);
+  if (improvement) return artifactFormats[`export-${improvement[1] === 'markdown' ? 'md' : improvement[1]}`];
+  if (/^manuscript-improvement-quality-report(?:-[1-9]\d*)?$/.test(artifactId)) return { name: '원고 품질 평가 보고서', extension: 'json' };
+  if (artifactId === 'manuscript-improvement-focused-analytical-results') return { name: '완료한 분석 결과', extension: 'json' };
+  if (artifactId === 'manuscript-improvement-focused-finite-checker') return { name: '유한 모형 검사 결과', extension: 'json' };
+  const developedPaper = /^manuscript-improvement-development(?:-round-[1-9]\d*)?-(?:ieee-software|ieee-security-privacy)-preflight(?:-[1-9]\d*)?-(markdown|docx|pdf)$/.exec(artifactId);
+  if (developedPaper) return artifactFormats[`export-${developedPaper[1] === 'markdown' ? 'md' : developedPaper[1]}`];
+  if (/^manuscript-improvement-development(?:-round-[1-9]\d*)?-supplement-[12]$/.test(artifactId)) return { name: '연구 재현 근거 묶음', extension: 'zip' };
+  if (/^manuscript-improvement-development(?:-round-[1-9]\d*)?-readme-[12]$/.test(artifactId)) return artifactFormats['export-md'];
+  if (/^manuscript-improvement-development(?:-round-[1-9]\d*)?-work-product-markdown-[12]$/.test(artifactId)) return artifactFormats['export-md'];
+  if (/^manuscript-improvement-development(?:-round-[1-9]\d*)?-(?:plan|audit|re-audit|(?:evidence|checker-report|models|checker|graphs|manifest|work-products|work-product-report)-[12])$/.test(artifactId)) return { name: '연구 설계·근거 기록', extension: 'json' };
+  if (/^manuscript-improvement-(?:ieee-software|ieee-security-privacy)-review-[1-9]\d*$/.test(artifactId)) return { name: '원고 독립 평가', extension: 'json' };
   const submission = /^repository-portfolio-submission-(md|pdf|docx|package|manifest|metadata|cover-letter)-[1-9]\d*$/.exec(artifactId);
   if (submission) return submission[1] === 'package' ? { name: '투고 제출 파일 묶음', extension: 'zip' }
     : submission[1] === 'cover-letter' ? { name: '투고 편지', extension: 'txt' }

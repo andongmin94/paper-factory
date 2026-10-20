@@ -27,6 +27,6 @@
   "paperFactoryVendor": {
     "repository": "https://github.com/openai/sign-in-with-chatgpt-devkit",
     "commit": "f723814abdccec135b519c451fb6e1992ee5e933",
-    "changes": "Package/build metadata adapted for Paper Factory. responses.ts uses the application's bounded ten-minute stream deadline; response-deadline.test.mjs adds synthetic regression coverage. Other upstream source/tests are unchanged."
+    "changes": "Package/build metadata adapted for Paper Factory. responses.ts permits a bounded twenty-five-minute stream for long research responses; the app applies its shorter deadline to other phases. response-deadline.test.mjs adds synthetic regression coverage. Other upstream source/tests are unchanged."
   }
 }

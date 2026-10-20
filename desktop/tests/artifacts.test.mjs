@@ -10,6 +10,28 @@ import { artifactFormat, artifactFormats, isReadableArtifactId, readVerifiedArti
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const rejected = error => error.code === 'SAVE_PATH_INVALID';
 
+test('bounded improvement exposes only official manuscript files and its final report', () => {
+  for (const venue of ['ieee-software', 'ieee-security-privacy']) for (const format of ['md', 'pdf', 'docx']) {
+    const id = `manuscript-improvement-${venue}-official-${format === 'md' ? 'markdown' : format}`;
+    assert.equal(isReadableArtifactId(id), true);
+    assert.deepEqual(artifactFormat(id), artifactFormats[`export-${format}`]);
+    assert.deepEqual(artifactFormat(`${id}-2`), artifactFormats[`export-${format}`]);
+  }
+  assert.deepEqual(artifactFormat('manuscript-improvement-quality-report'), { name: '원고 품질 평가 보고서', extension: 'json' });
+  assert.deepEqual(artifactFormat('manuscript-improvement-quality-report-2'), { name: '원고 품질 평가 보고서', extension: 'json' });
+  for (const [id, name] of [['manuscript-improvement-focused-analytical-results', '완료한 분석 결과'],
+    ['manuscript-improvement-focused-finite-checker', '유한 모형 검사 결과']]) {
+    assert.equal(isReadableArtifactId(id), true);
+    assert.deepEqual(artifactFormat(id), { name, extension: 'json' });
+  }
+  for (const id of ['manuscript-improvement-state-1', 'manuscript-improvement-ieee-software-draft-1',
+    'manuscript-improvement-ieee-software-official-docx-conversion', 'manuscript-improvement-../official-pdf',
+    'manuscript-improvement-ieee-software-official-pdf-0', 'manuscript-improvement-quality-report-0',
+    'manuscript-improvement-focused-primary-intent', 'manuscript-improvement-focused-finite-checker/../state-1']) {
+    assert.equal(isReadableArtifactId(id), false);
+  }
+});
+
 test('page review admits only frozen PDF quality identifiers for read-only opening', () => {
   assert.equal(isReadableArtifactId('export-pdf'), true);
   assert.equal(isReadableArtifactId('pdf-quality-012345abcdef'), true);
@@ -19,6 +41,33 @@ test('page review admits only frozen PDF quality identifiers for read-only openi
     'submission-requirements-012345abcdef-raw', 'submission-requirements-../body-text', 'source/image.png']) {
     assert.equal(isReadableArtifactId(value), false);
   }
+});
+
+test('development downloads admit only exact bounded evidence, supplement, review and fresh preflight formats', () => {
+  for (const venue of ['ieee-software', 'ieee-security-privacy']) {
+    for (const format of ['markdown', 'docx', 'pdf']) for (const generation of ['', '-1', '-2', '-12']) {
+      const id = `manuscript-improvement-development-${venue}-preflight${generation}-${format}`;
+      assert.equal(isReadableArtifactId(id), true);
+      assert.deepEqual(artifactFormat(id), artifactFormats[`export-${format === 'markdown' ? 'md' : format}`]);
+    }
+    assert.equal(artifactFormat(`manuscript-improvement-${venue}-review-4`).extension, 'json');
+  }
+  for (const id of ['plan', 'audit', 're-audit', 'evidence-1', 'evidence-2', 'checker-report-1', 'models-1', 'checker-2', 'graphs-1', 'manifest-2', 'work-products-1', 'work-product-report-2']) assert.equal(artifactFormat('manuscript-improvement-development-' + id).extension, 'json');
+  assert.equal(artifactFormat('manuscript-improvement-development-supplement-2').extension, 'zip');
+  assert.equal(artifactFormat('manuscript-improvement-development-readme-1').extension, 'md');
+  assert.equal(artifactFormat('manuscript-improvement-development-work-product-markdown-2').extension, 'md');
+  for (const id of ['grant', 'writer-candidate', 'evidence-3', 'checker-source-1', 'supplement-0', '../plan',
+    'ieee-software-preflight-docx-conversion', 'ieee-software-preflight-docx/../state', 'ieee-software-preflight-0-docx',
+    'ieee-software-preflight-02-pdf', 'ieee-software-preflight-2-docx-conversion', 'ieee-software-preflight-2-pdf/../state',
+    'work-products-3', 'work-product-report-0', 'work-product-markdown-3', 'work-product-checker-source-1', 're-audit/../state']) assert.equal(isReadableArtifactId('manuscript-improvement-development-' + id), false);
+});
+
+test('renewed round output identifiers keep the exact format boundary without shadowing the previous round', () => {
+  for (const [suffix, extension] of [['ieee-software-preflight-pdf', 'pdf'], ['ieee-security-privacy-preflight-2-docx', 'docx'],
+    ['work-products-1', 'json'], ['work-product-report-2', 'json'], ['work-product-markdown-1', 'md'], ['supplement-2', 'zip'], ['re-audit', 'json']])
+    assert.equal(artifactFormat('manuscript-improvement-development-round-2-' + suffix).extension, extension);
+  for (const suffix of ['round-0-work-products-1', 'round-02-supplement-1', 'round-2-work-product-checker-source-1', 'round-2-../plan'])
+    assert.equal(isReadableArtifactId('manuscript-improvement-development-' + suffix), false);
 });
 
 test('repository manuscript versions resolve only supported downloadable formats', () => {

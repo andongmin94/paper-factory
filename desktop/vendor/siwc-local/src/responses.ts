@@ -27,9 +27,9 @@ export async function streamResponse(
       stream: true,
     }),
     signal,
-  // Keep the streamed body within the app's bounded ten-minute request budget.
+  // The app applies its phase deadline; allow complete long manuscript streams.
   // A shorter fetch signal also aborts body reads, even after headers arrive.
-  }, 10 * 60_000);
+  }, 25 * 60_000);
   const requestId = response.headers.get("x-request-id");
   if (!response.ok) throw apiError(await jsonResponse(response), response.status, requestId);
   const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();

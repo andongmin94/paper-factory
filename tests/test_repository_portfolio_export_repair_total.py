@@ -14,7 +14,7 @@ def test_export_repair_total_retains_prior_draft_completed_or_unknown_attempt(fa
         monkeypatch.setattr("paper_factory.conversion.convert", successful_conversion(calls))
         first = service.repair_portfolio_export(rid, venue_id)
     else:
-        def interrupted(source, output):
+        def interrupted(source, output, **kwargs):
             calls.append((source, output))
             raise RuntimeError("Synthetic unknown conversion after immutable original repair input")
         monkeypatch.setattr("paper_factory.conversion.convert", interrupted)

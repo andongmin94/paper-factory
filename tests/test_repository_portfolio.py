@@ -13,8 +13,29 @@ from paper_factory.workflow import WorkflowError, _inference_read
 from test_repository_paper_workflow import study, accepted_repository_draft, analysis_value, draft, review, plan
 
 
+def _retained_portfolio_contract(monkeypatch):
+    """These regression cases freeze the earlier work-product-only contract.
+
+    The new question/acquisition pipeline is exercised independently in
+    test_repository_research_design.py, without changing existing study records.
+    """
+    from paper_factory.autonomous.repository_portfolio import RepositoryPortfolioMixin, START_KEY
+    original = RepositoryPortfolioMixin._portfolio_append
+    def append(ws, record, key, path, value):
+        if key == START_KEY:
+            value = {name: item for name, item in value.items() if name != "research_design_contract"}
+        return original(ws, record, key, path, value)
+    monkeypatch.setattr(RepositoryPortfolioMixin, "_portfolio_append", staticmethod(append))
+
+
+@pytest.fixture(autouse=True)
+def retained_portfolio_contract(monkeypatch):
+    _retained_portfolio_contract(monkeypatch)
+
+
 @pytest.fixture
 def portfolio(study, monkeypatch):
+    _retained_portfolio_contract(monkeypatch)
     service, rid = study
     accepted_repository_draft(service, rid)
     calls = []
@@ -33,6 +54,7 @@ def portfolio(study, monkeypatch):
 
 @pytest.fixture
 def unwritten_portfolio(study, monkeypatch):
+    _retained_portfolio_contract(monkeypatch)
     service, rid = study
     service.submit_repository_plan(rid, plan(service, rid))
     monkeypatch.setattr("paper_factory.submission_requirements.fetch_requirements", lambda url: {
@@ -105,12 +127,34 @@ def test_out_of_scope_security_magazine_is_assessed_then_omitted_from_authoring(
             for venue_id in ("ieee-software", "ieee-security-privacy")]})
 
 
-def retain_portfolio_response(service, rid, value, phase, venue_id=None, *, material_change=None, outcome="completed", before_outcome=None, material_notice="", failed_text=None, code=None, model="synthetic-test-model", binding_change=None, preflight=True):
+def work_products_fixture(source_id):
+    """Explicit synthetic source-only comparison; establishes no scholarly merit."""
+    note = "Synthetic comparison fixture only; no implementation or publication quality is established."
+    return {"products": [{"id": "source-choice", "kind": "source_comparison", "reader_decision": note,
+        "shared_requirements": [note], "common_conditions": [note],
+        "criteria": [{"id": "boundary", "question": note}],
+        "alternatives": [{"id": key, "label": note + key, "implementation_status": status,
+            "implementation_steps": [note], "costs": [note], "applicability_conditions": [note],
+            "evidence_ids": [source_id]} for key, status in
+            (("current", "retained_source"), ("proposed", "proposed_change"))],
+        "observations": [{"id": "observation-" + key, "alternative_id": key,
+            "criterion_id": "boundary", "observation": note + key, "evidence_ids": [source_id]}
+            for key in ("current", "proposed")],
+        "changed_decisions": [{"id": "decision-one", "condition": note,
+            "prior_method_evidence_ids": [], "baseline_decision": "Retain the existing source-bound entry point.",
+            "additional_analysis": note, "changed_decision": "Consider an explicitly proposed lifecycle review.",
+            "support_ids": ["observation-current", "observation-proposed"], "result_refs": [],
+            "limitations": [note]}], "limitations": [note]}]}
+
+
+def retain_portfolio_response(service, rid, value, phase, venue_id=None, *, material_change=None, outcome="completed", before_outcome=None, material_notice="", failed_text=None, code=None, model="synthetic-test-model", binding_change=None, preflight=True, include_work_products=True):
     status = service.status(rid)
     portfolio = status["repository_paper"]["portfolio"]
+    if phase == "source-analysis" and portfolio.get("research_workproducts_contract") and include_work_products:
+        value.setdefault("work_products", work_products_fixture(value["source_evidence"][0]["id"]))
     venue = next((item for item in portfolio["venues"] if item["venue_id"] == venue_id), None)
     if phase == "venue-manuscript-review" and preflight and venue["export_status"] == "not_started":
-        def fixture_conversion(source, output):
+        def fixture_conversion(source, output, **kwargs):
             output.write_bytes(b"Explicitly synthetic preflight output, not an actual publication file: " + output.suffix.encode())
             return {"input_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
                 "output_sha256": hashlib.sha256(output.read_bytes()).hexdigest(), "engine": "synthetic-fixture"}
@@ -137,6 +181,18 @@ def retain_portfolio_response(service, rid, value, phase, venue_id=None, *, mate
         "uninspectedSourceFiles": [item["name"] for item in inventory if item["name"] not in source],
         "sourceReads": [{**assets[name], **_inference_read(text)} for name, text in source.items()],
         "retainedLiterature": [], "retainedReferences": [], "retainedGuidance": guidance}
+    if binding.get("research_workproducts_contract") and binding.get("portfolio_analysis_sha256"):
+        analysis_key = next(key for key, artifact in status["artifacts"].items() if
+            artifact["sha256"] == binding["portfolio_analysis_sha256"])
+        text = service.artifact_path(rid, analysis_key).read_bytes().decode("utf-8")
+        materials["portfolioResearchWork"] = {"artifact_id": analysis_key,
+            "sha256": binding["portfolio_analysis_sha256"], "text": text, **_inference_read(text)}
+    if binding.get("research_agenda_sha256"):
+        agenda_key = next(key for key, artifact in status["artifacts"].items() if
+            key.startswith("repository-portfolio-research-agenda-") and artifact["sha256"] == binding["research_agenda_sha256"])
+        text = service.artifact_path(rid, agenda_key).read_bytes().decode("utf-8")
+        materials["portfolioResearchAgenda"] = {"artifact_id": agenda_key,
+            "sha256": binding["research_agenda_sha256"], "text": text, **_inference_read(text)}
     if phase == "venue-manuscript-review" or phase == "venue-manuscript" and venue["draft"]:
         text = service.artifact_path(rid, venue["artifact_ids"]["markdown"]).read_bytes().decode("utf-8")
         materials["portfolioDraft"] = {"artifact_id": venue["artifact_ids"]["markdown"], "text": text,
@@ -459,7 +515,7 @@ def test_portfolio_export_failure_and_interruption_are_public_without_reexecutin
     assert venue["export_status"] == "not_started" and venue["export"] is None
     original = service.artifact_path(rid, venue["artifact_ids"]["draft"]).read_bytes()
     calls = []
-    def fail(source, output):
+    def fail(source, output, **kwargs):
         calls.append(output.suffix)
         raise ValueError("Synthetic compiler failure preserves the original journal draft.")
     monkeypatch.setattr("paper_factory.conversion.convert", fail)

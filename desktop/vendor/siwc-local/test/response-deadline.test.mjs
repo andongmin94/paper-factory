@@ -30,7 +30,7 @@ function delayedStream(t) {
   } };
 }
 
-test('active SSE can complete after the former three-minute client cutoff', async t => {
+test('active SSE can complete after the former ten-minute client cutoff', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const deadlines = [];
   t.mock.method(AbortSignal, 'timeout', milliseconds => {
@@ -47,13 +47,13 @@ test('active SSE can complete after the former three-minute client cutoff', asyn
   const outcome = request.then(value => ({ value }), error => ({ error }));
   await delayed.headers;
   await new Promise(resolve => setImmediate(resolve));
-  t.mock.timers.tick(181_000);
+  t.mock.timers.tick(601_000);
   delayed.complete();
   const result = await outcome;
   assert.equal(result.error, undefined);
   assert.deepEqual(result.value, { text: 'partial complete' });
   assert.deepEqual(partials, ['partial', ' complete']);
-  assert.deepEqual(deadlines, [600_000]);
+  assert.deepEqual(deadlines, [1_500_000]);
 });
 
 test('caller cancellation after SSE headers remains a failed partial response', async t => {
@@ -70,7 +70,7 @@ test('caller cancellation after SSE headers remains a failed partial response', 
   assert.deepEqual(partials, ['partial']);
 });
 
-test('the ten-minute SSE deadline still stops an unfinished partial response', async t => {
+test('the twenty-five-minute SSE deadline still stops an unfinished partial response', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   t.mock.method(AbortSignal, 'timeout', milliseconds => {
     const controller = new AbortController();
@@ -85,7 +85,7 @@ test('the ten-minute SSE deadline still stops an unfinished partial response', a
   const outcome = request.then(value => ({ value }), error => ({ error }));
   await delayed.headers;
   await new Promise(resolve => setImmediate(resolve));
-  t.mock.timers.tick(600_001);
+  t.mock.timers.tick(1_500_001);
   const result = await outcome;
   assert.equal(result.value, undefined);
   assert.equal(result.error?.code, 'stream_interrupted');

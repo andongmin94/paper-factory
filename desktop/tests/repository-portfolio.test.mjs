@@ -27,8 +27,9 @@ catalog.venues.find(venue => venue.id === 'ieee-security-privacy').verified_limi
 catalog.venues.find(venue => venue.id === 'ieee-security-privacy').requirements_status = 'checked_scope';
 const digest = text => createHash('sha256').update(text).digest('hex');
 const source = { 'src/choice.ts': 'export const choice = "synthetic-local";',
-  'src/retained-analysis.ts': 'export const priorAnalysisOnly = "complete previously inspected synthetic witness";' };
-const sourceEvidence = Object.entries(source).map(([path, quote], index) => ({ id: `witness-${index}`, path,
+  'src/retained-analysis.ts': 'export const priorAnalysisOnly = "complete previously inspected synthetic witness";',
+  'src/question.ts': 'export const callerOwnsDefault = "newly requested complete source witness";' };
+const sourceEvidence = Object.entries(source).slice(0, 2).map(([path, quote], index) => ({ id: `witness-${index}`, path,
   sha256: digest(quote), quote, interpretation: 'Synthetic static witness only.' }));
 const analysis = { method: 'Synthetic complete source analysis.', codebook: [], units: [], findings: [], counterexamples: [],
   source_evidence: sourceEvidence, literature_evidence: [], document_evidence: [], limitations: ['No actual research.'] };
@@ -43,10 +44,27 @@ const review = () => ({ criteria: Object.fromEntries(['supported_findings', 'con
     contribution: { passed: true, reason: 'Synthetic contribution.' }, issues: [], next_actions: [],
     literature_queries: [], pdf_candidates: [], revision_outline: [] } });
 
+test('candidate acquisition and completed research drive the actual writer content using the existing planning and analysis requests', async t => {
+  const f = await fixture(t, { researchDesign: true });
+  await f.run();
+  const collection = f.requests.filter(item => item.method === 'workflow.collectPortfolioLiterature');
+  assert.equal(collection.length, 1);
+  assert.equal(collection[0].params.researchAgenda.provisional_selected_id, 'walkthrough');
+  assert.equal(f.portfolio.analysis.research_design.selected_question_id, 'ownership');
+  for (const venue of f.portfolio.venues) {
+    assert.ok(venue.draft.sections[1].text.includes('The caller-owned requirement changes the selected override order.'));
+  }
+  assert.equal(f.modelCalls.filter(request => request.input[0].content.startsWith('Select closest primary scholarly bodies')).length, 1);
+  assert.equal(f.modelCalls.filter(request => request.input[0].content.startsWith('Perform the common')).length, 1);
+  assert.equal(f.modelCalls.length, 2 + 2 * catalog.venues.length);
+  assert.equal(f.workflow.execution_attempt, 0);
+  assert.equal(f.workflow.study_literature_attempt, 3);
+});
+
 async function fixture(t, { failedWriter = null, partialWriter = null, failedRepair = false, alteredRepair = false,
   interruptedAdmission = null, globalError = null, rejectStartOnce = false, failedExport = null, failedExportRepair = false,
   revisionBodyChars = 0, negativeVenueReview = null, invalidAnalysis = false, failedAnalysisRepair = false,
-  invalidAnalysisRepair = false, unsupportedAnalysisRepair = false } = {}) {
+  invalidAnalysisRepair = false, unsupportedAnalysisRepair = false, researchDesign = false } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'pf-independent-portfolio-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const requests = [], modelCalls = [], texts = new Map(), reservations = new Set();
@@ -86,7 +104,23 @@ async function fixture(t, { failedWriter = null, partialWriter = null, failedRep
         return { venue_id: target.venue_id, url: 'https://example.test/guidelines', status: 'retained', failure: null,
           text_artifact_id: artifact.id, text_sha256: artifact.sha256, text_size: artifact.size, text_chars: [...texts.get(artifact.id)].length };
       }) }, venues: [], all_content_ready: false, completed: 0, total: targets.length };
+  const researchAgenda = { candidates: [{ id: 'walkthrough', question: 'How is the setting implemented?',
+    evidence_needs: [{ kind: 'source_inspection', target: 'src/question.ts' }] },
+    { id: 'ownership', question: 'When should a caller retain control of a default?',
+      evidence_needs: [{ kind: 'source_inspection', target: 'src/missing.ts' }] }], provisional_selected_id: 'walkthrough' };
+  const researchDesignReport = { writer_brief: { selected_question: researchAgenda.candidates[1],
+    completed_findings: [{ id: 'order', claim: 'The caller-owned requirement changes the selected override order.' }],
+    closest_methods: [{ already_provides: 'The existing default-first method already preserves caller control.' }] } };
+  if (researchDesign) {
+    portfolio.research_design_contract = portfolio.research_workproducts_contract = 1;
+    portfolio.literature_collections = [];
+    portfolio.literature_followup_available = true;
+    workflow.schemas.research_agenda = { type: 'object', properties: { candidates: { type: 'array' } },
+      $defs: { ResearchCandidate: { type: 'object' } } };
+  }
   const frame = (phase, target = null) => ({ research_id: workflow.id, portfolio_start_sha256: portfolio.sha256,
+    ...(researchDesign ? { research_design_contract: 1, research_workproducts_contract: 1,
+      ...(portfolio.research_agenda ? { research_agenda_sha256: portfolio.research_agenda.sha256 } : {}) } : {}),
     source_digest: digest('source'), source_commit: 'synthetic-commit', plan_sha256: digest('plan'), base_analysis_sha256: digest('base analysis'),
     catalog_sha256: digest(JSON.stringify(catalog)), guidance_sha256: portfolio.guidance.sha256, literature_sha256: null,
     portfolio_analysis_sha256: portfolio.analysis_sha256, phase, venue_id: target?.venue_id ?? null,
@@ -178,7 +212,9 @@ async function fixture(t, { failedWriter = null, partialWriter = null, failedRep
       }
       const revised = portfolio.analysis_revision?.status === 'planned';
       portfolio.analysis = params.value.analysis;
-      portfolio.analysis_sha256 = retain(revised ? 'repository-portfolio-analysis-revision-3' : 'repository-portfolio-analysis', params.value.analysis).sha256;
+      portfolio.analysis_sha256 = retain(revised ? 'repository-portfolio-analysis-revision-3' : 'repository-portfolio-analysis',
+        researchDesign ? { value: params.value.analysis, research_design_report: researchDesignReport } : params.value.analysis).sha256;
+      if (researchDesign) portfolio.research_design_report = structuredClone(researchDesignReport);
       portfolio.analysis_binding = null; portfolio.analysis_outcome = null;
       if (portfolio.analysis_repair) portfolio.analysis_repair.status = 'completed';
       if (revised) {
@@ -240,6 +276,15 @@ async function fixture(t, { failedWriter = null, partialWriter = null, failedRep
       portfolio.literature_followup_available = false;
       const artifact = retain('synthetic-new-literature-3', { sources: [], html_candidates: params.htmlCandidates });
       portfolio.literature_sha256 = artifact.sha256;
+      if (researchDesign) {
+        assert.deepEqual(params.researchAgenda, researchAgenda);
+        const completed = JSON.parse(texts.get(params.inferenceArtifactId));
+        assert.equal(completed.outcome, 'completed');
+        assert.deepEqual(JSON.parse(completed.text).queries, params.queries);
+        const agendaArtifact = retain('repository-portfolio-research-agenda-3', { value: params.researchAgenda });
+        portfolio.research_agenda = { artifact_id: agendaArtifact.id, sha256: agendaArtifact.sha256, value: params.researchAgenda };
+        portfolio.analysis_binding = frame('source-analysis');
+      }
       portfolio.literature_collections.push({ artifact_id: artifact.id, sha256: artifact.sha256,
         attempt: 3, queries: params.queries, status: 'completed' });
     } else if (method === 'workflow.submitPortfolioManuscript') {
@@ -328,7 +373,8 @@ async function fixture(t, { failedWriter = null, partialWriter = null, failedRep
         queries: ['Synthetic exact primary HTML paper'], pdf_candidates: [], html_candidates: [{
           landing_url: 'https://example.test/official-paper', html_url: 'https://example.test/full-paper.html',
           title: 'Synthetic exact primary HTML paper', authors: ['Synthetic Author'], year: 2026,
-          publication_type: 'proceedings-article', publication_version: 'published' }], reason: 'Synthetic retrieval planning only.' }) };
+          publication_type: 'proceedings-article', publication_version: 'published' }], reason: 'Synthetic retrieval planning only.',
+          ...(researchDesign ? { research_agenda: researchAgenda } : {}) }) };
       const venueId = /for ([\w-]+) attempt/.exec(prompt)?.[1];
       if (prompt.startsWith('Repair only the native-rejected common')) {
         const materials = JSON.parse(prompt.split('\n').at(-1));
@@ -343,6 +389,16 @@ async function fixture(t, { failedWriter = null, partialWriter = null, failedRep
         return { text: JSON.stringify(analysis) };
       }
       if (prompt.startsWith('Perform the common')) {
+        if (researchDesign) {
+          const materials = JSON.parse(prompt.split('\n').at(-1)), delivered = materials.portfolioResearchAgenda;
+          assert.equal(delivered.sha256, portfolio.research_agenda.sha256);
+          assert.equal(delivered.text, texts.get(delivered.artifact_id));
+          assert.equal(materials.productionSource['src/question.ts'], source['src/question.ts']);
+          assert.deepEqual(materials.sourceAcquisition.supplied_source_paths, ['src/question.ts']);
+          assert.deepEqual(materials.sourceAcquisition.unavailable_source_paths, ['src/missing.ts']);
+          assert.ok(prompt.includes('test the proposed addition against its falsifier'));
+          return { text: JSON.stringify({ ...analysis, research_design: { selected_question_id: 'ownership' } }) };
+        }
         if (portfolio.analysis_revision) {
           assert.ok(prompt.includes('"portfolioRevision"'));
           assert.ok(prompt.includes(JSON.stringify(analysis.method)));
@@ -391,6 +447,15 @@ async function fixture(t, { failedWriter = null, partialWriter = null, failedRep
       }
       assert.equal(request.model, 'synthetic-writer');
       const venue = portfolio.venues.find(item => item.venue_id === venueId);
+      if (researchDesign) {
+        const delivered = JSON.parse(prompt.split('\n').at(-1)).portfolioResearchWork;
+        assert.equal(delivered.text, texts.get(delivered.artifact_id));
+        assert.deepEqual(JSON.parse(delivered.text).research_design_report, researchDesignReport);
+        assert.ok(prompt.includes('The original plan.question and contribution were provisional'));
+        const value = manuscript(`Synthetic ownership feature for ${venueId}`);
+        value.sections[1].text += ' ' + researchDesignReport.writer_brief.completed_findings[0].claim;
+        return { text: JSON.stringify(value) };
+      }
       if (venue?.revision_feedback_pending) {
         const materials = JSON.parse(prompt.split('\n').at(-1)), supplied = materials.portfolioRevisionFeedback;
         assert.equal(supplied.text, texts.get(venue.revision_feedback.artifact_id));

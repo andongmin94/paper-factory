@@ -1387,6 +1387,12 @@ test("submission wizard reviews only newly generated files and never treats port
     manifest_artifact_id: null, metadata_artifact_id: null, cover_letter_artifact_id: null, confirmation: null,
     author_biography: 'Synthetic UI biography; no real credentials or human approval are asserted.', keywords: ['synthetic', 'static analysis'],
     funding_statement: 'Synthetic funding input only.', conflicts_statement: 'Synthetic conflict input only.', cover_letter_note: '', photo: null,
+    compliance: { venue_id: 'ieee-security-privacy', checked_at: '2026-10-18',
+      items: [{ id: 'word_count', label: '분량', status: 'failed', stage: 'native', reason: 'Synthetic native count fails for UI verification.', source_url: null },
+        { id: 'visual_review', label: '전체 페이지 직접 확인', status: 'pending', stage: 'submission', reason: 'Synthetic human confirmation remains pending.', source_url: null }],
+      metrics: { native_word: { whole_words: 6000, body_words: 5500, abstract_words: 45, reference_count: 8 }, effective_words: 6250 },
+      page_qa: { page_count: 10, automatic_checks: true }, blockers: ['word_count'], pending: ['visual_review'], prefilter_passed: true,
+      content_format_passed: false, submission_ready: false, scientific_merit_assessed: false, author_approval_inferred: false },
     origin: 'explicit_human_submission_preparation', externally_verified: false };
   const research: ResearchSnapshot = { runtime: { state: 'ready', message: 'Synthetic UI fixture only.', repositoryAnalysisReady: true },
     busy: false, cleanupResearchIds: [], error: null, jobs: [{ ...researchFixture(id), id, source: 'https://github.com/fixture-owner/submission-ui',
@@ -1451,16 +1457,29 @@ test("submission wizard reviews only newly generated files and never treats port
     const wizard = page.getByRole('region', { name: '실제 학술지 투고', exact: true });
     await wizard.getByRole('radio', { name: 'IEEE Security & Privacy', exact: true }).check();
     await expect(wizard.getByRole('checkbox')).toHaveCount(0);
+    const biographyDetails = { role: 'Synthetic role', location: 'Synthetic city, N/A', research_interests: 'Synthetic static analysis',
+      highest_degree: 'None', degree_institution: 'N/A', professional_membership: 'None' };
+    const biographyInputs = { role: '현재 직책·역할 (영문)', location: '근무·거주 도시와 국가 (영문)', research_interests: '연구 관심 분야 (영문)',
+      highest_degree: '최종 취득 학위 (영문)', degree_institution: '해당 학위를 받은 기관 (영문)', professional_membership: '학회·전문 단체 회원 정보 (영문)' };
+    for (const label of Object.values(biographyInputs)) await expect(wizard.getByLabel(label, { exact: true })).toHaveValue('');
     await wizard.getByLabel('실제 저자 약력 (영문)', { exact: true }).fill('Synthetic UI biography only; no actual credentials or author approval are asserted.');
-    await wizard.getByLabel('키워드 (영문, 쉼표로 구분)', { exact: true }).fill('synthetic, static analysis');
+    await wizard.getByLabel('키워드 (영문, 쉼표로 구분)', { exact: true }).fill('synthetic, static analysis, review');
     await wizard.getByLabel('연구비·지원 내역 (영문, 없으면 없다고 명시)', { exact: true }).fill('Synthetic funding input only.');
     await wizard.getByLabel('이해충돌 선언 (영문, 없으면 없다고 명시)', { exact: true }).fill('Synthetic conflict input only.');
+    await expect(wizard.getByRole('button', { name: '키워드·약력 포함한 새 제출 파일 만들기', exact: true })).toBeDisabled();
+    for (const key of Object.keys(biographyInputs) as Array<keyof typeof biographyInputs>) {
+      await wizard.getByLabel(biographyInputs[key], { exact: true }).fill(biographyDetails[key]);
+    }
     const jpegBytes = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0xff, 0xd9]);
     await wizard.getByLabel('실제 저자 사진 (선택)', { exact: true }).setInputFiles({
       name: '한글 저자 프로필.JPG', mimeType: 'image/jpeg', buffer: jpegBytes,
     });
     await wizard.getByRole('button', { name: '키워드·약력 포함한 새 제출 파일 만들기', exact: true }).click();
     await expect(wizard).toContainText('새 제출 파일 · 직접 검수 대기');
+    const compliance = wizard.getByRole('region', { name: '투고 형식과 제출 요건', exact: true });
+    await expect(compliance).toContainText('실제 Word 측정: 전체 6000단어');
+    await expect(compliance).toContainText('분량 · 보완 필요');
+    await expect(compliance).toContainText('전체 페이지 직접 확인 · 확인 대기');
     await expect(wizard.getByRole('button', { name: '미제출 준비 취소하고 학술지 다시 선택', exact: true })).toBeEnabled();
     for (const radio of await wizard.getByRole('radio').all()) await expect(radio).toBeDisabled();
     const fileCheck = wizard.getByRole('region', { name: '새 제출 파일 검수', exact: true });
@@ -1474,6 +1493,7 @@ test("submission wizard reviews only newly generated files and never treats port
     expect(calls.filter(call => call.kind === 'record')).toEqual([]);
     expect(calls.find(call => call.kind === 'open')?.value).toBe(preparation.docx_artifact_id);
     expect(calls.find(call => call.kind === 'prepare')?.value).toMatchObject(originalBinding);
+    expect((calls.find(call => call.kind === 'prepare')?.value as PortfolioSubmissionPreparationInput).biography_details).toEqual(biographyDetails);
     expect((calls.find(call => call.kind === 'prepare')?.value as PortfolioSubmissionPreparationInput).photo).toEqual({
       filename: 'author-photo.jpg', media_type: 'image/jpeg', base64: jpegBytes.toString('base64'),
     });
@@ -1481,6 +1501,14 @@ test("submission wizard reviews only newly generated files and never treats port
       '확인한 PDF 전체 페이지 수': '10', '표 개수': '1', '그림 개수': '0' };
     for (const [label, value] of Object.entries(metrics)) await fileCheck.getByLabel(label, { exact: true }).fill(value);
     for (const checkbox of await fileCheck.getByRole('checkbox').all()) await checkbox.check();
+    await expect(fileCheck.getByRole('button', { name: '새 파일 검수·저자 확인 저장하고 투고 패키지 만들기', exact: true })).toBeDisabled();
+    await electronApp.evaluate(({ BrowserWindow }) => {
+      const fixture = (globalThis as typeof globalThis & { __paperFactoryGateFixture: SubmissionFixture }).__paperFactoryGateFixture;
+      const report = fixture.research.jobs[0].repositoryPaper!.portfolio!.submission!.preparation!.compliance!;
+      report.content_format_passed = true; report.blockers = [];
+      report.items[0].status = 'passed'; report.items[0].reason = 'Synthetic count acceptance only.';
+      BrowserWindow.getAllWindows()[0]?.webContents.send('research:changed', fixture.research);
+    });
     await fileCheck.getByRole('button', { name: '새 파일 검수·저자 확인 저장하고 투고 패키지 만들기', exact: true }).click();
     await expect(wizard).toContainText('투고 패키지 준비됨');
     await wizard.getByRole('button', { name: 'IEEE Security & Privacy 공식 투고 사이트 열기', exact: true }).click();

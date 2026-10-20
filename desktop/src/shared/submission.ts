@@ -1,3 +1,14 @@
+import type { JournalComplianceReport } from './manuscript-improvement';
+
+export interface SubmissionBiographyDetails {
+  role: string;
+  location: string;
+  research_interests: string;
+  highest_degree: string;
+  degree_institution: string;
+  professional_membership: string;
+}
+
 export interface PortfolioSubmissionPreparationInput {
   expected_draft_sha256: string;
   expected_review_sha256: string;
@@ -5,6 +16,7 @@ export interface PortfolioSubmissionPreparationInput {
   expected_pdf_sha256: string;
   expected_docx_sha256: string;
   author_biography: string;
+  biography_details: SubmissionBiographyDetails;
   keywords: string[];
   photo: { filename: string; media_type: 'image/png' | 'image/jpeg'; base64: string } | null;
   funding_statement: string;
@@ -74,6 +86,8 @@ export interface PortfolioSubmissionPreparation {
     metrics: { biography_words: number; visual_words: number; effective_words: number; abstract_words: number;
       reference_count: number; count_scope: string } } | null;
   author_biography: string;
+  biography_details?: SubmissionBiographyDetails;
+  compliance?: JournalComplianceReport;
   keywords: string[];
   funding_statement: string;
   conflicts_statement: string;

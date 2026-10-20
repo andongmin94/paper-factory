@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import type { ResearchItem } from '../shared/research';
 import type { PortfolioSubmissionCandidate, PortfolioSubmissionConfirmationInput,
-  PortfolioSubmissionPreparation, PortfolioSubmissionRecordInput, PortfolioSubmissionState } from '../shared/submission';
+  PortfolioSubmissionPreparation, PortfolioSubmissionRecordInput, PortfolioSubmissionState, SubmissionBiographyDetails } from '../shared/submission';
 import { Badge } from './components/ui/badge';
 import { Button } from './components/ui/button';
+import { JournalCompliance } from './JournalCompliance';
 import type { ResearchAction } from './research-ui';
 
 const statusLabels: Record<PortfolioSubmissionState['status'], string> = {
@@ -28,6 +29,10 @@ const qaLabels: Record<keyof PortfolioSubmissionConfirmationInput['qa'], string>
   word_count: '실제 Word에서 확인한 단어 수', docx_pages: '확인한 Word 전체 페이지 수',
   pdf_pages: '확인한 PDF 전체 페이지 수', table_count: '표 개수', figure_count: '그림 개수',
 };
+const biographyLabels: Record<keyof SubmissionBiographyDetails, string> = {
+  role: '현재 직책·역할 (영문)', location: '근무·거주 도시와 국가 (영문)', research_interests: '연구 관심 분야 (영문)',
+  highest_degree: '최종 취득 학위 (영문)', degree_institution: '해당 학위를 받은 기관 (영문)', professional_membership: '학회·전문 단체 회원 정보 (영문)',
+};
 
 async function photoInput(file: File | null) {
   if (!file) return null;
@@ -49,11 +54,15 @@ function SubmissionAuthorForm({ job, candidate, locked, runAction }: {
   const [value, setValue] = useState({ author_biography: job.authorMetadata?.value.biography ?? '', keywords: '', funding_statement: '',
     conflicts_statement: '', cover_letter_note: '' });
   const [photo, setPhoto] = useState<File | null>(null);
+  const [biographyDetails, setBiographyDetails] = useState<SubmissionBiographyDetails>({ role: '', location: '', research_interests: '',
+    highest_degree: '', degree_institution: '', professional_membership: '' });
   const keywords = value.keywords.split(',').map(word => word.trim()).filter(Boolean);
   const needsPhoto = candidate.venue_id === 'ieee-software';
   const photoProblem = photo && (photo.size > 512 * 1024 || !['image/png', 'image/jpeg'].includes(photo.type));
-  const valid = !!candidate.expected_binding && candidate.prepare_available && !!value.author_biography.trim() &&
-    keywords.length > 0 && keywords.length <= 10 && !!value.funding_statement.trim() &&
+  const valid = !!candidate.expected_binding && candidate.prepare_available && value.author_biography.trim().length >= 40 &&
+    Object.values(biographyDetails).every(item => !!item.trim() && !/^(tbd|pending|미정|확인 대기)$/i.test(item.trim())) &&
+    keywords.length >= 3 && keywords.length <= 8 && new Set(keywords.map(word => word.toLocaleLowerCase())).size === keywords.length &&
+    keywords.every(word => word.length >= 2 && word.length <= 100) && !!value.funding_statement.trim() &&
     !!value.conflicts_statement.trim() && (!needsPhoto || !!photo) && !photoProblem;
   const author = job.authorMetadata?.value;
   return <form className="space-y-3" onSubmit={event => {
@@ -61,12 +70,20 @@ function SubmissionAuthorForm({ job, candidate, locked, runAction }: {
     if (!valid || locked || !candidate.expected_binding) return;
     void runAction('submission-prepare', async () => window.paperFactory.preparePortfolioSubmission(job.id, candidate.venue_id, {
       ...candidate.expected_binding!, author_biography: value.author_biography.trim(), keywords,
+      biography_details: biographyDetails,
       photo: await photoInput(photo), funding_statement: value.funding_statement.trim(),
       conflicts_statement: value.conflicts_statement.trim(), cover_letter_note: value.cover_letter_note.trim(),
     }));
   }}>
     <p className="detail-note">현재 저자 정보: {author ? `${author.display_name} · ${author.affiliation} · ${author.email}` : '먼저 실제 저자 정보를 저장하고 저자 정보를 반영해 출력하세요.'}</p>
     <p className="detail-note">키워드와 실제 저자 약력이 들어간 새 제출용 Word·PDF를 만듭니다. 기존 연구·원고·심사와 횟수는 보존됩니다. 아래 정보는 저자가 직접 제공해야 합니다.</p>
+    <fieldset className="space-y-3" disabled={locked}><legend className="font-semibold">약력에 필요한 실제 정보</legend>
+      <p className="detail-note">현재 역할·관심 분야·학위·회원 정보를 아래 약력과 일치하게 입력하세요. 해당 사항이 없으면 사실에 맞게 None 또는 N/A를 입력하세요.</p>
+      <div className="grid gap-3 sm:grid-cols-2">{(Object.keys(biographyLabels) as Array<keyof SubmissionBiographyDetails>).map(key =>
+        <div className="field" key={key}><label htmlFor={`${job.id}-submission-biography-${key}`}>{biographyLabels[key]}</label>
+          <input id={`${job.id}-submission-biography-${key}`} required maxLength={4000} value={biographyDetails[key]}
+            onChange={event => setBiographyDetails(current => ({ ...current, [key]: event.target.value }))} /></div>)}</div>
+    </fieldset>
     {(['author_biography', 'keywords', 'funding_statement', 'conflicts_statement', 'cover_letter_note'] as const).map(key => {
       const labels = { author_biography: '실제 저자 약력 (영문)', keywords: '키워드 (영문, 쉼표로 구분)',
         funding_statement: '연구비·지원 내역 (영문, 없으면 없다고 명시)',
@@ -77,6 +94,7 @@ function SubmissionAuthorForm({ job, candidate, locked, runAction }: {
           : <textarea id={`${job.id}-submission-${key}`} required={key !== 'cover_letter_note'} maxLength={4000} value={value[key]}
             disabled={locked} onChange={event => setValue(current => ({ ...current, [key]: event.target.value }))} />}</div>;
     })}
+    <p className="detail-note">키워드는 서로 다른 영문 구절 3~8개를 쉼표로 구분하세요. 약력은 위 사실을 담은 영문 문장으로 작성하세요.</p>
     <div className="field"><label htmlFor={`${job.id}-submission-photo`}>실제 저자 사진{needsPhoto ? ' (IEEE Software 필수)' : ' (선택)'}</label>
       <input id={`${job.id}-submission-photo`} type="file" accept="image/png,image/jpeg" required={needsPhoto} disabled={locked}
         onChange={event => setPhoto(event.currentTarget.files?.[0] ?? null)} />
@@ -94,7 +112,8 @@ function SubmissionFileCheck({ job, candidate, preparation, locked, runAction }:
   const [qa, setQa] = useState({ word_count: '', docx_pages: '', pdf_pages: '', table_count: '', figure_count: '' });
   const [declarations, setDeclarations] = useState(emptyDeclarations);
   const valid = Object.entries(qa).every(([key, value]) => value !== '' && Number.isSafeInteger(Number(value)) &&
-    Number(value) >= (key === 'table_count' || key === 'figure_count' ? 0 : 1)) && Object.values(declarations).every(Boolean);
+    Number(value) >= (key === 'table_count' || key === 'figure_count' ? 0 : 1)) && Object.values(declarations).every(Boolean) &&
+    preparation.compliance?.content_format_passed !== false;
   return <form className="space-y-3" onSubmit={event => {
     event.preventDefault();
     if (!valid || locked) return;
@@ -208,6 +227,7 @@ export function PortfolioSubmission({ job, locked, runAction }: { job: ResearchI
       <p className="detail-note">확인한 수치 요건: {candidate.requirements_checked_at} · 분량 {candidate.limits.min_words ? `${candidate.limits.min_words}~` : '최대 '}{candidate.limits.max_words}단어 · 초록 최대 {candidate.limits.max_abstract_words}단어 · 참고문헌 최대 {candidate.limits.max_references}개</p>
       {!!candidate.missing.length && <ul className="list-disc space-y-1 pl-5" aria-label="투고 준비에 남은 항목">{candidate.missing.map((item, index) => <li key={index}>{item}</li>)}</ul>}
       {preparation?.venue_id === selectedVenue && preparation.errors.length > 0 && <ul className="list-disc space-y-1 pl-5" aria-label="제출 파일 생성 오류">{preparation.errors.map((item, index) => <li key={index}>{item}</li>)}</ul>}
+      {preparation?.venue_id === selectedVenue && preparation.compliance && <JournalCompliance report={preparation.compliance} />}
       {released && <p className="detail-note">기존 접수·결과 기록을 보존했습니다. 다시 투고하려면 새 제출 파일을 만들고 새 파일의 검수와 저자 확인을 진행하세요.</p>}
       {preparedHere && !activeSubmission && <Button variant="ghost" size="sm" disabled={locked || !candidate.prepare_available}
         onClick={() => setReplacingPreparation(true)}>저자·키워드 정보를 고쳐 새 제출 파일 만들기</Button>}

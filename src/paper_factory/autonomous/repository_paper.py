@@ -508,7 +508,7 @@ def format_source_reference_labels(draft: RepositoryManuscript, markdown: str) -
 
 
 def render(draft: RepositoryManuscript, repository_url: str, commit: str | None, sources: dict, documents: dict,
-           source_paths: list[str]) -> str:
+           source_paths: list[str], *, group_repository_citations: bool = False) -> str:
     """Number verified citations by first appearance without rewriting prose."""
     evidence = {e.id: e for e in draft.source_evidence}
     source_refs = {(item.path, item.sha256): item for item in draft.source_evidence}
@@ -531,7 +531,8 @@ def render(draft: RepositoryManuscript, repository_url: str, commit: str | None,
                 raise ValueError("Source citation lacks literal evidence: " + identifier)
             used_source.add(identifier)
             item = evidence[identifier]
-            return number(("source", item.path, item.sha256))
+            return number(("repository", repository_url, commit) if group_repository_citations
+                          else ("source", item.path, item.sha256))
         if kind == "document":
             if identifier not in document_ids or identifier not in documents:
                 raise ValueError("Documentation citation lacks inspected retained evidence: " + identifier)
@@ -567,10 +568,15 @@ def render(draft: RepositoryManuscript, repository_url: str, commit: str | None,
     if any("{{" in paragraph for paragraph in paragraphs):
         raise ValueError("Unknown or unresolved manuscript evidence token")
     refs = {}
-    for item in source_refs.values():
-        url = repository_url.rstrip("/") + "/blob/" + (commit or "HEAD") + "/" + item.path
-        label = _source_code_label(item.path)
-        refs[("source", item.path, item.sha256)] = f"[{label}]({url}). Repository revision: {commit or 'retained snapshot'}."
+    if group_repository_citations:
+        url = repository_url.rstrip("/") + "/tree/" + (commit or "HEAD")
+        label = repository_url.rstrip("/").rsplit("/", 1)[-1] + " source snapshot"
+        refs[("repository", repository_url, commit)] = f"[{label}]({url}). Repository revision: {commit or 'retained snapshot'}."
+    else:
+        for item in source_refs.values():
+            url = repository_url.rstrip("/") + "/blob/" + (commit or "HEAD") + "/" + item.path
+            label = _source_code_label(item.path)
+            refs[("source", item.path, item.sha256)] = f"[{label}]({url}). Repository revision: {commit or 'retained snapshot'}."
     for identifier in sorted(citations):
         source = sources[identifier]
         authors = source.get("authors", [])

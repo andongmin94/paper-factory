@@ -579,7 +579,7 @@ def test_create_and_plan_never_probe_or_dispatch_scientific_runtime(study):
     assert status["research_mode"] == "repository_analysis"
     assert status["supporting_documents"] == []
     assert set(status["schemas"]) == {"repository_plan", "repository_analysis", "repository_manuscript", "repository_review", "repository_reference_selection", "repository_content_assessment", "repository_revision_feedback",
-        "portfolio_start", "portfolio_analysis_submission", "portfolio_manuscript_submission", "portfolio_review_submission"}
+        "portfolio_start", "portfolio_analysis_submission", "portfolio_manuscript_submission", "portfolio_review_submission", "research_agenda"}
     assert "content_assessment" in status["schemas"]["repository_review"]["required"]
     assert status["schemas"]["repository_review"]["properties"]["content_assessment"] == {"$ref": "#/$defs/RepositoryContentAssessment"}
     planned = service.submit_repository_plan(rid, plan(service, rid))

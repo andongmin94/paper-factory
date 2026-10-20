@@ -5,7 +5,7 @@
   "pythonVersion": "3.14.8",
   "hostDependencies": {
     "path": "runtime-inputs/host-dependencies.json",
-    "sha256": "99041a54eff30af4d8b9a78b34d3dadc35b888a73cf94a79afd6c381014d2ca6"
+    "sha256": "3bc23d225854514c3128709f103a17ab2b67f777b3cc21ae85cab48a462910b8"
   },
   "quickjs": {
     "archive": "runtime-inputs/assets/quickjs-runtime.zip",

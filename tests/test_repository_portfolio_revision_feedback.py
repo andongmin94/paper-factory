@@ -36,7 +36,7 @@ def written_feedback_portfolio(unwritten_portfolio):
 
 
 def fixture_export(service, rid, venue_id):
-    def convert(source, output):
+    def convert(source, output, **kwargs):
         output.write_bytes(b"Synthetic native-preflight fixture only: " + output.suffix.encode())
         return {"input_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
             "output_sha256": hashlib.sha256(output.read_bytes()).hexdigest(), "engine": "synthetic-fixture"}

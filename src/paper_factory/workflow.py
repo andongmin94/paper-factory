@@ -26,8 +26,10 @@ from . import conversion, project
 from .author import AuthorProfile, load_author, submission_author_status
 from .autonomous import literature, science
 from .autonomous.repository_paper import RepositoryPlan, RepositoryAnalysis, RepositoryManuscript, RepositoryReview, RepositoryContentAssessment, RepositoryReferenceSelection, RepositoryRevisionFeedback, render as render_repository_paper
-from .autonomous.repository_portfolio import RepositoryPortfolioMixin, PortfolioStart, PortfolioAnalysisSubmission, PortfolioManuscriptSubmission, PortfolioReviewSubmission, PORTFOLIO_MARKER
+from .autonomous.repository_portfolio import RepositoryPortfolioMixin, PortfolioStart, PortfolioAnalysisSubmission, PortfolioManuscriptSubmission, PortfolioReviewSubmission, PORTFOLIO_MARKER, portfolio_analysis_type
+from .autonomous.research_design import ResearchAgenda
 from .autonomous.repository_portfolio import portfolio_frame, START_KEY as PORTFOLIO_START_KEY
+from .autonomous.manuscript_improvement_workflow import ManuscriptImprovementMixin
 from .publication_venues import CATALOG_PATH, publication_catalog
 from .autonomous.study_repair import StudyRemediation, StudyRepair, StudyRecoveryReview, failed_criteria
 from .autonomous.preparation import ResearchQuestions, ResearchQuestionSelection, RedesignQuestionSelection, RedesignQuestionReframing, ReframedQuestionSelection, RedesignSearchRepairPlan, search_terms, validate_redesign_question_selection
@@ -2580,7 +2582,7 @@ def _append_figures(ws: Workspace, record: Workflow, markdown: Path) -> None:
                 f"![Descriptive means from verified controlled measurements.]({name})" for name in figures) + "\n")
 
 
-class WorkflowService(RepositoryPortfolioMixin):
+class WorkflowService(ManuscriptImprovementMixin, RepositoryPortfolioMixin):
     """Two bounded experiment workers and explicit, durable research IDs."""
 
     def __init__(self, home: Path, *, runner, collector=None):
@@ -2860,6 +2862,7 @@ class WorkflowService(RepositoryPortfolioMixin):
                 "publication_venues": _read(ws, record, "repository-publication-catalog")
                     if "repository-publication-catalog" in record.artifacts else publication_catalog(),
                 "portfolio": portfolio,
+                "manuscript_improvement": self._improvement_public(ws, record),
                 "literature": packet, "draft": draft["value"] if draft else None,
                 "references": references, "reference_collections": reference_collections, "venue_suggestions": venue_suggestions,
                 "formatting_receipts": formatting,
@@ -2906,7 +2909,8 @@ class WorkflowService(RepositoryPortfolioMixin):
                     for item in references if item["status"] == "retained"],
                 "read_costs": {"source": _source_read_costs(ws, inventory)}}
             data["schemas"] = {"repository_plan": RepositoryPlan.model_json_schema(),
-                "repository_analysis": RepositoryAnalysis.model_json_schema(),
+                "repository_analysis": portfolio_analysis_type(data.get("repository_paper", {}).get("portfolio") or {}).model_json_schema(),
+                "research_agenda": ResearchAgenda.model_json_schema(),
                 "repository_manuscript": RepositoryManuscript.model_json_schema(),
                 "repository_review": review_schema,
                 "repository_content_assessment": RepositoryContentAssessment.model_json_schema(),
@@ -3235,10 +3239,13 @@ class WorkflowService(RepositoryPortfolioMixin):
     def collect_repository_literature(self, research_id: str, queries: list[str]) -> dict:
         return self._collect_repository_literature(research_id, queries, portfolio=False, pdf_candidates=None)
 
-    def collect_portfolio_literature(self, research_id: str, queries: list[str], pdf_candidates=None, html_candidates=None) -> dict:
-        return self._collect_repository_literature(research_id, queries, portfolio=True, pdf_candidates=pdf_candidates, html_candidates=html_candidates)
+    def collect_portfolio_literature(self, research_id: str, queries: list[str], pdf_candidates=None, html_candidates=None,
+                                    research_agenda=None, inference_artifact_id=None) -> dict:
+        return self._collect_repository_literature(research_id, queries, portfolio=True, pdf_candidates=pdf_candidates,
+            html_candidates=html_candidates, research_agenda=research_agenda, inference_artifact_id=inference_artifact_id)
 
-    def _collect_repository_literature(self, research_id: str, queries: list[str], *, portfolio: bool, pdf_candidates, html_candidates=None) -> dict:
+    def _collect_repository_literature(self, research_id: str, queries: list[str], *, portfolio: bool, pdf_candidates,
+                                      html_candidates=None, research_agenda=None, inference_artifact_id=None) -> dict:
         if not isinstance(queries, list) or not 1 <= len(queries) <= 4 or any(
                 not isinstance(query, str) or not 8 <= len(query.strip()) <= 1000 for query in queries):
             raise ValueError("Repository reading requires one to four substantive queries")
@@ -3300,11 +3307,13 @@ class WorkflowService(RepositoryPortfolioMixin):
                 if ({query_identity(query) for query in queries} &
                         {query_identity(query) for query in _attempted_literature_queries(previous)}) - new_body_targets:
                     raise WorkflowError("LITERATURE_QUERY_CONFLICT", "Repository followup must add changed queries rather than replay the same search")
+            agenda_binding = self._portfolio_prepare_agenda(ws, record, research_agenda, inference_artifact_id,
+                queries, pdf_candidates, html_candidates) if portfolio else None
             record.study_literature_attempt += 1
             number = record.study_literature_attempt
             prefix = "repository-portfolio-literature" if portfolio else "repository-literature"
             intent = ws.path(f"research/repository/{'portfolio/' if portfolio else ''}literature-intent-{number}.json")
-            write_json(intent, {"queries": queries, "pdf_candidates": candidates, "attempt": number,
+            write_json(intent, {"queries": queries, "pdf_candidates": candidates, "attempt": number, **(agenda_binding or {}),
                 "content_assessment_sha256": feedback["content_assessment_sha256"],
                 **({"html_candidates": html} if html else {}),
                 "bindings": followup_binding or (self._portfolio_binding(ws, record, "source-analysis") if portfolio else self._repository_bindings(ws, record))})
@@ -3378,7 +3387,7 @@ class WorkflowService(RepositoryPortfolioMixin):
                     if not _retained_primary_body(ws, record, source, supplement):
                         raise WorkflowError("PUBLICATION_EVIDENCE_INVALID", "A targeted reading upgrade requires independently verified new primary body bytes")
                     merged[index] = source
-            packet = {**supplement, "sources": merged,
+            packet = {**supplement, **(agenda_binding or {}), "sources": merged,
                 "searches": list(previous.get("searches", [])) + supplement.get("searches", []),
                 "pdf_reservations": list(reservations) + supplement.get("pdf_reservations", []),
                 "pdf_hint_attempts": list(previous.get("pdf_hint_attempts", [])) + supplement.get("pdf_hint_attempts", []),
@@ -5678,7 +5687,9 @@ class WorkflowService(RepositoryPortfolioMixin):
                     raise WorkflowError("INFERENCE_EVIDENCE_CONFLICT", "Inference evidence is append-only")
                 return {"artifactId": key, "sha256": record.artifacts[key].sha256}
             portfolio_inference = receipt.phase in {"venue-manuscript", "venue-manuscript-review", "venue-manuscript-repair"} or receipt.phase == "source-analysis" and PORTFOLIO_MARKER in receipt.prompt
-            if portfolio_inference:
+            if receipt.phase in {"quality-plan", "quality-write", "quality-review"}:
+                self._improvement_inference_guard(ws, record, receipt)
+            elif portfolio_inference:
                 self._portfolio_inference_guard(ws, record, receipt)
             elif receipt.phase == "source-analysis":
                 if record.research_mode != "repository_analysis":

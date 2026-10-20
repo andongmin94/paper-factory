@@ -3,6 +3,10 @@ import type { AppSnapshot, PaperFactoryApi } from '../shared/contracts.js';
 import type { ResearchSnapshot } from '../shared/research.js';
 
 const api: PaperFactoryApi = {
+  continueManuscriptImprovement: id => ipcRenderer.invoke('research:manuscript-improvement', id),
+  focusManuscriptImprovement: id => ipcRenderer.invoke('research:focused-manuscript-improvement', id),
+  developManuscriptImprovement: id => ipcRenderer.invoke('research:research-development', id),
+  extendResearchDevelopmentRound: (id, priorRoundId) => ipcRenderer.invoke('research:research-development-extension', id, priorRoundId),
   lookupPublicOrcidProfile: input => ipcRenderer.invoke('research:orcid-profile', input),
   preparePortfolioSubmission: (id, venueId, value) => ipcRenderer.invoke('research:submission-prepare', id, venueId, value),
   confirmPortfolioSubmission: (id, value) => ipcRenderer.invoke('research:submission-confirm', id, value),

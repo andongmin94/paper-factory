@@ -37,7 +37,15 @@ METHODS = {
     "workflow.exportRepositoryDraft": {"researchId"},
     "workflow.reformatRepositoryDraft": {"researchId"},
     "workflow.startPortfolio": {"researchId", "value"},
-    "workflow.collectPortfolioLiterature": {"researchId", "queries", "pdfCandidates", "htmlCandidates"},
+    "workflow.startManuscriptImprovement": {"researchId"},
+    "workflow.reserveManuscriptImprovement": {"researchId", "value"},
+    "workflow.submitManuscriptImprovement": {"researchId", "inferenceArtifactId"},
+    "workflow.finishManuscriptImprovement": {"researchId"},
+    "workflow.repairManuscriptImprovement": {"researchId"},
+    "workflow.grantFocusedManuscriptRound": {"researchId"},
+    "workflow.grantResearchDevelopmentRound": {"researchId"},
+    "workflow.extendResearchDevelopmentRound": {"researchId", "priorRoundId"},
+    "workflow.collectPortfolioLiterature": {"researchId", "queries", "pdfCandidates", "htmlCandidates", "researchAgenda", "inferenceArtifactId"},
     "workflow.preparePortfolioRevision": {"researchId"},
     "workflow.preparePortfolioAnalysisRepair": {"researchId", "inferenceArtifactId"},
     "workflow.submitPortfolioAnalysis": {"researchId", "value"},
@@ -94,7 +102,7 @@ METHODS = {
     "workflow.recordInference": {"researchId", "receipt"},
 }
 OPTIONAL = {"workflow.create": {"researchMode"}, "workflow.status": {"includeMaterials"}, "workflow.readMaterial": {"offset", "limit"},
-            "workflow.collectPortfolioLiterature": {"pdfCandidates", "htmlCandidates"},
+            "workflow.collectPortfolioLiterature": {"pdfCandidates", "htmlCandidates", "researchAgenda", "inferenceArtifactId"},
             "workflow.submitProposal": {"repair"}, "workflow.submitRedesignProposal": {"repair", "preparationRepair"},
             "workflow.submitManuscript": {"claim", "repair"}}
 
@@ -118,6 +126,9 @@ def request(raw: bytes) -> dict:
         not isinstance(params.get("researchId"), str) or not re.fullmatch(r"research-[a-f0-9]{12}", params["researchId"])
     ):
         raise ValueError("Invalid research identifier")
+    if "priorRoundId" in params and (not isinstance(params["priorRoundId"], str) or
+            not re.fullmatch(r"research-development-round-[1-9][0-9]*", params["priorRoundId"])):
+        raise ValueError("Invalid prior research round identifier")
     if "includeMaterials" in params and type(params["includeMaterials"]) is not bool:
         raise ValueError("includeMaterials must be a boolean")
     if "researchMode" in params and params["researchMode"] not in {"empirical", "repository_analysis"}:
@@ -256,8 +267,25 @@ class Dispatcher:
             return self.service.submit_repository_plan(p["researchId"], p["value"])
         if method == "workflow.startPortfolio":
             return self.service.start_portfolio(p["researchId"], p["value"])
+        if method == "workflow.startManuscriptImprovement":
+            return self.service.start_manuscript_improvement(p["researchId"])
+        if method == "workflow.reserveManuscriptImprovement":
+            return self.service.reserve_manuscript_improvement(p["researchId"], p["value"])
+        if method == "workflow.submitManuscriptImprovement":
+            return self.service.submit_manuscript_improvement(p["researchId"], p["inferenceArtifactId"])
+        if method == "workflow.finishManuscriptImprovement":
+            return self.service.finish_manuscript_improvement(p["researchId"])
+        if method == "workflow.repairManuscriptImprovement":
+            return self.service.repair_manuscript_improvement(p["researchId"])
+        if method == "workflow.grantFocusedManuscriptRound":
+            return self.service.grant_focused_manuscript_round(p["researchId"])
+        if method == "workflow.grantResearchDevelopmentRound":
+            return self.service.grant_research_development_round(p["researchId"])
+        if method == "workflow.extendResearchDevelopmentRound":
+            return self.service.extend_research_development_round(p["researchId"], p["priorRoundId"])
         if method == "workflow.collectPortfolioLiterature":
-            return self.service.collect_portfolio_literature(p["researchId"], p["queries"], p.get("pdfCandidates"), p.get("htmlCandidates"))
+            return self.service.collect_portfolio_literature(p["researchId"], p["queries"], p.get("pdfCandidates"), p.get("htmlCandidates"),
+                p.get("researchAgenda"), p.get("inferenceArtifactId"))
         if method == "workflow.preparePortfolioRevision":
             return self.service.prepare_portfolio_revision(p["researchId"])
         if method == "workflow.preparePortfolioAnalysisRepair":

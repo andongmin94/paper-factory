@@ -173,12 +173,43 @@ def pandoc_binary(explicit: str | None = None) -> str:
     return str(binary.resolve())
 
 
-def convert(markdown: Path, output: Path, *, pandoc: str | None = None, bibliography: Path | None = None, csl: Path | None = None, metadata: dict | None = None, line_numbers: bool = False, page_numbers: bool = True) -> dict:
+def convert(markdown: Path, output: Path, *, pandoc: str | None = None, bibliography: Path | None = None, csl: Path | None = None, metadata: dict | None = None, line_numbers: bool = False, page_numbers: bool = True, venue_id: str | None = None) -> dict:
     suffix = output.suffix.lower()
     if suffix not in {".pdf", ".tex", ".docx"}:
         raise ValueError("Supported conversion outputs: PDF, LaTeX and DOCX")
     output.parent.mkdir(parents=True, exist_ok=True)
     output.unlink(missing_ok=True)
+    if venue_id is not None and suffix == ".pdf":
+        from .official_templates import word_pdf
+        source_digest = digest_file(markdown)
+        document = output.with_suffix(".docx")
+        # A Word artifact may already be frozen. Generate the expected bytes in
+        # isolation; never unlink or rewrite an existing companion to make PDF.
+        with TemporaryDirectory(prefix="paperfactory-template-") as temporary:
+            staged = Path(temporary) / document.name
+            report = convert(markdown, staged, pandoc=pandoc, bibliography=bibliography, csl=csl,
+                             metadata=metadata, line_numbers=line_numbers, page_numbers=page_numbers, venue_id=venue_id)
+            if document.exists():
+                if digest_file(document) != report["output_sha256"]:
+                    raise ValueError("The existing Word companion differs from the exact official-template manuscript; preserve it and export into a new directory")
+            else:
+                with document.open("xb") as stream:
+                    stream.write(staged.read_bytes())
+        try:
+            rendered = word_pdf(document, output)
+            from pypdf import PdfReader
+            reader = PdfReader(output)
+            if not output.read_bytes().startswith(b"%PDF-") or not reader.pages or reader.is_encrypted or digest_file(markdown) != source_digest:
+                raise ValueError("Official Word-template PDF is invalid or its manuscript changed during rendering")
+        except Exception:
+            output.unlink(missing_ok=True)
+            raise
+        return {"engine": "Pandoc → official publisher Word template → Microsoft Word PDF",
+                "input_sha256": source_digest, "official_template": report["official_template"],
+                "output_sha256": digest_file(output), "source_docx_sha256": digest_file(document),
+                "word_rendering": rendered}
+    if venue_id is not None and suffix != ".docx":
+        raise ValueError("Official magazine templates currently support native Word and Word-rendered PDF exports")
     target = output.with_suffix(".typ") if suffix == ".pdf" else output
     target.unlink(missing_ok=True)
     binary = pandoc_binary(pandoc)
@@ -189,6 +220,11 @@ def convert(markdown: Path, output: Path, *, pandoc: str | None = None, bibliogr
     table_filter = output.with_name(output.stem + "-table-layout.lua")
     table_filter.write_text(WIDE_TABLE_FILTER, encoding="utf-8")
     generated_inputs = {"--lua-filter": table_filter}
+    template_proof = None
+    if venue_id is not None:
+        from .official_templates import official_template
+        template_path, template_proof = official_template(venue_id)
+        generated_inputs["--reference-doc"] = template_path
     if bibliography:
         command += ["--citeproc", "--bibliography", str(bibliography.resolve())]
     if csl:
@@ -237,7 +273,26 @@ def convert(markdown: Path, output: Path, *, pandoc: str | None = None, bibliogr
     engine = "Pandoc"
     if suffix == ".docx":
         try:
+            if template_proof is not None:
+                from .official_templates import apply_official_styles
+                template_proof = {**template_proof, **apply_official_styles(output, template_path)}
             _format_docx(output, line_numbers=line_numbers, page_numbers=page_numbers)
+            if template_proof is not None:
+                # Repeated Word/PDF conversions bind to identical native bytes,
+                # independent of ZIP entry timestamps or Pandoc's creation time.
+                from docx import Document
+                import zipfile
+                from io import BytesIO
+                document = Document(output)
+                document.core_properties.created = datetime(2000, 1, 1, tzinfo=timezone.utc)
+                document.core_properties.modified = datetime(2000, 1, 1, tzinfo=timezone.utc)
+                document.save(output)
+                original_zip = output.read_bytes()
+                with zipfile.ZipFile(BytesIO(original_zip)) as source_zip, zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as final_zip:
+                    for name in source_zip.namelist():
+                        info = zipfile.ZipInfo(name, date_time=(2000, 1, 1, 0, 0, 0))
+                        info.compress_type = zipfile.ZIP_DEFLATED
+                        final_zip.writestr(info, source_zip.read(name))
         except Exception as exc:
             output.unlink(missing_ok=True)
             raise ValueError(f"Word document formatting failed: {exc}") from exc
@@ -299,6 +354,8 @@ show table.cell: cell => {
         receipt["bibliography_sha256"] = digest_file(bibliography)
     if csl is not None:
         receipt["csl_sha256"] = digest_file(csl)
+    if template_proof is not None:
+        receipt["official_template"] = template_proof
     if suffix == ".pdf":
         receipt["typst_sha256"] = digest_file(target)
     return receipt

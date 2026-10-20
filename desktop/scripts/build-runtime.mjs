@@ -372,7 +372,7 @@ if (isNative) {
   const probeScript = join(attempt, 'probe.py');
   await writeFile(probeScript, String.raw`
 import hashlib, importlib, importlib.metadata, importlib.util, json, pathlib, sys
-modules = ['ssl', 'sqlite3', 'lzma', 'pydantic', 'pydantic_core', 'httpx', 'bs4', 'pypdf', 'docx', 'lxml', 'typst', 'paper_factory.workflow', 'paper_factory.ipc']
+modules = ['ssl', 'sqlite3', 'lzma', 'pydantic', 'pydantic_core', 'httpx', 'bs4', 'pypdf', 'pypdfium2', 'PIL', 'docx', 'lxml', 'typst', 'paper_factory.workflow', 'paper_factory.ipc']
 root, scratch = map(pathlib.Path, sys.argv[1:3])
 for module in modules:
     imported = importlib.import_module(module)
@@ -400,6 +400,23 @@ from docx import Document
 pdf = PdfReader(scratch / 'probe.pdf', strict=True)
 assert len(pdf.pages) == 1 and 'Trusted runtime diagnostic only.' in pdf.pages[0].extract_text()
 assert '한국어 글꼴 검증을 진행합니다.' in pdf.pages[0].extract_text()
+import pypdfium2 as pdfium
+from PIL import Image
+with pdfium.PdfDocument(scratch / 'probe.pdf') as visual_pdf:
+    assert len(visual_pdf) == 1
+    page = visual_pdf[0]
+    try:
+        bitmap = page.render(scale=1)
+        try:
+            raster = bitmap.to_pil()
+            assert raster.width > 500 and raster.height > 500
+            raster.save(scratch / 'probe-page.png')
+        finally:
+            bitmap.close()
+    finally:
+        page.close()
+with Image.open(scratch / 'probe-page.png') as image:
+    assert image.format == 'PNG'
 document = Document(scratch / 'probe.docx')
 assert not document.inline_shapes and len(document.tables) == 1
 assert any('Trusted runtime diagnostic only.' in p.text for p in document.paragraphs)

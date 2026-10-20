@@ -108,7 +108,9 @@ export function inspectRepositoryArticle(draft: Article, target: Pick<Publicatio
   if (limits.max_references !== undefined && references > limits.max_references) blockers.push(`참고문헌 ${references}개: ${limits.max_references}개 이하로 정리해야 합니다.`);
   if (limits.insight_count !== undefined && insights !== limits.insight_count) blockers.push(`Actionable Insights에 실천적 시사점 ${limits.insight_count}개를 목록으로 작성해야 합니다.`);
   const numericGuidanceVerified = venue?.requirements_status === 'checked_numeric_guidance';
-  const uncheckedRequirements = numericGuidanceVerified ? [] : ['이 투고처의 최신 분량·초록·참고문헌·제출 형식은 공식 안내에서 최종 확인해야 합니다. 앱의 집필 권장 분량은 공식 제한이 아닙니다.'];
+  const uncheckedRequirements = numericGuidanceVerified
+    ? ['확인한 수치는 전체 제출 형식의 승인이 아닙니다. 공식 템플릿 적용, 인용 형식, 저자 필수 자료와 새 Word·PDF의 전체 페이지를 별도로 확인해야 합니다.']
+    : ['이 투고처의 최신 분량·초록·참고문헌·제출 형식은 공식 안내에서 최종 확인해야 합니다. 앱의 집필 권장 분량은 공식 제한이 아닙니다.'];
   return { venueId: venue?.id ?? null, numericGuidanceVerified, estimatedWords, maximumWordsEstimate, abstractWords, references, tables, figures, insights,
     formatReady: blockers.length === 0, blockers, uncheckedRequirements };
 }

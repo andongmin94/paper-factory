@@ -3,6 +3,7 @@
 import hashlib
 import io
 import json
+import os
 import re
 from types import SimpleNamespace
 
@@ -55,7 +56,7 @@ def author_draft(portfolio, monkeypatch, request):
     service.submit_portfolio_manuscript(rid, {"venue_id": venue_id, "inference_artifact_id": key, "manuscript": value})
     calls = []
 
-    def convert(source, output):
+    def convert(source, output, **kwargs):
         calls.append((source, output))
         output.write_bytes(b"Explicitly synthetic native fixture: " + output.suffix.encode() + b"\n" + source.read_bytes())
         return {"input_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
@@ -178,7 +179,7 @@ def test_author_failed_and_unknown_attempts_preserved_and_bounded_to_three(autho
     parent = service.artifact_path(rid, venue(before)["artifact_ids"]["draft"]).parent
     failures = []
 
-    def fail(source, output):
+    def fail(source, output, **kwargs):
         failures.append(output)
         output.write_bytes(b"Retained synthetic failure or unknown output bytes.")
         if failure == "interrupted":
@@ -222,12 +223,20 @@ def test_author_export_keeps_cancelled_research_stopped_and_does_not_invent_appr
 
 
 def test_author_export_creates_actual_native_word_and_pdf_with_literal_profile(author_draft, monkeypatch, pandoc):
+    if os.name != "nt":
+        pytest.skip("Official-template native PDF rendering requires Windows and Microsoft Word")
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, r"Word.Application\CLSID"):
+            pass
+    except FileNotFoundError:
+        pytest.skip("Microsoft Word is not installed; publisher DOCX and explicit missing-renderer behavior are tested separately")
     from docx import Document
     from pypdf import PdfReader
     service, rid, venue_id, _ = author_draft
     before = service.set_author_metadata(rid, PROFILE)
     original = {key: service.artifact_path(rid, key).read_bytes() for key in before["artifacts"]}
-    monkeypatch.setattr("paper_factory.conversion.convert", lambda source, output: native_convert(source, output, pandoc=pandoc))
+    monkeypatch.setattr("paper_factory.conversion.convert", lambda source, output, **kwargs: native_convert(source, output, **{**kwargs, "pandoc": pandoc}))
     current = service.export_portfolio_author(rid, venue_id)
     result = venue(current)
     assert result["author_export_status"] == "completed"

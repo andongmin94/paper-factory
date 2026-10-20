@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 import hashlib
 import io
 import json
+from pathlib import Path
 import re
 import xml.etree.ElementTree as ET
 import zipfile
@@ -35,6 +36,23 @@ class SubmissionPhoto(Record):
     filename: StrictStr = Field(min_length=5, max_length=100, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*\.(?:png|jpg|jpeg)$")
     media_type: Literal["image/png", "image/jpeg"]
     base64: StrictStr = Field(min_length=8, max_length=699052)
+
+
+class SubmissionBiographyDetails(Record):
+    role: ShortText
+    location: ShortText
+    research_interests: ShortText
+    highest_degree: ShortText
+    degree_institution: ShortText
+    professional_membership: ShortText
+
+    @field_validator("*")
+    @classmethod
+    def actual_fact(cls, value):
+        text = value.strip()
+        if not text or re.fullmatch(r"(?i)(?:tbd|pending|미정|확인 대기)", text) or any(ord(char) < 32 for char in text):
+            raise ValueError("Supply actual biography facts, or explicitly state none/not applicable when true")
+        return text
 
 
 class SubmissionFileQA(Record):
@@ -68,6 +86,7 @@ class PortfolioSubmissionPreparation(Record):
     expected_pdf_sha256: SHA
     expected_docx_sha256: SHA
     author_biography: StrictStr = Field(min_length=40, max_length=4000)
+    biography_details: SubmissionBiographyDetails
     keywords: list[Annotated[StrictStr, Field(min_length=2, max_length=100)]] = Field(min_length=3, max_length=8)
     photo: SubmissionPhoto | None
     funding_statement: ShortText
@@ -139,8 +158,43 @@ def _plain_markdown(value):
     return re.sub(r"([\\`*_{}\[\]()<>#!|$+.\-])", r"\\\1", value)
 
 
-def _submission_manuscript(original, biography, keywords):
-    """Insert supplemental text while retaining every original manuscript byte."""
+def _submission_manuscript(original, biography, keywords, *, funding_statement=None, conflicts_statement=None):
+    """Replace editorial metadata once; retain the original and scientific prose."""
+    retained_original = original
+    replaced = []
+    existing_keywords = list(re.finditer(rb"(?m)^Keywords:[^\r\n]*(?:\r?\n)?", original))
+    if len(existing_keywords) > 1:
+        raise ValueError("Resolve duplicate keyword paragraphs before submission preparation")
+    if existing_keywords:
+        match = existing_keywords[0]
+        replaced.append({"kind": "keywords", "sha256": hashlib.sha256(match[0]).hexdigest()})
+        original = original[:match.start()] + original[match.end():]
+    existing_bio = re.search(rb"(?m)^## Author Biography\r?$", original)
+    if existing_bio:
+        if re.search(rb"(?m)^## ", original[existing_bio.end():]):
+            raise ValueError("The author biography must be the final editorial section")
+        replaced.append({"kind": "biography", "sha256": hashlib.sha256(original[existing_bio.start():]).hexdigest()})
+        original = original[:existing_bio.start()].rstrip() + b"\n"
+    supplements = []
+    if funding_statement is not None or conflicts_statement is not None:
+        statements = [("Funding", funding_statement), ("Conflicts of interest", conflicts_statement)]
+        text = "\n\n".join(label + ": " + _plain_markdown(value) for label, value in statements if value is not None)
+        references = re.search(rb"(?m)^## References\r?$", original)
+        if references is None:
+            raise ValueError("Submission funding/conflict supplements require the retained References boundary")
+        acknowledgment = list(re.finditer(rb"(?mi)^## Acknowledg(?:e)?ments?\r?$", original[:references.start()]))
+        if len(acknowledgment) > 1:
+            raise ValueError("Resolve duplicate acknowledgment sections before adding author-supplied declarations")
+        if acknowledgment:
+            following = re.search(rb"(?m)^## ", original[acknowledgment[0].end():])
+            offset = acknowledgment[0].end() + following.start() if following else references.start()
+            addition = ("\n" + text + "\n\n").encode()
+        else:
+            offset = references.start()
+            addition = ("## Acknowledgments\n\n" + text + "\n\n").encode()
+        original = original[:offset] + addition + original[offset:]
+        supplements.append({"kind": "author_funding_conflicts", "insertion_offset": offset,
+                            "sha256": hashlib.sha256(addition).hexdigest()})
     abstract = re.search(rb"(?m)^## Abstract\r?$", original)
     boundary = re.search(rb"(?m)^## ", original[abstract.end():]) if abstract else None
     if boundary is None:
@@ -151,9 +205,28 @@ def _submission_manuscript(original, biography, keywords):
     output = original[:offset] + insertion + original[offset:] + suffix
     if output[:offset] + output[offset + len(insertion):-len(suffix)] != original:
         raise ValueError("Submission supplements must preserve every original manuscript byte")
-    return output, {"insertion_offset": offset, "insertion_sha256": hashlib.sha256(insertion).hexdigest(),
+    transformation = {"insertion_offset": offset, "insertion_sha256": hashlib.sha256(insertion).hexdigest(),
         "suffix_sha256": hashlib.sha256(suffix).hexdigest(), "original_sha256": hashlib.sha256(original).hexdigest(),
         "scope": "plain-keywords-after-abstract-and-plain-biography-after-bibliography; exact original bytes reversible"}
+    if replaced:
+        transformation.update(original_sha256=hashlib.sha256(retained_original).hexdigest(),
+            editorial_base_sha256=hashlib.sha256(original).hexdigest(), replaced_metadata=replaced,
+            scope="Replace existing editorial keyword/biography metadata exactly once; scientific prose retained and exact original artifact preserved")
+    if supplements:
+        transformation.update(original_sha256=hashlib.sha256(retained_original).hexdigest(),
+            editorial_base_sha256=hashlib.sha256(original).hexdigest(), declaration_supplements=supplements,
+            scope="Add actual supplied funding/conflict declarations and replace editorial keywords/biography; scientific prose and original artifact retained")
+    return output, transformation
+
+
+def _submission_biography(prose, details):
+    """Render the six supplied facts without inferring an author fact or consent."""
+    labels = {"role": "Role", "location": "Location", "research_interests": "Research interests",
+              "highest_degree": "Highest degree", "degree_institution": "Degree institution",
+              "professional_membership": "Professional membership"}
+    supplied = " ".join(prose.split())
+    facts = "; ".join(label + ": " + details[key] for key, label in labels.items())
+    return supplied + " " + facts + "."
 
 
 def _photo_bytes(photo):
@@ -216,7 +289,7 @@ class PortfolioSubmissionMixin:
             author_export = engine._read(ws, record, value["bindings"]["author_export_artifact_id"])
             if original != engine._artifact(ws, record, author_export["input_artifact_id"]).read_bytes():
                 raise engine.WorkflowError("ARTIFACT_CHANGED", "Submission source copy differs from its exact reviewed author Markdown")
-            generated, transformation = _submission_manuscript(original, value["author_biography"], value["keywords"])
+            generated, transformation = _submission_manuscript(original, value["author_biography"], value["keywords"], **value.get("supplements", {}))
             if (generated != engine._artifact(ws, record, value["outputs"]["md"]["artifact_id"]).read_bytes() or
                     transformation != value["transformation"]):
                 raise engine.WorkflowError("ARTIFACT_CHANGED", "Submission supplement changed an original manuscript byte or its literal biography/keywords")
@@ -268,21 +341,25 @@ class PortfolioSubmissionMixin:
         from .. import workflow as engine
         catalog = publication_catalog()
         venue = next(item for item in catalog["venues"] if item["id"] == venue_id)
-        number, keys, draft, review = self._portfolio_latest(ws, record, venue_id)
-        missing = []
-        assessed = RepositoryReview.model_validate(review["value"]) if review else None
-        if not draft or not assessed or not assessed.scientific_ready or not assessed.content_assessment or not assessed.content_assessment.content_ready:
-            missing.append("최신 원고가 독립 심사에서 내용과 근거 검토를 통과해야 합니다.")
-        analysis_key = self._portfolio_analysis_key(record)
-        if not analysis_key or not draft or draft["bindings"]["portfolio_analysis_sha256"] != record.artifacts[analysis_key].sha256:
-            missing.append("최신 분석을 반영한 원고를 작성하고 다시 심사해야 합니다.")
-        if self._portfolio_revision_feedback(ws, record, venue_id, latest=(number, keys, draft, review)):
-            missing.append("요청한 원고 보완을 마치고 다시 심사해야 합니다.")
-        author = self._repository_author_metadata(ws, record)
-        author_state = self._portfolio_author_state(ws, record, venue_id, number, keys, draft, review)
-        exported = author_state["author_export"] if author_state["author_export_status"] == "completed" else None
-        if not author or not exported:
-            missing.append("저자 정보를 저장하고 최신 Word·PDF의 저자 정보를 반영해야 합니다.")
+        quality = self._improvement_state(ws, record)
+        if quality is not None:
+            number, keys, draft, review, author, exported, missing = self._quality_submission_inputs(ws, record, venue_id, quality)
+        else:
+            number, keys, draft, review = self._portfolio_latest(ws, record, venue_id)
+            missing = []
+            assessed = RepositoryReview.model_validate(review["value"]) if review else None
+            if not draft or not assessed or not assessed.scientific_ready or not assessed.content_assessment or not assessed.content_assessment.content_ready:
+                missing.append("최신 원고가 독립 심사에서 내용과 근거 검토를 통과해야 합니다.")
+            analysis_key = self._portfolio_analysis_key(record)
+            if not analysis_key or not draft or draft["bindings"]["portfolio_analysis_sha256"] != record.artifacts[analysis_key].sha256:
+                missing.append("최신 분석을 반영한 원고를 작성하고 다시 심사해야 합니다.")
+            if self._portfolio_revision_feedback(ws, record, venue_id, latest=(number, keys, draft, review)):
+                missing.append("요청한 원고 보완을 마치고 다시 심사해야 합니다.")
+            author = self._repository_author_metadata(ws, record)
+            author_state = self._portfolio_author_state(ws, record, venue_id, number, keys, draft, review)
+            exported = author_state["author_export"] if author_state["author_export_status"] == "completed" else None
+            if not author or not exported:
+                missing.append("저자 정보를 저장하고 최신 Word·PDF의 저자 정보를 반영해야 합니다.")
         expected = None
         bindings = None
         if draft and review and author and exported:
@@ -301,6 +378,75 @@ class PortfolioSubmissionMixin:
             "guidelines_url": venue["guidelines_url"], "requirements_checked_at": catalog["checked_at"],
             "limits": venue["verified_limits"], "expected_binding": expected, "missing": missing,
             "prepare_available": not missing, "bindings": bindings, "draft": draft, "exported": exported, "author": author}
+
+    def _quality_submission_inputs(self, ws, record, venue_id, state):
+        """Use the exact assessed best version, never an earlier permissive PASS."""
+        from .. import workflow as engine
+        from .manuscript_improvement import IndependentAssessment, best_assessment
+
+        missing = []
+        versions = state["versions"].get(venue_id, [])
+        best = best_assessment(state["reviews"].get(venue_id, []))
+        selected = next((item for item in versions if best and item["markdown_sha256"] == best["manuscript_sha256"]), None)
+        keys, draft, review, exported, number = {}, None, None, None, 0
+        author = self._repository_author_metadata(ws, record)
+        if not state["finished"]:
+            missing.append("항목별 품질 보완과 독립 평가를 마친 뒤 최선 원고를 확정해야 합니다.")
+        if not best or not selected:
+            missing.append("보존된 최선 원고에 결속된 독립 품질 평가가 필요합니다.")
+        else:
+            assessed = IndependentAssessment.model_validate(best)
+            if assessed.venue_id != venue_id or assessed.manuscript_sha256 != selected["markdown_sha256"]:
+                raise engine.WorkflowError("ARTIFACT_CHANGED", "The selected quality assessment belongs to a different venue or manuscript")
+            if assessed.essential_errors or assessed.recommendation != "consider_submission":
+                missing.append("현재 독립 품질 평가가 투고 검토를 권하지 않습니다. 평가 이유와 필요한 보완을 확인하세요.")
+            review_key = state.get("review_artifact_ids", {}).get(venue_id, {}).get(selected["markdown_sha256"])
+            if not review_key or review_key not in record.artifacts:
+                missing.append("선택한 원고의 정확한 독립 평가 원문이 보존되어야 합니다.")
+            else:
+                review = engine._read(ws, record, review_key)
+                if review.get("value") != best:
+                    raise engine.WorkflowError("ARTIFACT_CHANGED", "The selected submission quality assessment differs from its frozen review")
+                keys = {"draft": selected["draft_artifact_id"], "markdown": selected["markdown_artifact_id"], "review": review_key}
+                if any(key not in record.artifacts or record.artifacts[key].sha256 != selected[field]
+                       for key, field in ((keys["draft"], "draft_sha256"), (keys["markdown"], "markdown_sha256"))):
+                    raise engine.WorkflowError("ARTIFACT_CHANGED", "The selected quality manuscript differs from its exact frozen version")
+                draft = engine._read(ws, record, keys["draft"])
+                baseline_attempt = int(versions[0]["draft_artifact_id"].rsplit("-", 1)[-1])
+                number = baseline_attempt + versions.index(selected)
+        analysis_key = self._portfolio_analysis_key(record)
+        if not analysis_key or record.artifacts[analysis_key].sha256 != state["analysis_sha256"]:
+            missing.append("품질 평가가 현재 보존된 공통 분석과 일치해야 합니다.")
+        export = state["exports"].get(venue_id)
+        if (not export or not selected or export.get("selected_version") != selected or export.get("errors") or
+                set(export.get("outputs", {})) != {"markdown", "docx", "pdf"} or
+                export.get("review_artifact_id") != keys.get("review") or
+                export.get("quality_status") != "assessed_manuscript" or
+                export.get("recommendation") != (best or {}).get("recommendation") or
+                not export.get("artifact_id") or export["artifact_id"] not in record.artifacts):
+            missing.append("선택한 최선 원고의 공식 템플릿 Word·PDF와 정확한 출력 기록이 필요합니다.")
+        elif (not author or export.get("author_artifact_id") != author["artifact_id"] or
+                export.get("author_sha256") != author["sha256"]):
+            missing.append("저자 정보를 저장하고 최선 원고의 공식 템플릿 출력에 반영해야 합니다.")
+        else:
+            saved = engine._read(ws, record, export["artifact_id"])
+            if (record.artifacts[export["artifact_id"]].sha256 != export.get("sha256") or
+                    saved != {key: value for key, value in export.items() if key not in {"artifact_id", "sha256"}}):
+                raise engine.WorkflowError("ARTIFACT_CHANGED", "The selected quality export differs from its frozen receipt")
+            if (export.get("input_artifact_id") not in record.artifacts or
+                    record.artifacts[export["input_artifact_id"]].sha256 != export.get("input_sha256") or
+                    export["outputs"]["markdown"]["artifact_id"] != export["input_artifact_id"] or
+                    export["outputs"]["markdown"]["sha256"] != export["input_sha256"]):
+                raise engine.WorkflowError("ARTIFACT_CHANGED", "The quality export requires its exact author-bound Markdown input")
+            for output in export["outputs"].values():
+                if output["artifact_id"] not in record.artifacts or record.artifacts[output["artifact_id"]].sha256 != output["sha256"]:
+                    raise engine.WorkflowError("ARTIFACT_CHANGED", "The official quality manuscript output differs from its frozen bytes")
+                engine._artifact(ws, record, output["artifact_id"])
+            editorial = export.get("editorial_preparation")
+            if editorial and editorial.get("sha256") != selected["markdown_sha256"]:
+                missing.append("공식 출력에 반영한 본문·참고문헌 형식 보완본의 정확한 독립 평가가 필요합니다.")
+            exported = export
+        return number, keys, draft, review, author, exported, missing
 
     def _portfolio_submission_public(self, ws, record):
         preparations = self._submission_preparations(ws, record)
@@ -347,6 +493,7 @@ class PortfolioSubmissionMixin:
         """Generate supplemental submission files; no approval or package yet."""
         from .. import workflow as engine
         from ..conversion import convert
+        from ..journal_compliance import compliance_report
         submitted = PortfolioSubmissionPreparation.model_validate(value)
         photo = _photo_bytes(submitted.photo)
         with self._operation(research_id) as (ws, record):
@@ -368,7 +515,9 @@ class PortfolioSubmissionMixin:
             if root.exists():
                 raise engine.WorkflowError("PORTFOLIO_SUBMISSION_INTERRUPTED", "Preserve an interrupted submission preparation instead of replacing unknown bytes")
             original = engine._artifact(ws, record, candidate["exported"]["input_artifact_id"]).read_bytes()
-            markdown, transformation = _submission_manuscript(original, submitted.author_biography, submitted.keywords)
+            biography = _submission_biography(submitted.author_biography, submitted.biography_details.model_dump(mode="json"))
+            supplements = {"funding_statement": submitted.funding_statement, "conflicts_statement": submitted.conflicts_statement}
+            markdown, transformation = _submission_manuscript(original, biography, submitted.keywords, **supplements)
             root.mkdir(parents=True)
             outputs = {}
 
@@ -388,12 +537,14 @@ class PortfolioSubmissionMixin:
                 photo_info = {"filename": submitted.photo.filename, "media_type": submitted.photo.media_type,
                     "sha256": hashlib.sha256(photo).hexdigest(), "size": len(photo)}
             errors = []
+            conversion_receipts = {}
             for extension in ("docx", "pdf"):
                 path = root / ("submission." + extension)
                 conversion = None
                 error = None
                 try:
-                    conversion = convert(source, path)
+                    conversion = convert(source, path, venue_id=venue_id)
+                    conversion_receipts[extension] = conversion
                     if (conversion["input_sha256"] != outputs["md"]["sha256"] or
                             conversion["output_sha256"] != hashlib.sha256(path.read_bytes()).hexdigest()):
                         raise ValueError("Submission conversion must preserve its exact input and output SHA")
@@ -411,6 +562,23 @@ class PortfolioSubmissionMixin:
                     "model_calls": 0, "scope": "Supplement-only native conversion; scientific originals remain immutable"})
                 key = f"{PREFIX}{extension}-conversion-{number}"
                 outputs[extension + "-conversion"] = {"artifact_id": key, "sha256": record.artifacts[key].sha256}
+            author = {**candidate["author"]["value"], "biography": biography,
+                      "biography_details": submitted.biography_details.model_dump(mode="json")}
+            compliance = compliance_report(source, root / "submission.docx" if "docx" in outputs else None, venue_id,
+                pdf=root / "submission.pdf" if "pdf" in outputs else None, qa_root=root / "page-qa",
+                author_metadata=author, conversion_receipts=conversion_receipts)
+            retain("compliance", "journal-compliance.json", _json_bytes(compliance))
+            for page in (compliance.get("page_qa") or {}).get("pages", []):
+                path = Path(page["image_path"])
+                if not path.resolve().is_relative_to((root / "page-qa").resolve()) or hashlib.sha256(path.read_bytes()).hexdigest() != page["image_sha256"]:
+                    raise engine.WorkflowError("ARTIFACT_CHANGED", "Submission page QA must bind the exact local rendered image")
+                key = f"{PREFIX}page-{page['number']}-{number}"
+                engine._freeze(ws, record, key, path)
+                outputs[f"page-{page['number']}"] = {"artifact_id": key, "sha256": record.artifacts[key].sha256}
+            if not compliance["content_format_passed"]:
+                errors.extend("투고 규정: " + reason for reason in compliance["blockers"])
+                if not compliance["blockers"]:
+                    errors.append("투고 규정: 실제 Word·PDF 검사를 모두 완료해야 합니다.")
             for generated in sorted(root.iterdir()):
                 if generated.suffix in {".typ", ".lua"} or generated.name.endswith("-pandoc-metadata.json"):
                     kind = "generated-" + generated.name.replace(".", "-")
@@ -420,7 +588,9 @@ class PortfolioSubmissionMixin:
             self._portfolio_append(ws, record, f"{PREFIX}preparation-{number}", root / "preparation.json", {
                 "at": now(), "venue_id": venue_id, "bindings": candidate["bindings"], "outputs": outputs,
                 "title": candidate["draft"]["value"]["title"], "author": candidate["author"]["value"],
-                "author_biography": submitted.author_biography, "keywords": submitted.keywords, "photo": photo_info,
+                "author_biography": biography, "provided_author_biography": submitted.author_biography,
+                "keywords": submitted.keywords, "photo": photo_info, "supplements": supplements,
+                "biography_details": submitted.biography_details.model_dump(mode="json"), "compliance": compliance,
                 "funding_statement": submitted.funding_statement, "conflicts_statement": submitted.conflicts_statement,
                 "cover_letter_note": submitted.cover_letter_note, "transformation": transformation, "errors": errors,
                 "origin": "explicit_human_submission_preparation", "externally_verified": False,
@@ -443,12 +613,20 @@ class PortfolioSubmissionMixin:
             preparation = self._submission_preparations(ws, record)[-1]
             if any(getattr(submitted, "expected_" + kind + "_sha256") != preparation["outputs"][kind]["sha256"] for kind in ("docx", "pdf")):
                 raise engine.WorkflowError("PORTFOLIO_SUBMISSION_STALE", "Human file review differs from the exact new submission Word/PDF SHA")
+            compliance = engine._read(ws, record, preparation["outputs"]["compliance"]["artifact_id"])
+            expected_format = {name + "_sha256": preparation["outputs"][key]["sha256"] for name, key in (("markdown", "md"), ("docx", "docx"), ("pdf", "pdf"))}
+            if compliance != preparation["compliance"] or not compliance["content_format_passed"] or any(
+                    compliance["binding"].get(key) != value for key, value in expected_format.items()):
+                raise engine.WorkflowError("PORTFOLIO_SUBMISSION_FORMAT", "Current submission files must pass their exact bound native journal compliance report")
+            actual = compliance["metrics"]["native_word"]
+            if (submitted.qa.word_count != actual["whole_words"] or submitted.qa.docx_pages != actual["pages"] or
+                    submitted.qa.pdf_pages != compliance["page_qa"]["page_count"]):
+                raise engine.WorkflowError("PORTFOLIO_SUBMISSION_QA", "Human Word/PDF counts must match the exact native measurements and rendered page count")
             pending = re.compile(r"(?i)^(?:tbd|pending|to be confirmed|author confirmation pending|미정|확인 대기|저자 확인 대기)$")
             if any(pending.fullmatch(preparation[name].strip()) for name in ("funding_statement", "conflicts_statement")):
                 raise ValueError("Confirm explicit funding and conflict statements before creating a final submission package")
             venue_id = preparation["venue_id"]
             candidate = self._submission_candidate(ws, record, venue_id)
-            original = engine._artifact(ws, record, preparation["outputs"]["source"]["artifact_id"]).read_bytes()
             word = engine._artifact(ws, record, preparation["outputs"]["docx"]["artifact_id"]).read_bytes()
             tables, figures = _word_visual_counts(word)
             generated_markdown = engine._artifact(ws, record, preparation["outputs"]["md"]["artifact_id"]).read_bytes().decode("utf-8")
@@ -457,21 +635,34 @@ class PortfolioSubmissionMixin:
                 raise engine.WorkflowError("PORTFOLIO_SUBMISSION_VISUALS", "The native Word document is missing a figure retained in the submission Markdown")
             if (submitted.qa.table_count, submitted.qa.figure_count) != (tables, figures):
                 raise engine.WorkflowError("PORTFOLIO_SUBMISSION_VISUALS", "Human visual counts must match the actual new Word document tables and figures; the separate author portrait is excluded")
-            draft = candidate["draft"]["value"]
-            abstract = next(section["text"] for section in draft["sections"] if section["heading"] == "Abstract")
-            bibliography = original.decode("utf-8").rsplit("## References", 1)[-1]
             metrics = {"biography_words": len(preparation["author_biography"].split()),
                 "visual_words": (submitted.qa.table_count + submitted.qa.figure_count) * candidate["limits"]["visual_word_cost"],
-                "abstract_words": len(abstract.split()), "reference_count": len(re.findall(r"(?m)^\[\d+\] ", bibliography)),
+                "abstract_words": actual["abstract_words"], "reference_count": actual["reference_count"],
                 "actual_table_count": tables, "actual_figure_count": figures, "markdown_figure_count": markdown_figures,
                 "count_scope": "human_reported_complete_new_Word_article_including_biography_keywords_references_and_table_text_plus_visual_cost"}
-            metrics["effective_words"] = submitted.qa.word_count + metrics["visual_words"]
+            metrics["effective_words"] = compliance["metrics"]["effective_words"]
+            metrics["count_scope"] = compliance["metrics"]["word_count_formula"]
             limits = candidate["limits"]
             if (metrics["effective_words"] > limits["max_words"] or metrics["effective_words"] < limits.get("min_words", 0) or
                     metrics["abstract_words"] > limits["max_abstract_words"] or metrics["reference_count"] > limits["max_references"]):
                 raise engine.WorkflowError("PORTFOLIO_SUBMISSION_LENGTH", "Human-reported complete new Word total plus visual cost, actual abstract or references violates current verified numeric requirements")
             if not metrics["reference_count"]:
                 raise engine.WorkflowError("PORTFOLIO_SUBMISSION_REFERENCES", "Submission requires its actual retained canonical bibliography")
+            confirmed_compliance = json.loads(json.dumps(compliance))
+            human_checks = {"author_identity": submitted.declarations.identity_confirmed,
+                "author_declarations": all(submitted.declarations.model_dump().values()),
+                "author_photo": bool(preparation["photo"]) and submitted.declarations.identity_confirmed,
+                "visual_review": submitted.declarations.all_pages_reviewed}
+            for item in confirmed_compliance["items"]:
+                if item["stage"] == "submission" and item["id"] in human_checks:
+                    item["status"] = "passed" if human_checks[item["id"]] else "pending"
+                    item["confirmation_origin"] = "explicit_human_submission_file_confirmation"
+            confirmed_compliance["pending"] = [item["reason"] for item in confirmed_compliance["items"] if item["status"] == "pending"]
+            confirmed_compliance["submission_ready"] = all(item["status"] == "passed" for item in confirmed_compliance["items"])
+            confirmed_compliance["human_confirmation"] = submitted.model_dump(mode="json")
+            confirmed_compliance["scope"] = "Native format checks plus explicit author reports bound to these exact submission files; no external verification or journal acceptance."
+            if not confirmed_compliance["submission_ready"]:
+                raise engine.WorkflowError("PORTFOLIO_SUBMISSION_FORMAT", "Complete every remaining journal preparation item before creating the final submission package")
             number = int(preparation["artifact_id"].rsplit("-", 1)[-1])
             root = ws.path(f"{ROOT}/preparation-{number}/confirmed")
             if root.exists():
@@ -479,10 +670,12 @@ class PortfolioSubmissionMixin:
             root.mkdir()
             author = preparation["author"]
             metadata = {"schema_version": 1, "venue_id": venue_id, "journal": candidate["name"], "article_category": "Feature Article",
-                "title": preparation["title"], "author": author, "author_biography": preparation["author_biography"], "keywords": preparation["keywords"],
+                "title": preparation["title"], "author": author, "author_biography": preparation["author_biography"],
+                "biography_details": preparation["biography_details"], "keywords": preparation["keywords"],
                 "photo": preparation["photo"], "funding_statement": preparation["funding_statement"], "conflicts_statement": preparation["conflicts_statement"],
                 "portal_url": candidate["portal_url"], "guidelines_url": candidate["guidelines_url"],
                 "requirements_checked_at": candidate["requirements_checked_at"], "limits": limits, "metrics": metrics,
+                "native_compliance": confirmed_compliance, "original_native_compliance_sha256": preparation["outputs"]["compliance"]["sha256"],
                 "human_confirmation": submitted.model_dump(mode="json"), "origin": "explicit_human_submission_file_confirmation", "externally_verified": False,
                 "scope": "New Word/PDF include plain author biography and keywords; original scientific manuscript and review bytes remain unchanged. Human confirmations are reports, not externally verified facts. Actual portal instructions govern uploads."}
             declaration_text = ("Human-confirmed submission declarations\n\n"
@@ -497,6 +690,7 @@ class PortfolioSubmissionMixin:
             files = {"author-biography.txt": (preparation["author_biography"] + "\n").encode(),
                 "keywords.txt": ("\n".join(preparation["keywords"]) + "\n").encode(), "declarations.txt": declaration_text.encode(),
                 "metadata.json": _json_bytes(metadata), "cover-letter.txt": cover.encode(),
+                "journal-compliance.json": _json_bytes(confirmed_compliance),
                 "submission-guide.txt": (f"Selected journal: {candidate['name']}\nOfficial portal: {candidate['portal_url']}\nGuidelines: {candidate['guidelines_url']}\n\n"
                     "Review the generated Word/PDF, author biography/photo/keywords and declarations against current portal instructions. Log in yourself, review all forms and files, and submit only after your final approval. Opening a portal or exporting this ZIP does not submit anything. Record submitted status only after receiving a real manuscript ID. Alternative venue manuscripts from this same study must not be submitted concurrently. Human declarations are retained reports, not external verification.\n").encode()}
             for kind in ("md", "docx", "pdf"):

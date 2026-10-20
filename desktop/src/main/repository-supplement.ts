@@ -11,6 +11,13 @@ export function verifyRepositoryRequestCapacity(prompt: string, model: string, s
   if (oversized) throw new EngineError('REVIEW_CONTEXT_TOO_LARGE', '전체 모델 요청이 해당 모델의 보존 가능한 문맥 한도를 초과했습니다. 전체 근거를 유지하고 요청을 시작하지 않습니다.');
 }
 
+export function verifyQualityRequestCapacity(prompt: string, model: string) {
+  verifyRepositoryRequestCapacity(prompt, model);
+  const bytes = Buffer.byteLength(JSON.stringify({ model, input: [{ role: 'user', content: prompt }], store: false, stream: true }), 'utf8');
+  if (bytes > 900_000) throw new EngineError('REVIEW_CONTEXT_TOO_LARGE', '전체 근거를 포함한 실제 모델 요청의 직렬화 크기가 한도를 초과했습니다. 모델에 보내지 않았습니다.');
+  return bytes;
+}
+
 export function portfolioEvidencePacket(input: unknown, researchId: string): RepositoryPortfolioEvidencePacket {
   const invalid = () => new EngineError('PORTFOLIO_EVIDENCE_INVALID', '보완 자료 패키지는 완전한 원문 파일 1–32개와 출처·해시·기존 심사를 담은 JSON이어야 합니다. 일반 텍스트마다 128 KiB, 정확한 commit·경로·해시에 결속된 완전한 비교 소스마다 256 KiB, 텍스트 합계 512 KiB, 공식 출판사 원 proof에 결속된 PDF는 별도 합계 1 MiB이며 전체 요청은 2 MiB 이내여야 합니다.');
   if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).sort().join(',') !== 'files,value') throw invalid();

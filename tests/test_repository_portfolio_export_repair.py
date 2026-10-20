@@ -27,7 +27,7 @@ def failed_export(portfolio, monkeypatch, request):
     condition = getattr(request, "param", "eligible")
     calls = []
 
-    def fail(source, output):
+    def fail(source, output, **kwargs):
         calls.append((source, output))
         lua = output.with_name("paper-table-layout.lua")
         if condition != "missing-proof":
@@ -48,7 +48,7 @@ def failed_export(portfolio, monkeypatch, request):
 
 
 def successful_conversion(calls):
-    def convert(source, output):
+    def convert(source, output, **kwargs):
         calls.append((source, output))
         output.write_bytes(b"Synthetic fixture output only: " + output.suffix.encode())
         output.with_name("paper-table-layout.lua").write_text(WIDE_TABLE_FILTER, encoding="utf-8")
@@ -118,7 +118,7 @@ def test_export_repair_rejects_unrelated_error_or_missing_exact_original_lua_pro
 def test_failed_export_repair_remains_single_idempotent_attempt(failed_export, monkeypatch):
     service, rid, venue_id, _, venue, calls = failed_export
     original_receipt = service.artifact_path(rid, venue["export"]["artifact_id"]).read_bytes()
-    def fail(source, output):
+    def fail(source, output, **kwargs):
         calls.append((source, output))
         raise ValueError("Synthetic remaining compiler failure, never an automatic rerun.")
     monkeypatch.setattr("paper_factory.conversion.convert", fail)
@@ -135,7 +135,7 @@ def test_failed_export_repair_remains_single_idempotent_attempt(failed_export, m
 def test_unadmitted_export_repair_directory_is_counted_and_never_reexecuted(failed_export, monkeypatch):
     service, rid, venue_id, _, venue, calls = failed_export
     original_receipt = service.artifact_path(rid, venue["export"]["artifact_id"]).read_bytes()
-    def uncertain(source, output):
+    def uncertain(source, output, **kwargs):
         calls.append((source, output))
         raise RuntimeError("Synthetic interruption after the immutable repair input was saved.")
     monkeypatch.setattr("paper_factory.conversion.convert", uncertain)

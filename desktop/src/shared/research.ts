@@ -2,8 +2,9 @@ import type { RepositoryArticleFormat } from './publication.js';
 import type { PublicationCatalog, PublicationTarget } from './venues.js';
 import type { PortfolioSubmissionState, PortfolioSubmissionPreparationInput, PortfolioSubmissionConfirmationInput, PortfolioSubmissionRecordInput } from './submission.js';
 import type { OrcidPublicProfile } from './orcid.js';
+import type { ManuscriptImprovement } from './manuscript-improvement.js';
 
-export type ResearchPhase = 'idle' | 'submission-plan' | 'source-selection' | 'source-analysis' | 'venue-manuscript' | 'venue-manuscript-repair' | 'venue-manuscript-review' | 'research-questions' | 'question-search-plan' | 'question-literature' | 'question-selection' | 'question-reframing' | 'question-reframing-selection' | 'plan' | 'redesign' | 'redesign-plan' | 'redesign-review' | 'literature-plan' | 'literature' | 'study-review' | 'code' | 'code-review' | 'experiment' | 'evidence-selection' | 'manuscript-claim' | 'manuscript' | 'manuscript-repair' | 'manuscript-review' | 'export';
+export type ResearchPhase = 'quality-plan' | 'quality-write' | 'quality-review' | 'idle' | 'submission-plan' | 'source-selection' | 'source-analysis' | 'venue-manuscript' | 'venue-manuscript-repair' | 'venue-manuscript-review' | 'research-questions' | 'question-search-plan' | 'question-literature' | 'question-selection' | 'question-reframing' | 'question-reframing-selection' | 'plan' | 'redesign' | 'redesign-plan' | 'redesign-review' | 'literature-plan' | 'literature' | 'study-review' | 'code' | 'code-review' | 'experiment' | 'evidence-selection' | 'manuscript-claim' | 'manuscript' | 'manuscript-repair' | 'manuscript-review' | 'export';
 
 export interface SupportingDocument { id: string; name: string; sha256: string; size: number }
 export interface ReviewCriterion { passed: boolean; reason: string }
@@ -127,6 +128,8 @@ export interface RepositoryPaperDraft {
   revision: { prior_draft_sha256: string; changes: string[] } | null;
 }
 export interface RepositoryAnalysis {
+  work_products?: Record<string, unknown>;
+  research_design?: Record<string, unknown>;
   method: string;
   codebook: Array<{ dimension: string; definition: string }>;
   units: Array<{ id: string; label: string; evidence_ids: string[];
@@ -175,6 +178,8 @@ export interface RepositoryReferenceSelection {
   venue_suggestions: Array<{ name: string; url: string; reason: string }>;
 }
 export interface RepositoryPortfolioFrame {
+  research_design_contract?: number;
+  research_agenda_sha256?: string;
   research_id: string; portfolio_start_sha256: string; source_digest: string; source_commit: string;
   plan_sha256: string; base_analysis_sha256: string | null; catalog_sha256: string; guidance_sha256: string;
   literature_sha256: string | null;
@@ -270,6 +275,12 @@ export interface RepositoryPortfolioProgress {
   artifact_id: string; sha256: string; bindings: Record<string, unknown>;
   targets: Array<{ venue_id: string; article_category: string }>;
   analysis: RepositoryAnalysis | null; analysis_sha256: string | null; analysis_binding: RepositoryPortfolioFrame | null;
+  analysis_artifact_id?: string | null;
+  research_workproducts_contract?: number | null;
+  research_design_contract?: number | null;
+  research_agenda?: { artifact_id: string; sha256: string; value: Record<string, unknown> } | null;
+  research_design_report?: Record<string, unknown> | null;
+  work_products_report?: Record<string, unknown> | null;
   analysis_outcome: RepositoryPortfolioOutcome;
   analysis_repair_available: boolean;
   analysis_repair_candidate_artifact_id: string | null;
@@ -299,6 +310,7 @@ export interface RepositoryPortfolioProgress {
   venues: RepositoryPortfolioVenue[]; all_content_ready: boolean; completed: number; total: number;
 }
 export interface RepositoryPaperProgress {
+  manuscript_improvement?: ManuscriptImprovement | null;
   portfolio?: RepositoryPortfolioProgress | null;
   publication_venues?: PublicationCatalog | null;
   analysis?: RepositoryAnalysis | null;
@@ -400,6 +412,10 @@ export interface CreateResearchInput { source: string; goal: string; model: stri
 export interface PublicRepository { name: string; url: string }
 
 export interface ResearchApi {
+  continueManuscriptImprovement(researchId: string): Promise<ResearchSnapshot>;
+  focusManuscriptImprovement(researchId: string): Promise<ResearchSnapshot>;
+  developManuscriptImprovement(researchId: string): Promise<ResearchSnapshot>;
+  extendResearchDevelopmentRound(researchId: string, priorRoundId: string): Promise<ResearchSnapshot>;
   lookupPublicOrcidProfile(input: string): Promise<OrcidPublicProfile>;
   preparePortfolioSubmission(id: string, venueId: string, value: PortfolioSubmissionPreparationInput): Promise<ResearchSnapshot>;
   confirmPortfolioSubmission(id: string, value: PortfolioSubmissionConfirmationInput): Promise<ResearchSnapshot>;

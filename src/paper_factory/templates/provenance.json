@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "authority": "IEEE Template Selector",
+  "selector_url": "https://template-selector.ieee.org/",
+  "author_guidance_url": "https://magazines.ieeeauthorcenter.ieee.org/create-your-ieee-magazine-article/authoring-tools-and-templates/ieee-article-templates/",
+  "templates": {
+    "ieee-software": {
+      "filename": "CS_Mag_7_22.docx",
+      "sha256": "9d69119bee5dba546d4a693305cf16f975f653ad79b9ff2a989c2e612a6b167f",
+      "size": 270187,
+      "publication": "IEEE Software",
+      "publication_type_id": 2,
+      "publication_title_id": 192,
+      "article_type_id": 1,
+      "template_id": 549,
+      "article_type": "Original Research",
+      "metadata_url": "https://template-selector.ieee.org/api/ieee-template-selector/template/publication-type/2/publication-title/192/article/1",
+      "download_url": "https://template-selector.ieee.org/api/ieee-template-selector/template/549/download",
+      "retrieved_at": "2026-10-18",
+      "publisher_modified_at_unix_ms": 1718197547000
+    },
+    "ieee-security-privacy": {
+      "filename": "CS-Mag-template.docx",
+      "sha256": "dfca1c444011174320ee9d481eed9ceca990110dd1d9c00305c09c149ef6c205",
+      "size": 71566,
+      "publication": "IEEE Security & Privacy",
+      "publication_type_id": 2,
+      "publication_title_id": 193,
+      "article_type_id": 3,
+      "template_id": 405,
+      "article_type": "Original research and Brief",
+      "metadata_url": "https://template-selector.ieee.org/api/ieee-template-selector/template/publication-type/2/publication-title/193/article/3",
+      "download_url": "https://template-selector.ieee.org/api/ieee-template-selector/template/405/download",
+      "retrieved_at": "2026-10-18",
+      "publisher_modified_at_unix_ms": 1718197811000
+    }
+  }
+}
