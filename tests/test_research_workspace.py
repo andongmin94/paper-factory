@@ -257,3 +257,145 @@ def test_status_requires_actual_revision_binding_for_a_current_review(materials,
     payload["artifacts"][0]["path"] = "../outside"
     with pytest.raises(ValueError, match="remain below"):
         notes.status(materials, json_file(tmp_path / "unsafe.json", payload), tmp_path / "unsafe-output")
+
+
+def prior_evidence(materials, tmp_path, *, shared=False):
+    payload = ledger(materials, tmp_path)
+    if shared:
+        value = json.loads(payload.read_text())
+        value["claims"].append({**value["claims"][0], "id": "C2", "claim": "Second supported decision"})
+        value["claims"].append({"id": "C3", "claim": "Independent source condition", "kind": "source_declared",
+                                "manuscript_quote": "The unchanged claim survives.", "sources": [
+                                    {"path": "unused.txt", "start_line": 1, "end_line": 1, "quote": "not selected"}]})
+        json_file(payload, value)
+    output = tmp_path / "prior-evidence"
+    notes.evidence(materials, payload, output)
+    return output / "evidence.json"
+
+
+def impact_report(materials, tmp_path, prior, *, name="impact", focus=None, manuscript_name=None):
+    output = tmp_path / name
+    result = notes.impact(materials, prior, output, focus_path=focus, manuscript_name=manuscript_name)
+    return result, json.loads((output / "impact.json").read_text(encoding="utf-8"))
+
+
+def test_impact_reuses_unchanged_literal_bindings_without_rewriting_notes(materials, tmp_path):
+    prior = prior_evidence(materials, tmp_path)
+    original = {p: p.read_bytes() for p in [*materials.iterdir(), prior]}
+    result, report = impact_report(materials, tmp_path, prior)
+    assert result["reusable_binding_claim_count"] == 1
+    assert report["review_needed_claim_ids"] == []
+    assert report["reusable_binding_claim_ids"] == ["C1"]
+    assert report["claims"][0]["sources"][0]["quote_matches"]
+    assert report["scientific_review_reassigned"] is False
+    assert original == {p: p.read_bytes() for p in original}
+
+
+def test_impact_shared_source_change_flags_only_its_dependent_claims(materials, tmp_path):
+    prior = prior_evidence(materials, tmp_path, shared=True)
+    # Even a change outside the original witness can alter its relevant context.
+    (materials / "source.txt").write_text("first\nclaim survives\nchanged context\n", encoding="utf-8")
+    result, report = impact_report(materials, tmp_path, prior)
+    assert result["review_needed_claim_count"] == 2
+    assert report["review_needed_claim_ids"] == ["C1", "C2"]
+    assert report["reusable_binding_claim_ids"] == ["C3"]
+    assert report["changed_source_paths"] == ["source.txt"]
+    assert report["claims"][0]["sources"][0]["quote_matches"]
+    assert report["claims"][0]["reasons"] == ["source_changed"]
+
+
+def test_impact_deleted_source_and_removed_article_claim_need_attention(materials, tmp_path):
+    prior = prior_evidence(materials, tmp_path, shared=True)
+    (materials / "source.txt").unlink()
+    (materials / "article.md").write_text("# Revised manuscript without old claim\n", encoding="utf-8")
+    _, report = impact_report(materials, tmp_path, prior)
+    assert report["missing_source_paths"] == ["source.txt"]
+    assert report["manuscript_bytes_changed"]
+    assert set(report["review_needed_claim_ids"]) == {"C1", "C2", "C3"}
+    assert {"missing_source", "manuscript_quote_not_found"} <= set(report["claims"][0]["reasons"])
+
+
+def test_impact_retains_reusable_witness_after_unrelated_manuscript_change(materials, tmp_path):
+    prior = prior_evidence(materials, tmp_path)
+    revised = materials / "current.md"
+    revised.write_text((materials / "article.md").read_text() + "\nA revised author note.\n", encoding="utf-8")
+    _, report = impact_report(materials, tmp_path, prior, manuscript_name="current.md")
+    assert report["manuscript_bytes_changed"]
+    assert report["reusable_binding_claim_ids"] == ["C1"]
+    assert not report["scientific_review_reassigned"]
+
+
+def test_impact_explicit_new_question_requires_selected_sources_to_be_reread(materials, tmp_path):
+    prior = prior_evidence(materials, tmp_path, shared=True)
+    focus = json_file(tmp_path / "focus.json", {"question": "What happens when another consumer remains?",
+                      "claim_ids": [], "source_paths": ["source.txt"]})
+    _, report = impact_report(materials, tmp_path, prior, focus=focus)
+    assert report["changed_source_paths"] == []
+    assert report["review_needed_claim_ids"] == ["C1", "C2"]
+    assert report["claims"][0]["reasons"] == ["selected_for_new_question"]
+    assert report["selected_sources"][0]["requires_reading_for_question"]
+    assert report["reusable_binding_claim_ids"] == ["C3"]
+
+
+def test_impact_direct_claim_focus_does_not_guess_relevance_for_other_claims(materials, tmp_path):
+    prior = prior_evidence(materials, tmp_path, shared=True)
+    focus = json_file(tmp_path / "focus.json", {"question": "Can this decision transfer?", "claim_ids": ["C1"], "source_paths": ["new-not-retained.txt"]})
+    _, report = impact_report(materials, tmp_path, prior, focus=focus)
+    assert report["review_needed_claim_ids"] == ["C1"]
+    assert report["selected_sources"] == [{"path": "new-not-retained.txt", "observed_sha256": None, "status": "missing", "requires_reading_for_question": True}]
+    assert report["reusable_binding_claim_ids"] == ["C2", "C3"]
+
+
+def test_impact_prior_unverified_binding_is_not_upgraded_to_reuse(materials, tmp_path):
+    payload = ledger(materials, tmp_path)
+    value = json.loads(payload.read_text())
+    value["claims"][0]["sources"][0]["sha256"] = "0" * 64
+    json_file(payload, value)
+    notes.evidence(materials, payload, tmp_path / "prior-evidence")
+    _, report = impact_report(materials, tmp_path, tmp_path / "prior-evidence/evidence.json")
+    assert not report["reusable_binding_claim_ids"]
+    assert "prior_claim_binding_unverified" in report["claims"][0]["reasons"]
+    assert "prior_source_binding_unverified" in report["claims"][0]["reasons"]
+
+
+@pytest.mark.parametrize("focus", [
+    {"question": "New", "claim_ids": ["unknown"], "source_paths": []},
+    {"question": "New", "claim_ids": [], "source_paths": ["../outside"]},
+    {"question": "New", "claim_ids": [], "source_paths": []},
+])
+def test_impact_rejects_unresolved_or_unsafe_question_focus(materials, tmp_path, focus):
+    prior = prior_evidence(materials, tmp_path)
+    with pytest.raises(ValueError):
+        notes.impact(materials, prior, tmp_path / "invalid", focus_path=json_file(tmp_path / "focus.json", focus))
+    assert not (tmp_path / "invalid").exists()
+
+
+def test_impact_isolated_cli_handles_a_moved_prior_evidence_report(materials, tmp_path):
+    prior = prior_evidence(materials, tmp_path)
+    isolated = tmp_path / "skill/scripts"
+    isolated.mkdir(parents=True)
+    root = Path(__file__).resolve().parents[1]
+    for name in ["research_workspace.py", "_publication_files.py"]:
+        shutil.copy2(root / "scripts" / name, isolated / name)
+    moved = tmp_path / "moved-evidence.json"
+    shutil.copy2(prior, moved)
+    result = subprocess.run([sys.executable, str(isolated / "research_workspace.py"), "impact", "--root", str(materials),
+                             "--evidence", str(moved), "--output-dir", str(tmp_path / "cli-impact")],
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["reusable_binding_claim_count"] == 1
+
+
+def test_impact_rejects_source_replaced_during_snapshot(materials, tmp_path, monkeypatch):
+    prior = prior_evidence(materials, tmp_path)
+    selected = materials / "source.txt"
+    original_read = Path.read_bytes
+    def replace_after_read(path):
+        data = original_read(path)
+        if path == selected:
+            selected.write_bytes(b"replacement without retained witness\n")
+        return data
+    monkeypatch.setattr(Path, "read_bytes", replace_after_read)
+    with pytest.raises(ValueError, match="Impact source changed"):
+        notes.impact(materials, prior, tmp_path / "raced")
+    assert not (tmp_path / "raced").exists()

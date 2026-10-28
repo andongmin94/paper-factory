@@ -21,7 +21,7 @@ Run the installed scripts' `--help` before using unfamiliar options. Replace `$p
 
 Supported venue identifiers are `ieee-software` and `ieee-security-privacy`. `preflight` reads the manuscript and retained template without launching Word. `export` requires a new output directory, retains exact Markdown bytes, verifies the official template, produces DOCX, renders that exact saved DOCX through hidden read-only Word to PDF, measures native counts, and retains conversion/format/provenance reports and all-page PNGs. A failed export retains its directory for diagnosis; do not overwrite it or reuse an earlier export as a successful result.
 
-Optional `--profile ABSOLUTE_FILE` uses the same multi-author profile as `submission_support.py authors`, including its generated `authors.json`. Preparation and export report every author's missing facts and biography details. The manuscript must already carry the intended author blocks; export does not insert them from metadata. Field presence is not proof of factual accuracy or consent. Optional `--pandoc ABSOLUTE_EXECUTABLE` selects an existing Pandoc binary; otherwise the helper resolves an available installation. Do not silently replace the publisher-template export with a generic alternative if Word, Pandoc, or required assets are unavailable.
+Optional `--profile ABSOLUTE_FILE` uses the same multi-author profile as `submission_support.py authors`, including its generated `authors.json`. Preparation and export report every author's missing facts and biography details, checking identity fields within that author's own byline block and order. The manuscript must already carry the intended author blocks; export does not insert them from metadata. Field presence is not proof of factual accuracy or consent. Optional `--pandoc ABSOLUTE_EXECUTABLE` selects an existing Pandoc binary; otherwise the helper resolves an available installation. Diagnostics and conversion verify the actual Pandoc identity rather than accepting any successful version command. Do not silently replace the publisher-template export with a generic alternative if Word, Pandoc, or required assets are unavailable.
 
 Exit status distinguishes passed content-format checks, a completed report with failed checks, and input/conversion errors; inspect both `--help` and the actual result. A passing format report is not scientific approval. `submission_ready: false` can remain while author information, declarations, page approval, or current guidance checks are pending.
 
@@ -32,6 +32,8 @@ Use `scripts/lookup_orcid.py --help` for its current CLI, then provide an ORCID 
 ## Research and submission files
 
 Use [researcher-convenience.md](researcher-convenience.md) for the optional environment diagnostic, status/continuation snapshots, literature reading cards, evidence links, comparisons, editorial reports, coauthor/anonymous drafts, reviewer responses and submission bundles. Each writes to a new output directory or reads a saved checkpoint; no scientific writing or review runs implicitly. Reuse a private author profile only when selected for that paper.
+
+The same reference describes `research_workspace.py impact` for revisiting only changed or explicitly selected evidence and `finalize_submission.py check` for reconciling existing exact-file format, visual, scientific and genuine human records. Final checking leaves old reports intact and is separate from uploading or acceptance.
 
 ## Exact-file verification
 

@@ -15,7 +15,7 @@ import shutil
 import subprocess
 import sys
 
-from _publication_convert import pandoc_binary
+from _publication_convert import pandoc_binary, pandoc_version
 from _publication_files import ensure_unlinked
 from _publication_templates import official_template
 
@@ -64,9 +64,7 @@ def diagnose(pandoc: str | None = None) -> dict:
     packages = _packages()
     try:
         binary = pandoc_binary(pandoc)
-        probe = subprocess.run([str(binary), "--version"], capture_output=True, text=True, timeout=10, check=True,
-                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0)
-        pandoc_result = {"status": "detected", "path": str(binary), "version": probe.stdout.splitlines()[0]}
+        pandoc_result = {"status": "detected", "path": str(binary), "version": pandoc_version(binary)}
     except (ValueError, OSError, subprocess.SubprocessError, IndexError) as exc:
         pandoc_result = {"status": "missing_or_unusable", "detail": str(exc)}
     templates = []

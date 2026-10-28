@@ -22,5 +22,7 @@ jobs:
         run: python -m pip install -r requirements.txt "pytest>=8,<10"
       - name: Check standalone scripts
         run: python -m compileall -q scripts
+      - name: Verify installed Pandoc identity
+        run: python -c "import sys; sys.path.insert(0, 'scripts'); from _publication_convert import pandoc_binary, pandoc_version; print(pandoc_version(pandoc_binary()))"
       - name: Run isolated tool tests
         run: python -m pytest -q

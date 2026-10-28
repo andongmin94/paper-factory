@@ -29,10 +29,10 @@ $paper-factory https://github.com/owner/repository
 | --- | --- |
 | 연구·집필 | 저장소 분석, 연구 질문 선정, 1차 문헌 비교, 근거에 맞는 기여와 한계 정리 |
 | 공식 원고 출력 | 매체별 공식 템플릿을 적용한 Word/PDF, 분량·형식 검사, 전체 페이지 확인 |
-| 문헌·근거 관리 | 읽은 범위를 명시한 문헌 카드, 주장별 소스 위치·인용·해시 연결 |
-| 연구 이어가기 | 자료와 결정의 포터블 저장, 현재·과거 버전 현황표, 개정 전후 비교, 새 PC 환경 진단 |
+| 문헌·근거 관리 | 읽은 범위를 명시한 문헌 카드, 주장별 소스 위치·인용·해시 연결, 변경된 근거의 영향 표시 |
+| 연구 이어가기 | 자료와 결정의 포터블 저장, 현재·과거 버전 현황표, 필요한 주장만 재검토, 새 PC 환경 진단 |
 | 저자 정보 준비 | 공개 ORCID 조회, 재사용 가능한 공저자 프로필, 저자별 누락 정보, 익명 사본·메타데이터 점검 |
-| 검토·투고 준비 | 참고문헌·도표·약어 검사, 심사 의견별 답변서, 커버레터 초안과 선택한 투고 파일 묶음 |
+| 검토·투고 준비 | 편집 검사와 답변서, 커버레터를 포함한 파일별 확인 기록, 기존 평가·형식·페이지·저자 기록의 최종 준비 상태 연결 |
 
 [IEEE Software](references/ieee-software.md)는 실무자의 엔지니어링 판단과 교훈을, [IEEE Security & Privacy](references/ieee-security-privacy.md)는 실질적인 보안·프라이버시 기여를 중심으로 다룹니다. 완성된 기여에 맞는 매체를 선택합니다.
 
@@ -66,13 +66,14 @@ python -m pip install -r requirements.txt "pytest>=8,<10"
 python -m pytest -q
 ```
 
-Windows CI에서 파일 도구와 입력 보존을 검사합니다. 최근 로컬 검증에서는 **164개 테스트**를 통과했고, 프론트론의 공식 Word/PDF 6페이지를 확인했습니다.
+Windows CI에서 실제 Pandoc 식별과 문서 변환을 필수로 검사합니다. 최근 로컬 검증에서는 **208개 테스트**를 통과했고, Garak·REA에서 질문·기여 선택을 한 번씩 확인했습니다. 프론트론의 기존 공식 원고·평가·횟수도 유지합니다.
 
 - [스킬 지침](SKILL.md)
 - [연구·평가 기준](references/research-and-review.md)
+- [연구 질문과 기여 선택](references/contribution-selection.md)
 - [공식 출력·ORCID 도구](references/tools.md)
 - [연구자 편의기능과 입력 형식](references/researcher-convenience.md)
-- [최신 구현·검증 기록](docs/researcher-improvements-verification-20261028.md)
+- [최신 구현·검증 기록](docs/quality-flow-verification-20261029.md)
 
 연구 자료·저자 프로필·출력 파일은 스킬 설치 폴더 밖에 보관합니다. 로컬 연구 자료와 생성 결과는 Git에 포함하지 않습니다.
 

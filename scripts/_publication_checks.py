@@ -17,6 +17,7 @@ from pathlib import Path
 
 from _publication_files import digest_file, ensure_unlinked
 from _author_profile import profile_completeness
+from _publication_text import mask_code, mask_fenced_code, section_headers
 
 VENUE_LIMITS = {'ieee-software': {'word_count_scope': 'body_excluding_references_and_bios', 'max_words': 4200, 'max_abstract_words': 150, 'max_references': 15, 'visual_word_cost': 250, 'insight_count': 3}, 'ieee-security-privacy': {'word_count_scope': 'whole_article', 'min_words': 4900, 'max_words': 7200, 'max_abstract_words': 50, 'max_references': 15, 'visual_word_cost': 250}}
 
@@ -57,8 +58,9 @@ def format_guidance(venue_id: str, author_metadata: dict | None = None) -> dict:
                                             for entry in (author_metadata or {}).get("authors", [])]}
 
 def _parts(markdown: str) -> dict[str, str]:
-    matches = list(re.finditer(r"(?m)^## ([^\r\n]+)\s*$", markdown))
-    return {match[1].strip().casefold(): markdown[match.end():matches[i + 1].start() if i + 1 < len(matches) else len(markdown)].strip()
+    masked = mask_fenced_code(markdown)
+    matches = section_headers(markdown)
+    return {match[1].strip().casefold(): masked[match.end():matches[i + 1].start() if i + 1 < len(matches) else len(markdown)].strip()
             for i, match in enumerate(matches)}
 
 def _words(text: str) -> int:
@@ -66,10 +68,6 @@ def _words(text: str) -> int:
     text = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", text)
     text = re.sub(r"[`*_#|]", " ", text)
     return len(text.split())
-
-def _prose_chunks(text: str):
-    """Keep fenced and inline code untouched by editorial-only normalization."""
-    return re.split(r"(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`)", text)
 
 def _item(identifier, status, detail, *, stage="manuscript", source=CS_GUIDANCE):
     return {"id": identifier, "label": identifier.replace("_", " "), "status": status, "stage": stage, "reason": detail, "source_url": source}
@@ -86,8 +84,7 @@ def _summarize(items, metrics, venue_id):
 
 def _insights(markdown: str) -> list[list[str]]:
     """Find explicitly labelled, contiguous insight lists, not arbitrary bullets."""
-    prose = "".join(chunk if index % 2 == 0 or not chunk.startswith(("```", "~~~"))
-                    else "\n" * chunk.count("\n") for index, chunk in enumerate(_prose_chunks(markdown)))
+    prose = mask_code(markdown)
     lines, blocks = prose.splitlines(), {}
     label = re.compile(r"(?:three\s+)?actionable\s+insights(?:\s+follow)?\s*:", re.I)
     bullet = re.compile(r"^( {0,3})[-*+][ \t]+(.*)$")
@@ -122,12 +119,43 @@ def _insights(markdown: str) -> list[list[str]]:
         blocks.setdefault(start, items)
     return list(blocks.values())
 
+def _author_blocks(front: str, authors: list[dict]) -> tuple[dict[str, str], bool]:
+    """Associate plain byline blocks with exact leading names, never global facts."""
+    starts = list(re.finditer(r"(?m)^[ \t]*<!-- paper-factory:authors:start -->[ \t]*$", front))
+    ends = list(re.finditer(r"(?m)^[ \t]*<!-- paper-factory:authors:end -->[ \t]*$", front))
+    if starts or ends:
+        if len(starts) != 1 or len(ends) != 1 or starts[0].start() >= ends[0].start():
+            return {}, False
+        front = front[starts[0].end():ends[0].start()]
+    names = {}
+    for author in authors:
+        name = author["author"].get("display_name")
+        if name:
+            names.setdefault(name, []).append(author["id"])
+    found, current, lines = [], None, []
+    for line in front.splitlines():
+        first = line.strip().split("|", 1)[0].strip()
+        matched = names.get(first, [])
+        if len(matched) == 1:
+            if current is not None:
+                found.append((current, "\n".join(lines)))
+            current, lines = matched[0], [line]
+        elif current is not None:
+            lines.append(line)
+    if current is not None:
+        found.append((current, "\n".join(lines)))
+    bindings = {identifier: text for identifier, text in found
+                if sum(other == identifier for other, _ in found) == 1}
+    return bindings, [identifier for identifier, _ in found] == [entry["id"] for entry in authors]
+
+
 def validate_manuscript(markdown: str, venue_id: str, author_metadata: dict | None = None) -> dict:
     """Pure prefilter. Its word estimate never substitutes for native Word QA."""
     guidance = format_guidance(venue_id, author_metadata)
     limits, parts = guidance["limits"], _parts(markdown)
     abstract = parts.get("abstract", "")
-    keyword_lines = re.findall(r"(?mi)^Keywords:\s*(.+)$", markdown)
+    prose = mask_code(markdown)
+    keyword_lines = re.findall(r"(?mi)^Keywords:\s*(.+)$", prose)
     keywords = [word.strip() for line in keyword_lines for word in line.split(";") if word.strip()]
     abstract = re.sub(r"(?mi)^Keywords:.*$", "", abstract).strip()
     references = parts.get("references", "")
@@ -140,9 +168,11 @@ def validate_manuscript(markdown: str, venue_id: str, author_metadata: dict | No
                         and re.search(r"\b(?:draft\w*|edit\w*|analy\w*|research|writ\w*|generat\w*)\b", acknowledgment, re.I)
                         and re.search(r"\b(?:sections?|throughout|entire|abstract|introduction|manuscript|article|methods?|prose|writing)\b", acknowledgment, re.I))
     insights = sum(map(len, insight_blocks))
-    body = markdown.split("## References", 1)[0]
-    table_count = len(re.findall(r"(?m)^\|?\s*:?-{3,}.*\|.*$", markdown))
-    figure_count = len(re.findall(r"!\[[^\]]*\]\([^)]+\)", markdown))
+    reference_heading = next((match for match in section_headers(markdown) if match[1].strip().casefold() == "references"), None)
+    body = markdown[:reference_heading.start()] if reference_heading else markdown
+    body_prose = prose[:reference_heading.start()] if reference_heading else prose
+    table_count = len(re.findall(r"(?m)^\|?\s*:?-{3,}.*\|.*$", prose))
+    figure_count = len(re.findall(r"!\[[^\]]*\]\([^)]+\)", prose))
     metrics = {"abstract_words_estimate": _words(abstract), "reference_count": len(entries), "actionable_insights": insights,
                "actionable_insight_blocks": len(insight_blocks),
                "keywords": keywords, "whole_words_estimate": _words(markdown), "body_words_estimate": _words(body),
@@ -157,10 +187,10 @@ def validate_manuscript(markdown: str, venue_id: str, author_metadata: dict | No
                    f"Canonical references: {len(entries)}; require sequential unique labels and at most {limits['max_references']}.", source=source),
              _item("keywords", "passed" if 3 <= len(keywords) <= 8 and len({k.casefold() for k in keywords}) == len(keywords) else "failed",
                    "Provide three to eight distinct article keywords as a Keywords: paragraph (skill preparation policy)."),
-             _item("self_attestation", "failed" if SELF_COUNTS.search(body) else "passed", "Numeric compliance claims and generated reference-count self-attestations must not remain in manuscript prose."),
-             _item("escaped_prose", "failed" if any(re.search(r"\\n(?:\\n|## |[-*] |Keywords:)", value) for value in _prose_chunks(markdown)[::2]) else "passed",
+             _item("self_attestation", "failed" if SELF_COUNTS.search(body_prose) else "passed", "Numeric compliance claims and generated reference-count self-attestations must not remain in manuscript prose."),
+             _item("escaped_prose", "failed" if re.search(r"\\n(?:\\n|## |[-*] |Keywords:)", prose) else "passed",
                    "Use real paragraph breaks in prose; code escapes are preserved."),
-             _item("placeholders", "failed" if EDITORIAL_MARKERS.search(body) else "passed",
+             _item("placeholders", "failed" if EDITORIAL_MARKERS.search(body_prose) else "passed",
                    "Resolve placeholders and evidence tokens before native format preflight."),
              _item("ai_disclosure", "passed" if ai_disclosed else "failed", "Acknowledge actual AI tools, their use and affected manuscript parts from retained provenance. Disclosure presence is checked; it never asserts author approval or verifies tool-name accuracy.", source=AI_GUIDANCE)]
     estimate = (_words(body) if venue_id == "ieee-software" else _words(markdown)) + limits["visual_word_cost"] * (table_count + figure_count)
@@ -180,18 +210,28 @@ def validate_manuscript(markdown: str, venue_id: str, author_metadata: dict | No
     items.append(_item("reference_metadata", "failed" if metadata_issues else "passed",
                        "Use retained descriptive source titles and available author/year/publication/access metadata; raw-URL-only entries: " + str(metadata_issues) + "."))
     authors = profile_completeness(author_metadata)
-    byline = markdown.split("## Abstract", 1)[0]
+    abstract_heading = next((match for match in section_headers(markdown) if match[1].strip().casefold() == "abstract"), None)
+    byline = prose[:abstract_heading.start()] if abstract_heading else ""
     biography_text = "\n".join(text for heading, text in parts.items() if heading in {"author biography", "author biographies", "about the author", "about the authors"})
-    for row, entry in zip(authors, (author_metadata or {}).get("authors", [])):
+    ordered = (author_metadata or {}).get("authors", [])
+    bindings, order_matches = _author_blocks(byline, ordered)
+    biography_blocks = re.split(r"\n[ \t]*\n", biography_text)
+    for row, entry in zip(authors, ordered):
         author = entry["author"]
-        row["missing_byline_values"] = [field for field in ("display_name", "affiliation", "email", "orcid") if author.get(field) and author[field] not in byline]
-        row["supplied_biography_in_manuscript"] = bool(author.get("biography") and author["biography"] in biography_text)
+        block = bindings.get(entry["id"], "")
+        values = {cell.strip() for line in block.splitlines() for cell in line.split("|") if cell.strip()}
+        row["missing_byline_values"] = [field for field in ("display_name", "affiliation", "email", "orcid")
+                                        if author.get(field) and author[field] not in values
+                                        and not (field == "orcid" and "ORCID " + author[field] in values)]
+        row["byline_order_matches"] = order_matches
+        row["supplied_biography_in_manuscript"] = bool(author.get("biography") and author.get("display_name") and any(
+            paragraph.startswith(author["display_name"] + ". ") and author["biography"] in paragraph for paragraph in biography_blocks))
     metrics["authors"] = authors
     metrics["missing_biography_fields"] = {entry["id"]: [field for field in entry["missing_fields"] if field == "biography" or field.startswith("biography_details.")]
                                            for entry in authors}
     biographies_complete = bool(authors) and not any(metrics["missing_biography_fields"].values()) and all(row["supplied_biography_in_manuscript"] for row in authors)
     items.extend([_item("author_identity", "pending", "Author identity, affiliation, contact and ORCID require the author's actual confirmation; public ORCID data is not consent.", stage="submission"),
-                  _item("author_profile_binding", "passed" if authors and all(not row["missing_byline_values"] for row in authors) else "pending", "Every supplied author's identity fields must appear in the manuscript byline. Missing or unmatched fields are recorded per author; matching text is not consent.", stage="submission"),
+                  _item("author_profile_binding", "passed" if authors and order_matches and all(not row["missing_byline_values"] for row in authors) else "pending", "Every supplied author's identity fields must occur in that author's distinct byline block and in the supplied author order. Missing or unmatched fields are recorded per author; matching text is not consent.", stage="submission"),
                   _item("author_biography", "passed" if biographies_complete else "pending", "Biography text and all factual details are checked separately for every supplied author. Missing facts are listed in metrics.authors; factual accuracy still requires actual author confirmation.", stage="submission"),
                   _item("author_declarations", "pending", "The author must confirm actual originality, rights, AI disclosure, author approval and final submission declarations.", stage="submission")])
     if venue_id == "ieee-software":

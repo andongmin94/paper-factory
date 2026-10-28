@@ -26,13 +26,19 @@ def _absolute(path: Path) -> Path:
 
 
 def _json(path: Path) -> dict:
+    return _json_snapshot(path)[0]
+
+
+def _json_snapshot(path: Path) -> tuple[dict, str]:
     path = _absolute(path)
-    if path.stat().st_size > 2 * 1024 * 1024:
+    with path.open("rb") as stream:
+        snapshot = stream.read(2 * 1024 * 1024 + 1)
+    if len(snapshot) > 2 * 1024 * 1024:
         raise ValueError("Research note JSON must be at most 2 MiB")
-    value = json.loads(path.read_text(encoding="utf-8-sig"))
+    value = json.loads(snapshot.decode("utf-8-sig"))
     if not isinstance(value, dict):
         raise ValueError("Research note input must be a JSON object")
-    return value
+    return value, hashlib.sha256(snapshot).hexdigest()
 
 
 def _relative(root: Path, name: object) -> Path:
@@ -260,6 +266,142 @@ def _sha256(value: object, label: str) -> str:
     return value
 
 
+def impact(root: Path, evidence_path: Path, output_dir: Path, *, manuscript_name: str | None = None,
+           focus_path: Path | None = None) -> dict:
+    """Locate claims needing attention after changes, without reading for the agent."""
+    root = _absolute(root)
+    prior, prior_hash = _json_snapshot(evidence_path)
+    original_manuscript_hash = _sha256(prior.get("manuscript_sha256"), "Prior manuscript_sha256")
+    manuscript_name = manuscript_name or prior.get("manuscript")
+    manuscript = _relative(root, manuscript_name)
+    manuscript_bytes = manuscript.read_bytes()
+    manuscript_hash = hashlib.sha256(manuscript_bytes).hexdigest()
+    text = manuscript_bytes.decode("utf-8-sig")
+    claims = prior.get("claims")
+    if not isinstance(claims, list) or not claims:
+        raise ValueError("Prior evidence report requires a nonempty claims list")
+    ids = [claim.get("id") for claim in claims if isinstance(claim, dict)]
+    if len(ids) != len(claims) or any(not isinstance(value, str) or not value for value in ids) or len(set(ids)) != len(ids):
+        raise ValueError("Prior claims require distinct nonempty string ids")
+    focus = {"question": None, "claim_ids": [], "source_paths": []}
+    focus_hash = None
+    if focus_path is not None:
+        focus, focus_hash = _json_snapshot(focus_path)
+        if set(focus) != {"question", "claim_ids", "source_paths"} or not isinstance(focus["question"], str) or not focus["question"].strip():
+            raise ValueError("Focus requires question, claim_ids and source_paths")
+        for key in ("claim_ids", "source_paths"):
+            if not isinstance(focus[key], list) or any(not isinstance(value, str) or not value for value in focus[key]) or len(set(focus[key])) != len(focus[key]):
+                raise ValueError("Focus selections must be distinct nonempty string lists")
+        if not set(focus["claim_ids"]) <= set(ids):
+            raise ValueError("Focused claim ids must occur in the prior evidence report")
+        if not focus["claim_ids"] and not focus["source_paths"]:
+            raise ValueError("Select claims or sources for the new question; relevance is not inferred")
+    snapshots = {}
+
+    def snapshot(name):
+        path = _relative(root, name)
+        if path not in snapshots:
+            data = path.read_bytes() if path.is_file() else None
+            snapshots[path] = (data, hashlib.sha256(data).hexdigest() if data is not None else None)
+        return snapshots[path]
+
+    focused_sources = {str(_relative(root, name)).casefold() for name in focus["source_paths"]}
+    selected = [{"path": name, "observed_sha256": snapshot(name)[1],
+                 "status": "selected_for_reading" if snapshot(name)[1] is not None else "missing",
+                 "requires_reading_for_question": True}
+                for name in focus["source_paths"]]
+    rows, changed, missing = [], set(), set()
+    for claim in claims:
+        anchor, sources = claim.get("manuscript_quote"), claim.get("sources")
+        if not isinstance(anchor, str) or not anchor or not isinstance(sources, list):
+            raise ValueError("Prior claims require a manuscript_quote and source list")
+        reasons = []
+        if claim.get("bindings_match") is not True:
+            reasons.append("prior_claim_binding_unverified")
+        if anchor not in text:
+            reasons.append("manuscript_quote_not_found")
+        if claim["id"] in focus["claim_ids"]:
+            reasons.append("selected_for_new_question")
+        if not sources:
+            reasons.append("no_source_bindings")
+        witnesses = []
+        for source in sources:
+            if not isinstance(source, dict):
+                raise ValueError("Prior source witness must be an object")
+            name = source.get("path")
+            path = _relative(root, name)
+            start, end, quote = source.get("start_line"), source.get("end_line"), source.get("quote")
+            if type(start) is not int or type(end) is not int or not 1 <= start <= end or not isinstance(quote, str) or not quote:
+                raise ValueError("Prior witness requires positive start_line/end_line and literal quote")
+            expected = source.get("observed_sha256")
+            if expected is not None:
+                _sha256(expected, "Prior observed_sha256")
+            data, observed = snapshot(name)
+            issues = []
+            if expected is None or source.get("issues") != []:
+                issues.append("prior_source_binding_unverified")
+            if observed is None:
+                issues.append("missing_source")
+                missing.add(name)
+            elif expected != observed:
+                issues.append("source_changed" if expected is not None else "source_newly_available")
+                changed.add(name)
+            # Reuse a verified unchanged witness without re-extracting the whole body.
+            matches = observed is not None and observed == expected and not issues
+            if data is not None and not matches:
+                try:
+                    lines = data.decode("utf-8-sig").splitlines()
+                    matches = end <= len(lines) and "\n".join(lines[start - 1:end]) == quote
+                except UnicodeDecodeError:
+                    matches = False
+                if not matches:
+                    issues.append("source_quote_mismatch")
+            if str(path).casefold() in focused_sources:
+                issues.append("selected_for_new_question")
+            witnesses.append({"path": name, "start_line": start, "end_line": end,
+                              "previous_sha256": expected, "observed_sha256": observed,
+                              "quote_matches": matches, "issues": issues})
+            reasons.extend(issues)
+        reasons = sorted(set(reasons))
+        rows.append({"id": claim["id"], "claim": claim.get("claim"), "manuscript_quote": anchor,
+                     "manuscript_quote_present": anchor in text, "sources": witnesses,
+                     "status": "review_needed" if reasons else "bindings_reusable", "reasons": reasons})
+    if digest_file(manuscript) != manuscript_hash or digest_file(evidence_path) != prior_hash or focus_path is not None and digest_file(focus_path) != focus_hash:
+        raise ValueError("Impact inputs changed during inspection")
+    for path, (_, observed) in snapshots.items():
+        if (digest_file(path) if path.is_file() else None) != observed:
+            raise ValueError("Impact source changed during inspection")
+    needs_review = [row["id"] for row in rows if row["status"] == "review_needed"]
+    reusable = [row["id"] for row in rows if row["status"] == "bindings_reusable"]
+    report = {"format_version": 1, "created_at": datetime.now(timezone.utc).isoformat(),
+              "prior_evidence_sha256": prior_hash, "prior_manuscript_sha256": original_manuscript_hash,
+              "current_manuscript": {"path": manuscript_name, "sha256": manuscript_hash},
+              "manuscript_bytes_changed": original_manuscript_hash != manuscript_hash,
+              "question_focus": focus, "selected_sources": selected, "claims": rows,
+              "review_needed_claim_ids": needs_review, "reusable_binding_claim_ids": reusable,
+              "changed_source_paths": sorted(changed), "missing_source_paths": sorted(missing),
+              "scientific_review_reassigned": False,
+              "scope": "Supplied prior witness hashes and current literal anchors only. Reusable means unchanged literal bindings, not scientific validity, source identity, complete reading or an old review covering new manuscript bytes. New-question relevance is explicitly selected, never inferred. A changed source conservatively flags every dependent claim even if its quote remains present."}
+    folder = _new_folder(output_dir)
+    _write(folder / "impact.json", report)
+    prose = ["# Evidence change impact", "", report["scope"], "",
+             f"Current manuscript: {manuscript_name}", "", f"SHA-256: `{manuscript_hash}`", "",
+             "| Claim | Literal binding status | Reasons |", "| --- | --- | --- |"]
+    prose += [f"| {row['id'].replace('|', '&#124;')} | {row['status']} | {', '.join(row['reasons']) or 'none'} |" for row in rows]
+    if focus["question"] is not None:
+        prose += ["", "## Selected new question", "", focus["question"], "",
+                  "Selected sources require reading for this question; relevance was supplied explicitly.", ""]
+        prose += [f"- {item['path']}: {item['status']}" for item in selected] or ["Claims selected directly."]
+    prose += ["", "Changed sources: " + (", ".join(sorted(changed)) or "none"),
+              "", "Missing sources: " + (", ".join(sorted(missing)) or "none"), ""]
+    with (folder / "impact.md").open("x", encoding="utf-8", newline="\n") as stream:
+        stream.write("\n".join(prose))
+    _manifest(folder)
+    return {"output_dir": str(folder), "claim_count": len(rows),
+            "review_needed_claim_count": len(needs_review), "reusable_binding_claim_count": len(reusable),
+            "existing_inputs_modified": False}
+
+
 def status(root: Path, state_path: Path, output_dir: Path) -> dict:
     """Summarize explicit artifacts and their version bindings, without judging quality."""
     root, state = _absolute(root), _json(state_path)
@@ -346,6 +488,12 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--root", type=Path, required=True)
     c.add_argument("--state", type=Path, required=True)
     c.add_argument("--output-dir", type=Path, required=True)
+    c = commands.add_parser("impact")
+    c.add_argument("--root", type=Path, required=True)
+    c.add_argument("--evidence", type=Path, required=True)
+    c.add_argument("--manuscript", help="Current root-relative manuscript; otherwise uses the prior report path")
+    c.add_argument("--focus", type=Path, help="Explicit question, claim_ids and source_paths selections")
+    c.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
         if args.command == "checkpoint":
@@ -356,6 +504,9 @@ def main(argv: list[str] | None = None) -> int:
             result = evidence(args.root, args.ledger, args.output_dir)
         elif args.command == "status":
             result = status(args.root, args.state, args.output_dir)
+        elif args.command == "impact":
+            result = impact(args.root, args.evidence, args.output_dir,
+                            manuscript_name=args.manuscript, focus_path=args.focus)
         else:
             result = compare(args.before, args.after, args.output_dir)
     except (OSError, ValueError, TypeError, KeyError) as exc:

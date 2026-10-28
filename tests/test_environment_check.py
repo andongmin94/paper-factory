@@ -49,6 +49,12 @@ def test_failed_pandoc_probe_produces_a_diagnostic(monkeypatch):
     assert not result["native_export_prerequisites_detected"]
 
 
+def test_python_version_banner_is_not_pandoc():
+    result = environment.diagnose(sys.executable)
+    assert result["pandoc"]["status"] == "missing_or_unusable"
+    assert not result["native_export_prerequisites_detected"]
+
+
 def test_existing_pandoc_does_not_require_a_second_provider(monkeypatch):
     monkeypatch.setattr(environment, "_packages", lambda: [{"name": "python-docx", "status": "detected"},
                                                            {"name": "pypandoc_binary", "status": "missing"}])

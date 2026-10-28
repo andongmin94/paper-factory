@@ -352,13 +352,21 @@ def prepare_bundle(plan, root, output_dir):
         raise ValueError("Declarations must map supported names to supplied text or null; use separate confirmations for human records")
     declarations = {name: _text(text, name) if text is not None else None for name, text in declarations.items()}
     confirmations = value.get("confirmations", {})
-    declaration_status = _declaration_status(declarations, confirmations, selections)
     cover = value.get("cover_letter")
     cover_text = None
     if cover is not None:
         if not isinstance(cover, dict):
             raise ValueError("cover_letter must contain supplied text")
         cover_text = _text(cover.get("text"), "cover letter text", required=True)
+    approval_files = [{"role": row["role"], "path": "files/" + row["path"],
+                       "bytes": row["bytes"], "sha256": row["sha256"]} for row in selections]
+    if cover_text:
+        if "cover_letter" in roles:
+            raise ValueError("Select one supplied cover-letter file or generated cover_letter.text, not both")
+        cover_bytes = (cover_text + "\n").encode("utf-8")
+        approval_files.append({"role": "cover_letter", "path": "cover-letter.md", "bytes": len(cover_bytes),
+                               "sha256": hashlib.sha256(cover_bytes).hexdigest()})
+    declaration_status = _declaration_status(declarations, confirmations, approval_files)
     pending = []
     if "manuscript" not in roles:
         pending.append("Select the final manuscript file")
@@ -387,7 +395,7 @@ def prepare_bundle(plan, root, output_dir):
         _write(folder / "cover-letter.md", cover_text + "\n")
     report = {"mode": "explicit_submission_file_bundle", "created_at_utc": datetime.now(timezone.utc).isoformat(),
               "title": title, "venue_id": value["venue_id"], "source_plan_sha256": plan_sha,
-              "selected_files": records, "supplied_declarations": declarations,
+              "selected_files": records, "approval_files": approval_files, "supplied_declarations": declarations,
               "supplied_confirmations": confirmations, "declaration_status": declaration_status, "pending": pending,
               "submission_ready": False, "author_approval_inferred": False, "actual_submission_performed": False,
               "scope": "Local allowlisted copies and supplied cover text only. File presence and supplied declarations are not independent verification or consent."}

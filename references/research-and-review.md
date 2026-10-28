@@ -4,6 +4,8 @@
 
 Select a question the actual material can answer and a decision that matters to the intended reader. Read the sources far enough to establish the central behavior, normal reachability, relevant guards, counterexamples, and boundaries. Record why cases were chosen. A bounded source construction can be valuable without being an execution, an exhaustive survey, or evidence of prevalence.
 
+If several angles compete, [contribution-selection.md](contribution-selection.md) provides a short worked selection example. Reuse retained reading and source witnesses to rule out unsupported or low-value questions before investing in a full article.
+
 Challenge the contribution with the closest existing method, including its strongest relevant guarantees and assumptions. Apply it fairly to the same supported cases. Explain what the existing method already establishes, what the article adds, and whether the additional work changes a decision. Agreement with established guidance remains a result; do not weaken a baseline to manufacture novelty.
 
 Separate source-declared behavior, static observations, executed observations, interpretation, and hypothetical applications. A recorded expectation does not by itself establish runtime harm. A worked policy is not an implemented, safe, or effective fix. Missing external evidence or an inaccessible paper is a research limitation, not proof that the project has reached an intrinsic ceiling.

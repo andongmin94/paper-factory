@@ -5,6 +5,7 @@ from io import BytesIO
 import hashlib
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 from tempfile import TemporaryDirectory
@@ -118,6 +119,20 @@ def pandoc_binary(explicit: str | None = None) -> Path:
     return candidate.resolve()
 
 
+def pandoc_version(binary: Path) -> str:
+    """Probe the selected tool's identity; an arbitrary --version is insufficient."""
+    try:
+        result = subprocess.run([str(binary), "--version"], capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", timeout=10, check=True,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ValueError("Selected Pandoc executable could not be verified") from exc
+    banner = result.stdout.splitlines()[0] if result.stdout.splitlines() else ""
+    if re.fullmatch(r"pandoc [0-9]+(?:\.[0-9]+)+(?:[-+][A-Za-z0-9.-]+)?", banner) is None:
+        raise ValueError("Selected executable did not identify itself as Pandoc")
+    return banner
+
+
 def convert_docx(markdown: Path, output: Path, *, venue_id: str,
                  pandoc: str | None = None) -> dict:
     """Use the actual publisher reference, citation rules and section masters."""
@@ -126,6 +141,7 @@ def convert_docx(markdown: Path, output: Path, *, venue_id: str,
     if output.suffix.lower() != ".docx" or output.exists():
         raise ValueError("Native Word export requires a new .docx output path")
     binary = pandoc_binary(pandoc)
+    version = pandoc_version(binary)
     template_path, template = official_template(venue_id)
     original_sha = digest_file(markdown)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -165,7 +181,7 @@ def convert_docx(markdown: Path, output: Path, *, venue_id: str,
         raise ValueError("The manuscript changed during native conversion")
     if digest_file(template_path) != template["sha256"]:
         raise ValueError("The publisher reference changed during conversion")
-    return {"command": command, "engine": "Pandoc → official publisher Word styles",
+    return {"command": command, "engine": "Pandoc → official publisher Word styles", "pandoc_version": version,
             "input_sha256": original_sha, "output_sha256": digest_file(output),
             "diagnostics": result.stderr, "official_template": proof,
             "author_control_markers": {"scope": "Only one ordered pair of exact top-level author marker paragraphs before Abstract is omitted from native output; canonical Markdown and code examples are retained.",

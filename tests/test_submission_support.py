@@ -239,7 +239,7 @@ def test_explicit_declaration_confirmation_is_bound_to_exact_text_and_all_select
     statement = "The named author confirms the originality of this exact selected manuscript."
     confirmation = {"confirmed": True, "confirmed_by": "Synthetic test author", "confirmed_at": "2026-10-28T12:00:00+09:00",
                     "declaration_sha256": hashlib.sha256(statement.encode()).hexdigest(),
-                    "files": [{"path": "article.md", "sha256": support.digest_file(article)}]}
+                    "files": [{"path": "files/article.md", "sha256": support.digest_file(article)}]}
     plan_data = {"venue_id": "ieee-software", "title": "A", "files": [{"role": "manuscript", "path": "article.md"}],
                  "declarations": {"originality": statement}, "confirmations": {"originality": confirmation}}
     plan = put(tmp_path / "plan.json", plan_data)
@@ -255,6 +255,40 @@ def test_explicit_declaration_confirmation_is_bound_to_exact_text_and_all_select
     put(plan, plan_data)
     result = support.prepare_bundle(plan, root, tmp_path / "changed-statement")
     assert any("exact declaration text" in reason for reason in result["declaration_status"]["originality"]["reasons"])
+
+
+def test_generated_cover_letter_is_part_of_exact_confirmation_scope(tmp_path):
+    import hashlib
+    root = tmp_path / "source"
+    root.mkdir()
+    article = put(root / "article.md", ARTICLE)
+    statement = "Synthetic test author approves these exact prepared files."
+    cover = "Please consider the attached bounded case study."
+    record = {"confirmed": True, "confirmed_by": "Synthetic test author", "confirmed_at": "2026-10-29T12:00:00+09:00",
+              "declaration_sha256": hashlib.sha256(statement.encode()).hexdigest(),
+              "files": [{"path": "files/article.md", "sha256": support.digest_file(article)},
+                        {"path": "cover-letter.md", "sha256": hashlib.sha256((cover + "\n").encode()).hexdigest()}]}
+    data = {"venue_id": "ieee-software", "title": "A", "files": [{"role": "manuscript", "path": "article.md"}],
+            "cover_letter": {"text": cover}, "declarations": {"author_approval": statement}, "confirmations": {"author_approval": record}}
+    plan = put(tmp_path / "plan.json", data)
+    report = support.prepare_bundle(plan, root, tmp_path / "first")
+    assert report["declaration_status"]["author_approval"]["status"] == "explicit_confirmation_recorded"
+    assert report["approval_files"][-1]["sha256"] == support.digest_file(tmp_path / "first/cover-letter.md")
+    data["cover_letter"]["text"] += " This changed wording needs fresh approval."
+    put(plan, data)
+    changed = support.prepare_bundle(plan, root, tmp_path / "changed")
+    assert changed["declaration_status"]["author_approval"]["status"] == "pending"
+
+
+def test_cover_letter_must_have_one_unambiguous_source(tmp_path):
+    root = tmp_path / "source"
+    root.mkdir()
+    put(root / "cover.md", "A supplied letter")
+    plan = put(tmp_path / "plan.json", {"venue_id": "ieee-software", "title": "A", "files": [{"role": "cover_letter", "path": "cover.md"}],
+                                      "cover_letter": {"text": "A generated letter"}})
+    with pytest.raises(ValueError, match="one supplied cover-letter"):
+        support.prepare_bundle(plan, root, tmp_path / "new")
+    assert not (tmp_path / "new").exists()
 
 
 def test_bare_boolean_is_not_a_human_declaration_record(tmp_path):

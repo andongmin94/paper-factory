@@ -147,13 +147,37 @@ def test_coauthor_metadata_does_not_hide_a_missing_rendered_byline(manuscript, t
     assert next(item for item in check["items"] if item["id"] == "author_profile_binding")["status"] == "pending"
 
 
+def _real_pandoc():
+    try:
+        binary = converter.pandoc_binary()
+        converter.pandoc_version(binary)
+        return binary
+    except ValueError as exc:
+        if os.environ.get("CI", "").casefold() == "true":
+            pytest.fail("CI requires the actual Pandoc conversion regressions: " + str(exc))
+        pytest.skip("An installed Pandoc is required for the actual native conversion regression")
+
+
+def test_ci_cannot_skip_a_broken_pandoc_installation(monkeypatch):
+    monkeypatch.setenv("CI", "true")
+    def unavailable():
+        raise ValueError("Broken discovery")
+    monkeypatch.setattr(converter, "pandoc_binary", unavailable)
+    with pytest.raises(pytest.fail.Exception, match="CI requires"):
+        _real_pandoc()
+
+
+def test_conversion_rejects_a_python_executable_without_creating_docx(manuscript, tmp_path):
+    target = tmp_path / "wrong.docx"
+    with pytest.raises(ValueError, match="identify itself as Pandoc"):
+        converter.convert_docx(manuscript, target, venue_id="ieee-software", pandoc=sys.executable)
+    assert not target.exists()
+
+
 def test_real_pandoc_hides_only_author_controls_and_preserves_code_and_relative_media(tmp_path):
     from docx import Document
     from PIL import Image
-    try:
-        binary = converter.pandoc_binary()
-    except ValueError:
-        pytest.skip("An installed Pandoc is required for the actual native conversion regression")
+    binary = _real_pandoc()
     source = tmp_path / "article.md"
     start, end = "<!-- paper-factory:authors:start -->", "<!-- paper-factory:authors:end -->"
     front = "# Shared configuration cleanup\n\n" + start + "\n\nAlice Example | alice@example.org\n\n" + end + "\n\n"
@@ -186,10 +210,7 @@ def test_real_pandoc_hides_only_author_controls_and_preserves_code_and_relative_
 
 def test_real_pandoc_does_not_hide_unpaired_or_inline_code_only_marker(tmp_path):
     from docx import Document
-    try:
-        binary = converter.pandoc_binary()
-    except ValueError:
-        pytest.skip("An installed Pandoc is required for the actual native conversion regression")
+    binary = _real_pandoc()
     start = "<!-- paper-factory:authors:start -->"
     source = tmp_path / "unpaired.md"
     source.write_text("# Title\n\n" + start + "\n\n`<!-- paper-factory:authors:end -->`\n\n## Abstract\n\nA bounded example.\n\n## Analysis\n\nAn example is preserved.\n", encoding="utf-8")
