@@ -1,27 +1,2 @@
-[build-system]
-requires = ["setuptools>=77"]
-build-backend = "setuptools.build_meta"
-
-[project]
-name = "paper-factory"
-version = "0.14.20"
-description = "Standalone local research engine with bounded QuickJS experiments and verified manuscript exports"
-readme = "README.md"
-requires-python = ">=3.11"
-license = "MIT"
-dependencies = ["pydantic>=2.12,<3", "httpx[socks]>=0.28,<1", "beautifulsoup4>=4.14,<5"]
-
-[project.optional-dependencies]
-dev = ["pytest>=8,<10", "jsonschema>=4.23,<5", "packaging>=26.3,<27"]
-pdf = ["typst>=0.14,<1", "pypdf>=5,<7", "python-docx>=1.2,<2", "pypandoc_binary>=1.17,<2", "pypdfium2>=5.14,<6", "Pillow>=12.3,<13"]
-
-[tool.setuptools.packages.find]
-where = ["src"]
-
-[tool.setuptools.package-data]
-"paper_factory" = ["fonts/*.ttf", "fonts/LICENSE", "fonts/provenance.json", "publication_venues.json", "templates/*.docx", "templates/*.json", "templates/*.ps1"]
-"paper_factory.autonomous" = ["quickjs_worker.mjs"]
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["network: live external API or public repository integration"]

@@ -3,34 +3,12 @@
 .venv/
 __pycache__/
 *.py[cod]
-*.egg-info/
 .pytest_cache/
-build/
-dist/
-.paper-factory/
-.pf-smoke/
-/desktop/node_modules/
-/desktop/dist/
-/desktop/release/
-/desktop/output/
-/desktop/resources/
-/desktop/test-results/
-/desktop/playwright-report/
-/desktop/vendor/siwc-local/dist/
-/desktop/runtime/
-**/node_modules/
-**/chatgpt-auth.json
-**/chatgpt-host.json
 
-# Local research exports and host installation metadata
+# Preserved local research, historical records, verification and exports
+/.paper-factory/
 /output/
-/.agents/
-
-# Local Windows cache directory
-/%SystemDrive%/
-
-# Local verification scratch files and browser captures
 /tmp/
+/.agents/
 /.playwright-cli/
-/desktop/.documentation-component-*/
-/desktop/.paper-factory-*.cjs
+/%SystemDrive%/

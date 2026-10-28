@@ -1,0 +1,4 @@
+interface:
+  display_name: "Paper Factory"
+  short_description: "Research repositories and write grounded feature articles"
+  default_prompt: "Use $paper-factory to research this repository and write a complete, evidence-grounded feature article."

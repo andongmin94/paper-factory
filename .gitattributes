@@ -1,3 +1,2 @@
 * text=auto eol=lf
-# Corpus bytes are scientific input; preserve them exactly across checkouts.
-examples/text-study/corpus.txt -text
+assets/templates/*.docx -text
