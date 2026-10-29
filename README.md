@@ -66,14 +66,14 @@ python -m pip install -r requirements.txt "pytest>=8,<10"
 python -m pytest -q
 ```
 
-Windows CI에서 실제 Pandoc 식별과 문서 변환을 필수로 검사합니다. 최근 로컬 검증에서는 **208개 테스트**를 통과했고, Garak·REA에서 질문·기여 선택을 한 번씩 확인했습니다. 프론트론의 기존 공식 원고·평가·횟수도 유지합니다.
+Windows CI에서 실제 Pandoc 식별과 문서 변환을 필수로 검사합니다. 최근 로컬 검증에서는 **224개 테스트**를 통과했습니다. 누락·손상된 그림의 정상 출력 처리, 확인 도중 바뀐 근거, 과거 출력 파일의 평가 재사용과 저자 검사 누락을 방지합니다. Garak·REA의 기존 질문·기여 선택 기록과 프론트론의 공식 원고·평가·횟수는 유지합니다.
 
 - [스킬 지침](SKILL.md)
 - [연구·평가 기준](references/research-and-review.md)
 - [연구 질문과 기여 선택](references/contribution-selection.md)
 - [공식 출력·ORCID 도구](references/tools.md)
 - [연구자 편의기능과 입력 형식](references/researcher-convenience.md)
-- [최신 구현·검증 기록](docs/quality-flow-verification-20261029.md)
+- [최신 구현·검증 기록](docs/skill-refinements-verification-20261030.md)
 
 연구 자료·저자 프로필·출력 파일은 스킬 설치 폴더 밖에 보관합니다. 로컬 연구 자료와 생성 결과는 Git에 포함하지 않습니다.
 

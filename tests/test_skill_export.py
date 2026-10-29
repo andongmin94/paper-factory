@@ -221,6 +221,21 @@ def test_real_pandoc_does_not_hide_unpaired_or_inline_code_only_marker(tmp_path)
     assert "<!-- paper-factory:authors:end -->" in paragraphs
 
 
+@pytest.mark.parametrize("missing", [True, False])
+def test_real_pandoc_cannot_silently_deliver_a_missing_or_invalid_figure(tmp_path, missing):
+    binary = _real_pandoc()
+    source = tmp_path / "article.md"
+    source.write_text(ARTICLE + "\n![A necessary figure](figure.png)\n", encoding="utf-8")
+    if not missing:
+        (tmp_path / "figure.png").write_bytes(b"This is not an image.")
+    original = source.read_bytes()
+    with pytest.raises(ValueError, match="Pandoc failed" if missing else "unreadable raster image") as failure:
+        converter.convert_docx(source, tmp_path / "incomplete.docx", venue_id="ieee-software", pandoc=str(binary))
+    if missing:
+        assert "figure.png" in str(failure.value)
+    assert source.read_bytes() == original
+
+
 def test_pandoc_resolves_only_an_existing_installation(tmp_path, monkeypatch):
     binary = tmp_path / "pandoc.exe"
     binary.write_bytes(b"test executable")

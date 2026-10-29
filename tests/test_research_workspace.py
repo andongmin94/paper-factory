@@ -141,6 +141,58 @@ def test_evidence_rejects_file_replaced_after_reading_its_anchor(materials, tmp_
     assert not (tmp_path / "must-not-approve").exists()
 
 
+@pytest.mark.parametrize("initially_missing", [False, True])
+def test_evidence_rechecks_earlier_sources_after_later_witnesses(materials, tmp_path, monkeypatch, initially_missing):
+    """A report must describe one source snapshot, including files initially absent."""
+    payload = ledger(materials, tmp_path)
+    value = json.loads(payload.read_text())
+    first = materials / "source.txt"
+    later = materials / "later.txt"
+    later.write_bytes(b"later witness\n")
+    value["claims"][0]["sources"].append({"path": later.name, "start_line": 1,
+                                         "end_line": 1, "quote": "later witness"})
+    json_file(payload, value)
+    if initially_missing:
+        first.unlink()
+    original_read = Path.read_bytes
+
+    def change_earlier_source(path):
+        data = original_read(path)
+        if path == later:
+            first.write_bytes(b"replacement without the retained witness\n")
+        return data
+
+    monkeypatch.setattr(Path, "read_bytes", change_earlier_source)
+    with pytest.raises(ValueError, match="Evidence source changed"):
+        notes.evidence(materials, payload, tmp_path / "must-not-approve")
+    assert not (tmp_path / "must-not-approve").exists()
+
+
+def test_evidence_reuses_one_source_snapshot_for_multiple_witnesses(materials, tmp_path, monkeypatch):
+    payload = ledger(materials, tmp_path)
+    value = json.loads(payload.read_text())
+    first_claim = value["claims"][0]
+    second = {**first_claim, "id": "C2", "sources": [{**first_claim["sources"][0],
+              "start_line": 3, "end_line": 3, "quote": "third"}]}
+    value["claims"].append(second)
+    json_file(payload, value)
+    source = materials / "source.txt"
+    original_read, reads = Path.read_bytes, []
+
+    def observe_source_reads(path):
+        if path == source:
+            reads.append(path)
+        return original_read(path)
+
+    monkeypatch.setattr(Path, "read_bytes", observe_source_reads)
+    output = tmp_path / "evidence"
+    assert notes.evidence(materials, payload, output)["bindings_match"]
+    report = json.loads((output / "evidence.json").read_text())
+    assert reads == [source]
+    assert len({claim["sources"][0]["observed_sha256"] for claim in report["claims"]}) == 1
+    assert [claim["sources"][0]["quote"] for claim in report["claims"]] == ["claim survives", "third"]
+
+
 @pytest.mark.parametrize("change,issue", [("quote", "source_quote_mismatch"), ("sha256", "source_hash_mismatch"), ("anchor", "manuscript_quote_not_found"), ("missing", "missing_source")])
 def test_evidence_retains_mismatches_instead_of_approving(materials, tmp_path, change, issue):
     payload = ledger(materials, tmp_path)

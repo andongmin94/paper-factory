@@ -138,6 +138,21 @@ def test_old_scientific_review_is_not_assigned_to_changed_manuscript(prepared, t
     assert "scientific_recommendation" in report["pending"]
 
 
+@pytest.mark.parametrize("formats", [("docx",), ("pdf",), ("docx", "pdf")])
+@pytest.mark.parametrize("matching", [True, False])
+def test_explicit_scientific_review_export_bindings_must_match(prepared, tmp_path, formats, matching):
+    root, record_path, _ = prepared
+    review = json.loads((root / "scientific.json").read_text())
+    review.update({name + "_sha256": sha(root / "raw" / ("article." + name)) if matching else "0" * 64
+                   for name in formats})
+    put(root / "scientific.json", review)
+    report = finalizer.check(root, record_path, tmp_path / "final")
+    assert report["native_format_passed"] and report["page_inspection_recorded"]
+    assert report["scientific_content"]["review_current"] is matching
+    assert report["submission_ready"] is matching
+    assert ("scientific_recommendation" in report["pending"]) is not matching
+
+
 def test_missing_human_information_stays_pending(prepared, tmp_path):
     root, record_path, record = prepared
     record["confirmations"] = {}
@@ -176,6 +191,19 @@ def test_missing_author_facts_cannot_be_overridden_by_a_confirmation(prepared, t
     put(root / "format.json", native)
     report = finalizer.check(root, record_path, tmp_path / "final")
     assert "supplied_author_facts" in report["pending"]
+
+
+@pytest.mark.parametrize("missing,duplicate", [("author_biography", "author_profile_binding"),
+                                               ("author_profile_binding", "author_biography")])
+def test_each_author_fact_check_must_be_present_once(prepared, tmp_path, missing, duplicate):
+    root, record_path, _ = prepared
+    native = json.loads((root / "format.json").read_text())
+    next(row for row in native["items"] if row["id"] == missing)["id"] = duplicate
+    put(root / "format.json", native)
+    report = finalizer.check(root, record_path, tmp_path / "final")
+    assert report["native_format_passed"]
+    assert "supplied_author_facts" in report["pending"]
+    assert not report["submission_ready"]
 
 
 def test_paths_cannot_escape_and_existing_final_report_is_preserved(prepared, tmp_path):

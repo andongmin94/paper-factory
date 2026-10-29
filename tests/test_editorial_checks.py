@@ -59,6 +59,24 @@ A real citation [1].
     assert "citation_without_reference" not in codes(result)
 
 
+@pytest.mark.parametrize("opener,closer", [("```python", "````"), ("~~~text", "~~~~~")])
+def test_longer_closing_fences_hide_code_without_hiding_following_citations(opener, closer):
+    result = editorial.check_manuscript(
+        "# Article\n" + opener + "\narray[9]\n## References\n[8] Example only.\n" + closer +
+        "\nA real citation [1].\n## References\n[1] Actual source.\n")
+    assert result["metrics"]["recognized_body_citations"] == [1]
+    assert result["metrics"]["reference_entries"] == 1
+    assert not result["structural_findings"]
+
+
+def test_inline_code_with_literal_backticks_does_not_create_citations():
+    result = editorial.check_manuscript(
+        "# Article\nUse ``literal `array[9]` notation``; the actual source is [1].\n"
+        "## References\n[1] Actual source.\n")
+    assert result["metrics"]["recognized_body_citations"] == [1]
+    assert not result["structural_findings"]
+
+
 def test_reference_heading_inside_code_does_not_end_the_real_body():
     result = editorial.check_manuscript("# Article\n```text\n## References\n[9] Not a reference.\n```\nReal source [1].\n## References\n[1] Source.\n")
     assert result["metrics"]["reference_entries"] == 1
@@ -239,7 +257,7 @@ def test_cli_has_no_checkout_or_app_requirement(tmp_path):
     import shutil
     isolated = tmp_path / "skill"
     isolated.mkdir()
-    for name in ["editorial_checks.py", "_publication_files.py"]:
+    for name in ["editorial_checks.py", "_publication_files.py", "_publication_text.py"]:
         shutil.copyfile(ROOT / "scripts" / name, isolated / name)
     manuscript = tmp_path / "article.md"
     manuscript.write_text("# Article\nA source [1].\n## References\n[1] Source.\n", encoding="utf-8")

@@ -15,13 +15,7 @@ import sys
 from urllib.parse import unquote, urlsplit, urlunsplit
 
 from _publication_files import digest_file, ensure_unlinked
-
-
-def _hide_code(text: str) -> str:
-    def blank(match):
-        return re.sub(r"[^\n]", " ", match[0])
-    text = re.sub(r"(?ms)^ {0,3}(`{3,}|~{3,})[^\n]*\n.*?^ {0,3}\1[ \t]*$", blank, text)
-    return re.sub(r"`+[^`\n]*`+", blank, text)
+from _publication_text import mask_code
 
 
 def _prose(text: str, *, context: str | None = None) -> str:
@@ -37,8 +31,8 @@ def _prose(text: str, *, context: str | None = None) -> str:
         return re.sub(r"\s+", " ", value).strip().casefold()
 
     definition = re.compile(r"(?m)^ {0,3}\[([^\]\n]+)\]:[ \t]*\S[^\n]*$")
-    labels = {label(match[1]) for match in definition.finditer(_hide_code(context if context is not None else text))}
-    text = _hide_code(text)
+    labels = {label(match[1]) for match in definition.finditer(mask_code(context if context is not None else text))}
+    text = mask_code(text)
     text = definition.sub(blank, text)
     text = re.sub(r"!?\[[^\]\n]*\]\([^\n)]*\)", blank, text)
 
@@ -52,7 +46,7 @@ def _prose(text: str, *, context: str | None = None) -> str:
 
 
 def _sections(text: str) -> tuple[str, str]:
-    masked = _hide_code(text)
+    masked = mask_code(text)
     heading = re.search(r"(?mi)^ {0,3}(#{1,6})[ \t]+references[ \t]*#*[ \t]*$", masked)
     if heading is None:
         return text, ""
@@ -65,7 +59,7 @@ def _sections(text: str) -> tuple[str, str]:
 
 
 def _references(text: str) -> list[dict]:
-    text = _hide_code(text)
+    text = mask_code(text)
     starts = list(re.finditer(r"(?m)^ {0,3}(?:\[(\d+)\]|(\d+)\.)[ \t]+", text))
     return [{"id": int(m[1] or m[2]),
              "text": text[m.end():starts[i + 1].start() if i + 1 < len(starts) else len(text)].strip()}

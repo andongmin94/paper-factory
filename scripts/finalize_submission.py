@@ -129,7 +129,9 @@ def check(root: Path, record_path: Path, output_dir: Path) -> dict:
     if not isinstance(author_rows, list) or any(not isinstance(row, dict) for row in author_rows):
         raise ValueError("Format report authors must be a list of objects")
     factual_rows = [row for row in native.get("items", []) if row.get("id") in {"author_profile_binding", "author_biography"}]
-    facts_complete = bool(author_rows and len(factual_rows) == 2 and all(row.get("status") == "passed" for row in factual_rows) and
+    facts_complete = bool(author_rows and len(factual_rows) == 2 and
+                          {row["id"] for row in factual_rows} == {"author_profile_binding", "author_biography"} and
+                          all(row.get("status") == "passed" for row in factual_rows) and
                           all(row.get("supplied_fields_complete") is True and not row.get("missing_byline_values") for row in author_rows))
     item("supplied_author_facts", facts_complete, "Every author's supplied facts, byline association and biography must already be complete in the existing format report.")
     human = {}
@@ -153,9 +155,11 @@ def check(root: Path, record_path: Path, output_dir: Path) -> dict:
     review = selected("scientific_review", document=True) or {}
     recommendation = review.get("recommendation")
     review_current = bool(hashes["manuscript"] and review.get("manuscript_sha256") == hashes["manuscript"] and
-                          review.get("venue_id") == supplied["venue_id"])
+                          review.get("venue_id") == supplied["venue_id"] and
+                          all(hashes[name] and review[name + "_sha256"] == hashes[name]
+                              for name in ("docx", "pdf") if name + "_sha256" in review))
     scientific_passed = bool(review_current and recommendation == "consider_submission" and review.get("essential_errors") == [])
-    item("scientific_recommendation", scientific_passed, "A supplied scientific assessment must cover this exact manuscript and venue, recommend consideration, and record no essential errors. No new review is performed.")
+    item("scientific_recommendation", scientific_passed, "A supplied scientific assessment must cover this exact manuscript and venue, match any explicitly reviewed DOCX/PDF hashes, recommend consideration, and record no essential errors. No new review is performed.")
     for path, expected_hash in snapshots.items():
         if (digest_file(path) if path.is_file() else None) != expected_hash:
             raise ValueError("An input changed while reconciling final preparation")

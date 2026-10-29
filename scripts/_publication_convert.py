@@ -145,8 +145,10 @@ def convert_docx(markdown: Path, output: Path, *, venue_id: str,
     template_path, template = official_template(venue_id)
     original_sha = digest_file(markdown)
     output.parent.mkdir(parents=True, exist_ok=True)
+    # Pandoc can exit successfully after replacing a missing figure with its
+    # description. Such a degraded document is not a completed official export.
     command = [str(binary), str(markdown.resolve()), "--from=markdown-smart-raw_tex-raw_html",
-               "--standalone", "--to=docx", "-o", str(output.resolve())]
+               "--standalone", "--fail-if-warnings", "--to=docx", "-o", str(output.resolve())]
     # A short reference path avoids native Windows path-length restrictions.
     with TemporaryDirectory(prefix="paper-factory-convert-") as temporary:
         staged_reference = Path(temporary) / template_path.name
@@ -172,6 +174,16 @@ def convert_docx(markdown: Path, output: Path, *, venue_id: str,
     document.core_properties.modified = datetime(2000, 1, 1, tzinfo=timezone.utc)
     document.save(output)
     with zipfile.ZipFile(BytesIO(output.read_bytes())) as source_zip:
+        # Pandoc can also embed corrupt raster bytes without a warning. Verify
+        # the actual embedded resources; vector formats still need page review.
+        from PIL import Image
+        for name in source_zip.namelist():
+            if name.startswith("word/media/") and Path(name).suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".webp"}:
+                try:
+                    with Image.open(BytesIO(source_zip.read(name))) as picture:
+                        picture.verify()
+                except (OSError, ValueError) as exc:
+                    raise ValueError(f"Native Word export contains an unreadable raster image: {name}") from exc
         with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as final_zip:
             for name in source_zip.namelist():
                 info = zipfile.ZipInfo(name, date_time=(2000, 1, 1, 0, 0, 0))

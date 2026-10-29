@@ -176,7 +176,7 @@ def evidence(root: Path, ledger_path: Path, output_dir: Path) -> dict:
     claims = ledger.get("claims")
     if not isinstance(claims, list) or not claims:
         raise ValueError("Evidence ledger requires a nonempty claims list")
-    output, identifiers = [], set()
+    output, identifiers, snapshots = [], set(), {}
     for claim in claims:
         if not isinstance(claim, dict) or not isinstance(claim.get("id"), str) or not claim["id"] or claim["id"] in identifiers:
             raise ValueError("Every claim requires a distinct nonempty string id")
@@ -201,23 +201,26 @@ def evidence(root: Path, ledger_path: Path, output_dir: Path) -> dict:
             if type(start) is not int or type(end) is not int or not 1 <= start <= end or not isinstance(quote, str) or not quote:
                 raise ValueError("Source witness requires positive start_line/end_line and a nonempty quote")
             status = []
-            observed_hash = None
-            if not path.is_file():
+            if path not in snapshots:
+                data = path.read_bytes() if path.is_file() else None
+                snapshots[path] = (data, hashlib.sha256(data).hexdigest() if data is not None else None)
+            data, observed_hash = snapshots[path]
+            if data is None:
                 status.append("missing_source")
             else:
-                observed_hash = digest_file(path)
-                lines = path.read_text(encoding="utf-8-sig").splitlines()
+                lines = data.decode("utf-8-sig").splitlines()
                 if end > len(lines) or "\n".join(lines[start - 1:end]) != quote:
                     status.append("source_quote_mismatch")
                 if source.get("sha256") is not None and source["sha256"] != observed_hash:
                     status.append("source_hash_mismatch")
-                if digest_file(path) != observed_hash:
-                    raise ValueError("Evidence source changed during inspection")
             witnesses.append({**source, "observed_sha256": observed_hash, "issues": status})
             issues.extend(status)
         output.append({**claim, "sources": witnesses, "issues": sorted(set(issues)), "bindings_match": not issues})
     if digest_file(manuscript) != initial:
         raise ValueError("Manuscript changed during evidence inspection")
+    for path, (_, observed_hash) in snapshots.items():
+        if (digest_file(path) if path.is_file() else None) != observed_hash:
+            raise ValueError("Evidence source changed during inspection")
     folder = _new_folder(output_dir)
     report = {"manuscript": ledger["manuscript"], "manuscript_sha256": initial, "claims": output,
               "bindings_match": all(item["bindings_match"] for item in output),
