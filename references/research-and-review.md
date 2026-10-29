@@ -12,9 +12,9 @@ Separate source-declared behavior, static observations, executed observations, i
 
 For a revision, prefer changes that resolve a real inference or adoption problem: a missing premise, an unfair comparison, an unexplained state transition, an ambiguous result, a needed failure condition, or evidence readers cannot locate. Distinguish those from a new study requiring execution, another independent case, measurements, or a maintainer response. More prose, more checks, and a higher rating are not new evidence.
 
-## Declared nine-criterion quality proxy
+## Evidence-grounded review criteria
 
-This is the skill's declared rubric, retained from the established research practice. It is not a recovered external reviewer's rubric, external peer review, or an acceptance predictor. Use integer scores from zero to ten. Nine requires convincing article-level support, not merely the absence of a detected error. Nine in every criterion is the aspiration; report uncertainty and the attainable result under current evidence.
+Use these criteria to judge the strongest useful manuscript supported by the inspected project and primary evidence, and its actual suitability for the selected venue. They are review dimensions, not numerical targets, publisher peer review or an acceptance predictor. A manuscript needs a worthwhile supported contribution, adequate evidence and a coherent argument for the intended reader; the absence of a detected error alone is insufficient. Distinguish missing research from the project's demonstrated limits rather than declaring a ceiling from an evidence gap.
 
 | Criterion | What the reviewer judges |
 | --- | --- |
@@ -32,11 +32,11 @@ This is the skill's declared rubric, retained from the established research prac
 
 Give a separate reviewer the complete frozen article, relevant raw sources and primary bodies, exact exported files when available, and this rubric. Do not provide prior ratings, a desired score, or a preferred winner unless the user specifically requested a comparison requiring that information. An independent technical review should check the claims, not merely the author's evidence summary.
 
-Ask for all nine criteria exactly once, each with an integer score, uncertainty, short literal article anchors, evidence-based reasons, and remaining improvements. Retain essential factual, citation, or source defects separately. Request a scientific-content recommendation of `consider_submission`, `revise_before_submission`, or `not_recommended`; an essential defect prevents an unqualified recommendation to consider submission.
+Cover all nine criteria in the single assessment with uncertainty, short literal article anchors, evidence-based reasons and consequential remaining improvements. Lead with a scientific-content recommendation of `consider_submission`, `revise_before_submission`, or `not_recommended`, explaining whether the actual contribution and evidence warrant submission for the selected audience and article category. Retain essential factual, citation or source defects separately; an essential defect prevents an unqualified recommendation to consider submission. Explain which remaining issues are blocking and which are useful future research, without manufacturing new observations or novelty to remove the distinction.
 
-Keep the original assessment and reviewed article/output hashes. If a simple arithmetic mean is displayed, calculate it from all nine scores without rounding individual judgments or choosing a favorable subset. Different one-pass reviewers are not a controlled paired comparison, and a score change does not prove improvement or deterioration. Do not call a replacement reviewer to obtain a preferred result.
+Numerical ratings are optional when useful or requested. If supplied, use integer scores from zero to ten across all nine criteria, retain uncertainty, and explain the evidence behind them. Scores and averages never determine readiness by a fixed threshold or override an essential defect. If a simple arithmetic mean is displayed, calculate it from all nine scores without rounding individual judgments or choosing a favorable subset. Keep the original assessment and reviewed article/output hashes, whether the assessment is qualitative or scored. Different one-pass reviewers are not a controlled paired comparison, and a score change does not prove improvement or deterioration. Do not call a replacement reviewer to obtain a preferred result.
 
-Separate an independent agent review from human author approval and publisher peer review. If independent review is unavailable or interrupted, deliver its actual status rather than inventing a full score or silently treating self-review as independent. After the one review, deliver the result and stop automatic rewriting or rating loops.
+Separate an independent agent review from human author approval and publisher peer review. If independent review is unavailable or interrupted, deliver its actual status rather than inventing an assessment or silently treating self-review as independent. Report content recommendation, native format checks, page inspection and human preparation separately; administrative completion and actual submission do not establish acceptance. After the one review, deliver the result and stop automatic rewriting or rating loops.
 
 ## Evidence and delivery record
 
