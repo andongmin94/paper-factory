@@ -15,18 +15,20 @@ def test_missing_package_is_reported(monkeypatch):
         raise metadata.PackageNotFoundError(name)
     monkeypatch.setattr(environment.metadata, "version", missing)
     rows = environment._packages()
-    assert len(rows) == 4
+    assert len(rows) == 5
     assert all(row["status"] == "missing" for row in rows)
 
 
 def test_incompatible_and_unusual_versions_remain_visible(monkeypatch):
-    versions = {"python-docx": "0.8.11", "pypdfium2": "5.14.1", "Pillow": "13.0.0", "pypandoc_binary": "1.17rc1"}
+    versions = {"python-docx": "0.8.11", "pypdfium2": "5.14.1", "Pillow": "13.0.0",
+                "pypandoc_binary": "1.17rc1", "pyparsing": "3.2.0"}
     monkeypatch.setattr(environment.metadata, "version", versions.__getitem__)
     rows = {row["name"]: row for row in environment._packages()}
     assert rows["python-docx"]["status"] == "incompatible"
     assert rows["pypdfium2"]["status"] == "detected"
     assert rows["Pillow"]["status"] == "incompatible"
     assert rows["pypandoc_binary"]["status"] == "unverified_version"
+    assert rows["pyparsing"]["status"] == "detected"
 
 
 def test_detected_prerequisites_do_not_certify_native_export(monkeypatch):
