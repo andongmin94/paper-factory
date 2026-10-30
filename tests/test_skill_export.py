@@ -259,7 +259,7 @@ def test_prepared_author_manuscript_exports_real_docx_with_explicit_resource_dir
     manuscript.write_text(ARTICLE.replace("## References", "![A relative image](figure.png)\n\n## References", 1),
                           encoding="utf-8")
     figure = tmp_path / "figure.png"
-    Image.new("RGB", (12, 12), "navy").save(figure)
+    Image.new("RGB", (480, 120), "navy").save(figure)
     profile = tmp_path / "profile.json"
     profile.write_text(json.dumps({"authors": [{"id": "alice", "author": {
         "display_name": "Alice Research", "affiliation": "Lab A", "email": "alice@example.org",
@@ -286,6 +286,8 @@ def test_prepared_author_manuscript_exports_real_docx_with_explicit_resource_dir
     assert word_calls == [(docx, pdf)]
     document = Document(docx)
     assert len(document.inline_shapes) == 1
+    assert document.inline_shapes[0].width < 4 * 914400
+    assert document.inline_shapes[0].width == 4 * document.inline_shapes[0].height
     assert "Alice Research | Lab A | alice@example.org" in [paragraph.text for paragraph in document.paragraphs]
     with zipfile.ZipFile(docx) as archive:
         images = [archive.read(name) for name in archive.namelist()
@@ -480,6 +482,69 @@ def test_retained_publisher_styles_columns_and_citations(tmp_path, venue):
     assert [[cell.text for cell in row.cells] for row in checked.tables[0].rows] == expected_cells
     assert checked.tables[0].rows[0]._tr.get_or_add_trPr().find(qn("w:tblHeader")) is not None
     assert next(p for p in checked.paragraphs if p.text.startswith("Table 1.")).style.name == "TableCaption"
+
+
+@pytest.mark.parametrize("venue", ["ieee-software", "ieee-security-privacy"])
+@pytest.mark.parametrize("image_width_inches", [1, 6])
+def test_body_images_fit_publisher_columns_without_changing_front_table_or_media(tmp_path, venue, image_width_inches):
+    from docx import Document
+    from docx.oxml.ns import qn
+    from docx.shared import Inches, Twips
+    from PIL import Image
+    import zipfile
+
+    template, _ = templates.official_template(venue)
+    document = Document(template)
+    for child in list(document._element.body):
+        if child.tag != qn("w:sectPr"):
+            document._element.body.remove(child)
+    image = tmp_path / "figure.png"
+    Image.new("RGB", (480, 120), "navy").save(image)
+    document.add_paragraph("A concrete image layout", "Heading 1")
+    front = document.add_paragraph().add_run().add_picture(str(image), width=Inches(4.5))
+    document.add_paragraph("Abstract", "Heading 2")
+    document.add_paragraph("A bounded image layout example.", "Normal")
+    document.add_paragraph("Introduction", "Heading 2")
+    body = document.add_paragraph().add_run().add_picture(str(image), width=Inches(image_width_inches))
+    prose = document.add_paragraph("An inline image within prose keeps its paragraph indent.", "Normal")
+    prose.paragraph_format.first_line_indent = Inches(0.25)
+    prose_image = prose.add_run().add_picture(str(image), width=Inches(1))
+    table = document.add_table(rows=1, cols=1)
+    cell = table.cell(0, 0).paragraphs[0].add_run().add_picture(str(image), width=Inches(4.5))
+    document.add_paragraph("References", "Heading 2")
+    document.add_paragraph("[1] Authors, A retained source, 2025.", "Normal")
+    before = [(shape.width, shape.height) for shape in (front, body, cell)]
+    path = tmp_path / "images.docx"
+    document.save(path)
+    with zipfile.ZipFile(path) as archive:
+        original_media = {name: archive.read(name) for name in archive.namelist() if name.startswith("word/media/")}
+
+    templates.apply_official_styles(path, template)
+
+    checked = Document(path)
+    front, body, prose_image, cell = checked.inline_shapes
+    section = next(s for s in reversed(list(checked.sections))
+                   if s._sectPr.find(qn("w:cols")).get(qn("w:num")) == "2")
+    gap = Twips(int(section._sectPr.find(qn("w:cols")).get(qn("w:space"))))
+    column_width = (section.page_width - section.left_margin - section.right_margin - gap) // 2
+    assert body.width <= column_width
+    assert abs(body.width - body.height * 4) <= 2
+    picture_only_paragraph = next(p for p in checked.paragraphs
+                                  if not p.text.strip() and p._p.xpath(".//wp:inline")
+                                  and p.style.name == "Para")
+    assert picture_only_paragraph.paragraph_format.first_line_indent == 0
+    prose = next(p for p in checked.paragraphs if p.text.startswith("An inline image within prose"))
+    assert prose.paragraph_format.first_line_indent == Inches(0.25)
+    assert prose_image.width == Inches(1)
+    if image_width_inches == 1:
+        assert (body.width, body.height) == before[1]
+    else:
+        assert body.width < before[1][0]
+    assert (front.width, front.height) == before[0]
+    assert (cell.width, cell.height) == before[2]
+    with zipfile.ZipFile(path) as archive:
+        assert {name: archive.read(name) for name in archive.namelist() if name.startswith("word/media/")} == original_media
+        assert image.read_bytes() in original_media.values()
 
 
 def test_skill_copy_preflight_works_without_old_checkout(tmp_path):

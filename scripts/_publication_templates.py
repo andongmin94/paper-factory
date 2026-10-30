@@ -155,6 +155,8 @@ def apply_official_styles(output: Path, template: Path) -> dict:
     from docx.oxml import OxmlElement
     from docx.oxml.ns import qn
     from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.shape import InlineShape
+    from docx.shared import Twips
     from docx.text.paragraph import Paragraph
 
     document, reference = Document(output), Document(template)
@@ -225,8 +227,9 @@ def apply_official_styles(output: Path, template: Path) -> dict:
         return element
 
     front = master(reference.sections[0])
-    body = master(next(s for s in reversed(list(reference.sections))
-                       if s._sectPr.find(qn("w:cols")).get(qn("w:num")) == "2"))
+    body_section = next(s for s in reversed(list(reference.sections))
+                        if s._sectPr.find(qn("w:cols")).get(qn("w:num")) == "2")
+    body = master(body_section)
     body_element = document._element.body
     for old in list(body_element.iter(qn("w:sectPr"))):
         old.getparent().remove(old)
@@ -236,6 +239,24 @@ def apply_official_styles(output: Path, template: Path) -> dict:
     before_body = preceding[0]
     before_body.get_or_add_pPr().append(front)
     body_element.append(body)
+
+    # Pandoc sizes images before the publisher's two-column body is restored.
+    # Fit standalone body images to one column without changing their media.
+    columns = body.find(qn("w:cols"))
+    column_count = int(columns.get(qn("w:num")))
+    column_gap = Twips(int(columns.get(qn("w:space"), "0")))
+    column_width = int((body_section.page_width - body_section.left_margin - body_section.right_margin
+                        - column_gap * (column_count - 1)) // column_count)
+    for paragraph in paragraphs[body_index:]:
+        inlines = paragraph._p.xpath(".//wp:inline")
+        if inlines and not paragraph.text.strip():
+            paragraph.paragraph_format.first_line_indent = 0
+        for inline in inlines:
+            shape = InlineShape(inline)
+            if shape.width > column_width:
+                height = round(shape.height * column_width / shape.width)
+                shape.width = column_width
+                shape.height = height
 
     # Tables need the full printable width. Retain exact content and surround
     # them with the template's own one-column section, then return to its body.
@@ -332,6 +353,7 @@ def apply_official_styles(output: Path, template: Path) -> dict:
                             "Table captions share the table's full-width section; first header rows repeat with bold labels",
                             "Following table captions retain exact content above the table; section boundaries do not modify prose paragraphs",
                             "Abstract text aligned left to avoid distributed final-line spacing",
+                            "Oversized standalone body images shrink proportionally to the publisher column width",
                             "Publisher-specific native citation typography and numbered-period reference labels"],
             "citation_typography": citation_proof,
             "font_policy": "Official font names retained; Microsoft Word substitutes locally unavailable fonts. Exact proprietary font fidelity is not attested."}
