@@ -141,7 +141,7 @@ def check_manuscript(text: str, references: list[dict] | None = None) -> dict:
     for entry in entries:
         dois.extend((entry["id"], value) for value in set(_dois(entry["text"])))
         urls.extend((entry["id"], _url(m[0])) for m in re.finditer(r"https?://[^\s<>]+", entry["text"]))
-        for token in re.finditer(r"(?i)(?:\bdoi:\s*|https?://doi\.org/)([^\s]+)", entry["text"]):
+        for token in re.finditer(r"(?i)(?:\bdoi:\s*|https?://doi\.org/)([^\s<>]+)", entry["text"]):
             if _doi(token[1]) is None:
                 findings.append({"code": "malformed_doi", "reference_id": entry["id"],
                                  "detail": "Explicit DOI value has invalid syntax: " + token[1].rstrip(".,;)]}")})

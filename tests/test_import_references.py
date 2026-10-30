@@ -528,5 +528,75 @@ ER  -
                 self.assertEqual(source.read_bytes(), original)
 
 
+    def test_bibtex_cli_doi_autolinks_match_assigned_reference_numbers(self):
+        source_text = (
+            "@article{second,title={Second Source},author={Roe, John},year=2025,"
+            "doi={10.1234/second},url={https://doi.org/10.1234/second}}\n"
+            "@article{first,title={First Source},author={Doe, Jane},year=2024,"
+            "doi={10.1234/first},url={https://doi.org/10.1234/first}}\n")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source, output = root / "sources.bib", root / "imported"
+            original_source = source_text.encode("utf-8")
+            source.write_bytes(original_source)
+            imported = subprocess.run(
+                [sys.executable, str(ROOT / "scripts" / "import_references.py"),
+                 "--input", str(source), "--output-dir", str(output), "--reference-ids", "2", "1"],
+                cwd=root, capture_output=True, text=True, timeout=20)
+            self.assertEqual(imported.returncode, 0, imported.stderr)
+            self.assertEqual(json.loads(imported.stdout)["network_requests"], 0)
+            references_file = output / "references.json"
+            original_json = references_file.read_bytes()
+            records = json.loads(original_json)
+            self.assertEqual([record["id"] for record in records], [2, 1])
+            manuscript = root / "article.md"
+            original_manuscript = (
+                "# Article\nSources [1, 2].\n## References\n"
+                "[1] Doe, Jane. First Source. 2024. <https://doi.org/10.1234/first>\n"
+                "[2] Roe, John. Second Source. 2025. <https://doi.org/10.1234/second>\n"
+            ).encode("utf-8")
+            manuscript.write_bytes(original_manuscript)
+            checked = subprocess.run(
+                [sys.executable, str(ROOT / "scripts" / "editorial_checks.py"), "check",
+                 "--manuscript", str(manuscript), "--references-json", str(references_file),
+                 "--output-dir", str(root / "editorial")],
+                cwd=root, capture_output=True, text=True, timeout=20)
+            self.assertEqual(checked.returncode, 0, checked.stderr)
+            self.assertEqual(json.loads(checked.stdout)["network_requests"], 0)
+            report = json.loads((root / "editorial" / "editorial-report.json").read_text(encoding="utf-8"))
+            self.assertEqual(report["structural_findings"], [])
+            self.assertFalse(any(item["code"].startswith("metadata_")
+                                 for item in report["manual_review_suggestions"]))
+            self.assertEqual(report["metrics"]["reference_entries"], 2)
+            self.assertEqual(report["metrics"]["recognized_body_citations"], [1, 2])
+            self.assertEqual(source.read_bytes(), original_source)
+            self.assertEqual(references_file.read_bytes(), original_json)
+            self.assertEqual(manuscript.read_bytes(), original_manuscript)
+
+    def test_doi_autolinks_keep_real_malformed_mismatch_and_duplicate_findings(self):
+        references = json.loads("""[
+            {"id": 1, "title": "Bad Source", "doi": "not-a-doi"},
+            {"id": 2, "title": "Second Source", "doi": "10.1234/other"},
+            {"id": 3, "title": "Third Source", "doi": "10.1234/actual"}
+        ]""")
+        original_json = json.dumps(references)
+        manuscript = (
+            "# Article\nSources [1, 2, 3].\n## References\n"
+            "[1] Bad Source. <https://doi.org/not-a-doi>\n"
+            "[2] Second Source. <https://doi.org/10.1234/actual>\n"
+            "[3] Third Source. <https://doi.org/10.1234/actual>\n")
+        result = editorial.check_manuscript(manuscript, references)
+        findings = result["structural_findings"]
+        self.assertEqual({item["reference_id"] for item in findings
+                          if item["code"] == "malformed_doi"}, {1})
+        self.assertEqual({item["reference_id"] for item in findings
+                          if item["code"] == "malformed_metadata_doi"}, {1})
+        self.assertEqual({item["reference_id"] for item in findings
+                          if item["code"] == "metadata_doi_mismatch"}, {2})
+        self.assertEqual([item["reference_ids"] for item in findings
+                          if item["code"] == "duplicate_doi"], [[2, 3]])
+        self.assertEqual(json.dumps(references), original_json)
+
+
 if __name__ == "__main__":
     unittest.main()
