@@ -115,6 +115,33 @@ def test_preflight_rejects_invalid_consecutive_references(manuscript, case, coun
     assert manuscript.read_bytes() == original
 
 
+@pytest.mark.parametrize("citation", ["[1]", "[1, 3]", "[1-4]", "[1; 3]", "[1, 3–4]"])
+def test_preflight_rejects_supported_numeric_citations_in_abstract(manuscript, citation):
+    text = ARTICLE.replace("A conditional static example explains a maintenance decision.",
+                           "A conditional static example explains a maintenance decision " + citation + ".", 1)
+    manuscript.write_text(text, encoding="utf-8")
+    original = manuscript.read_bytes()
+    result = exporter.preflight(manuscript, "ieee-software")
+    statuses = {row["id"]: row["status"] for row in result["items"]}
+    assert statuses["abstract_structure"] == "failed"
+    assert not result["prefilter_passed"]
+    assert not result["native_word_measured"]
+    assert manuscript.read_bytes() == original
+
+
+def test_preflight_body_grouped_citation_does_not_fail_abstract_structure(manuscript):
+    text = ARTICLE.replace("A shared requirement may survive the command that first wrote it. [1]",
+                           "A shared requirement may survive the command that first wrote it. [1, 3–4]", 1)
+    manuscript.write_text(text, encoding="utf-8")
+    original = manuscript.read_bytes()
+    result = exporter.preflight(manuscript, "ieee-software")
+    statuses = {row["id"]: row["status"] for row in result["items"]}
+    assert statuses["abstract_structure"] == "passed"
+    assert result["prefilter_passed"]
+    assert not result["native_word_measured"]
+    assert manuscript.read_bytes() == original
+
+
 def test_author_input_requires_real_typed_fields(tmp_path):
     assert author_facts._explicit_author({"given_name": "A", "family_name": "B"})["display_name"] == "A B"
     assert author_facts._explicit_author({"orcid": "0009-0009-8671-9967"})["orcid"] == "0009-0009-8671-9967"

@@ -181,7 +181,7 @@ def validate_manuscript(markdown: str, venue_id: str, author_metadata: dict | No
     source = SOFTWARE_GUIDANCE if venue_id == "ieee-software" else SP_GUIDANCE
     items = [_item("abstract", "passed" if abstract and _words(abstract) <= limits["max_abstract_words"] else "failed",
                    f"Abstract estimate {_words(abstract)} words; maximum {limits['max_abstract_words']}.", source=source),
-             _item("abstract_structure", "passed" if len(re.split(r"\n\s*\n", abstract)) == 1 and not re.search(r"\[\d+\]|\{\{(?:source|document|citation):", abstract) else "failed",
+             _item("abstract_structure", "passed" if len(re.split(r"\n\s*\n", abstract)) == 1 and not re.search(r"\[\d+(?:[ \t]*[-–,;][ \t]*\d+)*[ \t]*\]|\{\{(?:source|document|citation):", abstract) else "failed",
                    "The publisher template requires a single-paragraph abstract without reference citations."),
              _item("reference_count", "passed" if entries and len(entries) <= limits["max_references"] and numbers == list(range(1, len(entries) + 1)) else "failed",
                    f"Canonical references: {len(entries)}; require sequential unique labels and at most {limits['max_references']}.", source=source),
