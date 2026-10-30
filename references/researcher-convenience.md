@@ -42,6 +42,21 @@ Use this report to revisit affected claims and reuse unchanged retained witnesse
 
 Keep definite structural findings separate from heuristic suggestions. Acronym-first-use, naming, caption matching and possible duplicate titles need contextual review; code, symbols and official names can be legitimate exceptions. Do not automatically edit the manuscript or block delivery on a heuristic. The existing official exporter remains responsible for native format and exact-file page checks.
 
+### Import BibTeX or RIS into the existing metadata workflow
+
+`scripts/import_references.py --input BIB_OR_RIS --output-dir NEW` reads a supplied UTF-8 bibliography and writes `references.json`, `import-report.json` and `import-report.md`. The extension selects BibTeX (`.bib` or `.bibtex`) or RIS (`.ris`); use `--format bibtex|ris` for another extension. Use absolute paths and a new output directory. BibTeX parsing uses `pyparsing` from `requirements.txt`. No network lookup, metadata completion, deduplication or manuscript edit is performed.
+
+```sh
+python scripts/import_references.py --input /work/sources.bib --output-dir /work/imported
+python scripts/editorial_checks.py check --manuscript /work/article.md --references-json /work/imported/references.json --output-dir /work/editorial
+```
+
+The JSON is the same list of objects accepted by `--references-json`. Records receive positive integer `id` values in input order, starting at 1; confirm or adjust those IDs to match the manuscript's numbered bibliography before checking. Each record retains its original text in `source.raw`, its `source.format`, and the original BibTeX citation key or RIS `ID` in `source.key` when supplied. Duplicate keys and incomplete or empty metadata records are retained separately. Source input bytes are unchanged and their SHA-256 is recorded in the import report.
+
+Only supplied `title`, `authors`, `year`, `doi` and `url` values are mapped. BibTeX supports braced/quoted values, nested braces, multiline values, `#` concatenation and string definitions actually present before use; TeX markup and the original `author` string are retained without name or title rewriting. Undefined strings are reported and the affected field is left unmapped. RIS maps `TI`/`T1`, ordered `AU`/`A1`, `PY`/`Y1`, `DO` and `UR`; other tags remain in `source.raw`. A RIS publication date such as `2024/10/02/` supplies the explicit year `2024`. Other dates and BibTeX years that are not one four-digit year remain in the original record with a warning; no century, current year or missing publication fact is inferred. When repeated fields disagree, the first supplied value is mapped and the conflict is reported.
+
+Import reports use the existing `structural_findings` and `manual_review_suggestions` lists with `code`, `reference_id` (when applicable), and `detail`. Missing metadata, unmapped years/strings and numbering checks are advisory; a malformed DOI is retained and reported with the existing `malformed_metadata_doi` code. Exit0 means the import was prepared, including its findings; Exit2 means invalid input or output failure. Unparseable BibTeX syntax or RIS records without an `ER` terminator are rejected before output is created. Import does not verify publication identity, author names or DOI resolution. Review its report alongside the later editorial report.
+
 ## Reuse author and coauthor facts
 
 Save an explicit profile outside the skill and provide it for each paper. `scripts/submission_support.py authors --profile PROFILE_JSON --manuscript MANUSCRIPT_MD --output-dir NEW` validates ordering and facts, prepares a new Markdown author block/biographies and a separate missing-information report, leaving the input unchanged. The profile contains `authors` entries with `id`, `author` and `contributions`, an `order` list, and an optional `corresponding_author` ID, `funding` and `conflicts`.
