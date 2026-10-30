@@ -159,7 +159,7 @@ def validate_manuscript(markdown: str, venue_id: str, author_metadata: dict | No
     keywords = [word.strip() for line in keyword_lines for word in line.split(";") if word.strip()]
     abstract = re.sub(r"(?mi)^Keywords:.*$", "", abstract).strip()
     references = parts.get("references", "")
-    entries = list(re.finditer(r"(?ms)^\[(\d+)\]\s+(.+?)(?=\n\n\[\d+\]\s|\Z)", references))
+    entries = list(re.finditer(r"(?ms)^\[(\d+)\]\s+(.+?)(?=\n\[\d+\]\s|\Z)", references))
     numbers = [int(entry[1]) for entry in entries]
     insight_blocks = _insights(markdown)
     acknowledgment = next((text for heading, text in parts.items()

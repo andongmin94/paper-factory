@@ -66,6 +66,55 @@ def test_preflight_uses_explicit_facts_and_preserves_input(manuscript, monkeypat
     assert list(manuscript.parent.iterdir()) == [manuscript]
 
 
+@pytest.mark.parametrize("separator", ["\n", "\n\n"])
+def test_preflight_counts_multiline_references_with_supported_separators(manuscript, separator):
+    references = [
+        "[1] First Authors,\n  A retained first title, 2024. https://example.org/first",
+        "[2] Second Authors,\n  A retained second title, 2025. https://example.org/second",
+    ]
+    manuscript.write_text(ARTICLE.split("## References", 1)[0] + "## References\n\n" +
+                          separator.join(references) + "\n", encoding="utf-8")
+    original = manuscript.read_bytes()
+    result = exporter.preflight(manuscript, "ieee-software")
+    statuses = {row["id"]: row["status"] for row in result["items"]}
+    assert result["metrics"]["reference_count"] == 2
+    assert statuses["reference_count"] == "passed"
+    assert statuses["reference_metadata"] == "passed"
+    assert result["prefilter_passed"]
+    assert not result["native_word_measured"]
+    assert manuscript.read_bytes() == original
+
+
+@pytest.mark.parametrize("case, count_status, metadata_status", [
+    ("duplicate", "failed", "passed"),
+    ("gap", "failed", "passed"),
+    ("over_limit", "failed", "passed"),
+    ("raw_url", "passed", "failed"),
+])
+def test_preflight_rejects_invalid_consecutive_references(manuscript, case, count_status, metadata_status):
+    numbers = {
+        "duplicate": [1, 1, 2, 3],
+        "gap": [1, 3],
+        "over_limit": list(range(1, checks.VENUE_LIMITS["ieee-software"]["max_references"] + 2)),
+        "raw_url": [1, 2],
+    }[case]
+    references = [f"[{number}] Example Authors, Retained source {index}, 2025."
+                  for index, number in enumerate(numbers, 1)]
+    if case == "raw_url":
+        references[1] = "[2] https://example.org/second"
+    manuscript.write_text(ARTICLE.split("## References", 1)[0] + "## References\n\n" +
+                          "\n".join(references) + "\n", encoding="utf-8")
+    original = manuscript.read_bytes()
+    result = exporter.preflight(manuscript, "ieee-software")
+    statuses = {row["id"]: row["status"] for row in result["items"]}
+    assert result["metrics"]["reference_count"] == len(numbers)
+    assert statuses["reference_count"] == count_status
+    assert statuses["reference_metadata"] == metadata_status
+    assert not result["prefilter_passed"]
+    assert not result["native_word_measured"]
+    assert manuscript.read_bytes() == original
+
+
 def test_author_input_requires_real_typed_fields(tmp_path):
     assert author_facts._explicit_author({"given_name": "A", "family_name": "B"})["display_name"] == "A B"
     assert author_facts._explicit_author({"orcid": "0009-0009-8671-9967"})["orcid"] == "0009-0009-8671-9967"
