@@ -16,6 +16,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 
 from _publication_files import digest_file, ensure_unlinked
+from _publication_text import section_headers
 from _author_profile import normalize_profile, profile_completeness
 
 
@@ -86,7 +87,7 @@ def _hide_fenced_code(markdown):
 
 
 def _sections(markdown):
-    return list(re.finditer(r"(?m)^## ([^\r\n]+)[ \t]*$", _hide_fenced_code(markdown)))
+    return section_headers(markdown)
 
 
 def _without_biographies(markdown):

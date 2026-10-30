@@ -155,6 +155,35 @@ def test_biography_heading_in_code_example_is_preserved(tmp_path, inputs):
     assert "Old biographical text." not in text
 
 
+@pytest.mark.parametrize("abstract_heading,biography_heading", [
+    ("## Abstract", "## Author biographies ##"),
+    ("  ## Abstract ##", "  ## Author biographies ##"),
+])
+def test_author_preparation_recognizes_markdown_section_variants(tmp_path, inputs, abstract_heading, biography_heading):
+    article, profile = inputs
+    example = "```markdown\n## Author biographies ##\nA literal biography example.\n```"
+    appendix = "  ## Appendix ##\n\nThe retained appendix remains.\n"
+    source = ARTICLE.replace("## Abstract\n", abstract_heading + "\n")
+    source = source.replace("## Author biographies\n", biography_heading + "\n")
+    source = source.replace("The local claim survives.", "The local claim survives.\n\n" + example)
+    put(article, source + "\n" + appendix)
+    original = article.read_bytes(), profile.read_bytes()
+    result = support.prepare_authors(profile, article, tmp_path / "out", anonymous=True)
+    authored = (tmp_path / "out/manuscript.md").read_text(encoding="utf-8")
+    anonymous = (tmp_path / "out/anonymous.md").read_text(encoding="utf-8")
+    for text in (authored, anonymous):
+        assert "Old biographical text." not in text
+        assert "A bounded source example." in text
+        assert "Alice Research wrote the retained tool. The local claim survives." in text
+        assert "## References\n\n[1] A retained source, 2026." in text
+        assert example in text
+        assert appendix in text
+    assert "Alice Research. Studies software." in authored
+    assert "Alice Research. Studies software." not in anonymous
+    assert result["anonymous_check"]["fully_anonymized_claimed"] is False
+    assert original == (article.read_bytes(), profile.read_bytes())
+
+
 def test_responses_check_actual_after_section_and_do_not_infer_resolution(tmp_path):
     before = put(tmp_path / "before.md", "# A\n\n## Analysis\n\nOld text.\n")
     after = put(tmp_path / "after.md", "# A\n\n## Analysis\n\nNew bounded text.\n\n## Limits\n\nNew limits.\n")
@@ -169,6 +198,24 @@ def test_responses_check_actual_after_section_and_do_not_infer_resolution(tmp_pa
     assert result["comments"][1]["issues"]
     assert not result["scientific_resolution_verified"]
     assert "Response pending." in (tmp_path / "replies/response-letter.md").read_text()
+    assert original == (before.read_bytes(), after.read_bytes(), comments.read_bytes())
+
+
+def test_response_anchors_follow_markdown_section_boundaries(tmp_path):
+    before = put(tmp_path / "before.md", "# Article\n\n  ## Analysis ##\n\nOld analysis.\n\n  ## Limits ##\n\nOld limits.\n")
+    after = put(tmp_path / "after.md", "# Article\n\n  ## Analysis ##\n\nNew bounded analysis.\n\n  ## Limits ##\n\nNew limitation.\n")
+    comments = put(tmp_path / "comments.json", {"comments": [
+        {"id": "R1", "comment": "Clarify the analysis.", "status": "addressed", "response": "The analysis is clarified.",
+         "changes": [{"quote": "New bounded analysis.", "section": "Analysis"}]},
+        {"id": "R2", "comment": "Clarify the limit.", "status": "addressed", "response": "A limitation is stated.",
+         "changes": [{"quote": "New limitation.", "section": "Analysis"}]},
+    ]})
+    original = before.read_bytes(), after.read_bytes(), comments.read_bytes()
+    result = support.prepare_responses(comments, before, after, tmp_path / "replies")
+    assert result["comments"][0]["changes"][0]["present_in_revised_manuscript"] is True
+    assert result["comments"][0]["issues"] == []
+    assert result["comments"][1]["changes"][0]["present_in_revised_manuscript"] is False
+    assert result["comments"][1]["issues"]
     assert original == (before.read_bytes(), after.read_bytes(), comments.read_bytes())
 
 
