@@ -85,6 +85,12 @@ Author slots use `<!-- paper-factory:authors:start -->` and `<!-- paper-factory:
 
 Use the new Markdown and generated `authors.json` together with the official exporter: `export_manuscript.py ... --profile AUTHORS_JSON`. Preparation and export share the same multi-author profile contract and report missing fields for every author, including factual biography details. The exporter does not rewrite the byline from the profile. Adding author material changes the delivered bytes; retain the scientific version/review binding and check the new output and venue word-count rules. Do not insert unconfirmed profile choices or treat a field's presence as consent. A saved profile is not included in a checkpoint or submission bundle unless explicitly selected.
 
+If the manuscript contains relative media links such as `![Figure](figure.png)`, pass their original directory with `--resource-dir` when exporting the prepared copy from a new folder. Supply one existing absolute directory; the original media stay in that directory and the Markdown links remain unchanged. For an original `/work/source/article.md` with `/work/source/figure.png`:
+
+```sh
+python scripts/export_manuscript.py export --manuscript /work/prepared/manuscript.md --profile /work/prepared/authors.json --resource-dir /work/source --venue ieee-software --output-dir /work/exported
+```
+
 ## Prepare an anonymous draft only when appropriate
 
 `authors ... --anonymous` additionally prepares a separate Markdown draft without its dedicated author block and biography sections. Use only when requested or when the verified article category requires anonymity. Read the residual-identifier findings and inspect self-identifying prose, acknowledgments, citations, source URLs, supplements and file names. This targeted text operation is not comprehensive anonymization and does not scrub metadata in an existing DOCX or PDF.

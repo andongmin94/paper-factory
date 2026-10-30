@@ -250,6 +250,60 @@ def test_conversion_rejects_a_python_executable_without_creating_docx(manuscript
     assert not target.exists()
 
 
+def test_prepared_author_manuscript_exports_real_docx_with_explicit_resource_dir(manuscript, tmp_path, monkeypatch, capsys):
+    import submission_support
+    import zipfile
+    from docx import Document
+    from PIL import Image
+    binary = _real_pandoc()
+    manuscript.write_text(ARTICLE.replace("## References", "![A relative image](figure.png)\n\n## References", 1),
+                          encoding="utf-8")
+    figure = tmp_path / "figure.png"
+    Image.new("RGB", (12, 12), "navy").save(figure)
+    profile = tmp_path / "profile.json"
+    profile.write_text(json.dumps({"authors": [{"id": "alice", "author": {
+        "display_name": "Alice Research", "affiliation": "Lab A", "email": "alice@example.org",
+        "biography": "Studies software."}, "contributions": ["Writing"]}], "order": ["alice"]}), encoding="utf-8")
+    original = {path: path.read_bytes() for path in (manuscript, profile, figure)}
+    prepared = tmp_path / "prepared"
+    submission_support.prepare_authors(profile, manuscript, prepared)
+    prepared_manuscript, prepared_profile = prepared / "manuscript.md", prepared / "authors.json"
+    original.update({path: path.read_bytes() for path in (prepared_manuscript, prepared_profile)})
+    assert not (prepared / "figure.png").exists()
+    sentinel = "Native Word intentionally not run"
+    word_calls = []
+    def stop_before_word(docx, pdf):
+        word_calls.append((docx, pdf))
+        raise ValueError(sentinel)
+    monkeypatch.setattr(exporter, "word_pdf", stop_before_word)
+    output = tmp_path / "export"
+    result = exporter.main(["export", "--manuscript", str(prepared_manuscript), "--profile", str(prepared_profile),
+                            "--venue", "ieee-software", "--output-dir", str(output), "--pandoc", str(binary),
+                            "--resource-dir", str(tmp_path)])
+    assert result == 2
+    assert json.loads(capsys.readouterr().err)["error"] == sentinel
+    docx, pdf = output / "manuscript-ieee-software.docx", output / "manuscript-ieee-software.pdf"
+    assert word_calls == [(docx, pdf)]
+    document = Document(docx)
+    assert len(document.inline_shapes) == 1
+    assert "Alice Research | Lab A | alice@example.org" in [paragraph.text for paragraph in document.paragraphs]
+    with zipfile.ZipFile(docx) as archive:
+        images = [archive.read(name) for name in archive.namelist()
+                  if name.startswith("word/media/") and name.lower().endswith(".png")]
+    assert original[figure] in images
+    assert all(path.read_bytes() == contents for path, contents in original.items())
+    assert not pdf.exists()
+
+
+@pytest.mark.parametrize("kind", ["relative", "missing", "file"])
+def test_conversion_rejects_invalid_resource_directory_before_docx(manuscript, tmp_path, kind):
+    resource_dir = {"relative": Path("relative-media"), "missing": tmp_path / "missing", "file": manuscript}[kind]
+    output = tmp_path / "invalid-resource.docx"
+    with pytest.raises(ValueError, match="Resource directory must be an existing absolute directory"):
+        converter.convert_docx(manuscript, output, venue_id="ieee-software", resource_dir=resource_dir)
+    assert not output.exists()
+
+
 def test_real_pandoc_hides_only_author_controls_and_preserves_code_and_relative_media(tmp_path):
     from docx import Document
     from PIL import Image

@@ -57,7 +57,8 @@ def _write_json(path: Path, value: dict) -> None:
 
 
 def export(manuscript: Path, venue_id: str, output_dir: Path, *,
-           profile: Path | None = None, pandoc: str | None = None) -> dict:
+           profile: Path | None = None, pandoc: str | None = None,
+           resource_dir: Path | None = None) -> dict:
     """Create a new direct-authoring delivery; an existing directory is refused.
 
     Failed conversions leave their new directory available for diagnosis. No
@@ -81,7 +82,8 @@ def export(manuscript: Path, venue_id: str, output_dir: Path, *,
     docx, pdf = output_dir / (stem + ".docx"), output_dir / (stem + ".pdf")
     # Convert the actual source path so authored relative media links resolve.
     # Its bytes, and the retained canonical copy, are checked again below.
-    docx_receipt = convert_docx(manuscript, docx, pandoc=str(binary), venue_id=venue_id)
+    docx_receipt = convert_docx(manuscript, docx, pandoc=str(binary), venue_id=venue_id,
+                                resource_dir=resource_dir)
     rendered = word_pdf(docx, pdf)
     receipts = {"docx": docx_receipt,
                 "pdf": {"engine": "Microsoft Word PDF of the exact saved official-template DOCX",
@@ -140,6 +142,7 @@ def main(argv: list[str] | None = None) -> int:
         if name == "export":
             command.add_argument("--output-dir", type=Path, required=True)
             command.add_argument("--pandoc", help="Existing absolute Pandoc executable; otherwise uses an installed Pandoc")
+            command.add_argument("--resource-dir", type=Path, help="Existing absolute directory for relative media, such as the original manuscript folder after author preparation")
     args = parser.parse_args(argv)
     try:
         if args.command == "preflight":
@@ -147,7 +150,7 @@ def main(argv: list[str] | None = None) -> int:
             passed = result["prefilter_passed"]
         else:
             result = export(args.manuscript, args.venue, args.output_dir,
-                            profile=args.profile, pandoc=args.pandoc)
+                            profile=args.profile, pandoc=args.pandoc, resource_dir=args.resource_dir)
             passed = result["content_format_passed"]
     except (OSError, ValueError, ImportError) as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)

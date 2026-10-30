@@ -134,12 +134,16 @@ def pandoc_version(binary: Path) -> str:
 
 
 def convert_docx(markdown: Path, output: Path, *, venue_id: str,
-                 pandoc: str | None = None) -> dict:
+                 pandoc: str | None = None, resource_dir: Path | None = None) -> dict:
     """Use the actual publisher reference, citation rules and section masters."""
     ensure_unlinked(markdown)
     ensure_unlinked(output)
     if output.suffix.lower() != ".docx" or output.exists():
         raise ValueError("Native Word export requires a new .docx output path")
+    if resource_dir is not None:
+        ensure_unlinked(resource_dir)
+        if not resource_dir.is_absolute() or not resource_dir.is_dir():
+            raise ValueError("Resource directory must be an existing absolute directory")
     binary = pandoc_binary(pandoc)
     version = pandoc_version(binary)
     template_path, template = official_template(venue_id)
@@ -149,6 +153,8 @@ def convert_docx(markdown: Path, output: Path, *, venue_id: str,
     # description. Such a degraded document is not a completed official export.
     command = [str(binary), str(markdown.resolve()), "--from=markdown-smart-raw_tex-raw_html",
                "--standalone", "--fail-if-warnings", "--to=docx", "-o", str(output.resolve())]
+    if resource_dir is not None:
+        command += ["--resource-path", str(resource_dir.resolve())]
     # A short reference path avoids native Windows path-length restrictions.
     with TemporaryDirectory(prefix="paper-factory-convert-") as temporary:
         staged_reference = Path(temporary) / template_path.name
