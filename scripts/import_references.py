@@ -1,4 +1,4 @@
-"""Import supplied BibTeX/RIS records for editorial_checks --references-json.
+"""Import supplied BibTeX/RIS/CSL-JSON records for editorial_checks --references-json.
 
 Only explicit source values are mapped. Original records, including unmapped
 fields, remain in the JSON; missing facts are reported, never looked up or filled.
@@ -97,16 +97,75 @@ def _ris_records(text: str):
         raise ValueError("RIS record is missing its ER terminator")
 
 
+def _csl_json_records(text: str):
+    records = json.loads(text)
+    if not isinstance(records, list) or any(not isinstance(record, dict) for record in records):
+        raise ValueError("CSL-JSON must be a list of reference objects")
+    for record in records:
+        key = record.get("id")
+        if type(key) not in {str, int, float}:
+            key = None
+        yield json.dumps(record, ensure_ascii=False, allow_nan=False), key, record
+
+
+def _csl_fields(record: dict, number: int, suggestions: list):
+    def unmapped(field):
+        suggestions.append({"code": "unmapped_csl_metadata", "reference_id": number,
+                            "detail": f"CSL-JSON {field} has no supported supplied value; the original remains in source.raw."})
+
+    if record.get("id") is not None and type(record["id"]) not in {str, int, float}:
+        unmapped("id")
+    for name, target in (("title", "title"), ("DOI", "doi"), ("URL", "url")):
+        value = record.get(name)
+        if isinstance(value, str):
+            yield target, value
+        elif value is not None:
+            unmapped(name)
+    authors = record.get("author")
+    if authors is not None:
+        if not isinstance(authors, list):
+            unmapped("author")
+        else:
+            name_parts = ("given", "dropping-particle", "non-dropping-particle", "family", "suffix")
+            for index, author in enumerate(authors, 1):
+                if not isinstance(author, dict) or any(
+                        author.get(part) is not None and not isinstance(author[part], str)
+                        for part in ("literal", *name_parts)):
+                    unmapped(f"author entry {index}")
+                    continue
+                literal = author.get("literal") or ""
+                name = literal if literal.strip() else " ".join(
+                    author[part].strip() for part in name_parts if author.get(part) and author[part].strip())
+                if name:
+                    yield "author", name
+                else:
+                    unmapped(f"author entry {index}")
+    issued = record.get("issued")
+    if issued is not None:
+        parts = issued.get("date-parts") if isinstance(issued, dict) else None
+        if (isinstance(parts, list) and len(parts) == 1 and isinstance(parts[0], list)
+                and 1 <= len(parts[0]) <= 3 and type(parts[0][0]) in {str, int}
+                and re.fullmatch(r"[0-9]{4}", str(parts[0][0]))
+                and issued.get("circa") in (None, False, 0, "", "0", "false")):
+            yield "year", str(parts[0][0])
+        else:
+            suggestions.append({"code": "unmapped_metadata_year", "reference_id": number,
+                                "detail": "CSL-JSON issued does not supply one exact supported four-digit publication year; the original date remains in source.raw."})
+
+
 def parse_bibliography(text: str, format: str, *, reference_ids: list[int] | None = None) -> dict:
     """Return existing reference JSON records and the editorial finding shape."""
-    if format not in {"bibtex", "ris"}:
-        raise ValueError("Reference format must be bibtex or ris")
+    if format not in {"bibtex", "ris", "csl-json"}:
+        raise ValueError("Reference format must be bibtex, ris or csl-json")
     if not isinstance(text, str) or not text.strip():
         raise ValueError("Bibliography must contain records")
-    mapping = {"title": "title", "author": "authors", "year": "year", "doi": "doi", "url": "url"} if format == "bibtex" else {
+    mapping = {"title": "title", "author": "authors", "year": "year", "doi": "doi", "url": "url"} if format != "ris" else {
         "TI": "title", "T1": "title", "AU": "authors", "A1": "authors",
         "PY": "year", "Y1": "year", "DO": "doi", "UR": "url"}
-    records = list(_bibtex_records(text) if format == "bibtex" else _ris_records(text))
+    if format == "csl-json":
+        records = list(_csl_json_records(text))
+    else:
+        records = list(_bibtex_records(text) if format == "bibtex" else _ris_records(text))
     if not records:
         raise ValueError("Bibliography must contain at least one reference record")
     if reference_ids is not None:
@@ -124,6 +183,8 @@ def parse_bibliography(text: str, format: str, *, reference_ids: list[int] | Non
         if key is not None:
             item["source"]["key"] = key
             source_keys[key].append(number)
+        if format == "csl-json":
+            fields = _csl_fields(fields, number, suggestions)
         for name, value in fields:
             target = mapping.get(name)
             if target is None:
@@ -131,7 +192,7 @@ def parse_bibliography(text: str, format: str, *, reference_ids: list[int] | Non
             if value is None:
                 suggestions.append({"code": "unresolved_bibtex_string", "reference_id": number,
                                     "detail": f"{name} uses a string not defined before this record; the original expression is retained in source.raw."})
-            elif target == "authors" and format == "ris":
+            elif target == "authors" and format in {"ris", "csl-json"}:
                 item.setdefault("authors", []).append(value)
             elif target not in item:
                 item[target] = value
@@ -140,7 +201,7 @@ def parse_bibliography(text: str, format: str, *, reference_ids: list[int] | Non
                                     "detail": f"Multiple {target} values were supplied; the first is mapped and all originals remain in source.raw."})
         if "year" in item:
             original = item.pop("year")
-            pattern = r"([0-9]{4})" if format == "bibtex" else r"([0-9]{4})(?:/[0-9]{0,2}){0,3}"
+            pattern = r"([0-9]{4})(?:/[0-9]{0,2}){0,3}" if format == "ris" else r"([0-9]{4})"
             year = re.fullmatch(pattern, original.strip())
             if year:
                 item["year"] = year[1]
@@ -175,16 +236,16 @@ def write_import(source: Path, output_dir: Path, *, format: str | None = None,
         raise ValueError("Source and output paths must be absolute")
     ensure_unlinked(source)
     ensure_unlinked(output_dir)
-    selected = format or {".bib": "bibtex", ".bibtex": "bibtex", ".ris": "ris"}.get(source.suffix.lower())
+    selected = format or {".bib": "bibtex", ".bibtex": "bibtex", ".ris": "ris", ".json": "csl-json"}.get(source.suffix.lower())
     if selected is None:
-        raise ValueError("Use a .bib, .bibtex or .ris file, or supply --format bibtex|ris")
+        raise ValueError("Use a .bib, .bibtex, .ris or .json file, or supply --format bibtex|ris|csl-json")
     original = source.read_bytes()
     result = parse_bibliography(original.decode("utf-8-sig"), selected, reference_ids=reference_ids)
     references = result.pop("references")
     report = {"mode": "local_bibliographic_import", "source_path": str(source), "source_format": selected,
               "source_input_sha256": hashlib.sha256(original).hexdigest(), "reference_count": len(references),
               **result, "network_requests": 0, "source_rewritten": False,
-              "scope": "Only supplied metadata is mapped. Original records remain in source.raw; TeX markup and supplied name forms are not rewritten. IDs are local reference numbers, not verified publication identities."}
+              "scope": "Only supplied metadata is mapped. Source records remain in source.raw; CSL-JSON objects are reserialized, preserving their fields. TeX markup is retained and structured CSL names use only supplied parts. IDs are local reference numbers, not verified publication identities."}
     output_dir.mkdir(parents=True, exist_ok=False)
     for name, value in (("references.json", references), ("import-report.json", report)):
         with (output_dir / name).open("x", encoding="utf-8", newline="\n") as stream:
@@ -206,7 +267,7 @@ def write_import(source: Path, output_dir: Path, *, format: str | None = None,
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, required=True)
-    parser.add_argument("--format", choices=("bibtex", "ris"))
+    parser.add_argument("--format", choices=("bibtex", "ris", "csl-json"))
     parser.add_argument("--reference-ids", type=int, nargs="+", metavar="ID",
                         help="Manuscript reference numbers in input record order; one unique positive integer per record (default: 1..N)")
     parser.add_argument("--output-dir", type=Path, required=True)

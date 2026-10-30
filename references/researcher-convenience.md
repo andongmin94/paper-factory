@@ -42,9 +42,9 @@ Use this report to revisit affected claims and reuse unchanged retained witnesse
 
 Keep definite structural findings separate from heuristic suggestions. Acronym-first-use, naming, caption matching and possible duplicate titles need contextual review; code, symbols and official names can be legitimate exceptions. Do not automatically edit the manuscript or block delivery on a heuristic. The existing official exporter remains responsible for native format and exact-file page checks.
 
-### Import BibTeX or RIS into the existing metadata workflow
+### Import BibTeX, RIS or CSL-JSON into the existing metadata workflow
 
-`scripts/import_references.py --input BIB_OR_RIS --output-dir NEW` reads a supplied UTF-8 bibliography and writes `references.json`, `import-report.json` and `import-report.md`. The extension selects BibTeX (`.bib` or `.bibtex`) or RIS (`.ris`); use `--format bibtex|ris` for another extension. Use absolute paths and a new output directory. BibTeX parsing uses `pyparsing` from `requirements.txt`. No network lookup, metadata completion, deduplication or manuscript edit is performed.
+`scripts/import_references.py --input BIB_RIS_OR_CSL_JSON --output-dir NEW` reads a supplied UTF-8 bibliography and writes `references.json`, `import-report.json` and `import-report.md`. The extension selects BibTeX (`.bib` or `.bibtex`), RIS (`.ris`) or CSL-JSON (`.json`); use `--format bibtex|ris|csl-json` for another extension. Use absolute paths and a new output directory. BibTeX parsing uses `pyparsing` from `requirements.txt`; CSL-JSON uses Python's standard JSON parser. No network lookup, metadata completion, deduplication or manuscript edit is performed.
 
 ```sh
 python scripts/import_references.py --input /work/sources.bib --output-dir /work/imported
@@ -57,11 +57,23 @@ The JSON is the same list of objects accepted by `--references-json`. By default
 python scripts/import_references.py --input /work/sources.bib --reference-ids 2 1 --output-dir /work/imported
 ```
 
-Supply exactly one unique positive integer per record; invalid numbering is rejected before output is created. Import findings use the same assigned numbers. Confirm this correspondence yourself: the importer does not infer manuscript numbers from titles, DOI values or source keys. Each record retains its original text in `source.raw`, its `source.format`, and the original BibTeX citation key or RIS `ID` in `source.key` when supplied. Duplicate keys and incomplete or empty metadata records are retained separately. Source input bytes are unchanged and their SHA-256 is recorded in the import report.
+Supply exactly one unique positive integer per record; invalid numbering is rejected before output is created. Import findings use the same assigned numbers. Confirm this correspondence yourself: the importer does not infer manuscript numbers from titles, DOI values or source keys. Each record retains its text in `source.raw`, its `source.format`, and the original BibTeX citation key, RIS `ID` or CSL `id` in `source.key` when supplied. CSL objects are reserialized in `source.raw`, preserving their fields rather than their original JSON whitespace. Duplicate keys and incomplete or empty metadata records are retained separately. Source input bytes are unchanged and their SHA-256 is recorded in the import report.
 
 Only supplied `title`, `authors`, `year`, `doi` and `url` values are mapped. BibTeX supports braced/quoted values, nested braces, multiline values, `#` concatenation and string definitions actually present before use; TeX markup and the original `author` string are retained without name or title rewriting. Undefined strings are reported and the affected field is left unmapped. RIS maps `TI`/`T1`, ordered `AU`/`A1`, `PY`/`Y1`, `DO` and `UR`; other tags remain in `source.raw`. A RIS publication date such as `2024/10/02/` supplies the explicit year `2024`. Other dates and BibTeX years that are not one four-digit year remain in the original record with a warning; no century, current year or missing publication fact is inferred. When repeated fields disagree, the first supplied value is mapped and the conflict is reported.
 
-Import reports use the existing `structural_findings` and `manual_review_suggestions` lists with `code`, `reference_id` (when applicable), and `detail`. Missing metadata, unmapped years/strings and numbering checks are advisory; a malformed DOI is retained and reported with the existing `malformed_metadata_doi` code. Exit0 means the import was prepared, including its findings; Exit2 means invalid input or output failure. Unparseable BibTeX syntax or RIS records without an `ER` terminator are rejected before output is created. Import does not verify publication identity, author names or DOI resolution. Review its report alongside the later editorial report.
+CSL-JSON input is an array of objects, including incomplete objects. It maps supplied `title`, `DOI` and `URL` strings. Ordered `author` entries use `literal` for a supplied organization/name, or join the supplied `given`, `dropping-particle`, `non-dropping-particle`, `family` and `suffix` parts in that order with spaces; missing name parts are not filled. This is a literal comparison form, not CSL style rendering. One `issued.date-parts` date supplies its explicit four-digit year; month/day remain in the original record. Date ranges, free-text dates and approximate (`circa`) dates remain unmapped with a year warning. Missing/null fields stay missing; unsupported field/name values remain in the original object with `unmapped_csl_metadata` suggestions. Source `id` never selects a manuscript reference number.
+
+For example, a supplied `/work/sources.json` can contain:
+
+```json
+[{"id":"source-key","title":"Supplied title","author":[{"given":"Min","family":"Kim"},{"literal":"Research Group"}],"issued":{"date-parts":[[2024,10,2]]}}]
+```
+
+```sh
+python scripts/import_references.py --input /work/sources.json --format csl-json --reference-ids 3 --output-dir /work/imported-csl
+```
+
+Import reports use the existing `structural_findings` and `manual_review_suggestions` lists with `code`, `reference_id` (when applicable), and `detail`. Missing metadata, unmapped years/strings and numbering checks are advisory; a malformed DOI is retained and reported with the existing `malformed_metadata_doi` code. Exit0 means the import was prepared, including its findings; Exit2 means invalid input or output failure. Unparseable BibTeX/JSON syntax, non-object CSL list entries or RIS records without an `ER` terminator are rejected before output is created. Import does not verify publication identity, author names or DOI resolution. Review its report alongside the later editorial report.
 
 ## Reuse author and coauthor facts
 
