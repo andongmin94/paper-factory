@@ -97,7 +97,7 @@ def _ris_records(text: str):
         raise ValueError("RIS record is missing its ER terminator")
 
 
-def parse_bibliography(text: str, format: str) -> dict:
+def parse_bibliography(text: str, format: str, *, reference_ids: list[int] | None = None) -> dict:
     """Return existing reference JSON records and the editorial finding shape."""
     if format not in {"bibtex", "ris"}:
         raise ValueError("Reference format must be bibtex or ris")
@@ -106,10 +106,20 @@ def parse_bibliography(text: str, format: str) -> dict:
     mapping = {"title": "title", "author": "authors", "year": "year", "doi": "doi", "url": "url"} if format == "bibtex" else {
         "TI": "title", "T1": "title", "AU": "authors", "A1": "authors",
         "PY": "year", "Y1": "year", "DO": "doi", "UR": "url"}
-    records = _bibtex_records(text) if format == "bibtex" else _ris_records(text)
+    records = list(_bibtex_records(text) if format == "bibtex" else _ris_records(text))
+    if not records:
+        raise ValueError("Bibliography must contain at least one reference record")
+    if reference_ids is not None:
+        if len(reference_ids) != len(records):
+            raise ValueError("Supply exactly one reference ID per record in input order")
+        if any(type(number) is not int or number < 1 for number in reference_ids):
+            raise ValueError("Reference IDs must be positive integers")
+        if len(set(reference_ids)) != len(reference_ids):
+            raise ValueError("Reference IDs must be unique")
+    numbers = reference_ids if reference_ids is not None else range(1, len(records) + 1)
     references, findings, suggestions = [], [], []
     source_keys = defaultdict(list)
-    for number, (raw, key, fields) in enumerate(records, 1):
+    for number, (raw, key, fields) in zip(numbers, records):
         item = {"id": number, "source": {"format": format, "raw": raw}}
         if key is not None:
             item["source"]["key"] = key
@@ -148,18 +158,19 @@ def parse_bibliography(text: str, format: str) -> dict:
             suggestions.append({"code": "incomplete_reference_metadata", "reference_id": number,
                                 "detail": "Missing or unmapped metadata: " + ", ".join(missing) + ". The record is retained without filling these facts."})
         references.append(item)
-    if not references:
-        raise ValueError("Bibliography must contain at least one reference record")
     for key, numbers in source_keys.items():
         if len(numbers) > 1:
             suggestions.append({"code": "duplicate_source_key", "reference_ids": numbers,
                                 "detail": f"Source key {key!r} occurs in multiple records; each record was retained separately."})
     suggestions.append({"code": "reference_numbering_check",
-                        "detail": "IDs were assigned from 1 in input order. Match them to the manuscript's numbered references before using --references-json."})
+                        "detail": ("IDs were assigned from 1 in input order. Match them to the manuscript's numbered references before using --references-json."
+                                   if reference_ids is None else
+                                   "Supplied IDs were applied in input order. Confirm they match the manuscript's numbered references before using --references-json.")})
     return {"references": references, "structural_findings": findings, "manual_review_suggestions": suggestions}
 
 
-def write_import(source: Path, output_dir: Path, *, format: str | None = None) -> dict:
+def write_import(source: Path, output_dir: Path, *, format: str | None = None,
+                 reference_ids: list[int] | None = None) -> dict:
     if not source.is_absolute() or not output_dir.is_absolute():
         raise ValueError("Source and output paths must be absolute")
     ensure_unlinked(source)
@@ -168,7 +179,7 @@ def write_import(source: Path, output_dir: Path, *, format: str | None = None) -
     if selected is None:
         raise ValueError("Use a .bib, .bibtex or .ris file, or supply --format bibtex|ris")
     original = source.read_bytes()
-    result = parse_bibliography(original.decode("utf-8-sig"), selected)
+    result = parse_bibliography(original.decode("utf-8-sig"), selected, reference_ids=reference_ids)
     references = result.pop("references")
     report = {"mode": "local_bibliographic_import", "source_path": str(source), "source_format": selected,
               "source_input_sha256": hashlib.sha256(original).hexdigest(), "reference_count": len(references),
@@ -196,10 +207,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--format", choices=("bibtex", "ris"))
+    parser.add_argument("--reference-ids", type=int, nargs="+", metavar="ID",
+                        help="Manuscript reference numbers in input record order; one unique positive integer per record (default: 1..N)")
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
-        result = write_import(args.input, args.output_dir, format=args.format)
+        result = write_import(args.input, args.output_dir, format=args.format, reference_ids=args.reference_ids)
     except (OSError, ValueError, ImportError) as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
         return 2

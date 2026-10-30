@@ -51,7 +51,13 @@ python scripts/import_references.py --input /work/sources.bib --output-dir /work
 python scripts/editorial_checks.py check --manuscript /work/article.md --references-json /work/imported/references.json --output-dir /work/editorial
 ```
 
-The JSON is the same list of objects accepted by `--references-json`. Records receive positive integer `id` values in input order, starting at 1; confirm or adjust those IDs to match the manuscript's numbered bibliography before checking. Each record retains its original text in `source.raw`, its `source.format`, and the original BibTeX citation key or RIS `ID` in `source.key` when supplied. Duplicate keys and incomplete or empty metadata records are retained separately. Source input bytes are unchanged and their SHA-256 is recorded in the import report.
+The JSON is the same list of objects accepted by `--references-json`. By default, records receive positive integer `id` values in input order, starting at 1. If the export order differs from the manuscript's numbered bibliography, supply `--reference-ids` in input record order. For example, the following maps the first of two source records to reference `[2]` and the second to `[1]`, so the generated JSON can be passed directly to the checker above:
+
+```sh
+python scripts/import_references.py --input /work/sources.bib --reference-ids 2 1 --output-dir /work/imported
+```
+
+Supply exactly one unique positive integer per record; invalid numbering is rejected before output is created. Import findings use the same assigned numbers. Confirm this correspondence yourself: the importer does not infer manuscript numbers from titles, DOI values or source keys. Each record retains its original text in `source.raw`, its `source.format`, and the original BibTeX citation key or RIS `ID` in `source.key` when supplied. Duplicate keys and incomplete or empty metadata records are retained separately. Source input bytes are unchanged and their SHA-256 is recorded in the import report.
 
 Only supplied `title`, `authors`, `year`, `doi` and `url` values are mapped. BibTeX supports braced/quoted values, nested braces, multiline values, `#` concatenation and string definitions actually present before use; TeX markup and the original `author` string are retained without name or title rewriting. Undefined strings are reported and the affected field is left unmapped. RIS maps `TI`/`T1`, ordered `AU`/`A1`, `PY`/`Y1`, `DO` and `UR`; other tags remain in `source.raw`. A RIS publication date such as `2024/10/02/` supplies the explicit year `2024`. Other dates and BibTeX years that are not one four-digit year remain in the original record with a warning; no century, current year or missing publication fact is inferred. When repeated fields disagree, the first supplied value is mapped and the conflict is reported.
 

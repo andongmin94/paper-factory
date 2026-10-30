@@ -267,6 +267,90 @@ ER  -
             self.assertFalse(output.exists())
             self.assertEqual(source.read_text(encoding="utf-8"), original)
 
+    def test_cli_reference_ids_match_reversed_export_to_manuscript(self):
+        samples = {
+            "bib": "@article{second,title={Second Source},author={Roe, John},year=2025,doi={10.1234/second}}\n"
+                   "@article{first,title={First Source},author={Doe, Jane},year=2024,doi={10.1234/first}}\n",
+            "ris": "TY  - JOUR\nTI  - Second Source\nAU  - Roe, John\nPY  - 2025\nDO  - 10.1234/second\nER  -\n"
+                   "TY  - JOUR\nTI  - First Source\nAU  - Doe, Jane\nPY  - 2024\nDO  - 10.1234/first\nER  -\n",
+        }
+        for extension, source_text in samples.items():
+            with self.subTest(extension=extension), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                source, output = root / f"sources.{extension}", root / "imported"
+                original = b"\xef\xbb\xbf" + source_text.replace("\n", "\r\n").encode("utf-8")
+                source.write_bytes(original)
+                imported = subprocess.run(
+                    [sys.executable, str(ROOT / "scripts" / "import_references.py"),
+                     "--input", str(source), "--output-dir", str(output), "--reference-ids", "2", "1"],
+                    cwd=root, capture_output=True, text=True, timeout=20)
+                self.assertEqual(imported.returncode, 0, imported.stderr)
+                self.assertEqual(json.loads(imported.stdout)["network_requests"], 0)
+                records = json.loads((output / "references.json").read_text(encoding="utf-8"))
+                self.assertEqual([record["id"] for record in records], [2, 1])
+                self.assertEqual([record["title"] for record in records], ["Second Source", "First Source"])
+                manuscript = root / "article.md"
+                manuscript_bytes = ("# Article\nSources [1, 2].\n## References\n"
+                                    "[1] Doe, Jane. First Source. 2024. doi:10.1234/first\n"
+                                    "[2] Roe, John. Second Source. 2025. doi:10.1234/second\n").encode("utf-8")
+                manuscript.write_bytes(manuscript_bytes)
+                checked = subprocess.run(
+                    [sys.executable, str(ROOT / "scripts" / "editorial_checks.py"), "check",
+                     "--manuscript", str(manuscript), "--references-json", str(output / "references.json"),
+                     "--output-dir", str(root / "editorial")],
+                    cwd=root, capture_output=True, text=True, timeout=20)
+                self.assertEqual(checked.returncode, 0, checked.stderr)
+                self.assertEqual(json.loads(checked.stdout)["network_requests"], 0)
+                report = json.loads((root / "editorial" / "editorial-report.json").read_text(encoding="utf-8"))
+                self.assertEqual(report["structural_findings"], [])
+                self.assertFalse(any(item["code"].startswith("metadata_")
+                                     for item in report["manual_review_suggestions"]))
+                self.assertEqual(source.read_bytes(), original)
+                self.assertEqual(manuscript.read_bytes(), manuscript_bytes)
+
+    def test_explicit_reference_ids_are_used_by_all_record_warnings(self):
+        samples = {
+            "bibtex": "@misc{same,doi={bad-one}}\n@misc{same,doi={bad-two}}",
+            "ris": "TY  - GEN\nID  - same\nDO  - bad-one\nER  -\n"
+                   "TY  - GEN\nID  - same\nDO  - bad-two\nER  -\n",
+        }
+        for format, source in samples.items():
+            with self.subTest(format=format):
+                result = imports.parse_bibliography(source, format, reference_ids=[7, 3])
+                self.assertEqual([record["id"] for record in result["references"]], [7, 3])
+                warnings = result["structural_findings"] + result["manual_review_suggestions"]
+                for code in ("malformed_metadata_doi", "incomplete_reference_metadata"):
+                    self.assertEqual({item["reference_id"] for item in warnings if item["code"] == code}, {7, 3})
+                duplicates = [item for item in warnings if item["code"] == "duplicate_source_key"]
+                self.assertEqual(len(duplicates), 1)
+                self.assertEqual(duplicates[0]["reference_ids"], [7, 3])
+                for item in warnings:
+                    if "reference_id" in item:
+                        self.assertIn(item["reference_id"], {7, 3})
+                    if "reference_ids" in item:
+                        self.assertTrue(set(item["reference_ids"]) <= {7, 3})
+
+    def test_invalid_reference_ids_fail_before_output_and_preserve_input(self):
+        samples = {
+            "bib": "@misc{first,}\n@misc{second,}\n",
+            "ris": "TY  - GEN\nER  -\nTY  - GEN\nER  -\n",
+        }
+        invalid_ids = [[], [7], [7, 3, 9], [7, 7], [0, 3], [-7, 3],
+                       [True, 3], [7, False], [7, "3"], [7, 3.0]]
+        for extension, source_text in samples.items():
+            with tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                source = root / f"sources.{extension}"
+                original = b"\xef\xbb\xbf" + source_text.replace("\n", "\r\n").encode("utf-8")
+                source.write_bytes(original)
+                for index, reference_ids in enumerate(invalid_ids):
+                    with self.subTest(extension=extension, reference_ids=reference_ids):
+                        output = root / f"invalid-{index}"
+                        with self.assertRaises(ValueError):
+                            imports.write_import(source, output, reference_ids=reference_ids)
+                        self.assertFalse(output.exists())
+                        self.assertEqual(source.read_bytes(), original)
+
 
 if __name__ == "__main__":
     unittest.main()
