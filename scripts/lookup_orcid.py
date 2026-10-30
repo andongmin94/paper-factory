@@ -176,7 +176,8 @@ def _public_record(orcid, section, opener, deadline):
         raise OrcidLookupError("The ORCID public lookup timed out.")
     request = Request(url, headers={"Accept": "application/json", "User-Agent": "Paper-Factory-Public-ORCID"})
     try:
-        with opener.open(request, timeout=remaining) as response:
+        # Subtracting float clock values can round just above the request limit.
+        with opener.open(request, timeout=min(remaining, REQUEST_TIMEOUT)) as response:
             if response.status != 200 or response.geturl() != url:
                 raise OrcidLookupError("The ORCID public response did not match the requested endpoint.")
             mime = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()

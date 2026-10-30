@@ -81,7 +81,9 @@ def test_non_ascii_decimal_identity_is_rejected_before_network(decimal_digits, w
     assert opener.calls == []
 
 
-def test_only_three_fixed_anonymous_endpoints_and_missing_fields_are_honest():
+def test_only_three_fixed_anonymous_endpoints_and_missing_fields_are_honest(monkeypatch):
+    # At a repeated clock tick, (12.072 + 20) - 12.072 is 20.000000000000004.
+    monkeypatch.setattr(orcid.time, "monotonic", lambda: 12.072)
     opener = FakeOpener()
     result = orcid.lookup_public_orcid(f"https://orcid.org/my-orcid?orcid={ID}", opener=opener, retrieved_at=WHEN)
     assert [req.full_url for req, _ in opener.calls] == [f"https://pub.orcid.org/v3.0/{ID}/{part}" for part in orcid.SECTIONS]
