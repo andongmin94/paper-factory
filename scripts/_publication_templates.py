@@ -241,22 +241,24 @@ def apply_official_styles(output: Path, template: Path) -> dict:
     body_element.append(body)
 
     # Pandoc sizes images before the publisher's two-column body is restored.
-    # Fit standalone body images to one column without changing their media.
+    # Fit body images to one column and page without changing their media.
     columns = body.find(qn("w:cols"))
     column_count = int(columns.get(qn("w:num")))
     column_gap = Twips(int(columns.get(qn("w:space"), "0")))
     column_width = int((body_section.page_width - body_section.left_margin - body_section.right_margin
                         - column_gap * (column_count - 1)) // column_count)
+    page_height = int(body_section.page_height - body_section.top_margin - body_section.bottom_margin)
     for paragraph in paragraphs[body_index:]:
         inlines = paragraph._p.xpath(".//wp:inline")
         if inlines and not paragraph.text.strip():
             paragraph.paragraph_format.first_line_indent = 0
         for inline in inlines:
             shape = InlineShape(inline)
-            if shape.width > column_width:
-                height = round(shape.height * column_width / shape.width)
-                shape.width = column_width
-                shape.height = height
+            scale = min(column_width / shape.width if shape.width > column_width else 1,
+                        page_height / shape.height if shape.height > page_height else 1)
+            if scale < 1:
+                width, height = round(shape.width * scale), round(shape.height * scale)
+                shape.width, shape.height = width, height
 
     # Tables need the full printable width. Retain exact content and surround
     # them with the template's own one-column section, then return to its body.
@@ -353,7 +355,7 @@ def apply_official_styles(output: Path, template: Path) -> dict:
                             "Table captions share the table's full-width section; first header rows repeat with bold labels",
                             "Following table captions retain exact content above the table; section boundaries do not modify prose paragraphs",
                             "Abstract text aligned left to avoid distributed final-line spacing",
-                            "Oversized standalone body images shrink proportionally to the publisher column width",
+                            "Oversized body images shrink proportionally to the publisher column width and printable page height",
                             "Publisher-specific native citation typography and numbered-period reference labels"],
             "citation_typography": citation_proof,
             "font_policy": "Official font names retained; Microsoft Word substitutes locally unavailable fonts. Exact proprietary font fidelity is not attested."}

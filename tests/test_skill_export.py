@@ -485,8 +485,8 @@ def test_retained_publisher_styles_columns_and_citations(tmp_path, venue):
 
 
 @pytest.mark.parametrize("venue", ["ieee-software", "ieee-security-privacy"])
-@pytest.mark.parametrize("image_width_inches", [1, 6])
-def test_body_images_fit_publisher_columns_without_changing_front_table_or_media(tmp_path, venue, image_width_inches):
+@pytest.mark.parametrize("image_width_inches,image_height_inches", [(1, 0.25), (6, 1.5), (1, 12)])
+def test_body_images_fit_publisher_columns_without_changing_front_table_or_media(tmp_path, venue, image_width_inches, image_height_inches):
     from docx import Document
     from docx.oxml.ns import qn
     from docx.shared import Inches, Twips
@@ -500,12 +500,14 @@ def test_body_images_fit_publisher_columns_without_changing_front_table_or_media
             document._element.body.remove(child)
     image = tmp_path / "figure.png"
     Image.new("RGB", (480, 120), "navy").save(image)
+    body_image = tmp_path / "body-figure.png"
+    Image.new("RGB", (round(image_width_inches * 80), round(image_height_inches * 80)), "navy").save(body_image)
     document.add_paragraph("A concrete image layout", "Heading 1")
     front = document.add_paragraph().add_run().add_picture(str(image), width=Inches(4.5))
     document.add_paragraph("Abstract", "Heading 2")
     document.add_paragraph("A bounded image layout example.", "Normal")
     document.add_paragraph("Introduction", "Heading 2")
-    body = document.add_paragraph().add_run().add_picture(str(image), width=Inches(image_width_inches))
+    body = document.add_paragraph().add_run().add_picture(str(body_image), width=Inches(image_width_inches))
     prose = document.add_paragraph("An inline image within prose keeps its paragraph indent.", "Normal")
     prose.paragraph_format.first_line_indent = Inches(0.25)
     prose_image = prose.add_run().add_picture(str(image), width=Inches(1))
@@ -527,8 +529,10 @@ def test_body_images_fit_publisher_columns_without_changing_front_table_or_media
                    if s._sectPr.find(qn("w:cols")).get(qn("w:num")) == "2")
     gap = Twips(int(section._sectPr.find(qn("w:cols")).get(qn("w:space"))))
     column_width = (section.page_width - section.left_margin - section.right_margin - gap) // 2
+    page_height = section.page_height - section.top_margin - section.bottom_margin
     assert body.width <= column_width
-    assert abs(body.width - body.height * 4) <= 2
+    assert body.height <= page_height
+    assert abs(body.width - body.height * image_width_inches / image_height_inches) <= 2
     picture_only_paragraph = next(p for p in checked.paragraphs
                                   if not p.text.strip() and p._p.xpath(".//wp:inline")
                                   and p.style.name == "Para")
@@ -536,15 +540,16 @@ def test_body_images_fit_publisher_columns_without_changing_front_table_or_media
     prose = next(p for p in checked.paragraphs if p.text.startswith("An inline image within prose"))
     assert prose.paragraph_format.first_line_indent == Inches(0.25)
     assert prose_image.width == Inches(1)
-    if image_width_inches == 1:
+    if before[1][0] <= column_width and before[1][1] <= page_height:
         assert (body.width, body.height) == before[1]
     else:
-        assert body.width < before[1][0]
+        assert body.width < before[1][0] and body.height < before[1][1]
     assert (front.width, front.height) == before[0]
     assert (cell.width, cell.height) == before[2]
     with zipfile.ZipFile(path) as archive:
         assert {name: archive.read(name) for name in archive.namelist() if name.startswith("word/media/")} == original_media
         assert image.read_bytes() in original_media.values()
+        assert body_image.read_bytes() in original_media.values()
 
 
 def test_skill_copy_preflight_works_without_old_checkout(tmp_path):
