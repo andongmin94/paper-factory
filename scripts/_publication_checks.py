@@ -386,6 +386,9 @@ def compliance_report(markdown: Path, docx: Path | None, venue_id: str, *, pdf: 
                     passed, item["reason"] = replacements[item["id"]]
                     item.update(status="passed" if passed else "failed", stage="native")
             structure = _native_structure(docx, venue_id == "ieee-software")
+            canonical_count = metrics["reference_count"]
+            items.append(_item("reference_count_consistency", "passed" if canonical_count == actual["reference_count"] == structure["reference_count"] else "failed",
+                               f"Reference entries must match: canonical Markdown {canonical_count}, native Word {actual['reference_count']}, DOCX bibliography paragraphs {structure['reference_count']}.", stage="native", source=source))
             items.append(_item("native_word", "passed" if not structure["issues"] else "failed", "; ".join(structure["issues"]) or "Actual publisher styles, columns, citation conventions and numbered bibliography retained.", stage="native", source=template["download_url"]))
             metrics["native_structure"] = structure
             metrics["missing_template_fonts"] = actual.get("missing_template_fonts", [])

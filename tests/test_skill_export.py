@@ -484,6 +484,53 @@ def test_retained_publisher_styles_columns_and_citations(tmp_path, venue):
     assert next(p for p in checked.paragraphs if p.text.startswith("Table 1.")).style.name == "TableCaption"
 
 
+@pytest.mark.parametrize("word_count,paragraph_count", [(1, 1), (1, 4), (4, 1), (4, 4)])
+def test_native_reference_counts_must_match_canonical_entries(manuscript, tmp_path, monkeypatch, word_count, paragraph_count):
+    """Collapsed bibliography paragraphs must fail even when native counts fit the limit."""
+    from docx import Document
+    from docx.oxml.ns import qn
+    references = [f"[{number}] Example Authors, Retained source {number}, 2025." for number in range(1, 5)]
+    manuscript.write_text(ARTICLE.split("## References", 1)[0] + "## References\n\n" +
+                          "\n".join(references) + "\n", encoding="utf-8")
+    template, record = templates.official_template("ieee-software")
+    doc = Document(template)
+    for child in list(doc._element.body):
+        if child.tag != qn("w:sectPr"):
+            doc._element.body.remove(child)
+    for text, style in [("A concrete maintenance decision", "Heading 1"),
+                        ("Abstract", "Heading 2"), ("A bounded static example.", "Normal"),
+                        ("Keywords: one; two; three", "Normal"), ("Introduction", "Heading 2"),
+                        ("Source supports this statement. [1]", "Normal"), ("References", "Heading 2")]:
+        doc.add_paragraph(text, style)
+    for entry in references if paragraph_count == 4 else [" ".join(references)]:
+        doc.add_paragraph(entry, "Normal")
+    native_docx = tmp_path / "native.docx"
+    doc.save(native_docx)
+    templates.apply_official_styles(native_docx, template)
+    monkeypatch.setattr(templates, "measure_word", lambda _: {"metrics": {
+        "body_words": 300, "body_table_words": 0, "body_tables": 0, "body_figures": 0,
+        "abstract_words": 10, "reference_heading_found": True, "reference_count": word_count}})
+    native_pdf = tmp_path / "native.pdf"
+    native_pdf.write_bytes(b"PDF fixture; rendering is mocked")
+    docx_sha = exporter.digest_file(native_docx)
+    receipts = {name: {"input_sha256": exporter.digest_file(manuscript),
+                       "output_sha256": exporter.digest_file(path), "official_template": record}
+                for name, path in (("docx", native_docx), ("pdf", native_pdf))}
+    receipts["pdf"].update(source_docx_sha256=docx_sha, word_rendering={"source_docx_sha256": docx_sha})
+    monkeypatch.setattr(checks, "render_pdf_pages", lambda *_: {
+        "automatic_checks": True, "issues": [], "page_count": 1, "pages": []})
+    result = checks.compliance_report(manuscript, native_docx, "ieee-software", pdf=native_pdf,
+                                      qa_root=tmp_path / "pages", conversion_receipts=receipts)
+    row = next(item for item in result["items"] if item["id"] == "reference_count_consistency")
+    expected_pass = word_count == paragraph_count == 4
+    assert row["status"] == ("passed" if expected_pass else "failed")
+    assert result["content_format_passed"] is expected_pass
+    assert result["metrics"]["reference_count"] == 4
+    assert result["metrics"]["native_structure"]["reference_count"] == paragraph_count
+    if not expected_pass:
+        assert row["reason"] in result["blockers"]
+
+
 @pytest.mark.parametrize("venue", ["ieee-software", "ieee-security-privacy"])
 @pytest.mark.parametrize("image_width_inches,image_height_inches", [(1, 0.25), (6, 1.5), (1, 12)])
 def test_body_images_fit_publisher_columns_without_changing_front_table_or_media(tmp_path, venue, image_width_inches, image_height_inches):
