@@ -19,7 +19,7 @@ Choose the venue supported by the completed contribution: [IEEE Software](refere
 
 Write one complete English feature article unless the user requests a different language or scope. Its argument should carry the question, completed analysis and results, fair comparison, worked decisions, limitations, accurate references, and truthful AI-use disclosure. Keep collection logs, scores, missing human information, and process notes outside the article. Never invent measurements, novelty, quotations, citations, author biography, funding, consent, or model identity.
 
-Lead with the concrete practitioner problem and the supported result. Make the additional value over the closest existing answer clear in the article itself. Before freezing it, perform the author editorial pass in [research-and-review.md](references/research-and-review.md): remove repeated generic disclaimers and duplicate conclusions, explain abstractions through actors and outcomes, and retain the distinctions that keep claims accurate. Do not replace weak evidence or an unclear contribution with smoother prose.
+Lead with the concrete practitioner problem and the supported result. Demonstrate the additional value over the closest existing answer through evidence and decisions. Before freezing it, use the author editorial pass in [research-and-review.md](references/research-and-review.md) to remove defensive framing and repetition while retaining material qualifications and a useful actionable recap. Do not replace weak evidence or an unclear contribution with smoother prose.
 
 ## Revise and assess once
 
