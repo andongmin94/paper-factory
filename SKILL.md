@@ -1,6 +1,6 @@
 ---
 name: paper-factory
-description: Research software repositories and write, revise, or review evidence-grounded articles for IEEE Software, IEEE Security & Privacy, IEEE Access, JORS, or JOSS. Includes official Word templates or JOSS Markdown/BibTeX source output, portable evidence notes, author preparation, and venue-aware review support. Actual submission requires separate authorization.
+description: Turn a GitHub repository URL into an evidence-grounded article draft and preparation bundle, or revise and review an existing article for IEEE Software, IEEE Security & Privacy, IEEE Access, JORS, or JOSS. Includes source snapshots, three-candidate venue comparison, official Word templates or JOSS Markdown/BibTeX output, and portable evidence notes. Actual submission requires separate authorization.
 ---
 
 # Paper Factory
@@ -11,9 +11,11 @@ Lead the research and writing directly in the current Codex conversation. Produc
 
 Start from the user's question, repository, retained material, and authorized scope. Inspect actual sources, dependencies, documentation, and existing analysis before selecting a consequential research or practitioner question. Read nearby primary work that could challenge the contribution and compare competent alternatives on the same supported cases. A search result, abstract, landing page, or partial extraction is not a complete primary paper. Retain source revision, exact witnesses, original retrieved bytes, URLs, dates, hashes, and any unread or inaccessible portions.
 
+For a repository URL to draft request, follow [repository-to-draft.md](references/repository-to-draft.md): inspect the actual tree and selected contents, preserve a read-only source snapshot, compare exactly three of the five supported venues by evidence and article category, recommend one conditionally, write one manuscript, and connect the existing bibliography, evidence, preflight/export and bundle tools. The agent performs the reading, comparison and writing; a snapshot or checklist does not perform them. Preserve an incomplete source draft when evidence, author facts or rendering are missing, with those gaps explicit. Do not stop after a plan or candidate table.
+
 When the useful contribution is unclear, use [contribution-selection.md](references/contribution-selection.md) to compare two or three plausible questions by available evidence, the strongest existing answer and what changes for the reader. Select one before full drafting; this short choice does not add a mandatory stage or a second manuscript.
 
-Use [research-and-review.md](references/research-and-review.md) for evidence boundaries, revision decisions, and the independent assessment rubric. Source inspection is not an executed experiment or an observed deployment outcome. Do not execute the input project's code, build, or tests unless the user authorized it. Choose further research for a concrete unanswered need that could change the article; stop when available evidence cannot support a worthwhile claim.
+Use [research-and-review.md](references/research-and-review.md) for evidence boundaries, revision decisions, and the independent assessment rubric. Source inspection is not an executed experiment or an observed deployment outcome. Do not modify or execute the input project's code, build, or tests unless the user authorized it. Choose further research for a concrete unanswered need that could change the article; stop collecting when the authorized evidence cannot resolve the remaining gap and deliver the supported draft or finding with its limits.
 
 Choose the venue supported by the completed contribution and read its guidance:
 
@@ -24,6 +26,8 @@ Choose the venue supported by the completed contribution and read its guidance:
 - [JOSS](references/joss.md): substantial research software with demonstrated use and sustained public development; produce its Markdown/BibTeX source package.
 
 Do not treat a generic application as research software without evidence or manufacture additional articles to fill supported venues. Support does not establish a user's submission target. Access and JORS require an explicitly supplied official DOCX; JOSS uses authored YAML metadata and its own bibliography path.
+
+Use contribution, intended reader, evidence and current article rules to choose among supported venues; do not rank by impact factor or infer an accredited-journal list from a topic label. Keep one brief candidate comparison, one guidance record, and the existing evidence ledger instead of creating parallel catalogs or repeated reports.
 
 Write one complete English manuscript in the selected article category unless the user requests a different language or scope. Explain its contribution, evidence, comparison, limitations, accurate references, and truthful AI-use disclosure using the venue's structure. Keep collection logs, scores, missing human information, and process notes outside the article. Never invent measurements, novelty, quotations, citations, author biography, funding, consent, or model identity.
 
@@ -52,3 +56,5 @@ Treat existing raw data, manuscripts, reviews, failures, budgets, and historical
 On continuation, use the optional impact report to revisit changed sources, affected claims and explicit new-question reading choices while reusing unchanged verified bindings. After actual author and page confirmations arrive, reconcile the existing exact-file records with the optional final-preparation tool; do not overwrite old reports or infer consent to remove pending items.
 
 Inspect every page when a final PDF is produced. JOSS export provides submission sources without Word or Inara PDF rendering; report PDF and visual checks as unperformed until separately executed. Its source package cannot use the native-Word final-preparation report. Report content quality, format checks, visual inspection, missing human preparation, and actual submission separately. Genuine author identity, affiliation, contact, venue-required biography or photographs, funding/conflicts, rights, approval, and submission decisions remain human preparation when absent. Public ORCID data is not consent. A complete draft with accurately reported gaps is a valid delivery. Do not upload, submit, or contact others without separate user authorization.
+
+For the URL-to-draft workflow, deliver the preserved manuscript source and bibliography with the explicit bundle checklist even if native output is unavailable. Keep incomplete drafting, blocked guidance and missing evidence conditional. Finish after this one case; do not add an orchestration framework, expand the venue catalog, or start another improvement cycle.

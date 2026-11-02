@@ -107,6 +107,9 @@ def check(root: Path, record_path: Path, output_dir: Path) -> dict:
     item("page_inspection", visual_passed, "Supplied dated page inspection must identify the exact PDF and every ordered actual page image; this is separate from author approval.")
 
     bundle = selected("bundle_report", document=True) or {}
+    if bundle.get("draft_status") is not None or bundle.get("missing_evidence"):
+        item("draft_completion", False,
+             "This bundle retains a draft/incomplete status or evidence gaps. Resolve them and prepare a new final bundle; formatting and author confirmations do not clear research gaps.")
     approval_files = bundle.get("approval_files", [])
     if (not isinstance(approval_files, list) or not isinstance(bundle.get("supplied_declarations", {}), dict)):
         raise ValueError("Bundle report requires an approval_files list and supplied_declarations object")

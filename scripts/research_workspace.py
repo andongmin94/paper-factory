@@ -473,6 +473,11 @@ def status(root: Path, state_path: Path, output_dir: Path) -> dict:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    c = commands.add_parser("repository", help="Retain selected GitHub source files at one commit without executing project code")
+    c.add_argument("--url", required=True)
+    c.add_argument("--ref", help="Existing branch or tag; otherwise the remote default branch")
+    c.add_argument("--paths", nargs="+", required=True, help="Explicit tracked repository files to retain after inspecting the tree")
+    c.add_argument("--output-dir", type=Path, required=True)
     c = commands.add_parser("checkpoint")
     c.add_argument("--root", type=Path, required=True)
     c.add_argument("--state", type=Path, required=True)
@@ -499,7 +504,10 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
-        if args.command == "checkpoint":
+        if args.command == "repository":
+            from _repository_snapshot import capture_repository
+            result = capture_repository(args.url, args.output_dir, paths=args.paths, ref=args.ref)
+        elif args.command == "checkpoint":
             result = checkpoint(args.root, args.state, args.output_dir)
         elif args.command == "resume":
             result = resume(args.checkpoint)
@@ -513,9 +521,9 @@ def main(argv: list[str] | None = None) -> int:
         else:
             result = compare(args.before, args.after, args.output_dir)
     except (OSError, ValueError, TypeError, KeyError) as exc:
-        print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
+        print(json.dumps({"error": str(exc)}, ensure_ascii=True), file=sys.stderr)
         return 2
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    print(json.dumps(result, ensure_ascii=True, indent=2))
     return 1 if result.get("verified") is False or result.get("bindings_match") is False else 0
 
 

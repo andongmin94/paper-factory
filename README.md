@@ -16,13 +16,22 @@ Codex에서 `$paper-factory`와 대상 저장소를 지정하세요.
 ```text
 $paper-factory https://github.com/owner/repository
 
-저장소와 관련 원문을 읽고, 프로젝트의 근거로 뒷받침할 수 있는 가장 유용한 논문을 작성해.
-완성된 기여와 실제 근거에 적합한 지원 매체를 선택하고, 해당 원고 형식과 허용된 독립 검토를 제공해.
+저장소와 관련 원문을 읽고, 현재 지원하는 매체 중 정확히 세 후보의 근거 적합성과 article type을 비교해.
+한 곳을 조건부로 추천한 뒤 실제 근거로 뒷받침할 수 있는 영문 초안 한 편을 작성해.
+초안 소스, 서지, 짧은 선정·근거·공식 지침 기록과 미확인 항목 checklist를 하나의 묶음으로 제공해.
 평가는 단순 투고 적합성보다 원고 그대로 게재를 권고할 수 있는지를 기준으로 해.
 프로젝트 코드는 실행하지 말고, 기존 자료와 횟수는 유지해.
 ```
 
 기존 연구를 이어갈 때는 보존 자료의 위치와 원하는 작업을 함께 알려주면 됩니다. 필요한 명령과 입력 파일은 에이전트가 준비합니다.
+
+## 저장소 URL에서 초안 묶음까지
+
+에이전트가 실제 파일 트리를 확인하고 README·구현·테스트·기존 실험 자료를 읽습니다. `research_workspace.py repository`는 선택한 원본 파일과 저장소 커밋·해시를 새 작업 폴더에 보존합니다. 파일명이나 README의 설명만으로 프로젝트 분야·성능·연구소프트웨어 적격성을 판정하지 않습니다.
+
+현재 구현된 다섯 지원 매체 안에서 **후보 세 곳을 비교하고 한 곳을 조건부 추천한 다음, 초안 한 편을 직접 작성**합니다. 정적 소스 관찰, 실제 측정, 추론과 미확인 근거를 구분하며 저널의 현재 공식 지침과 article type을 확인합니다. 기존 서지 가져오기·근거 ledger·preflight·export·bundle 경로를 이어 사용합니다. [URL에서 초안까지 실행 절차](references/repository-to-draft.md)에 명령과 최소 결과물을 정리했습니다.
+
+저자 정보나 근거가 부족하면 이를 보완 과제로 남긴 소스 초안을 전달합니다. Word/PDF 또는 JOSS Inara 렌더링을 수행하지 못했으면 미검증으로 기록하며, 형식 검사를 통과시키기 위해 이름·결과·승인을 만들지 않습니다. 사용자 저장소 수정·코드 실행은 별도 허용 범위를 따르고, 한 사례의 초안 묶음을 전달하면 이번 작업을 마칩니다.
 
 ## 주요 기능
 
@@ -61,6 +70,7 @@ $paper-factory https://github.com/owner/repository
 | 작업 | 필요한 환경 |
 | --- | --- |
 | 연구·집필 | Codex와 대상 저장소·문헌에 대한 접근 |
+| 저장소 URL 자료 보존 | 설치된 Git과 대상 GitHub 저장소 읽기 권한; 프로젝트 코드 실행 없음 |
 | 파일 도구 | Python 3.11 이상. 문서 처리 의존성은 [requirements.txt](requirements.txt) 참조 |
 | 공식 Word/PDF 출력 | Windows, 설치된 Microsoft Word, Pandoc, 문서 처리 의존성 |
 | JOSS 소스 검사·출력 | Python, Pandoc, 기존 서지 파서. Word 불필요; 공식 PDF는 별도 Inara 환경에서 검증 |
@@ -85,6 +95,7 @@ Windows CI에서 실제 Pandoc 식별과 문서 변환을 필수로 검사합니
 - [스킬 지침](SKILL.md)
 - [연구·평가 기준](references/research-and-review.md)
 - [연구 질문과 기여 선택](references/contribution-selection.md)
+- [저장소 URL에서 초안 묶음까지](references/repository-to-draft.md)
 - [공식 출력·ORCID 도구](references/tools.md)
 - [연구자 편의기능과 입력 형식](references/researcher-convenience.md)
 - [이전 구현·검증 기록](docs/skill-refinements-verification-20261030.md)
