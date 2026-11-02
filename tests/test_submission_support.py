@@ -317,7 +317,7 @@ def test_draft_bundle_preserves_evidence_gaps_and_never_infers_human_approval(tm
                 "guidance": "Current source access and template version recorded separately.\n"}
     files = []
     for role, content in contents.items():
-        put(root / (role + ".txt"), content)
+        (root / (role + ".txt")).write_bytes(content.encode("utf-8"))
         files.append({"role": role, "path": role + ".txt"})
     plan = put(tmp_path / "plan.json", {"venue_id": "ieee-software", "title": "Test case",
                "article_type": "Feature Article", "draft_status": "draft", "guidance_status": guidance,
