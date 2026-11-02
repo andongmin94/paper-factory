@@ -18,9 +18,9 @@ import xml.etree.ElementTree as ET
 from _publication_files import digest_file, ensure_unlinked
 from _publication_text import section_headers
 from _author_profile import normalize_profile, profile_completeness
+from _publication_venues import VENUES
 
 
-VENUES = ("ieee-software", "ieee-security-privacy")
 BIO_HEADINGS = {"author biography", "author biographies", "about the author", "about the authors"}
 AUTHOR_START = "<!-- paper-factory:authors:start -->"
 AUTHOR_END = "<!-- paper-factory:authors:end -->"
@@ -371,6 +371,8 @@ def prepare_bundle(plan, root, output_dir):
     pending = []
     if "manuscript" not in roles:
         pending.append("Select the final manuscript file")
+    if value["venue_id"] == "joss" and "bibliography" not in roles:
+        pending.append("Select the original paper.bib as bibliography and every local figure referenced by paper.md")
     if value["venue_id"] == "ieee-software" and "author_photo" not in roles:
         pending.append("Retained Software guidance requests author photographs; supply approved images and confirm current requirements")
     if not cover_text and "cover_letter" not in roles:
@@ -380,7 +382,7 @@ def prepare_bundle(plan, root, output_dir):
             pending.append("Confirm actual " + name.replace("_", " "))
     pending.extend(["Reconfirm current publisher category, instructions and required files",
                     "Confirm genuine author identity, affiliation, contact and contribution selections",
-                    "Inspect every final Word/PDF page and approve the exact files",
+                    ("Compile with the official JOSS publisher pipeline, inspect its PDF and confirm the exact source package" if value["venue_id"] == "joss" else "Inspect every final Word/PDF page and approve the exact files"),
                     "Complete any submission-specific declarations in the actual portal"])
     folder = _new_output(output_dir)
     records = []

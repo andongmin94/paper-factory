@@ -2,7 +2,11 @@
 param(
     [Parameter(Mandatory = $true)][string]$SourceDocx,
     [Parameter(Mandatory = $true, ParameterSetName = 'Render')][string]$OutputPdf,
-    [Parameter(Mandatory = $true, ParameterSetName = 'Inspect')][switch]$MetricsOnly
+    [Parameter(Mandatory = $true, ParameterSetName = 'Inspect')][switch]$MetricsOnly,
+    [string]$ReferenceHeadingStyle = 'ReferenceHead',
+    [string]$ReferenceEntryStyle = 'Bib_entry',
+    [AllowEmptyString()][string]$AbstractLabel = ('Abstract' + [char]0x2014),
+    [string]$TemplateFonts = 'Helvetica-Light,Cheltenham-Book'
 )
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
@@ -52,16 +56,16 @@ try {
         $details.reference_heading_found = $false
         foreach ($paragraph in $document.Paragraphs) {
             $style = [string]$paragraph.Range.Style.NameLocal
-            if ($style -eq 'ReferenceHead' -and -not $details.reference_heading_found) {
+            if ($style -eq $ReferenceHeadingStyle -and ([string]$paragraph.Range.Text).Trim() -eq 'References' -and -not $details.reference_heading_found) {
                 $referenceStart = [int]$paragraph.Range.Start
                 $bodyEnd = [Math]::Min($bodyEnd, $referenceStart)
                 $details.reference_heading_found = $true
             }
             if ($style -eq 'AuthorBioHead') { $bodyEnd = [Math]::Min($bodyEnd, [int]$paragraph.Range.Start) }
-            if ($style -eq 'Bib_entry' -and ([string]$paragraph.Range.Text).Trim()) { $details.reference_count += 1 }
+            if ($style -eq $ReferenceEntryStyle -and ([string]$paragraph.Range.Text).Trim()) { $details.reference_count += 1 }
             if ($style -eq 'Abstract') {
                 $range = $paragraph.Range.Duplicate
-                if (([string]$range.Text).StartsWith('Abstract' + [char]0x2014, [StringComparison]::Ordinal)) { $range.Start = [int]$range.Start + 9 }
+                if ($AbstractLabel -and ([string]$range.Text).StartsWith($AbstractLabel, [StringComparison]::Ordinal)) { $range.Start = [int]$range.Start + $AbstractLabel.Length }
                 $details.abstract_words += $range.ComputeStatistics(0)
             }
         }
@@ -88,7 +92,7 @@ try {
     $fonts = New-Object System.Drawing.Text.InstalledFontCollection
     try {
         $installed = @($fonts.Families | ForEach-Object { $_.Name })
-        $details.missing_template_fonts = @('Helvetica-Light', 'Cheltenham-Book' | Where-Object { $_ -notin $installed })
+        $details.missing_template_fonts = @($TemplateFonts.Split(',') | Where-Object { $_ -and $_ -notin $installed })
     } finally { $fonts.Dispose() }
     if (-not $MetricsOnly) { $document.ExportAsFixedFormat($target, 17, $false, 0, 0, 1, 1, 0, $false, $true, 0, $true, $true, $false) }
     $details | ConvertTo-Json -Compress

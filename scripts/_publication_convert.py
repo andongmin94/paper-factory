@@ -134,7 +134,8 @@ def pandoc_version(binary: Path) -> str:
 
 
 def convert_docx(markdown: Path, output: Path, *, venue_id: str,
-                 pandoc: str | None = None, resource_dir: Path | None = None) -> dict:
+                 pandoc: str | None = None, resource_dir: Path | None = None,
+                 template_path: Path | None = None) -> dict:
     """Use the actual publisher reference, citation rules and section masters."""
     ensure_unlinked(markdown)
     ensure_unlinked(output)
@@ -146,7 +147,9 @@ def convert_docx(markdown: Path, output: Path, *, venue_id: str,
             raise ValueError("Resource directory must be an existing absolute directory")
     binary = pandoc_binary(pandoc)
     version = pandoc_version(binary)
-    template_path, template = official_template(venue_id)
+    template_path, template = official_template(venue_id, template_path)
+    if template["format"] != "docx":
+        raise ValueError("This venue uses a Markdown/BibTeX source package, not Word conversion")
     original_sha = digest_file(markdown)
     output.parent.mkdir(parents=True, exist_ok=True)
     # Pandoc can exit successfully after replacing a missing figure with its
@@ -171,7 +174,12 @@ def convert_docx(markdown: Path, output: Path, *, venue_id: str,
             raise ValueError("Pandoc conversion timed out after 120 seconds") from exc
     if result.returncode or not output.is_file():
         raise ValueError(f"Pandoc failed ({result.returncode}): {result.stderr[:2000]}")
-    proof = {**template, **apply_official_styles(output, template_path)}
+    if template["layout"] == "ieee-magazine":
+        styles = apply_official_styles(output, template_path, citation_style=template["citation_style"])
+    else:
+        from _publication_research_word import apply_research_styles
+        styles = apply_research_styles(output, template_path, venue_id)
+    proof = {**template, **styles}
     _format_docx(output)
     # Retain the existing converter's deterministic native ZIP bytes.
     from docx import Document

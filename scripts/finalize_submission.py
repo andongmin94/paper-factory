@@ -12,7 +12,8 @@ from pathlib import Path
 import sys
 
 from _publication_files import digest_file
-from _publication_templates import official_template
+from _publication_templates import official_template, template_record
+from _publication_venues import VENUE_RULES
 from research_workspace import _absolute, _manifest, _new_folder, _relative, _write
 from submission_support import DECLARATIONS, VENUES, _declaration_status
 
@@ -31,11 +32,13 @@ def check(root: Path, record_path: Path, output_dir: Path) -> dict:
     required = {"venue_id", "manuscript", "docx", "pdf", "format_report", "visual_review", "bundle_report", "scientific_review", "pages", "confirmations"}
     if not isinstance(supplied, dict) or set(supplied) != required or supplied["venue_id"] not in VENUES:
         raise ValueError("Record requires venue_id, manuscript, docx, pdf, format_report, visual_review, bundle_report, scientific_review, pages and confirmations")
+    if supplied["venue_id"] == "joss":
+        raise ValueError("JOSS uses a Markdown/BibTeX source package and publisher PDF review; this Word/PDF finalizer does not apply")
     if (not isinstance(supplied["pages"], list) or not supplied["pages"] or any(not isinstance(name, str) for name in supplied["pages"]) or
             len(set(supplied["pages"])) != len(supplied["pages"])):
         raise ValueError("pages must explicitly list distinct ordered page-image paths")
     confirmations = supplied["confirmations"]
-    if not isinstance(confirmations, dict) or set(confirmations) - {"author_identity", "author_photo", "current_guidance", "required_files"}:
+    if not isinstance(confirmations, dict) or set(confirmations) - {"author_identity", "author_photo", "current_guidance", "required_files", "software_availability", "page_length_review"}:
         raise ValueError("Unsupported final preparation confirmation")
     snapshots, checks = {record_path: hashlib.sha256(record_bytes).hexdigest()}, []
 
@@ -71,7 +74,9 @@ def check(root: Path, record_path: Path, output_dir: Path) -> dict:
             any(not isinstance(row, dict) for row in native.get("items", [])) or
             not isinstance(native.get("metrics", {}), dict)):
         raise ValueError("Format report requires binding and metrics objects and an items list of objects")
-    _, template = official_template(supplied["venue_id"])
+    template = template_record(supplied["venue_id"])
+    if template["bundled"]:
+        _, template = official_template(supplied["venue_id"])
     expected = {"markdown_sha256": hashes["manuscript"], "docx_sha256": hashes["docx"], "pdf_sha256": hashes["pdf"],
                 "template_sha256": template["sha256"], "template_provenance_sha256": template["provenance_sha256"]}
     native_items = [row for row in native.get("items", []) if row.get("stage") in {"manuscript", "native"}]
@@ -128,14 +133,17 @@ def check(root: Path, record_path: Path, output_dir: Path) -> dict:
     author_rows = (native.get("metrics") or {}).get("authors", [])
     if not isinstance(author_rows, list) or any(not isinstance(row, dict) for row in author_rows):
         raise ValueError("Format report authors must be a list of objects")
-    factual_rows = [row for row in native.get("items", []) if row.get("id") in {"author_profile_binding", "author_biography"}]
-    facts_complete = bool(author_rows and len(factual_rows) == 2 and
-                          {row["id"] for row in factual_rows} == {"author_profile_binding", "author_biography"} and
+    required_facts = {"author_profile_binding", "author_biography"} if VENUE_RULES[supplied["venue_id"]]["biographies"] else {"author_profile_binding"}
+    factual_rows = [row for row in native.get("items", []) if row.get("id") in required_facts]
+    facts_complete = bool(author_rows and len(factual_rows) == len(required_facts) and
+                          {row["id"] for row in factual_rows} == required_facts and
                           all(row.get("status") == "passed" for row in factual_rows) and
                           all(row.get("supplied_fields_complete") is True and not row.get("missing_byline_values") for row in author_rows))
-    item("supplied_author_facts", facts_complete, "Every author's supplied facts, byline association and biography must already be complete in the existing format report.")
+    item("supplied_author_facts", facts_complete, "Every author's supplied facts, byline association and any required biography must already be complete in the existing format report.")
     human = {}
     human_names = ["author_identity", "current_guidance", "required_files"]
+    human_names.extend(row["id"] for row in native.get("items", [])
+                       if row.get("id") in {"software_availability", "page_length_review"} and row.get("status") == "pending")
     if supplied["venue_id"] == "ieee-software":
         human_names.append("author_photo")
     for name in human_names:

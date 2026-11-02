@@ -19,6 +19,14 @@ def test_missing_package_is_reported(monkeypatch):
     assert all(row["status"] == "missing" for row in rows)
 
 
+def test_new_template_prerequisites_distinguish_external_and_source_formats():
+    result = environment.diagnose()
+    rows = {row["venue"]: row for row in result["official_templates"]}
+    assert rows["jors"]["status"] == rows["ieee-access"]["status"] == "external_template_required"
+    assert rows["joss"]["status"] == "verified"
+    assert not result["native_export_verified"]
+
+
 def test_incompatible_and_unusual_versions_remain_visible(monkeypatch):
     versions = {"python-docx": "0.8.11", "pypdfium2": "5.14.1", "Pillow": "13.0.0",
                 "pypandoc_binary": "1.17rc1", "pyparsing": "3.2.0"}
