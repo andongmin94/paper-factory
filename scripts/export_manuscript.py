@@ -172,9 +172,9 @@ def main(argv: list[str] | None = None) -> int:
                             template_path=args.template, bibliography=args.bibliography)
             passed = result["source_package_passed"] if args.venue == "joss" else result["content_format_passed"]
     except (OSError, ValueError, ImportError) as exc:
-        print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
+        print(json.dumps({"error": str(exc)}, ensure_ascii=True), file=sys.stderr)
         return 2
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    print(json.dumps(result, ensure_ascii=True, indent=2))
     return 0 if passed else 1
 
 

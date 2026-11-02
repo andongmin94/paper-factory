@@ -609,6 +609,7 @@ def test_skill_copy_preflight_works_without_old_checkout(tmp_path):
     manuscript = tmp_path / "input.md"
     manuscript.write_text(ARTICLE, encoding="utf-8")
     env = {key: value for key, value in os.environ.items() if key not in {"PYTHONPATH", "PAPER_FACTORY_ROOT"}}
+    env["PYTHONIOENCODING"] = "cp1252"  # Match the Windows pipe encoding that broke UTF-8 JSON consumers.
     result = subprocess.run([sys.executable, str(isolated / "scripts" / "export_manuscript.py"),
                              "preflight", "--manuscript", str(manuscript), "--venue", "ieee-software"],
                             cwd=tmp_path, env=env, capture_output=True, text=True, encoding="utf-8", timeout=30)
