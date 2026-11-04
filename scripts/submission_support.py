@@ -542,9 +542,9 @@ def main(argv=None):
         else:
             result = inspect_metadata(args.file, args.output_dir, profile=args.profile)
     except (OSError, ValueError, TypeError) as exc:
-        print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
+        print(json.dumps({"error": str(exc)}, ensure_ascii=True), file=sys.stderr)
         return 2
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    print(json.dumps(result, ensure_ascii=True, indent=2))
     return 0
 
 
