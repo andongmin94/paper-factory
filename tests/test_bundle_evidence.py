@@ -1,15 +1,14 @@
-"""Exercise bundle handoff of saved evidence reports, not repository/Word E2E."""
+"""Saved-evidence handoff tests; CLI pipe coverage lives in test_submission_cli."""
 
 import hashlib
 import json
-import os
 from pathlib import Path
-import subprocess
 import sys
 
 import pytest
 
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "submission_support.py"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+from submission_support import prepare_bundle
 
 
 def prepare_case(tmp_path, variant):
@@ -62,14 +61,7 @@ def run_bundle(tmp_path, root, contents, plan):
     plan_bytes = json.dumps(plan).encode("utf-8")
     plan_path.write_bytes(plan_bytes)
     output = tmp_path / "bundle"
-    result = subprocess.run(
-        [sys.executable, str(SCRIPT), "bundle", "--root", str(root),
-         "--plan", str(plan_path), "--output-dir", str(output)],
-        capture_output=True, timeout=30, env={**os.environ, "PYTHONIOENCODING": "cp1252"},
-    )
-    assert result.returncode == 0, result.stderr
-    assert not result.stderr
-    report = json.loads(result.stdout.decode("utf-8"))
+    report = prepare_bundle(plan_path, root, output)
     saved = json.loads((output / "report.json").read_text(encoding="utf-8"))
     assert {k: v for k, v in report.items() if k != "output_dir"} == saved
     assert not report["submission_ready"] and not report["author_approval_inferred"]
