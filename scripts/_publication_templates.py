@@ -131,20 +131,32 @@ def _citation_typography(document, reference, *, software):
             "bibliography_metadata": "Supplied names, descriptions, titles, URLs and dates preserved; unavailable bibliographic metadata is not invented and still requires editorial verification."}
 
 
-def official_template(venue_id: str) -> tuple[Path, dict]:
+def template_record(venue_id: str) -> dict:
     manifest = json.loads((ROOT / "provenance.json").read_bytes())
     try:
         record = manifest["templates"][venue_id]
     except KeyError as exc:
-        raise ValueError("An official template is configured only for IEEE Software and IEEE Security & Privacy") from exc
-    path = ROOT / record["filename"]
+        raise ValueError(f"No verified official template is configured for {venue_id}") from exc
+    return {**record, "venue_id": venue_id, "provenance_sha256": digest_file(ROOT / "provenance.json")}
+
+
+def official_template(venue_id: str, template_path: Path | None = None) -> tuple[Path, dict]:
+    record = template_record(venue_id)
+    if template_path is not None:
+        ensure_unlinked(template_path)
+        if not template_path.is_absolute():
+            raise ValueError("The official --template must be an absolute local path")
+        path = template_path
+    elif record["bundled"]:
+        path = ROOT / record["filename"]
+    else:
+        raise ValueError(f"{record['publication']} requires --template with the official file downloaded from {record['download_url']}; redistribution permission was not established")
     if not path.is_file() or digest_file(path) != record["sha256"]:
-        raise ValueError("The bundled official publisher template is missing or differs from its provenance SHA")
-    return path, {**record, "venue_id": venue_id, "authority": manifest["authority"],
-                  "provenance_sha256": digest_file(ROOT / "provenance.json")}
+        raise ValueError("The official publisher template is missing or differs from its provenance SHA")
+    return path, record
 
 
-def apply_official_styles(output: Path, template: Path) -> dict:
+def apply_official_styles(output: Path, template: Path, *, citation_style: str) -> dict:
     """Map parsed content to the publisher's actual named styles and sections.
 
     Pandoc imports the reference package, including its styles. Its final section
@@ -341,7 +353,7 @@ def apply_official_styles(output: Path, template: Path) -> dict:
             for child in list(header._element):
                 header._element.remove(child)
             header.add_paragraph("Feature Article", style="Header")
-    citation_proof = _citation_typography(document, reference, software=template.name == "CS_Mag_7_22.docx")
+    citation_proof = _citation_typography(document, reference, software=citation_style == "superscript_outside_punctuation")
     document.save(output)
     checked = Document(output)
     if checked.paragraphs[0].style.name != "Title_document" or not any(
@@ -361,7 +373,17 @@ def apply_official_styles(output: Path, template: Path) -> dict:
             "font_policy": "Official font names retained; Microsoft Word substitutes locally unavailable fonts. Exact proprietary font fidelity is not attested."}
 
 
-def word_pdf(docx: Path, output: Path) -> dict:
+def _word_style_arguments(venue_id: str) -> list[str]:
+    if venue_id == "ieee-access":
+        return ["-ReferenceHeadingStyle", "H1", "-ReferenceEntryStyle", "References",
+                "-AbstractLabel", "ABSTRACT ", "-TemplateFonts", "Helvetica,Times New Roman"]
+    if venue_id == "jors":
+        return ["-ReferenceHeadingStyle", "UP Section Heading", "-ReferenceEntryStyle", "References",
+                "-AbstractLabel", "", "-TemplateFonts", "Arial"]
+    return []
+
+
+def word_pdf(docx: Path, output: Path, *, venue_id: str = "ieee-software") -> dict:
     """Render the exact exported Word bytes, never a generic PDF substitute."""
     if os.name != "nt":
         raise ValueError("Official-template PDF export currently requires Windows with Microsoft Word installed; the official Word file remains available")
@@ -380,7 +402,7 @@ def word_pdf(docx: Path, output: Path) -> dict:
         if digest_file(staged_docx) != source_sha:
             raise ValueError("The short-path Word rendering source differs from the native export")
         command = [str(shell), "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(script.resolve()),
-                   "-SourceDocx", str(staged_docx), "-OutputPdf", str(staged_pdf)]
+                   "-SourceDocx", str(staged_docx), "-OutputPdf", str(staged_pdf), *_word_style_arguments(venue_id)]
         try:
             result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180,
                                     creationflags=subprocess.CREATE_NO_WINDOW)
@@ -403,14 +425,14 @@ def word_pdf(docx: Path, output: Path) -> dict:
             "diagnostics": result.stderr, "word": json.loads(result.stdout.lstrip("\ufeff").strip())}
 
 
-def measure_word(docx: Path) -> dict:
+def measure_word(docx: Path, *, venue_id: str = "ieee-software") -> dict:
     """Measure a short exact copy with the same hidden, read-only Word process.
 
     This opens neither the original nor an interactive Word window and never
     saves a document. It uses the renderer's native-profile isolation fix.
     """
     if os.name != "nt":
-        raise ValueError("Definitive magazine word counts require Windows with Microsoft Word installed")
+        raise ValueError("Definitive native Word counts require Windows with Microsoft Word installed")
     ensure_unlinked(docx)
     script = ROOT / "render-word.ps1"
     shell = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32/WindowsPowerShell/v1.0/powershell.exe"
@@ -419,7 +441,7 @@ def measure_word(docx: Path) -> dict:
         staged = Path(temporary) / "source.docx"
         shutil.copyfile(docx, staged)
         command = [str(shell), "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(script.resolve()),
-                   "-SourceDocx", str(staged), "-MetricsOnly"]
+                   "-SourceDocx", str(staged), "-MetricsOnly", *_word_style_arguments(venue_id)]
         try:
             result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180,
                                     creationflags=subprocess.CREATE_NO_WINDOW)

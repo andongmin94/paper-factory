@@ -17,9 +17,7 @@ from _publication_checks import compliance_report, validate_manuscript
 from _publication_templates import official_template, word_pdf
 from _publication_files import digest_file, ensure_unlinked
 from _author_profile import normalize_profile
-
-
-VENUES = ("ieee-software", "ieee-security-privacy")
+from _publication_venues import VENUES
 
 
 def _read_inputs(manuscript: Path, profile: Path | None):
@@ -38,10 +36,19 @@ def _read_inputs(manuscript: Path, profile: Path | None):
     return source, text, author_source, author
 
 
-def preflight(manuscript: Path, venue_id: str, *, profile: Path | None = None) -> dict:
+def preflight(manuscript: Path, venue_id: str, *, profile: Path | None = None,
+              template_path: Path | None = None, bibliography: Path | None = None,
+              pandoc: str | None = None, resource_dir: Path | None = None) -> dict:
     """Read-only Markdown estimates and retained-template verification; no Word."""
+    if venue_id == "joss":
+        if profile is not None or template_path is not None:
+            raise ValueError("JOSS uses the authored YAML metadata and bundled syntax reference; --profile and --template do not apply")
+        from _publication_joss import preflight as source_preflight
+        return source_preflight(manuscript, bibliography=bibliography, pandoc=pandoc, resource_dir=resource_dir)
+    if bibliography is not None:
+        raise ValueError("--bibliography is for JOSS; Word venues retain numbered references in the manuscript")
     source, text, author_source, author = _read_inputs(manuscript, profile)
-    template_path, template = official_template(venue_id)
+    template_path, template = official_template(venue_id, template_path)
     return {**validate_manuscript(text, venue_id, author),
             "mode": "skill_read_only_preflight",
             "manuscript_sha256": hashlib.sha256(source).hexdigest(),
@@ -58,15 +65,23 @@ def _write_json(path: Path, value: dict) -> None:
 
 def export(manuscript: Path, venue_id: str, output_dir: Path, *,
            profile: Path | None = None, pandoc: str | None = None,
-           resource_dir: Path | None = None) -> dict:
+           resource_dir: Path | None = None, template_path: Path | None = None,
+           bibliography: Path | None = None) -> dict:
     """Create a new direct-authoring delivery; an existing directory is refused.
 
     Failed conversions leave their new directory available for diagnosis. No
     prior artifact is removed, rewritten, adopted, or used as a fallback.
     """
+    if venue_id == "joss":
+        if profile is not None or template_path is not None:
+            raise ValueError("JOSS uses the authored YAML metadata and bundled syntax reference; --profile and --template do not apply")
+        from _publication_joss import export as source_export
+        return source_export(manuscript, output_dir, bibliography=bibliography, pandoc=pandoc, resource_dir=resource_dir)
+    if bibliography is not None:
+        raise ValueError("--bibliography is for JOSS; Word venues retain numbered references in the manuscript")
     source, _, author_source, author = _read_inputs(manuscript, profile)
     source_sha = hashlib.sha256(source).hexdigest()
-    template_path, template = official_template(venue_id)
+    template_path, template = official_template(venue_id, template_path)
     binary = pandoc_binary(pandoc)
     ensure_unlinked(output_dir)
     output_dir.mkdir(parents=True, exist_ok=False)
@@ -83,8 +98,8 @@ def export(manuscript: Path, venue_id: str, output_dir: Path, *,
     # Convert the actual source path so authored relative media links resolve.
     # Its bytes, and the retained canonical copy, are checked again below.
     docx_receipt = convert_docx(manuscript, docx, pandoc=str(binary), venue_id=venue_id,
-                                resource_dir=resource_dir)
-    rendered = word_pdf(docx, pdf)
+                                resource_dir=resource_dir, template_path=template_path)
+    rendered = word_pdf(docx, pdf, venue_id=venue_id)
     receipts = {"docx": docx_receipt,
                 "pdf": {"engine": "Microsoft Word PDF of the exact saved official-template DOCX",
                         "input_sha256": source_sha, "output_sha256": digest_file(pdf),
@@ -93,7 +108,7 @@ def export(manuscript: Path, venue_id: str, output_dir: Path, *,
     _write_json(output_dir / "conversion-receipts.json", receipts)
     report = compliance_report(retained_source, docx, venue_id, pdf=pdf,
                                qa_root=output_dir / "pages", author_metadata=author,
-                               conversion_receipts=receipts)
+                               conversion_receipts=receipts, template_path=template_path)
     if manuscript.read_bytes() != source or retained_source.read_bytes() != source:
         raise ValueError("The canonical manuscript changed during direct export")
     if profile is not None and profile.read_bytes() != author_source:
@@ -139,23 +154,27 @@ def main(argv: list[str] | None = None) -> int:
         command.add_argument("--manuscript", type=Path, required=True)
         command.add_argument("--venue", choices=VENUES, required=True)
         command.add_argument("--profile", type=Path)
+        command.add_argument("--template", type=Path, help="Official downloaded Word template for IEEE Access or JORS; exact retained SHA required")
+        command.add_argument("--bibliography", type=Path, help="JOSS original BibTeX file; defaults to paper.bib beside the manuscript")
+        command.add_argument("--pandoc", help="Existing absolute Pandoc executable; otherwise uses an installed Pandoc")
+        command.add_argument("--resource-dir", type=Path, help="Existing absolute directory for authored relative media")
         if name == "export":
             command.add_argument("--output-dir", type=Path, required=True)
-            command.add_argument("--pandoc", help="Existing absolute Pandoc executable; otherwise uses an installed Pandoc")
-            command.add_argument("--resource-dir", type=Path, help="Existing absolute directory for relative media, such as the original manuscript folder after author preparation")
     args = parser.parse_args(argv)
     try:
         if args.command == "preflight":
-            result = preflight(args.manuscript, args.venue, profile=args.profile)
+            result = preflight(args.manuscript, args.venue, profile=args.profile, template_path=args.template,
+                               bibliography=args.bibliography, pandoc=args.pandoc, resource_dir=args.resource_dir)
             passed = result["prefilter_passed"]
         else:
             result = export(args.manuscript, args.venue, args.output_dir,
-                            profile=args.profile, pandoc=args.pandoc, resource_dir=args.resource_dir)
-            passed = result["content_format_passed"]
+                            profile=args.profile, pandoc=args.pandoc, resource_dir=args.resource_dir,
+                            template_path=args.template, bibliography=args.bibliography)
+            passed = result["source_package_passed"] if args.venue == "joss" else result["content_format_passed"]
     except (OSError, ValueError, ImportError) as exc:
-        print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
+        print(json.dumps({"error": str(exc)}, ensure_ascii=True), file=sys.stderr)
         return 2
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    print(json.dumps(result, ensure_ascii=True, indent=2))
     return 0 if passed else 1
 
 

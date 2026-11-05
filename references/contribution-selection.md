@@ -12,6 +12,14 @@ Compare two or three plausible questions, then select one. For each, identify:
 
 A compact table can have columns `question`, `available evidence`, `strongest existing answer`, `additional decision value`, `remaining work`, and `choice`. Explain the choice in a few sentences. Do not assign fabricated numerical novelty scores or collect whole literatures for candidates already ruled out. Draft one article from the chosen question; do not write competing complete articles to choose a winner.
 
+## Compare three supported venues for a URL-to-draft request
+
+After identifying the supported contribution, follow [repository-to-draft.md](repository-to-draft.md) and compare exactly three candidates from IEEE Software, IEEE Security & Privacy, IEEE Access, JORS and JOSS. This is a venue comparison, separate from the short question selection above. Use one table with the intended reader and article category, actual supporting evidence, eligibility or evidence gaps, current official-guidance status, and decision. Keep a poor or blocked fit visible when fewer than three candidates are plausible; do not present it as eligible merely to fill the table.
+
+Recommend one conditionally and state what the existing evidence permits the article to claim and what must still be verified. Prioritize contribution and evidence fit over impact factor. A topic classification or institutional label is not an approved-journal list. Do not infer research-software eligibility from a repository name, an academic audience, or bibliography/export features. Use the existing venue references and directly check current official sources; preserve inaccessible guidance as a gap.
+
+Continue into one authored draft and its bibliography, evidence, guidance and checklist bundle. Missing measurements or author facts must remain missing; they do not justify fabricated results or placeholder identities presented as real authors. End with the actual supported draft and conditional preparation status, not only a recommendation or a promise to write it later.
+
 ## Worked selection example
 
 The following is an illustrative planning example, not a new study or a claim about an uninspected repository. Suppose retained source shows installation records, shared configuration, cleanup and recovery. Execution and new measurements are outside scope.

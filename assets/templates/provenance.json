@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "authority": "IEEE Template Selector",
+  "authority": "Official publisher sources recorded per template",
   "selector_url": "https://template-selector.ieee.org/",
   "author_guidance_url": "https://magazines.ieeeauthorcenter.ieee.org/create-your-ieee-magazine-article/authoring-tools-and-templates/ieee-article-templates/",
   "templates": {
@@ -17,7 +17,12 @@
       "metadata_url": "https://template-selector.ieee.org/api/ieee-template-selector/template/publication-type/2/publication-title/192/article/1",
       "download_url": "https://template-selector.ieee.org/api/ieee-template-selector/template/549/download",
       "retrieved_at": "2026-10-18",
-      "publisher_modified_at_unix_ms": 1718197547000
+      "publisher_modified_at_unix_ms": 1718197547000,
+      "authority": "IEEE Template Selector",
+      "bundled": true,
+      "format": "docx",
+      "layout": "ieee-magazine",
+      "citation_style": "superscript_outside_punctuation"
     },
     "ieee-security-privacy": {
       "filename": "CS-Mag-template.docx",
@@ -32,7 +37,65 @@
       "metadata_url": "https://template-selector.ieee.org/api/ieee-template-selector/template/publication-type/2/publication-title/193/article/3",
       "download_url": "https://template-selector.ieee.org/api/ieee-template-selector/template/405/download",
       "retrieved_at": "2026-10-18",
-      "publisher_modified_at_unix_ms": 1718197811000
+      "publisher_modified_at_unix_ms": 1718197811000,
+      "authority": "IEEE Template Selector",
+      "bundled": true,
+      "format": "docx",
+      "layout": "ieee-magazine",
+      "citation_style": "bracketed_inside_punctuation"
+    },
+    "ieee-access": {
+      "authority": "IEEE Access",
+      "filename": "Access-Template-2024.docx",
+      "sha256": "c30433ce4e817bf4fba6dc69e6e4d5bf7fc1f8e7b0126374c65926dbd5d5b1bb",
+      "size": 335244,
+      "publication": "IEEE Access",
+      "article_type": "Research Article",
+      "format": "docx",
+      "layout": "ieee-access",
+      "bundled": false,
+      "citation_style": "bracketed_inside_punctuation",
+      "metadata_url": "https://ieeeaccess.ieee.org/authors/preparing-your-article/",
+      "download_url": "https://ieeeaccess.ieee.org/wp-content/uploads/2025/08/Access-Template-2024.docx",
+      "retrieved_at": "2026-11-02",
+      "license": "No explicit template redistribution license found; download from the publisher and supply --template. The repository MIT license does not cover this template."
+    },
+    "jors": {
+      "authority": "Journal of Open Research Software / Ubiquity Press",
+      "filename": "jors_sw_paper_template_0-2.docx",
+      "sha256": "e7d18e25a580011a4b06fb42675dec01154d1101759e7fdddeffec392205d0f8",
+      "size": 24209,
+      "publication": "Journal of Open Research Software",
+      "article_type": "Software Metapaper",
+      "format": "docx",
+      "layout": "jors",
+      "bundled": false,
+      "citation_style": "vancouver_parenthetical",
+      "metadata_url": "https://openresearchsoftware.metajnl.com/about/submissions",
+      "download_url": "https://account.openresearchsoftware.metajnl.com/index.php/up-j-jors/libraryFiles/downloadPublic/4",
+      "retrieved_at": "2026-11-02",
+      "license": "No explicit template redistribution license found; download from the publisher and supply --template. Article licensing does not establish template redistribution rights.",
+      "guidance_conflict": "The current author guidelines specify Vancouver; they take precedence over the older template prose mentioning Harvard."
+    },
+    "joss": {
+      "authority": "Open Journals / Inara",
+      "filename": "joss/paper.md",
+      "sha256": "046936692004a5612945221b0c4d126b885266413247d7e5aeb016dd6fafc28d",
+      "size": 15927,
+      "publication": "Journal of Open Source Software",
+      "article_type": "Software paper",
+      "format": "markdown-bibtex",
+      "layout": "joss",
+      "bundled": true,
+      "citation_style": "apa_author_date",
+      "metadata_url": "https://joss.readthedocs.io/en/latest/paper.html",
+      "download_url": "https://raw.githubusercontent.com/openjournals/inara/88ee5d656f147d801448ce77ad8375619d383df6/example/paper.md",
+      "retrieved_at": "2026-11-02",
+      "source_revision": "88ee5d656f147d801448ce77ad8375619d383df6",
+      "bibliography_configuration_url": "https://github.com/openjournals/inara/blob/88ee5d656f147d801448ce77ad8375619d383df6/resources/joss/defaults.yaml",
+      "bibliography_configuration_sha256": "b657c5d877916ef18823e885035bd1ec1de01831c2293ca530ad2ca9f35f23a1",
+      "license": "MIT; copyright (c) 2021 Albert Krewinkel. Notice retained in joss/LICENSE. APA CSL has a separate CC BY-SA 3.0 license and is not bundled.",
+      "scope": "Unmodified publisher example as a metadata/citation syntax reference; current JOSS required sections override the older example narrative. Source-package output; publisher PDF renderer is not included."
     }
   }
 }

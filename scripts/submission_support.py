@@ -18,9 +18,9 @@ import xml.etree.ElementTree as ET
 from _publication_files import digest_file, ensure_unlinked
 from _publication_text import section_headers
 from _author_profile import normalize_profile, profile_completeness
+from _publication_venues import VENUES
 
 
-VENUES = ("ieee-software", "ieee-security-privacy")
 BIO_HEADINGS = {"author biography", "author biographies", "about the author", "about the authors"}
 AUTHOR_START = "<!-- paper-factory:authors:start -->"
 AUTHOR_END = "<!-- paper-factory:authors:end -->"
@@ -319,6 +319,37 @@ def _declaration_status(declarations, confirmations, selections):
     return statuses
 
 
+def _evidence_gaps(selections):
+    """Carry saved JSON evidence results forward; do not rerun source inspection."""
+    manuscripts = [row for row in selections if row["role"] == "manuscript"]
+    gaps = []
+    for row in selections:
+        # Authored prose evidence notes are not machine-readable binding reports.
+        if row["role"] != "evidence" or row["source"].suffix.casefold() != ".json":
+            continue
+        label = "Evidence report " + row["path"]
+        try:
+            report = _json(row["source"])
+        except ValueError:
+            gaps.append(label + ": unreadable JSON report; retain and review the original")
+            continue
+        if len(manuscripts) != 1 or report.get("manuscript_sha256") != manuscripts[0]["sha256"]:
+            gaps.append(label + ": does not bind the single selected manuscript; rerun evidence for these bytes")
+        claims = report.get("claims")
+        if (not isinstance(claims, list) or not claims or
+                any(not isinstance(claim, dict) or not isinstance(claim.get("id"), str) or not claim["id"] or
+                    type(claim.get("bindings_match")) is not bool or not isinstance(claim.get("issues"), list)
+                    for claim in claims)):
+            gaps.append(label + ": missing or invalid claim results; supply research_workspace evidence.json")
+            continue
+        failed = [claim["id"] for claim in claims if not claim["bindings_match"] or claim["issues"]]
+        if failed:
+            gaps.append(label + ": unresolved claim bindings: " + ", ".join(failed))
+        elif report.get("bindings_match") is not True:
+            gaps.append(label + ": overall bindings are not reported as matching")
+    return gaps
+
+
 def prepare_bundle(plan, root, output_dir):
     ensure_unlinked(plan)
     ensure_unlinked(root)
@@ -333,6 +364,17 @@ def prepare_bundle(plan, root, output_dir):
     if value.get("venue_id") not in VENUES:
         raise ValueError("A supported venue_id is required")
     title = _text(value.get("title"), "title", required=True)
+    draft_status = value.get("draft_status")
+    if draft_status is not None and (not isinstance(draft_status, str) or draft_status not in {"draft", "incomplete"}):
+        raise ValueError("draft_status must be draft or incomplete; this tool cannot approve submission")
+    article_type = _text(value.get("article_type", ""), "article_type", required=draft_status is not None)
+    guidance_status = value.get("guidance_status", "not_assessed")
+    if not isinstance(guidance_status, str) or guidance_status not in {"verified", "partial", "blocked", "not_assessed"}:
+        raise ValueError("guidance_status must be verified, partial, blocked or not_assessed")
+    missing = value.get("missing_evidence", [])
+    if not isinstance(missing, list) or any(not isinstance(item, str) or not item.strip() for item in missing):
+        raise ValueError("missing_evidence must be a list of explicit nonempty strings")
+    missing = [_text(item, "missing evidence", required=True) for item in missing]
     if not isinstance(value.get("files"), list) or not value["files"]:
         raise ValueError("Plan requires an explicit non-empty file allowlist")
     selections, names, roles = [], set(), set()
@@ -368,9 +410,23 @@ def prepare_bundle(plan, root, output_dir):
         approval_files.append({"role": "cover_letter", "path": "cover-letter.md", "bytes": len(cover_bytes),
                                "sha256": hashlib.sha256(cover_bytes).hexdigest()})
     declaration_status = _declaration_status(declarations, confirmations, approval_files)
+    missing.extend(_evidence_gaps(selections))
     pending = []
+    if draft_status is not None:
+        for role in ("manuscript", "bibliography", "venue_selection", "evidence", "guidance"):
+            if role not in roles:
+                missing.append("Draft preparation file not selected: " + role)
+        if guidance_status != "verified":
+            missing.append("Current official guidance is " + guidance_status + "; retained rules do not establish current compliance")
+        if missing:
+            draft_status = "incomplete"
+        pending.extend(["Human review of ethics requirements and whether approval is applicable",
+                        "Human review of data/code availability, licences and research-software eligibility where applicable"])
+    pending.extend("Missing evidence: " + item for item in missing)
     if "manuscript" not in roles:
         pending.append("Select the final manuscript file")
+    if value["venue_id"] == "joss" and "bibliography" not in roles:
+        pending.append("Select the original paper.bib as bibliography and every local figure referenced by paper.md")
     if value["venue_id"] == "ieee-software" and "author_photo" not in roles:
         pending.append("Retained Software guidance requests author photographs; supply approved images and confirm current requirements")
     if not cover_text and "cover_letter" not in roles:
@@ -380,7 +436,7 @@ def prepare_bundle(plan, root, output_dir):
             pending.append("Confirm actual " + name.replace("_", " "))
     pending.extend(["Reconfirm current publisher category, instructions and required files",
                     "Confirm genuine author identity, affiliation, contact and contribution selections",
-                    "Inspect every final Word/PDF page and approve the exact files",
+                    ("Compile with the official JOSS publisher pipeline, inspect its PDF and confirm the exact source package" if value["venue_id"] == "joss" else "Inspect every final Word/PDF page and approve the exact files"),
                     "Complete any submission-specific declarations in the actual portal"])
     folder = _new_output(output_dir)
     records = []
@@ -396,12 +452,17 @@ def prepare_bundle(plan, root, output_dir):
         _write(folder / "cover-letter.md", cover_text + "\n")
     report = {"mode": "explicit_submission_file_bundle", "created_at_utc": datetime.now(timezone.utc).isoformat(),
               "title": title, "venue_id": value["venue_id"], "source_plan_sha256": plan_sha,
+              "article_type": article_type or None, "draft_status": draft_status,
+              "recommendation_status": "conditional" if draft_status is not None or missing else "not_assessed",
+              "guidance_status": guidance_status, "missing_evidence": missing,
               "selected_files": records, "approval_files": approval_files, "supplied_declarations": declarations,
               "supplied_confirmations": confirmations, "declaration_status": declaration_status, "pending": pending,
               "submission_ready": False, "author_approval_inferred": False, "actual_submission_performed": False,
-              "scope": "Local allowlisted copies and supplied cover text only. File presence and supplied declarations are not independent verification or consent."}
+              "scope": "Allowlisted copies, saved JSON evidence-report/manuscript bindings and supplied cover text. Source witnesses and scientific claims are not rechecked; prose evidence notes and human declarations are not independently verified."}
     _write(folder / "report.json", report)
-    _write(folder / "checklist.md", "# Submission preparation\n\n" + title + "\n\n" +
+    draft_note = ("Status: **" + draft_status + "**. Recommendation: **conditional**. Article type: " + article_type +
+                  ".\n\nGuidance status: " + guidance_status + " (supplied reading record, not independently verified by this file tool).\n\n") if draft_status else ""
+    _write(folder / "checklist.md", "# Submission preparation\n\n" + title + "\n\n" + draft_note +
            "\n".join("- [ ] " + item for item in pending) +
            "\n\nNo upload or submission was performed. Supplied declarations require genuine author confirmation.\n")
     _manifest(folder)
@@ -513,9 +574,9 @@ def main(argv=None):
         else:
             result = inspect_metadata(args.file, args.output_dir, profile=args.profile)
     except (OSError, ValueError, TypeError) as exc:
-        print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
+        print(json.dumps({"error": str(exc)}, ensure_ascii=True), file=sys.stderr)
         return 2
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    print(json.dumps(result, ensure_ascii=True, indent=2))
     return 0
 
 

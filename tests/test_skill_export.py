@@ -272,7 +272,7 @@ def test_prepared_author_manuscript_exports_real_docx_with_explicit_resource_dir
     assert not (prepared / "figure.png").exists()
     sentinel = "Native Word intentionally not run"
     word_calls = []
-    def stop_before_word(docx, pdf):
+    def stop_before_word(docx, pdf, **kwargs):
         word_calls.append((docx, pdf))
         raise ValueError(sentinel)
     monkeypatch.setattr(exporter, "word_pdf", stop_before_word)
@@ -405,7 +405,7 @@ def _mock_native_export(monkeypatch, *, mutate_source=False):
             source.write_text(ARTICLE + "\nChanged\n", encoding="utf-8")
         return {"input_sha256": digest, "output_sha256": exporter.digest_file(output),
                 "official_template": original}
-    def render(source, output):
+    def render(source, output, **kwargs):
         output.write_bytes(b"%PDF-native fixture")
         return {"source_docx_sha256": exporter.digest_file(source), "visible": False, "read_only": True}
     monkeypatch.setattr(exporter, "convert_docx", convert)
@@ -470,7 +470,7 @@ def test_retained_publisher_styles_columns_and_citations(tmp_path, venue):
     expected_cells = [[cell.text for cell in row.cells] for row in table.rows]
     path = tmp_path / (venue + ".docx")
     doc.save(path)
-    proof = templates.apply_official_styles(path, template)
+    proof = templates.apply_official_styles(path, template, citation_style=templates.template_record(venue)["citation_style"])
     structure = checks._native_structure(path, venue == "ieee-software")
     assert not structure["issues"]
     assert structure["reference_count"] == 1
@@ -506,7 +506,7 @@ def test_native_reference_counts_must_match_canonical_entries(manuscript, tmp_pa
         doc.add_paragraph(entry, "Normal")
     native_docx = tmp_path / "native.docx"
     doc.save(native_docx)
-    templates.apply_official_styles(native_docx, template)
+    templates.apply_official_styles(native_docx, template, citation_style=record["citation_style"])
     monkeypatch.setattr(templates, "measure_word", lambda _: {"metrics": {
         "body_words": 300, "body_table_words": 0, "body_tables": 0, "body_figures": 0,
         "abstract_words": 10, "reference_heading_found": True, "reference_count": word_count}})
@@ -568,7 +568,7 @@ def test_body_images_fit_publisher_columns_without_changing_front_table_or_media
     with zipfile.ZipFile(path) as archive:
         original_media = {name: archive.read(name) for name in archive.namelist() if name.startswith("word/media/")}
 
-    templates.apply_official_styles(path, template)
+    templates.apply_official_styles(path, template, citation_style=templates.template_record(venue)["citation_style"])
 
     checked = Document(path)
     front, body, prose_image, cell = checked.inline_shapes
@@ -609,6 +609,7 @@ def test_skill_copy_preflight_works_without_old_checkout(tmp_path):
     manuscript = tmp_path / "input.md"
     manuscript.write_text(ARTICLE, encoding="utf-8")
     env = {key: value for key, value in os.environ.items() if key not in {"PYTHONPATH", "PAPER_FACTORY_ROOT"}}
+    env["PYTHONIOENCODING"] = "cp1252"  # Match the Windows pipe encoding that broke UTF-8 JSON consumers.
     result = subprocess.run([sys.executable, str(isolated / "scripts" / "export_manuscript.py"),
                              "preflight", "--manuscript", str(manuscript), "--venue", "ieee-software"],
                             cwd=tmp_path, env=env, capture_output=True, text=True, encoding="utf-8", timeout=30)

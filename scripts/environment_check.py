@@ -17,7 +17,8 @@ import sys
 
 from _publication_convert import pandoc_binary, pandoc_version
 from _publication_files import ensure_unlinked
-from _publication_templates import official_template
+from _publication_templates import official_template, template_record
+from _publication_venues import VENUES
 
 
 def _packages() -> list[dict]:
@@ -68,7 +69,13 @@ def diagnose(pandoc: str | None = None) -> dict:
     except (ValueError, OSError, subprocess.SubprocessError, IndexError) as exc:
         pandoc_result = {"status": "missing_or_unusable", "detail": str(exc)}
     templates = []
-    for venue in ("ieee-software", "ieee-security-privacy"):
+    for venue in VENUES:
+        record = template_record(venue)
+        if not record["bundled"]:
+            templates.append({"venue": venue, "status": "external_template_required",
+                              "download_url": record["download_url"], "sha256": record["sha256"],
+                              "detail": "Download the official Word file and verify it with preflight --template; not redistributed."})
+            continue
         try:
             path, record = official_template(venue)
             templates.append({"venue": venue, "status": "verified", "path": str(path), "sha256": record["sha256"]})
@@ -82,13 +89,14 @@ def diagnose(pandoc: str | None = None) -> dict:
     detected = (python_ok and sys.platform == "win32" and bool(powershell) and
                 word["status"] == "detected" and pandoc_result["status"] == "detected" and
                 all(x["status"] == "detected" for x in packages if x["required_for_export"]) and
-                all(x["status"] == "verified" for x in templates))
+                all(x["status"] == "verified" for x in templates if x["status"] != "external_template_required"))
     return {"created_at": datetime.now(timezone.utc).isoformat(),
             "python": {"executable": sys.executable, "version": platform.python_version(), "supported": python_ok},
             "platform": platform.platform(), "skill_directory": str(Path(__file__).resolve().parents[1]),
             "packages": packages, "pandoc": pandoc_result, "powershell": powershell,
             "word": word, "official_templates": templates,
             "native_export_prerequisites_detected": detected,
+            "native_export_scope": "Bundled Word venues only; IEEE Access and JORS additionally require their explicit verified external template. JOSS produces source files, not native Word/PDF.",
             "native_export_verified": False,
             "limitations": ["Registration and package metadata do not verify imports, Word licensing or PDF rendering.",
                             "pypandoc_binary is an optional Pandoc provider when a usable executable is already selected.",

@@ -304,6 +304,56 @@ def test_explicit_declaration_confirmation_is_bound_to_exact_text_and_all_select
     assert any("exact declaration text" in reason for reason in result["declaration_status"]["originality"]["reasons"])
 
 
+@pytest.mark.parametrize("guidance, gaps, expected", [
+    ("partial", ["No controlled comparison was retained"], "incomplete"),
+    ("verified", [], "draft"),
+])
+def test_draft_bundle_preserves_evidence_gaps_and_never_infers_human_approval(tmp_path, guidance, gaps, expected):
+    root = tmp_path / "research"
+    root.mkdir()
+    contents = {"manuscript": "# Authored test draft\n", "bibliography": "@misc{source,title={Retained source}}\n",
+                "venue_selection": "Three candidates compared from retained evidence.\n",
+                "evidence": "Literal source bindings do not establish claim truth.\n",
+                "guidance": "Current source access and template version recorded separately.\n"}
+    files = []
+    for role, content in contents.items():
+        (root / (role + ".txt")).write_bytes(content.encode("utf-8"))
+        files.append({"role": role, "path": role + ".txt"})
+    plan = put(tmp_path / "plan.json", {"venue_id": "ieee-software", "title": "Test case",
+               "article_type": "Feature Article", "draft_status": "draft", "guidance_status": guidance,
+               "missing_evidence": gaps, "files": files})
+    report = support.prepare_bundle(plan, root, tmp_path / "package")
+    assert report["draft_status"] == expected and report["recommendation_status"] == "conditional"
+    assert not report["submission_ready"] and not report["author_approval_inferred"]
+    assert all(row["status"] == "pending" for row in report["declaration_status"].values())
+    assert any("ethics" in item for item in report["pending"])
+    assert any("research-software eligibility" in item for item in report["pending"])
+    checklist = (tmp_path / "package/checklist.md").read_text(encoding="utf-8")
+    assert expected in checklist and all(gap in checklist for gap in gaps)
+    for role, content in contents.items():
+        assert (tmp_path / "package/files" / (role + ".txt")).read_bytes() == content.encode()
+        assert (root / (role + ".txt")).read_bytes() == content.encode()
+
+
+def test_draft_without_bibliography_or_fit_record_stays_incomplete(tmp_path):
+    root = tmp_path / "source"
+    root.mkdir()
+    put(root / "article.md", "# Unfinished source\n")
+    data = {"venue_id": "joss", "title": "Test case", "article_type": "Software paper",
+            "draft_status": "draft", "guidance_status": "verified",
+            "files": [{"role": "manuscript", "path": "article.md"}]}
+    plan = put(tmp_path / "plan.json", data)
+    report = support.prepare_bundle(plan, root, tmp_path / "draft")
+    assert report["draft_status"] == "incomplete"
+    assert "Draft preparation file not selected: bibliography" in report["missing_evidence"]
+    assert "Draft preparation file not selected: venue_selection" in report["missing_evidence"]
+    data["draft_status"] = "submission_ready"
+    put(plan, data)
+    with pytest.raises(ValueError, match="draft_status"):
+        support.prepare_bundle(plan, root, tmp_path / "must-not-approve")
+    assert not (tmp_path / "must-not-approve").exists()
+
+
 def test_generated_cover_letter_is_part_of_exact_confirmation_scope(tmp_path):
     import hashlib
     root = tmp_path / "source"

@@ -18,18 +18,9 @@ from pathlib import Path
 from _publication_files import digest_file, ensure_unlinked
 from _author_profile import profile_completeness
 from _publication_text import mask_code, mask_fenced_code, section_headers
+from _publication_venues import VENUE_RULES, WORD_VENUES, CS_GUIDANCE, AI_GUIDANCE
 
-VENUE_LIMITS = {'ieee-software': {'word_count_scope': 'body_excluding_references_and_bios', 'max_words': 4200, 'max_abstract_words': 150, 'max_references': 15, 'visual_word_cost': 250, 'insight_count': 3}, 'ieee-security-privacy': {'word_count_scope': 'whole_article', 'min_words': 4900, 'max_words': 7200, 'max_abstract_words': 50, 'max_references': 15, 'visual_word_cost': 250}}
-
-CS_GUIDANCE = "https://www.computer.org/publications/author-resources"
-
-SOFTWARE_GUIDANCE = "https://www.computer.org/digital-library/magazines/so/cfp-ieee-software"
-
-SP_GUIDANCE = "https://www.computer.org/digital-library/magazines/sp/cfp-real-world-security-impact"
-
-AI_GUIDANCE = "https://open.ieee.org/author-guidelines-for-artificial-intelligence-ai-generated-text/"
-
-CHECKED_AT = "2026-10-18"
+VENUE_LIMITS = {venue: rules["limits"] for venue, rules in VENUE_RULES.items()}
 
 SELF_COUNTS = re.compile(r"\b(?:the|this|our)\s+(?:manuscript|article|paper)\s+(?:contains?|has|includes?|is\s+within|meets?|complies?)\b.*(?:\breference\s+entries\b|\bword\s+limit\b|\bnumeric\s+(?:limits?|requirements?)\b|\babstract\s+(?:below|under|within)\b)", re.I)
 
@@ -39,17 +30,17 @@ EDITORIAL_MARKERS = re.compile(r"(?i:\b(?:TODO|TBD|FIXME)\b|(?:\[|<|\{\{?)\s*pla
 
 def format_guidance(venue_id: str, author_metadata: dict | None = None) -> dict:
     try:
-        limits = VENUE_LIMITS[venue_id].copy()
+        rules = VENUE_RULES[venue_id]
     except KeyError as exc:
-        raise ValueError("Only IEEE Software and IEEE Security & Privacy are supported") from exc
-    return {"venue_id": venue_id, "checked_at": CHECKED_AT, "limits": limits,
-            "source_urls": [SOFTWARE_GUIDANCE if venue_id == "ieee-software" else SP_GUIDANCE, CS_GUIDANCE, AI_GUIDANCE],
+        raise ValueError(f"Unsupported venue: {venue_id}") from exc
+    limits = rules["limits"].copy()
+    return {"venue_id": venue_id, "checked_at": rules["checked_at"], "limits": limits,
+            "source_urls": rules["source_urls"], "citation_style": rules["citation_style"],
             "source_scope": "Retained venue guidance, not a fresh publisher check; recheck the current article category and rules before submission.",
-            "writer_targets": {"abstract_words": 130 if venue_id == "ieee-software" else 45,
-                               "whole_words": [3200, 3800] if venue_id == "ieee-software" else [5400, 6500]},
+            "writer_targets": rules.get("writer_targets", {}),
             "instructions": ["Use actual retained references with verified metadata; do not add a model-authored bibliography or numeric compliance self-attestation.",
-                             "The abstract is one paragraph with no reference citations. Use unnumbered headings without ending punctuation. Current verified venue limits override the older template's sample numeric instructions.",
-                             "Include a separate Keywords: term; term; term paragraph immediately after the abstract. Three to eight keywords is this skill's preparation policy, not a claimed universal journal limit.",
+                             "Use a single paragraph without citations for the Word abstract; for JORS this is a preparation convention, not a verified hard publisher requirement. Use unnumbered canonical headings; the adapter applies publisher numbering. Current guidance overrides older template examples.",
+                             "For Word venues use a Keywords: term; term; term paragraph after the abstract. Access requires 3–10 terms; the other Word venues use this skill's 3–8 preparation policy. JOSS uses authored YAML instead.",
                              "Keep literal code escapes in code; prose must contain actual paragraph breaks, never escaped backslash-n separators.",
                              "Do not pad prose to reach a word limit. Extend supported analysis, worked decisions, comparisons, counterexamples or limitations.",
                              "Include an Acknowledgments paragraph naming the actual AI system/model, its actual use and affected sections from retained provenance; do not claim unrecorded human review, responsibility or approval.",
@@ -76,7 +67,7 @@ def _summarize(items, metrics, venue_id):
     content = [item for item in items if item["stage"] in {"manuscript", "native"}]
     blockers = [item["reason"] for item in content if item["status"] == "failed"]
     pending = [item["reason"] for item in items if item["status"] == "pending"]
-    return {"venue_id": venue_id, "checked_at": CHECKED_AT, "items": items, "metrics": metrics,
+    return {"venue_id": venue_id, "checked_at": VENUE_RULES[venue_id]["checked_at"], "items": items, "metrics": metrics,
             "blockers": blockers, "pending": pending,
             "content_format_passed": bool(content) and all(item["status"] == "passed" for item in content),
             "submission_ready": all(item["status"] == "passed" for item in items),
@@ -151,7 +142,10 @@ def _author_blocks(front: str, authors: list[dict]) -> tuple[dict[str, str], boo
 
 def validate_manuscript(markdown: str, venue_id: str, author_metadata: dict | None = None) -> dict:
     """Pure prefilter. Its word estimate never substitutes for native Word QA."""
+    if venue_id not in WORD_VENUES:
+        raise ValueError("Use export_manuscript.py preflight for JOSS Markdown/BibTeX validation")
     guidance = format_guidance(venue_id, author_metadata)
+    rules = VENUE_RULES[venue_id]
     limits, parts = guidance["limits"], _parts(markdown)
     abstract = parts.get("abstract", "")
     prose = mask_code(markdown)
@@ -178,24 +172,38 @@ def validate_manuscript(markdown: str, venue_id: str, author_metadata: dict | No
                "keywords": keywords, "whole_words_estimate": _words(markdown), "body_words_estimate": _words(body),
                "visual_count_estimate": table_count + figure_count,
                "word_count_status": "estimate_only_native_Word_measurement_required"}
-    source = SOFTWARE_GUIDANCE if venue_id == "ieee-software" else SP_GUIDANCE
-    items = [_item("abstract", "passed" if abstract and _words(abstract) <= limits["max_abstract_words"] else "failed",
-                   f"Abstract estimate {_words(abstract)} words; maximum {limits['max_abstract_words']}.", source=source),
+    source = guidance["source_urls"][0]
+    abstract_max, reference_max = limits["max_abstract_words"], limits["max_references"]
+    abstract_passed = bool(abstract) and _words(abstract) >= limits.get("min_abstract_words", 1) and (abstract_max is None or _words(abstract) <= abstract_max)
+    abstract_detail = (f"Abstract estimate {_words(abstract)} words; allowed {limits.get('min_abstract_words', 1)}–{abstract_max}."
+                       if abstract_max is not None else f"Abstract estimate {_words(abstract)} words; template target about 100, not a verified hard maximum.")
+    items = [_item("abstract", "passed" if abstract_passed else "failed", abstract_detail, source=source),
              _item("abstract_structure", "passed" if len(re.split(r"\n\s*\n", abstract)) == 1 and not re.search(r"\[\d+(?:[ \t]*[-–,;][ \t]*\d+)*[ \t]*\]|\{\{(?:source|document|citation):", abstract) else "failed",
-                   "The publisher template requires a single-paragraph abstract without reference citations."),
-             _item("reference_count", "passed" if entries and len(entries) <= limits["max_references"] and numbers == list(range(1, len(entries) + 1)) else "failed",
-                   f"Canonical references: {len(entries)}; require sequential unique labels and at most {limits['max_references']}.", source=source),
-             _item("keywords", "passed" if 3 <= len(keywords) <= 8 and len({k.casefold() for k in keywords}) == len(keywords) else "failed",
-                   "Provide three to eight distinct article keywords as a Keywords: paragraph (skill preparation policy)."),
+                   "Use a single-paragraph abstract without reference citations " + ("(skill preparation convention for JORS)." if venue_id == "jors" else "as specified by the publisher template."), source=None if venue_id == "jors" else source),
+             _item("reference_count", "passed" if entries and (reference_max is None or len(entries) <= reference_max) and numbers == list(range(1, len(entries) + 1)) else "failed",
+                   f"Canonical references: {len(entries)}; sequential unique labels required. " + (f"Maximum {reference_max}." if reference_max is not None else "No reference cap established by the checked guidance."), source=source),
+             _item("keywords", "passed" if limits["min_keywords"] <= len(keywords) <= limits["max_keywords"] and len({k.casefold() for k in keywords}) == len(keywords) else "failed",
+                   f"Provide {limits['min_keywords']}–{limits['max_keywords']} distinct keywords as a Keywords: paragraph " + ("(Access submission requirement)." if venue_id == "ieee-access" else "(skill preparation policy)."), source=source),
              _item("self_attestation", "failed" if SELF_COUNTS.search(body_prose) else "passed", "Numeric compliance claims and generated reference-count self-attestations must not remain in manuscript prose."),
              _item("escaped_prose", "failed" if re.search(r"\\n(?:\\n|## |[-*] |Keywords:)", prose) else "passed",
                    "Use real paragraph breaks in prose; code escapes are preserved."),
              _item("placeholders", "failed" if EDITORIAL_MARKERS.search(body_prose) else "passed",
                    "Resolve placeholders and evidence tokens before native format preflight."),
-             _item("ai_disclosure", "passed" if ai_disclosed else "failed", "Acknowledge actual AI tools, their use and affected manuscript parts from retained provenance. Disclosure presence is checked; it never asserts author approval or verifies tool-name accuracy.", source=AI_GUIDANCE)]
-    estimate = (_words(body) if venue_id == "ieee-software" else _words(markdown)) + limits["visual_word_cost"] * (table_count + figure_count)
-    items.append(_item("word_count", "passed" if limits.get("min_words", 0) <= estimate <= limits["max_words"] else "failed",
-                       f"Markdown estimate including visual allowances: {estimate}; native Word measurement is definitive.", source=source))
+             _item("ai_disclosure", "passed" if ai_disclosed else "failed", "Acknowledge actual AI tools, their use and affected manuscript parts from retained provenance. Disclosure presence is checked; it never asserts author approval or verifies tool-name accuracy.", source=source if venue_id == "jors" else AI_GUIDANCE)]
+    estimate = (_words(body) if limits["word_count_scope"] == "body_excluding_references_and_bios" else _words(markdown)) + limits["visual_word_cost"] * (table_count + figure_count)
+    max_words = limits["max_words"]
+    items.append(_item("word_count", "passed" if limits.get("min_words", 0) <= estimate and (max_words is None or estimate <= max_words) else "failed",
+                       f"Markdown estimate including visual allowances: {estimate}; " + ("no hard word cap established for this category." if max_words is None else "native Word measurement is definitive."), source=source))
+    if rules.get("required_sections"):
+        headings = list(re.finditer(r"(?m)^(#{2,6})[ \t]+(.+?)[ \t]*#*[ \t]*$", prose))
+        normalized = {}
+        for index, heading in enumerate(headings):
+            end = next((other.start() for other in headings[index + 1:] if len(other[1]) <= len(heading[1])), len(prose))
+            name = re.sub(r"^\(\d+\)\s*", "", heading[2]).casefold()
+            normalized[name] = prose[heading.end():end].strip()
+        missing = [heading for heading in rules["required_sections"] if not normalized.get(heading)]
+        items.append(_item("required_sections", "failed" if missing else "passed", "Missing or empty metapaper sections: " + ", ".join(missing) if missing else "Required software metapaper sections are present.", source=source))
+        items.append(_item("software_availability", "pending", "Verify the software archive persistent identifier, open licence, released version/date, code repository, system requirements and reuse/support details against actual evidence.", stage="submission", source=source))
     if venue_id == "ieee-software":
         complete_insights = len(insight_blocks) == 1 and len(insight_blocks[0]) == 3 and all(insight_blocks[0])
         items.append(_item("actionable_insights", "passed" if complete_insights else "failed",
@@ -210,6 +218,10 @@ def validate_manuscript(markdown: str, venue_id: str, author_metadata: dict | No
     items.append(_item("reference_metadata", "failed" if metadata_issues else "passed",
                        "Use retained descriptive source titles and available author/year/publication/access metadata; raw-URL-only entries: " + str(metadata_issues) + "."))
     authors = profile_completeness(author_metadata)
+    if not rules["biographies"]:
+        for row in authors:
+            row["missing_fields"] = [field for field in row["missing_fields"] if field not in {"biography", "orcid"} and not field.startswith("biography_details.")]
+            row["supplied_fields_complete"] = not row["missing_fields"]
     abstract_heading = next((match for match in section_headers(markdown) if match[1].strip().casefold() == "abstract"), None)
     byline = prose[:abstract_heading.start()] if abstract_heading else ""
     biography_text = "\n".join(text for heading, text in parts.items() if heading in {"author biography", "author biographies", "about the author", "about the authors"})
@@ -232,10 +244,15 @@ def validate_manuscript(markdown: str, venue_id: str, author_metadata: dict | No
     biographies_complete = bool(authors) and not any(metrics["missing_biography_fields"].values()) and all(row["supplied_biography_in_manuscript"] for row in authors)
     items.extend([_item("author_identity", "pending", "Author identity, affiliation, contact and ORCID require the author's actual confirmation; public ORCID data is not consent.", stage="submission"),
                   _item("author_profile_binding", "passed" if authors and order_matches and all(not row["missing_byline_values"] for row in authors) else "pending", "Every supplied author's identity fields must occur in that author's distinct byline block and in the supplied author order. Missing or unmatched fields are recorded per author; matching text is not consent.", stage="submission"),
-                  _item("author_biography", "passed" if biographies_complete else "pending", "Biography text and all factual details are checked separately for every supplied author. Missing facts are listed in metrics.authors; factual accuracy still requires actual author confirmation.", stage="submission"),
                   _item("author_declarations", "pending", "The author must confirm actual originality, rights, AI disclosure, author approval and final submission declarations.", stage="submission")])
+    if rules["biographies"]:
+        items.append(_item("author_biography", "passed" if biographies_complete else "pending", "Biography text and all factual details are checked separately for every supplied author. Missing facts are listed in metrics.authors; factual accuracy still requires actual author confirmation.", stage="submission", source=source))
     if venue_id == "ieee-software":
         items.append(_item("author_photo", "pending", "IEEE Software requests a photograph of each author with submission; obtain the actual approved image.", stage="submission", source=source))
+    if venue_id in {"ieee-access", "jors"}:
+        for item in items:
+            if item["source_url"] == CS_GUIDANCE:
+                item.update(source_url=None, authority="skill_preparation_policy")
     return _summarize(items, metrics, venue_id)
 
 def render_pdf_pages(pdf: Path, output_root: Path) -> dict:
@@ -348,7 +365,8 @@ def _native_structure(docx: Path, software: bool) -> dict:
 
 def compliance_report(markdown: Path, docx: Path | None, venue_id: str, *, pdf: Path | None = None,
                       qa_root: Path | None = None, author_metadata: dict | None = None,
-                      conversion_receipts: dict | None = None, visual_review: dict | None = None) -> dict:
+                      conversion_receipts: dict | None = None, visual_review: dict | None = None,
+                      template_path: Path | None = None) -> dict:
     """Definitive numeric/native preflight plus explicit human preparation items.
 
     The caller retains this result with the exact reviewed manuscript. Optional
@@ -361,8 +379,8 @@ def compliance_report(markdown: Path, docx: Path | None, venue_id: str, *, pdf: 
     base = validate_manuscript(markdown.read_text(encoding="utf-8"), venue_id, author_metadata)
     items, metrics = base["items"], base["metrics"]
     limits = format_guidance(venue_id)["limits"]
-    source = SOFTWARE_GUIDANCE if venue_id == "ieee-software" else SP_GUIDANCE
-    _, template = official_template(venue_id)
+    source = VENUE_RULES[venue_id]["source_urls"][0]
+    _, template = official_template(venue_id, template_path)
     binding = {"markdown_sha256": initial_sha, "template_sha256": template["sha256"], "template_provenance_sha256": template["provenance_sha256"]}
     native, pages = None, None
     if docx is None or not docx.is_file():
@@ -371,30 +389,42 @@ def compliance_report(markdown: Path, docx: Path | None, venue_id: str, *, pdf: 
         ensure_unlinked(docx)
         binding["docx_sha256"] = digest_file(docx)
         try:
-            native = measure_word(docx)
+            native = measure_word(docx, venue_id=venue_id) if venue_id in {"ieee-access", "jors"} else measure_word(docx)
             actual = native["metrics"]
             metrics["native_word"] = actual
             metrics["word_count_status"] = "measured_native_Word"
-            effective = (actual["body_words"] - actual["body_table_words"] + 250 * (actual["body_tables"] + actual["body_figures"])) if venue_id == "ieee-software" else (actual["whole_words"] + 250 * (actual["tables"] + actual["figures"]))
+            body_only = limits["word_count_scope"] == "body_excluding_references_and_bios"
+            cost = limits["visual_word_cost"]
+            effective = (actual["body_words"] - actual["body_table_words"] + cost * (actual["body_tables"] + actual["body_figures"])) if body_only else (actual["whole_words"] + cost * (actual["tables"] + actual["figures"]))
             metrics["effective_words"] = effective
-            metrics["word_count_formula"] = "Body Word words minus body table-text words plus 250 per body visual" if venue_id == "ieee-software" else "Whole Word words including table text plus 250 per table/figure"
-            replacements = {"abstract": (0 < actual["abstract_words"] <= limits["max_abstract_words"], f"Actual Word abstract: {actual['abstract_words']}; maximum {limits['max_abstract_words']}."),
-                            "word_count": (limits.get("min_words", 0) <= effective <= limits["max_words"], f"Actual effective Word count: {effective}; allowed {limits.get('min_words', 0)}–{limits['max_words']}."),
-                            "reference_count": (actual["reference_heading_found"] and 0 < actual["reference_count"] <= limits["max_references"], f"Native reference entries: {actual['reference_count']}; maximum {limits['max_references']}.")}
+            metrics["word_count_formula"] = (f"Body Word words minus body table-text words plus {cost} per body visual" if body_only else f"Whole Word words including table text plus {cost} per table/figure")
+            abstract_max, word_max, reference_max = (limits[key] for key in ("max_abstract_words", "max_words", "max_references"))
+            replacements = {"abstract": (actual["abstract_words"] >= limits.get("min_abstract_words", 1) and (abstract_max is None or actual["abstract_words"] <= abstract_max), f"Actual Word abstract: {actual['abstract_words']}; " + (f"allowed {limits.get('min_abstract_words', 1)}–{abstract_max}." if abstract_max is not None else "template target about 100, not a hard maximum.")),
+                            "word_count": (limits.get("min_words", 0) <= effective and (word_max is None or effective <= word_max), f"Actual effective Word count: {effective}; " + (f"allowed {limits.get('min_words', 0)}–{word_max}." if word_max is not None else "no verified hard word cap.")),
+                            "reference_count": (actual["reference_heading_found"] and actual["reference_count"] > 0 and (reference_max is None or actual["reference_count"] <= reference_max), f"Native reference entries: {actual['reference_count']}; " + (f"maximum {reference_max}." if reference_max is not None else "no verified reference cap."))}
             for item in items:
                 if item["id"] in replacements:
                     passed, item["reason"] = replacements[item["id"]]
                     item.update(status="passed" if passed else "failed", stage="native")
-            structure = _native_structure(docx, venue_id == "ieee-software")
+            if venue_id in {"ieee-access", "jors"}:
+                from _publication_research_word import native_structure
+                structure = native_structure(docx, venue_id)
+            else:
+                structure = _native_structure(docx, template["citation_style"] == "superscript_outside_punctuation")
             canonical_count = metrics["reference_count"]
             items.append(_item("reference_count_consistency", "passed" if canonical_count == actual["reference_count"] == structure["reference_count"] else "failed",
                                f"Reference entries must match: canonical Markdown {canonical_count}, native Word {actual['reference_count']}, DOCX bibliography paragraphs {structure['reference_count']}.", stage="native", source=source))
             items.append(_item("native_word", "passed" if not structure["issues"] else "failed", "; ".join(structure["issues"]) or "Actual publisher styles, columns, citation conventions and numbered bibliography retained.", stage="native", source=template["download_url"]))
             metrics["native_structure"] = structure
             metrics["missing_template_fonts"] = actual.get("missing_template_fonts", [])
+            if limits.get("recommended_max_pages") and actual["pages"] > limits["recommended_max_pages"]:
+                items.append(_item("page_length_review", "pending", "IEEE Access recommends under 20 pages; longer articles require the current editorial length/justification review, not an automatic hard-limit failure.", stage="submission", source=source))
         except Exception as exc:
             items.append(_item("native_word", "failed", str(exc), stage="native", source=source))
     receipts = conversion_receipts or {}
+    if limits.get("max_file_bytes"):
+        oversized = [path.name for path in (docx, pdf) if path is not None and path.is_file() and path.stat().st_size > limits["max_file_bytes"]]
+        items.append(_item("file_size", "failed" if oversized else "passed", "Files exceeding the 40 MB submission maximum: " + ", ".join(oversized) if oversized else "Present manuscript files meet the 40 MB submission maximum.", stage="native", source=source))
     binding_issues = []
     for name, path in (("docx", docx), ("pdf", pdf)):
         if path is None or not path.is_file():
