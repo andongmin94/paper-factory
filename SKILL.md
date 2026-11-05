@@ -1,11 +1,15 @@
 ---
 name: paper-factory
-description: Read software repositories and primary literature to write, revise, or review evidence-grounded articles for IEEE Software, IEEE Security & Privacy, IEEE Access, JORS, or JOSS. Prepare editable drafts and venue-specific submission files; actual submission requires separate authorization.
+description: Draft, revise or review software-repository papers with traceable evidence. Use for journal selection, manuscript writing, bibliography checks, or submission-file preparation.
 ---
 
 # Paper Factory
 
 Research and write in the current conversation. The scripts collect, inspect and package authored files; they do not choose a contribution or write a paper. Deliver one useful article supported by the available evidence, not a plan or a promised future result.
+
+## Runtime
+
+Use the same instructions in Claude Code, Claude.ai or another Agent Skills host. For installation or missing prerequisites, read [runtime.md](references/runtime.md). Resolve tool paths from this installed skill directory, not from the input repository. No provider API key or separate model runner is required. Without native Word, deliver the existing source bundle and leave Word/PDF verification pending.
 
 ## Choose the requested path
 

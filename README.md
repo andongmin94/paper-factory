@@ -1,17 +1,35 @@
 # Paper Factory
 
-GitHub 저장소와 1차 문헌을 바탕으로 영문 논문을 작성하는 Codex 스킬입니다. **IEEE Software, IEEE Security & Privacy, IEEE Access, Journal of Open Research Software(JORS), Journal of Open Source Software(JOSS)**를 지원합니다. 에이전트가 연구 질문 선정부터 기존 연구 비교·집필·검토까지 직접 조율하고, 파일 도구가 매체별 원고 출력과 투고 준비를 돕습니다.
+GitHub 저장소와 1차 문헌을 바탕으로 영문 논문을 작성하는 Agent Skills 형식의 스킬입니다. **Claude Code·Claude.ai·Codex에서 같은 지침과 Python 도구를 재사용**합니다. **IEEE Software, IEEE Security & Privacy, IEEE Access, Journal of Open Research Software(JORS), Journal of Open Source Software(JOSS)**를 지원합니다. 에이전트가 연구 질문 선정부터 기존 연구 비교·집필·검토까지 직접 조율하고, 파일 도구가 매체별 원고 출력과 투고 준비를 돕습니다.
 
 ## 빠른 시작
 
-새 PC에서는 이 저장소를 Codex의 스킬 폴더에 설치합니다.
+### Claude Code
+
+개인용 스킬 디렉터리에 설치하거나, 아래 Claude.ai용 ZIP의 `paper-factory/` 폴더를 `~/.claude/skills/`에 풉니다. 한 프로젝트에서만 쓸 때는 `.claude/skills/`에 넣습니다.
+
+```sh
+git clone https://github.com/andongmin94/paper-factory.git "$HOME/.claude/skills/paper-factory"
+```
+
+Windows PowerShell에서는 `$HOME` 대신 `$env:USERPROFILE`을 사용할 수 있습니다. Claude Code에서 `/paper-factory https://github.com/owner/repository`로 호출합니다. 기존 설치본이 있으면 덮어쓰지 말고 변경 상태를 먼저 확인하세요.
+
+### Claude.ai
+
+코드 실행·파일 생성을 활성화한 뒤 **Customize > Skills > + > Create skill > Upload a skill**에서 `paper-factory.zip`을 업로드하고 켭니다. [Skill tools CI](https://github.com/andongmin94/paper-factory/actions/workflows/skill.yml)의 해당 커밋 실행에서 `paper-factory-skill` artifact를 받으면 안에 설치용 ZIP이 있습니다. GitHub의 바깥 artifact ZIP을 한 번 풀고 **안쪽 `paper-factory.zip`**을 업로드합니다.
+
+ZIP에는 `paper-factory/SKILL.md`와 기존 스크립트·참조·에셋만 들어갑니다. 별도 Claude 전용 프롬프트나 API 키는 필요하지 않습니다. **업로드 형식 지원과 실제 Claude 실행 검증은 별개**이며, Word가 없는 환경에서는 원고 소스·서지·그림·checklist까지 전달하고 Word/PDF 검증을 미완료로 남깁니다.
+
+### Codex
+
+기존 설치와 호출 방법은 그대로 유지합니다.
 
 ```powershell
 git clone https://github.com/andongmin94/paper-factory.git "$env:USERPROFILE/.codex/skills/paper-factory"
 Set-Location "$env:USERPROFILE/.codex/skills/paper-factory"
 ```
 
-Codex에서 `$paper-factory`와 대상 저장소를 지정하세요.
+Codex에서는 `$paper-factory`, Claude Code에서는 `/paper-factory`를 사용합니다. Claude.ai에서는 활성화한 뒤 “paper-factory 스킬을 사용해”라고 요청하세요. 다음은 Codex 호출 예이며 본문 요청은 공통입니다.
 
 ```text
 $paper-factory https://github.com/owner/repository
@@ -69,13 +87,13 @@ $paper-factory https://github.com/owner/repository
 
 | 작업 | 필요한 환경 |
 | --- | --- |
-| 연구·집필 | Codex와 대상 저장소·문헌에 대한 접근 |
+| 연구·집필 | Claude 또는 Codex와 대상 저장소·문헌에 대한 접근 |
 | 저장소 URL 자료 보존 | 설치된 Git과 대상 GitHub 저장소 읽기 권한; 프로젝트 코드 실행 없음 |
 | 파일 도구 | Python 3.11 이상. 문서 처리 의존성은 [requirements.txt](requirements.txt) 참조 |
 | 공식 Word/PDF 출력 | Windows, 설치된 Microsoft Word, Pandoc, 문서 처리 의존성 |
 | JOSS 소스 검사·출력 | Python, Pandoc, 기존 서지 파서. Word 불필요; 공식 PDF는 별도 Inara 환경에서 검증 |
 
-문서 출력이 필요한 환경에서 의존성을 설치합니다. Codex에서는 제공되는 문서 런타임과 이미 설치된 도구를 먼저 확인합니다.
+문서 출력에 필요한 패키지가 없을 때만 호스트의 관리 환경 또는 작업용 가상환경에 의존성을 설치합니다. 제공되는 런타임과 기존 도구를 먼저 확인하고, 전역 설치나 Word 설치를 자동으로 수행하지 않습니다. Claude.ai의 네트워크·설치 권한은 계정 설정에 따라 다릅니다. [호스트별 설치·실행 범위](references/runtime.md)를 확인하세요.
 
 ```powershell
 python -m pip install -r requirements.txt
@@ -93,6 +111,7 @@ python -m pytest -q
 Windows CI에서 실제 Pandoc 식별과 문서 변환을 필수로 검사합니다. 현재 변경 사항과 테스트 결과는 [커밋 이력](https://github.com/andongmin94/paper-factory/commits/main/)과 [GitHub Actions](https://github.com/andongmin94/paper-factory/actions/workflows/skill.yml)에서 확인할 수 있습니다. 누락·손상된 그림의 정상 출력 처리, 확인 도중 바뀐 근거, 과거 출력 파일의 평가 재사용과 저자 검사 누락을 방지합니다. Garak·REA의 기존 질문·기여 선택 기록과 프론트론의 공식 원고·평가·횟수는 유지합니다.
 
 - [스킬 지침](SKILL.md)
+- [Claude 설치와 실행 환경](references/runtime.md)
 - [연구·평가 기준](references/research-and-review.md)
 - [연구 질문과 기여 선택](references/contribution-selection.md)
 - [저장소 URL에서 초안 묶음까지](references/repository-to-draft.md)
