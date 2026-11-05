@@ -15,6 +15,7 @@ Check only the prerequisites needed for the requested task. Use an available Pyt
 | `research_workspace.py repository` | Python 3.11+, Git and permitted GitHub access; captures files, never executes the input project |
 | Bibliography import | Python; `pyparsing` is used for BibTeX parsing; missing literature facts are not filled in |
 | Preflight, document conversion, JOSS source export | Relevant dependencies in `requirements.txt`; JOSS also needs Pandoc and genuine YAML/BibTeX metadata |
+| `export_manuscript.py export --docx-only` | Pandoc and document dependencies; Access/JORS also need the supplied official template. No Word/PDF or page verification is performed |
 | Native Word/PDF export | Windows, PowerShell and an already installed/licensed Microsoft Word, plus the document dependencies; Access/JORS need the supplied official template |
 
 For a document-environment problem, the existing diagnostic is:
@@ -39,7 +40,7 @@ On Windows PowerShell, replace `$HOME` with `$env:USERPROFILE`. Do not overwrite
 
 Enable code execution and file creation, then open **Customize > Skills > + > Create skill > Upload a skill** and upload `paper-factory.zip`. It contains a single top-level `paper-factory/` folder with uppercase `SKILL.md`. Enable the skill and ask, for example: "Use paper-factory to analyze this repository and prepare an evidence-grounded incomplete draft when required evidence is missing."
 
-Network access depends on the account/admin configuration. Do not assume Git, publisher access, installed packages or Microsoft Word are available. When native Word export is unavailable, deliver the authored Markdown, bibliography, necessary figures and the existing bundle checklist. A generic built-in document renderer is not verification of this skill's native Word/PDF route. Do not install Word or switch journals merely to make export pass.
+Network access depends on the account/admin configuration. Do not assume Git, publisher access, installed packages or Microsoft Word are available. When native Word export is unavailable, `export --docx-only` can prepare editable DOCX with conversion records if Pandoc and document dependencies are present. Include it alongside the authored Markdown, bibliography, necessary figures and existing bundle checklist; otherwise deliver those source files. Word/PDF verification stays pending. A generic built-in document renderer is not verification of this skill's native Word/PDF route. Do not install Word or switch journals merely to make export pass.
 
 If Git or a publisher is inaccessible, report the exact blocked step and actual reading scope. Authorized connectors or supplied files can support explicitly identified source reading, but do not call that a successful repository-capture CLI run. Keep incomplete evidence/guidance conditional; do not invent missing metadata or claim an export that was not produced.
 

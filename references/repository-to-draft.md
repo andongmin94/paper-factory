@@ -31,7 +31,7 @@ python /path/to/paper-factory/scripts/export_manuscript.py preflight --manuscrip
 python /path/to/paper-factory/scripts/export_manuscript.py export --manuscript /work/repo-article/paper.md --venue SELECTED_ID --output-dir /work/repo-article/exported
 ```
 
-Run export only when prerequisites are available. Access/JORS require `--template ABSOLUTE_FILE` for preflight and export. JOSS uses genuine YAML metadata, `paper.bib` and referenced local figures; it does not render the publisher PDF. Bibliography import preserves supplied BibTeX/RIS/CSL-JSON metadata; it neither verifies publications nor converts RIS to JOSS BibTeX. Keep failures visible and deliver the incomplete source when rendering or author facts are unavailable.
+Run export only when prerequisites are available. For editable DOCX without Word, explicitly add `--docx-only`; this preserves conversion records while leaving native Word/PDF and page review pending. Access/JORS require `--template ABSOLUTE_FILE` for preflight and export. JOSS uses genuine YAML metadata, `paper.bib` and referenced local figures; it does not render the publisher PDF. Bibliography import preserves supplied BibTeX/RIS/CSL-JSON metadata; it neither verifies publications nor converts RIS to JOSS BibTeX. Keep failures visible and deliver the incomplete source when rendering or author facts are unavailable.
 
 ## 4. Bundle and stop
 

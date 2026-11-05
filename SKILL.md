@@ -9,7 +9,7 @@ Research and write in the current conversation. The scripts collect, inspect and
 
 ## Runtime
 
-Use the same instructions in Claude Code, Claude.ai or another Agent Skills host. For installation or missing prerequisites, read [runtime.md](references/runtime.md). Resolve tool paths from this installed skill directory, not from the input repository. No provider API key or separate model runner is required. Without native Word, deliver the existing source bundle and leave Word/PDF verification pending.
+Use the same instructions in Claude Code, Claude.ai or another Agent Skills host. For installation or missing prerequisites, read [runtime.md](references/runtime.md). Resolve tool paths from this installed skill directory, not from the input repository. No provider API key or separate model runner is required. Without native Word, use `export --docx-only` when editable DOCX is needed and its conversion prerequisites are available; otherwise deliver the existing source bundle. Leave Word/PDF verification pending.
 
 ## Choose the requested path
 

@@ -66,13 +66,15 @@ def _write_json(path: Path, value: dict) -> None:
 def export(manuscript: Path, venue_id: str, output_dir: Path, *,
            profile: Path | None = None, pandoc: str | None = None,
            resource_dir: Path | None = None, template_path: Path | None = None,
-           bibliography: Path | None = None) -> dict:
+           bibliography: Path | None = None, docx_only: bool = False) -> dict:
     """Create a new direct-authoring delivery; an existing directory is refused.
 
     Failed conversions leave their new directory available for diagnosis. No
     prior artifact is removed, rewritten, adopted, or used as a fallback.
     """
     if venue_id == "joss":
+        if docx_only:
+            raise ValueError("--docx-only is for Word venues; JOSS exports authored source files")
         if profile is not None or template_path is not None:
             raise ValueError("JOSS uses the authored YAML metadata and bundled syntax reference; --profile and --template do not apply")
         from _publication_joss import export as source_export
@@ -99,16 +101,30 @@ def export(manuscript: Path, venue_id: str, output_dir: Path, *,
     # Its bytes, and the retained canonical copy, are checked again below.
     docx_receipt = convert_docx(manuscript, docx, pandoc=str(binary), venue_id=venue_id,
                                 resource_dir=resource_dir, template_path=template_path)
-    rendered = word_pdf(docx, pdf, venue_id=venue_id)
-    receipts = {"docx": docx_receipt,
-                "pdf": {"engine": "Microsoft Word PDF of the exact saved official-template DOCX",
-                        "input_sha256": source_sha, "output_sha256": digest_file(pdf),
-                        "official_template": docx_receipt["official_template"],
-                        "source_docx_sha256": digest_file(docx), "word_rendering": rendered}}
+    receipts = {"docx": docx_receipt}
+    if not docx_only:
+        rendered = word_pdf(docx, pdf, venue_id=venue_id)
+        receipts["pdf"] = {"engine": "Microsoft Word PDF of the exact saved official-template DOCX",
+                           "input_sha256": source_sha, "output_sha256": digest_file(pdf),
+                           "official_template": docx_receipt["official_template"],
+                           "source_docx_sha256": digest_file(docx), "word_rendering": rendered}
     _write_json(output_dir / "conversion-receipts.json", receipts)
-    report = compliance_report(retained_source, docx, venue_id, pdf=pdf,
-                               qa_root=output_dir / "pages", author_metadata=author,
-                               conversion_receipts=receipts, template_path=template_path)
+    if docx_only:
+        report = preflight(retained_source, venue_id, profile=profile, template_path=template_path)
+        pending = "Native Microsoft Word measurement, Word PDF rendering and all-page visual review were not performed."
+        report["items"].append({"id": "native_word_pdf", "label": "native word pdf",
+                                "status": "pending", "stage": "native", "reason": pending,
+                                "source_url": template["download_url"]})
+        report["pending"].append(pending)
+        report.update(mode="skill_docx_export", content_format_passed=False, submission_ready=False,
+                      word_measurement=None, page_qa=None,
+                      binding={"markdown_sha256": source_sha, "docx_sha256": digest_file(docx),
+                               "template_sha256": template["sha256"],
+                               "template_provenance_sha256": template["provenance_sha256"]})
+    else:
+        report = compliance_report(retained_source, docx, venue_id, pdf=pdf,
+                                   qa_root=output_dir / "pages", author_metadata=author,
+                                   conversion_receipts=receipts, template_path=template_path)
     if manuscript.read_bytes() != source or retained_source.read_bytes() != source:
         raise ValueError("The canonical manuscript changed during direct export")
     if profile is not None and profile.read_bytes() != author_source:
@@ -117,7 +133,7 @@ def export(manuscript: Path, venue_id: str, output_dir: Path, *,
         raise ValueError("The official template changed during direct export")
     _write_json(output_dir / "format-report.json", report)
     provenance = {
-        "mode": "direct_agent_authored_markdown_native_export",
+        "mode": "direct_agent_authored_markdown_docx_export" if docx_only else "direct_agent_authored_markdown_native_export",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "input": {"path": str(manuscript.resolve()), "sha256": source_sha},
         "author_input": {"path": str(profile.resolve()), "sha256": hashlib.sha256(author_source).hexdigest()} if author_source is not None else None,
@@ -130,7 +146,7 @@ def export(manuscript: Path, venue_id: str, output_dir: Path, *,
         "writing_performed_by_tool": False,
         "author_approval_inferred": False,
         "actual_submission_performed": False,
-        "scope": "Deterministic formatting and native QA only. Direct-agent research and model use must be documented separately. Retained guidance/template dates do not establish current publisher availability. Visual page review and author declarations remain separate.",
+        "scope": ("DOCX conversion and read-only manuscript preflight only; no native Word measurement, PDF or page review. " if docx_only else "Deterministic formatting and native QA only. ") + "Direct-agent research and model use must be documented separately. Retained guidance/template dates do not establish current publisher availability. Visual page review and author declarations remain separate.",
     }
     _write_json(output_dir / "provenance.json", provenance)
     manifest = {"algorithm": "SHA-256", "scope": "Direct-authoring delivery; excludes this manifest.",
@@ -140,7 +156,9 @@ def export(manuscript: Path, venue_id: str, output_dir: Path, *,
                           for path in sorted(output_dir.rglob("*")) if path.is_file()]}
     _write_json(output_dir / "manifest.json", manifest)
     return {"output_dir": str(output_dir), "manuscript": str(retained_source),
-            "docx": str(docx), "pdf": str(pdf), "format_report": str(output_dir / "format-report.json"),
+            "docx": str(docx), "pdf": None if docx_only else str(pdf),
+            "format_report": str(output_dir / "format-report.json"),
+            **({"prefilter_passed": report["prefilter_passed"], "native_word_measured": False} if docx_only else {}),
             "content_format_passed": report["content_format_passed"],
             "submission_ready": report["submission_ready"],
             "visual_review_status": (report.get("page_qa") or {}).get("visual_review_status", "pending")}
@@ -160,6 +178,8 @@ def main(argv: list[str] | None = None) -> int:
         command.add_argument("--resource-dir", type=Path, help="Existing absolute directory for authored relative media")
         if name == "export":
             command.add_argument("--output-dir", type=Path, required=True)
+            command.add_argument("--docx-only", action="store_true",
+                                 help="Create official-template DOCX and reports without native Word/PDF; exit 0/1 reflects manuscript preflight, not native format approval")
     args = parser.parse_args(argv)
     try:
         if args.command == "preflight":
@@ -169,8 +189,9 @@ def main(argv: list[str] | None = None) -> int:
         else:
             result = export(args.manuscript, args.venue, args.output_dir,
                             profile=args.profile, pandoc=args.pandoc, resource_dir=args.resource_dir,
-                            template_path=args.template, bibliography=args.bibliography)
-            passed = result["source_package_passed"] if args.venue == "joss" else result["content_format_passed"]
+                            template_path=args.template, bibliography=args.bibliography, docx_only=args.docx_only)
+            passed = (result["prefilter_passed"] if args.docx_only else
+                      result["source_package_passed"] if args.venue == "joss" else result["content_format_passed"])
     except (OSError, ValueError, ImportError) as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=True), file=sys.stderr)
         return 2

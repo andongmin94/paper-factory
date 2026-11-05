@@ -18,7 +18,7 @@ Windows PowerShell에서는 `$HOME` 대신 `$env:USERPROFILE`을 사용할 수 �
 
 코드 실행·파일 생성을 활성화한 뒤 **Customize > Skills > + > Create skill > Upload a skill**에서 `paper-factory.zip`을 업로드하고 켭니다. [Skill tools CI](https://github.com/andongmin94/paper-factory/actions/workflows/skill.yml)의 해당 커밋 실행에서 `paper-factory-skill` artifact를 받으면 안에 설치용 ZIP이 있습니다. GitHub의 바깥 artifact ZIP을 한 번 풀고 **안쪽 `paper-factory.zip`**을 업로드합니다.
 
-ZIP에는 `paper-factory/SKILL.md`와 기존 스크립트·참조·에셋만 들어갑니다. 별도 Claude 전용 프롬프트나 API 키는 필요하지 않습니다. **업로드 형식 지원과 실제 Claude 실행 검증은 별개**이며, Word가 없는 환경에서는 원고 소스·서지·그림·checklist까지 전달하고 Word/PDF 검증을 미완료로 남깁니다.
+ZIP에는 `paper-factory/SKILL.md`와 기존 스크립트·참조·에셋만 들어갑니다. 별도 Claude 전용 프롬프트나 API 키는 필요하지 않습니다. **업로드 형식 지원과 실제 Claude 실행 검증은 별개**이며, Word가 없는 환경에서는 원고 소스·서지·그림·checklist를 전달합니다. Pandoc과 문서 의존성이 있으면 `export --docx-only`로 편집 가능한 DOCX와 변환 기록도 만들 수 있고, Word/PDF 검증은 미완료로 남깁니다.
 
 ### Codex
 
@@ -90,6 +90,7 @@ $paper-factory https://github.com/owner/repository
 | 연구·집필 | Claude 또는 Codex와 대상 저장소·문헌에 대한 접근 |
 | 저장소 URL 자료 보존 | 설치된 Git과 대상 GitHub 저장소 읽기 권한; 프로젝트 코드 실행 없음 |
 | 파일 도구 | Python 3.11 이상. 문서 처리 의존성은 [requirements.txt](requirements.txt) 참조 |
+| DOCX 생성 (`export --docx-only`) | Pandoc, 문서 처리 의존성, 해당 공식 템플릿. Word 불필요; native Word/PDF 검증은 미완료 |
 | 공식 Word/PDF 출력 | Windows, 설치된 Microsoft Word, Pandoc, 문서 처리 의존성 |
 | JOSS 소스 검사·출력 | Python, Pandoc, 기존 서지 파서. Word 불필요; 공식 PDF는 별도 Inara 환경에서 검증 |
 
