@@ -51,6 +51,8 @@ Run the existing export only when its prerequisites are available. A missing Wor
 
 Prepare one plan for the existing `submission_support.py bundle`. Select the preserved source as `manuscript`, the actual bibliography as `bibliography`, and one short record each as `venue_selection`, `evidence` and `guidance`; add only needed `figure` files and any actual requested export. Paths are relative to the explicit source root. Do not bundle the entire repository or unrelated logs.
 
+Select the existing `research_workspace.py evidence` JSON report (for example, `evidence/evidence.json`) with role `evidence`. For `.json` evidence selections, the bundle checks the saved `manuscript_sha256` against the single selected manuscript and carries failed, empty, malformed or inconsistent claim results into `missing_evidence` and the checklist. It preserves the original report and files even when the draft becomes `incomplete`; exit 0 means the bundle was written, not that its evidence passed. These are saved-report checks only, not a new source inspection, scientific judgment or author approval. Rerun the existing evidence/impact tools when source witnesses change. Authored Markdown/text evidence notes remain manual records and are not machine-verified binding reports.
+
 Set the optional `draft_status` to `draft` or `incomplete`, `article_type` to the selected category, `guidance_status` to `verified`, `partial` or `blocked`, and `missing_evidence` to the unresolved facts. These are preparation statements, not proof of compliance. Incomplete drafting, unverified guidance and missing evidence remain conditional. Leave unsupplied declarations and author confirmations pending.
 
 ```sh

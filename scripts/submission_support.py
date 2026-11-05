@@ -319,6 +319,37 @@ def _declaration_status(declarations, confirmations, selections):
     return statuses
 
 
+def _evidence_gaps(selections):
+    """Carry saved JSON evidence results forward; do not rerun source inspection."""
+    manuscripts = [row for row in selections if row["role"] == "manuscript"]
+    gaps = []
+    for row in selections:
+        # Authored prose evidence notes are not machine-readable binding reports.
+        if row["role"] != "evidence" or row["source"].suffix.casefold() != ".json":
+            continue
+        label = "Evidence report " + row["path"]
+        try:
+            report = _json(row["source"])
+        except ValueError:
+            gaps.append(label + ": unreadable JSON report; retain and review the original")
+            continue
+        if len(manuscripts) != 1 or report.get("manuscript_sha256") != manuscripts[0]["sha256"]:
+            gaps.append(label + ": does not bind the single selected manuscript; rerun evidence for these bytes")
+        claims = report.get("claims")
+        if (not isinstance(claims, list) or not claims or
+                any(not isinstance(claim, dict) or not isinstance(claim.get("id"), str) or not claim["id"] or
+                    type(claim.get("bindings_match")) is not bool or not isinstance(claim.get("issues"), list)
+                    for claim in claims)):
+            gaps.append(label + ": missing or invalid claim results; supply research_workspace evidence.json")
+            continue
+        failed = [claim["id"] for claim in claims if not claim["bindings_match"] or claim["issues"]]
+        if failed:
+            gaps.append(label + ": unresolved claim bindings: " + ", ".join(failed))
+        elif report.get("bindings_match") is not True:
+            gaps.append(label + ": overall bindings are not reported as matching")
+    return gaps
+
+
 def prepare_bundle(plan, root, output_dir):
     ensure_unlinked(plan)
     ensure_unlinked(root)
@@ -379,6 +410,7 @@ def prepare_bundle(plan, root, output_dir):
         approval_files.append({"role": "cover_letter", "path": "cover-letter.md", "bytes": len(cover_bytes),
                                "sha256": hashlib.sha256(cover_bytes).hexdigest()})
     declaration_status = _declaration_status(declarations, confirmations, approval_files)
+    missing.extend(_evidence_gaps(selections))
     pending = []
     if draft_status is not None:
         for role in ("manuscript", "bibliography", "venue_selection", "evidence", "guidance"):
@@ -426,7 +458,7 @@ def prepare_bundle(plan, root, output_dir):
               "selected_files": records, "approval_files": approval_files, "supplied_declarations": declarations,
               "supplied_confirmations": confirmations, "declaration_status": declaration_status, "pending": pending,
               "submission_ready": False, "author_approval_inferred": False, "actual_submission_performed": False,
-              "scope": "Local allowlisted copies and supplied cover text only. File presence and supplied declarations are not independent verification or consent."}
+              "scope": "Allowlisted copies, saved JSON evidence-report/manuscript bindings and supplied cover text. Source witnesses and scientific claims are not rechecked; prose evidence notes and human declarations are not independently verified."}
     _write(folder / "report.json", report)
     draft_note = ("Status: **" + draft_status + "**. Recommendation: **conditional**. Article type: " + article_type +
                   ".\n\nGuidance status: " + guidance_status + " (supplied reading record, not independently verified by this file tool).\n\n") if draft_status else ""
