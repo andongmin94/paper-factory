@@ -116,7 +116,7 @@ def test_new_cli_routes_source_export_and_rejects_word_profile(tmp_path, monkeyp
 
 
 @pytest.mark.parametrize('venue,role,suffix', [('emse', 'editable_docx', '.docx'), ('jmlr-mloss', 'review_pdf', '.pdf')])
-def test_prepared_cs_bundle_records_only_the_selected_manuscript_role_and_format(tmp_path, venue, role, suffix):
+def test_prepared_cs_bundle_needs_the_selected_format_and_conversion_record(tmp_path, venue, role, suffix):
     root = tmp_path / 'sources'
     root.mkdir()
     source = root / 'paper.md'
@@ -136,6 +136,7 @@ def test_prepared_cs_bundle_records_only_the_selected_manuscript_role_and_format
     plan_path.write_text(json.dumps(plan))
     supplied = support.prepare_bundle(plan_path, root, tmp_path / 'supplied')
     assert not any(role in gap and suffix in gap for gap in supplied['missing_evidence'])
+    assert any('conversion_record' in gap for gap in supplied['missing_evidence'])
     assert (tmp_path / 'supplied' / 'files' / prepared.name).read_bytes() == prepared.read_bytes()
     assert supplied['recommendation_status'] == 'not_recommended'
     assert 'Recommendation: **not recommended**' in (tmp_path / 'supplied' / 'checklist.md').read_text(encoding='utf-8')

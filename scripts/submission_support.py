@@ -284,6 +284,76 @@ def _inside_file(root, raw):
     return path
 
 
+def record_conversion(root, inputs, output, output_dir):
+    """Snapshot host-declared conversion files, without executing a converter."""
+    ensure_unlinked(root)
+    root = root.resolve(strict=True)
+    if not root.is_dir() or not isinstance(inputs, list) or not inputs:
+        raise ValueError("Conversion requires a source root and explicit non-empty inputs")
+    paths = [_inside_file(root, name) for name in [*inputs, output]]
+    names = [path.relative_to(root).as_posix() for path in paths]
+    if len({name.casefold() for name in names}) != len(names):
+        raise ValueError("Conversion inputs and output must be distinct files")
+    if paths[-1].suffix.casefold() not in {".docx", ".pdf"}:
+        raise ValueError("Conversion output must be a prepared DOCX or PDF")
+    records = [{"path": name, "bytes": path.stat().st_size, "sha256": digest_file(path)}
+               for name, path in zip(names, paths)]
+    report = {"mode": "host_prepared_conversion", "created_at_utc": datetime.now(timezone.utc).isoformat(),
+              "inputs": records[:-1], "output": records[-1], "conversion_executed_by_tool": False,
+              "scope": "Byte snapshot after host conversion. Input selection and the conversion relationship are host-declared, not independently verified. No layout, scientific or author approval is implied."}
+    if any(digest_file(path) != record["sha256"] for path, record in zip(paths, records)):
+        raise ValueError("A conversion file changed while recording its hash")
+    folder = _new_output(output_dir)
+    _write(folder / "conversion.json", report)
+    _manifest(folder)
+    return {"output_dir": str(folder), **report}
+
+
+def _conversion_gaps(selections, outputs):
+    """Compare saved host conversion snapshots only with allowlisted files."""
+    selected = {row["path"]: row["sha256"] for row in selections}
+    output_paths = {row["path"] for row in outputs}
+    required_inputs = {row["path"] for row in selections
+                       if row["role"] in {"manuscript", "bibliography", "latex_source", "figure", "conversion_input"}
+                       and row["path"] not in output_paths}
+    records, gaps = [], []
+    for row in selections:
+        if row["role"] != "conversion_record":
+            continue
+        label = "Conversion record " + row["path"]
+        try:
+            record = _json(row["source"])
+            inputs, output = record.get("inputs"), record.get("output")
+            if record.get("mode") != "host_prepared_conversion" or not isinstance(inputs, list) or not inputs:
+                raise ValueError("Invalid conversion inputs")
+            files = [*inputs, output]
+            if any(not isinstance(item, dict) or not isinstance(item.get("path"), str) or not item["path"] or
+                   not isinstance(item.get("sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", item["sha256"])
+                   for item in files):
+                raise ValueError("Invalid conversion binding")
+            if len({item["path"].casefold() for item in files}) != len(files):
+                raise ValueError("Duplicate conversion paths")
+        except ValueError:
+            gaps.append(label + ": invalid record; regenerate the output and use record-conversion")
+            continue
+        records.append((label, inputs, output))
+    for output in outputs:
+        matching = [(label, inputs, saved) for label, inputs, saved in records if saved["path"] == output["path"]]
+        if len(matching) != 1:
+            gaps.append(f"Prepared output {output['path']}: select exactly one conversion_record for these inputs and output")
+            continue
+        label, inputs, saved = matching[0]
+        for item in [*inputs, saved]:
+            path = item["path"]
+            if path not in selected:
+                gaps.append(f"{label}: conversion file {path} is not selected; include the exact input/output bytes")
+            elif selected[path] != item["sha256"]:
+                gaps.append(f"{label}: {path} changed; regenerate {output['path']} and record the conversion again")
+        for path in sorted(required_inputs - {item["path"] for item in inputs}):
+            gaps.append(f"{label}: selected input {path} is not bound; regenerate {output['path']} with all inputs recorded")
+    return gaps
+
+
 def _declaration_status(declarations, confirmations, selections):
     """Check the scope of explicitly supplied human records, never infer consent."""
     if not isinstance(confirmations, dict) or set(confirmations) - set(DECLARATIONS):
@@ -436,9 +506,12 @@ def prepare_bundle(plan, root, output_dir):
     venue = value["venue_id"]
     if venue in PREPARED_MANUSCRIPTS:
         role, suffix = PREPARED_MANUSCRIPTS[venue]
-        if not any(row["role"] in {role, "manuscript"} and row["source"].suffix.lower() == suffix
-                   for row in selections):
+        outputs = [row for row in selections if row["role"] in {role, "manuscript"}
+                   and row["source"].suffix.lower() == suffix]
+        if not outputs:
             missing.append(f"Select the prepared {venue} manuscript ({role}, {suffix})")
+        else:
+            missing.extend(_conversion_gaps(selections, outputs))
     recommendation = value.get("recommendation_status")
     if recommendation not in (None, "conditional", "not_recommended"):
         raise ValueError("recommendation_status must be conditional or not_recommended; a bundle cannot approve submission")
@@ -493,7 +566,7 @@ def prepare_bundle(plan, root, output_dir):
               "selected_files": records, "approval_files": approval_files, "supplied_declarations": declarations,
               "supplied_confirmations": confirmations, "declaration_status": declaration_status, "pending": pending,
               "submission_ready": False, "author_approval_inferred": False, "actual_submission_performed": False,
-              "scope": "Allowlisted copies, saved evidence bindings for the selected manuscript, ledgers and included sources, and supplied cover text. Source quotations and scientific claims are not rechecked; prose evidence notes and human declarations are not independently verified."}
+              "scope": "Allowlisted copies, saved evidence and host conversion bindings for the selected files, and supplied cover text. Source quotations, scientific claims and conversion relationships are not rechecked; prose evidence notes and human declarations are not independently verified."}
     _write(folder / "report.json", report)
     draft_note = f"Status: **{draft_status}**. Article type: {article_type}.\n\n" if draft_status else ""
     if recommendation != "not_assessed":
@@ -596,10 +669,14 @@ def main(argv=None):
     bundle = commands.add_parser("bundle", help="Copy only explicit submission files into a new local folder")
     bundle.add_argument("--plan", type=Path, required=True)
     bundle.add_argument("--root", type=Path, required=True)
+    conversion = commands.add_parser("record-conversion", help="Snapshot declared inputs and DOCX/PDF after host conversion; does not run a converter")
+    conversion.add_argument("--root", type=Path, required=True)
+    conversion.add_argument("--inputs", nargs="+", required=True, help="All authored input files, relative to root")
+    conversion.add_argument("--file", required=True, help="Generated DOCX/PDF, relative to root")
     metadata = commands.add_parser("metadata", help="Inspect actual DOCX/PDF properties without removing them")
     metadata.add_argument("--file", type=Path, required=True)
     metadata.add_argument("--profile", type=Path)
-    for command in (authors, responses, bundle, metadata):
+    for command in (authors, responses, bundle, conversion, metadata):
         command.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
@@ -609,6 +686,8 @@ def main(argv=None):
             result = prepare_responses(args.comments, args.before, args.after, args.output_dir)
         elif args.command == "bundle":
             result = prepare_bundle(args.plan, args.root, args.output_dir)
+        elif args.command == "record-conversion":
+            result = record_conversion(args.root, args.inputs, args.file, args.output_dir)
         else:
             result = inspect_metadata(args.file, args.output_dir, profile=args.profile)
     except (OSError, ValueError, TypeError) as exc:

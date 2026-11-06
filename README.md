@@ -76,7 +76,7 @@ $paper-factory https://github.com/owner/repository
 | [EMSE](references/emse.md) / `emse` | 사례·자료·분석이 갖춰진 소프트웨어공학 실증 원저 또는 재현 연구 | 전용 Word 양식 없음. 에이전트가 준비한 편집용 DOCX를 묶음에 포함 |
 | [JMLR MLOSS](references/jmlr-mloss.md) / `jmlr-mloss` | 실제 사용자 기반이 있는 비자명한 공개 ML 구현 | 공식 LaTeX 스타일로 빌드한 심사용 PDF와 별도 커버레터 준비 |
 
-EMSE와 MLOSS의 저널별 지침에 따라 원고를 준비하고 `submission_support.py bundle`로 실제 파일을 보존합니다. 두 곳에는 `export_manuscript.py`의 기존 IEEE/JORS/JOSS 변환기를 적용하지 않습니다.
+EMSE와 MLOSS의 저널별 지침에 따라 원고를 준비하고 `submission_support.py bundle`로 실제 파일을 보존합니다. 변환·검수 직후 `record-conversion`으로 입력과 출력 해시를 기록하면, 묶음을 만들 때 원고·서지·그림이나 DOCX/PDF가 달라진 경우 재생성이 필요하다고 표시합니다. 이는 기록 이후 버전 일치 검사이며 변환 성공이나 내용·레이아웃의 증명은 아닙니다. [입력과 기록 선택 방법](references/tools.md#host-prepared-cs-manuscripts)을 따르세요. 두 곳에는 `export_manuscript.py`의 기존 IEEE/JORS/JOSS 변환기를 적용하지 않습니다.
 
 Access·JORS·JOSS는 2026-11-02에 공식 지침과 템플릿 원문을 확인했습니다. Access·JORS 템플릿은 재배포 허가를 확인하지 못해 포함하지 않으며, 각 매체 문서의 공식 원본을 내려받아 `--template`으로 지정합니다. 도구는 확인된 SHA-256과 일치하는 파일을 사용합니다. JOSS는 YAML·인용·서지·그림 경로를 검사해 실제 제출 소스를 보존하며, Inara PDF 렌더링은 수행하지 않습니다.
 

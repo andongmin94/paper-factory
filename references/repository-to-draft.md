@@ -10,7 +10,7 @@ Inspect the tracked tree and local instructions before choosing files. Read the 
 python /path/to/paper-factory/scripts/research_workspace.py repository --url https://github.com/owner/repository --paths README.md path/to/implementation.py path/to/relevant_test.py --output-dir /work/repo-article/source-snapshot
 ```
 
-Add `--ref BRANCH_OR_TAG` when needed. The helper clones without checkout and saves selected bytes under `sources/`, with the resolved commit and hashes in `repository.json`. Base the analysis on that revision. Capture success is not reading or execution evidence. Record access failures instead of inventing a snapshot.
+Add `--ref BRANCH_OR_TAG_OR_FULL_COMMIT_SHA` when needed. Branches and tags are cloned without checkout; a full 40-character commit SHA is fetched directly and must match the resolved commit. The helper saves selected bytes under `sources/`, with the resolved commit and hashes in `repository.json`. Base the analysis on that revision. Capture success is not reading or execution evidence. Record access failures instead of inventing a snapshot.
 
 ## 2. Choose the contribution and venue
 

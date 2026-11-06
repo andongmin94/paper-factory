@@ -481,7 +481,7 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     c = commands.add_parser("repository", help="Retain selected GitHub source files at one commit without executing project code")
     c.add_argument("--url", required=True)
-    c.add_argument("--ref", help="Existing branch or tag; otherwise the remote default branch")
+    c.add_argument("--ref", help="Existing branch, tag or full 40-character commit SHA; otherwise the remote default branch")
     c.add_argument("--paths", nargs="+", required=True, help="Explicit tracked repository files to retain after inspecting the tree")
     c.add_argument("--output-dir", type=Path, required=True)
     c = commands.add_parser("checkpoint")

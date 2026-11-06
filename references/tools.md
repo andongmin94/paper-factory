@@ -59,7 +59,19 @@ This path does not generate DOCX, call Inara, upload sources, or produce a PDF. 
 
 ## Host-prepared CS manuscripts
 
-For [EMSE Research Articles](emse.md), prepare an editable DOCX. For [JMLR MLOSS](jmlr-mloss.md), prepare the initial-review PDF using the official style and keep the cover letter separate. Select actual files in the existing `submission_support.py bundle` plan with `venue_id: emse` or `jmlr-mloss`. Keep the evidence-bound manuscript and select the DOCX as `editable_docx` or the PDF as `review_pdf`. The bundle checks the selected role and filename extension, preserves bytes, and records an omitted required manuscript role/format as a gap. Selecting a nonexistent file is an input error. It does not inspect layout, run TeX, prove that the PDF came from the selected source, or certify eligibility. These two routes do not use the journal-specific `export_manuscript.py` converters or native Word finalizer.
+For [EMSE Research Articles](emse.md), prepare an editable DOCX. For [JMLR MLOSS](jmlr-mloss.md), prepare the initial-review PDF using the official style and keep the cover letter separate. These two routes do not use the journal-specific `export_manuscript.py` converters or native Word finalizer.
+
+After successful host conversion and inspection of the output against the authored inputs, record their exact versions. Use `record-conversion` with all actual authored inputs: the evidence-bound manuscript, any separate LaTeX source, bibliography and figures. For example, when the canonical manuscript is Markdown and the host prepared a separate TeX source:
+
+```sh
+python /path/to/paper-factory/scripts/submission_support.py record-conversion --root /work/article --inputs paper.md paper.tex paper.bib --file paper.pdf --output-dir /work/article/conversion-1
+```
+
+For EMSE, select the actual DOCX with `--file paper.docx` and list its authored inputs. Include figure files in `--inputs` when used. The command writes `conversion.json` and a manifest into a new directory; it does not copy or convert the files. It records a host-declared relationship, not proof that a build occurred or that every dependency was listed. Do not record an old output against edited sources: regenerate it first. A matching snapshot cannot replace content or page review.
+
+In the existing `bundle` plan, set `venue_id: emse` or `jmlr-mloss`, retain the evidence-bound `manuscript`, and select the output as `editable_docx` or `review_pdf`. Select `conversion-1/conversion.json` as `conversion_record` and every recorded input using the same root-relative paths. Use `bibliography`, `latex_source` and `figure` for those authored inputs, or `conversion_input` for other authored dependencies. The bundle requires exactly one record for each prepared output, checks its input/output hashes against the selected files, and flags selected manuscript, bibliography, LaTeX and figure inputs omitted from the record. Missing records, unselected inputs and changed bytes become explicit gaps; a supplied `draft` becomes `incomplete`. Rebuild the output and create a new record after an input changes, then bundle the new files together. Existing records remain unchanged.
+
+The bundle also checks the required output role and extension; a nonexistent selected file is an input error. It does not inspect layout, run TeX, independently verify the declared conversion relationship, or certify eligibility. Ordinary `bundle` exit 0 means copies and reports were created, even when the checklist records stale output. Always read `missing_evidence` and `draft_status`; `submission_ready` remains false.
 
 ## Public ORCID facts
 
