@@ -13,9 +13,9 @@ import sys
 
 from _publication_files import digest_file
 from _publication_templates import official_template, template_record
-from _publication_venues import VENUE_RULES
+from _publication_venues import VENUE_RULES, WORD_VENUES, VENUES
 from research_workspace import _absolute, _manifest, _new_folder, _relative, _write
-from submission_support import DECLARATIONS, VENUES, _declaration_status
+from submission_support import DECLARATIONS, _declaration_status
 
 
 def _confirmation(statement, record, files):
@@ -32,8 +32,8 @@ def check(root: Path, record_path: Path, output_dir: Path) -> dict:
     required = {"venue_id", "manuscript", "docx", "pdf", "format_report", "visual_review", "bundle_report", "scientific_review", "pages", "confirmations"}
     if not isinstance(supplied, dict) or set(supplied) != required or supplied["venue_id"] not in VENUES:
         raise ValueError("Record requires venue_id, manuscript, docx, pdf, format_report, visual_review, bundle_report, scientific_review, pages and confirmations")
-    if supplied["venue_id"] == "joss":
-        raise ValueError("JOSS uses a Markdown/BibTeX source package and publisher PDF review; this Word/PDF finalizer does not apply")
+    if supplied["venue_id"] not in WORD_VENUES:
+        raise ValueError(f"{supplied['venue_id']} does not use official-template Word measurements; this Word/PDF finalizer does not apply")
     if (not isinstance(supplied["pages"], list) or not supplied["pages"] or any(not isinstance(name, str) for name in supplied["pages"]) or
             len(set(supplied["pages"])) != len(supplied["pages"])):
         raise ValueError("pages must explicitly list distinct ordered page-image paths")

@@ -18,7 +18,7 @@ import sys
 from _publication_convert import pandoc_binary, pandoc_version
 from _publication_files import ensure_unlinked
 from _publication_templates import official_template, template_record
-from _publication_venues import VENUES
+from _publication_venues import EXPORT_VENUES
 
 
 def _packages() -> list[dict]:
@@ -69,7 +69,7 @@ def diagnose(pandoc: str | None = None) -> dict:
     except (ValueError, OSError, subprocess.SubprocessError, IndexError) as exc:
         pandoc_result = {"status": "missing_or_unusable", "detail": str(exc)}
     templates = []
-    for venue in VENUES:
+    for venue in EXPORT_VENUES:
         record = template_record(venue)
         if not record["bundled"]:
             templates.append({"venue": venue, "status": "external_template_required",

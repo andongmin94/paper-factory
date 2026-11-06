@@ -9,7 +9,7 @@ Research and write in the current conversation. The scripts collect, inspect and
 
 ## Runtime
 
-Use the same instructions in Claude Code, Claude.ai or another Agent Skills host. For installation or missing prerequisites, read [runtime.md](references/runtime.md). Resolve tool paths from this installed skill directory, not from the input repository. No provider API key or separate model runner is required. Without native Word, use `export --docx-only` when editable DOCX is needed and its conversion prerequisites are available; otherwise deliver the existing source bundle. Leave Word/PDF verification pending.
+Use the same instructions in Claude Code, Claude.ai or another Agent Skills host. For installation or missing prerequisites, read [runtime.md](references/runtime.md). Resolve tool paths from this installed skill directory, not from the input repository. No provider API key or separate model runner is required. For the four official-template Word routes, use `export --docx-only` when editable DOCX is needed without native Word. Follow the venue guide for other formats; if the required tools are unavailable, deliver the incomplete source bundle. Leave Word/PDF verification pending.
 
 ## Choose the requested path
 
@@ -35,6 +35,8 @@ Write in English unless requested otherwise. Lead with the reader's problem, the
 | [IEEE Access](references/ieee-access.md) | Engineering research with supported methods/results | Supplied official DOCX, native Word/PDF |
 | [JORS](references/jors.md) | Reusable research software, Software Metapaper | Supplied official DOCX, native Word/PDF |
 | [JOSS](references/joss.md) | Research software with demonstrated use/development | Authored Markdown, BibTeX and local figures |
+| [Empirical Software Engineering](references/emse.md) | Empirical or replication study with an assessable design, observations and analysis | Author-prepared editable DOCX; no journal Word template |
+| [JMLR MLOSS](references/jmlr-mloss.md) | Open ML implementation with demonstrated community and distinct software contribution | Official-style LaTeX → review PDF; separate cover letter |
 
 Choose by contribution and evidence, not impact factor. A generic application is not automatically research software; topic labels are not approved-journal lists. Verify current official article rules and template provenance directly, including licensing and AI policy. Retained templates do not prove current compliance. For JOSS, automated review is author-side diagnostics only; publication verdicts belong to humans, and editor/reviewer conversations must not be AI-written except for translation.
 
@@ -42,6 +44,6 @@ Choose by contribution and evidence, not impact factor. A generic application is
 
 Keep original data, manuscripts, reviews, failures and historical counts unchanged. Work outside the installed skill in a new output directory. Do not modify or execute the input repository without authorization. Reuse the existing evidence and preparation reports; do not create parallel catalogs, controllers or repeated status documents. Rerun checks only for changed inputs, a new failure or a concrete unresolved concern.
 
-Deliver editable source, bibliography, needed figures and a checklist with the source revision, actual checks and unresolved evidence. Include requested exports only when actually produced. Record real AI assistance and review scope. Hash consistency, scientific assessment, format checks, visual inspection and human approval are separate: none substitutes for another. Inspect every page of a final PDF; unavailable Word/Inara rendering remains unverified. JOSS sources do not use the Word finalizer.
+Deliver editable source, bibliography, needed figures and a checklist with the source revision, actual checks and unresolved evidence. Include requested exports only when actually produced. Record real AI assistance and review scope. Hash consistency, scientific assessment, format checks, visual inspection and human approval are separate: none substitutes for another. Inspect every page of a final PDF; unavailable Word/Inara rendering remains unverified. The native Word finalizer applies only to its four official-template venues.
 
 Leave author identity/consent, eligibility, ethics, rights, funding/conflicts and data/code availability pending without genuine confirmation. ORCID data is not consent. Do not publish, upload, submit or contact others without separate authorization. Stop after the requested draft, revision, review or preparation bundle; do not start another improvement cycle.

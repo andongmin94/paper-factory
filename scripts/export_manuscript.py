@@ -17,7 +17,7 @@ from _publication_checks import compliance_report, validate_manuscript
 from _publication_templates import official_template, word_pdf
 from _publication_files import digest_file, ensure_unlinked
 from _author_profile import normalize_profile
-from _publication_venues import VENUES
+from _publication_venues import EXPORT_VENUES
 
 
 def _read_inputs(manuscript: Path, profile: Path | None):
@@ -170,7 +170,7 @@ def main(argv: list[str] | None = None) -> int:
     for name in ("preflight", "export"):
         command = commands.add_parser(name)
         command.add_argument("--manuscript", type=Path, required=True)
-        command.add_argument("--venue", choices=VENUES, required=True)
+        command.add_argument("--venue", choices=EXPORT_VENUES, required=True)
         command.add_argument("--profile", type=Path)
         command.add_argument("--template", type=Path, help="Official downloaded Word template for IEEE Access or JORS; exact retained SHA required")
         command.add_argument("--bibliography", type=Path, help="JOSS original BibTeX file; defaults to paper.bib beside the manuscript")

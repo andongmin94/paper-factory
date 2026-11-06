@@ -57,6 +57,10 @@ The bibliography defaults to sibling `paper.bib`; `--bibliography ABSOLUTE_FILE`
 
 This path does not generate DOCX, call Inara, upload sources, or produce a PDF. Report the completed source checks separately from unperformed rendering and visual inspection. For a JOSS submission bundle, select manuscript and bibliography roles plus the referenced figure files. `finalize_submission.py` applies to native Word reports and rejects JOSS; do not create a synthetic Word/PDF report for a source package.
 
+## Host-prepared CS manuscripts
+
+For [EMSE Research Articles](emse.md), prepare an editable DOCX. For [JMLR MLOSS](jmlr-mloss.md), prepare the initial-review PDF using the official style and keep the cover letter separate. Select actual files in the existing `submission_support.py bundle` plan with `venue_id: emse` or `jmlr-mloss`. Keep the evidence-bound manuscript and select the DOCX as `editable_docx` or the PDF as `review_pdf`. The bundle checks the selected role and filename extension, preserves bytes, and records an omitted required manuscript role/format as a gap. Selecting a nonexistent file is an input error. It does not inspect layout, run TeX, prove that the PDF came from the selected source, or certify eligibility. These two routes do not use the journal-specific `export_manuscript.py` converters or native Word finalizer.
+
 ## Public ORCID facts
 
 Use `scripts/lookup_orcid.py --help` for its current CLI, then provide an ORCID identifier or accepted public profile URL. The helper requests public ORCID records and normalizes available names, affiliations, emails, and biography material. It does not access private account data or establish author consent. Preserve returned provenance and missing fields; do not infer an email, current role, degree, or approval from absence. Multiple public affiliations or contacts need the actual author's selection for the paper.

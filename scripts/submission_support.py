@@ -18,7 +18,7 @@ import xml.etree.ElementTree as ET
 from _publication_files import digest_file, ensure_unlinked
 from _publication_text import section_headers
 from _author_profile import normalize_profile, profile_completeness
-from _publication_venues import VENUES
+from _publication_venues import PREPARED_MANUSCRIPTS, VENUES
 
 
 BIO_HEADINGS = {"author biography", "author biographies", "about the author", "about the authors"}
@@ -411,6 +411,15 @@ def prepare_bundle(plan, root, output_dir):
                                "sha256": hashlib.sha256(cover_bytes).hexdigest()})
     declaration_status = _declaration_status(declarations, confirmations, approval_files)
     missing.extend(_evidence_gaps(selections))
+    venue = value["venue_id"]
+    if venue in PREPARED_MANUSCRIPTS:
+        role, suffix = PREPARED_MANUSCRIPTS[venue]
+        if not any(row["role"] in {role, "manuscript"} and row["source"].suffix.lower() == suffix
+                   for row in selections):
+            missing.append(f"Select the prepared {venue} manuscript ({role}, {suffix})")
+    recommendation = value.get("recommendation_status")
+    if recommendation not in (None, "conditional", "not_recommended"):
+        raise ValueError("recommendation_status must be conditional or not_recommended; a bundle cannot approve submission")
     pending = []
     if draft_status is not None:
         for role in ("manuscript", "bibliography", "venue_selection", "evidence", "guidance"):
@@ -430,14 +439,18 @@ def prepare_bundle(plan, root, output_dir):
     if value["venue_id"] == "ieee-software" and "author_photo" not in roles:
         pending.append("Retained Software guidance requests author photographs; supply approved images and confirm current requirements")
     if not cover_text and "cover_letter" not in roles:
-        pending.append("Cover letter not supplied; check whether the selected category requests one")
+        pending.append("Supply the required MLOSS cover letter with the reviewed release, repository, license and community evidence"
+                       if venue == "jmlr-mloss" else "Cover letter not supplied; check whether the selected category requests one")
     for name in DECLARATIONS:
         if declaration_status[name]["status"] == "pending":
             pending.append("Confirm actual " + name.replace("_", " "))
     pending.extend(["Reconfirm current publisher category, instructions and required files",
                     "Confirm genuine author identity, affiliation, contact and contribution selections",
-                    ("Compile with the official JOSS publisher pipeline, inspect its PDF and confirm the exact source package" if value["venue_id"] == "joss" else "Inspect every final Word/PDF page and approve the exact files"),
+                    {"joss": "Compile with the official JOSS publisher pipeline, inspect its PDF and confirm the exact source package",
+                     "emse": "Inspect the editable EMSE manuscript, its data availability statement, declarations and submission-system PDF",
+                     "jmlr-mloss": "Inspect the compiled JMLR-style PDF, its four-page text limit plus references, and prior software publications"}.get(venue, "Inspect every final Word/PDF page and approve the exact files"),
                     "Complete any submission-specific declarations in the actual portal"])
+    recommendation = recommendation or ("conditional" if draft_status is not None or missing else "not_assessed")
     folder = _new_output(output_dir)
     records = []
     for selected in selections:
@@ -453,15 +466,18 @@ def prepare_bundle(plan, root, output_dir):
     report = {"mode": "explicit_submission_file_bundle", "created_at_utc": datetime.now(timezone.utc).isoformat(),
               "title": title, "venue_id": value["venue_id"], "source_plan_sha256": plan_sha,
               "article_type": article_type or None, "draft_status": draft_status,
-              "recommendation_status": "conditional" if draft_status is not None or missing else "not_assessed",
+              "recommendation_status": recommendation,
               "guidance_status": guidance_status, "missing_evidence": missing,
               "selected_files": records, "approval_files": approval_files, "supplied_declarations": declarations,
               "supplied_confirmations": confirmations, "declaration_status": declaration_status, "pending": pending,
               "submission_ready": False, "author_approval_inferred": False, "actual_submission_performed": False,
               "scope": "Allowlisted copies, saved JSON evidence-report/manuscript bindings and supplied cover text. Source witnesses and scientific claims are not rechecked; prose evidence notes and human declarations are not independently verified."}
     _write(folder / "report.json", report)
-    draft_note = ("Status: **" + draft_status + "**. Recommendation: **conditional**. Article type: " + article_type +
-                  ".\n\nGuidance status: " + guidance_status + " (supplied reading record, not independently verified by this file tool).\n\n") if draft_status else ""
+    draft_note = f"Status: **{draft_status}**. Article type: {article_type}.\n\n" if draft_status else ""
+    if recommendation != "not_assessed":
+        draft_note += f"Recommendation: **{recommendation.replace('_', ' ')}**.\n\n"
+    if draft_status:
+        draft_note += f"Guidance status: {guidance_status} (supplied reading record, not independently verified by this file tool).\n\n"
     _write(folder / "checklist.md", "# Submission preparation\n\n" + title + "\n\n" + draft_note +
            "\n".join("- [ ] " + item for item in pending) +
            "\n\nNo upload or submission was performed. Supplied declarations require genuine author confirmation.\n")
