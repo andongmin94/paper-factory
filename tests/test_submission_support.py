@@ -278,6 +278,50 @@ def test_bundle_only_allowlisted_files_and_exact_hashes(tmp_path):
     assert all(support.digest_file(tmp_path / "package" / row["path"]) == row["sha256"] for row in manifest["files"])
 
 
+def test_conversion_record_preserves_files_and_requires_a_new_output(tmp_path):
+    source = put(tmp_path / "paper.md", ARTICLE)
+    output = tmp_path / "paper.docx"
+    output.write_bytes(b"Supplied synthetic output, not a valid Word document.")
+    original = {path.name: path.read_bytes() for path in (source, output)}
+    record = support.record_conversion(tmp_path, [source.name], output.name, tmp_path / "conversion")
+    saved = json.loads((tmp_path / "conversion/conversion.json").read_text())
+    assert {key: value for key, value in record.items() if key != "output_dir"} == saved
+    for row in [*record["inputs"], record["output"]]:
+        assert (tmp_path / row["path"]).read_bytes() == original[row["path"]]
+        assert row["sha256"] == support.digest_file(tmp_path / row["path"])
+    assert record["conversion_executed_by_tool"] is False
+    manifest = json.loads((tmp_path / "conversion/manifest.json").read_text())
+    assert manifest["files"][0]["sha256"] == support.digest_file(tmp_path / "conversion/conversion.json")
+    with pytest.raises(FileExistsError):
+        support.record_conversion(tmp_path, [source.name], output.name, tmp_path / "conversion")
+    assert json.loads((tmp_path / "conversion/conversion.json").read_text()) == saved
+
+
+@pytest.mark.parametrize("inputs", [["../private.md"], ["paper.md", "paper.pdf"], []])
+def test_conversion_record_rejects_escaping_or_overlapping_inputs(tmp_path, inputs):
+    put(tmp_path / "paper.md", ARTICLE)
+    put(tmp_path / "paper.pdf", "Synthetic output bytes")
+    with pytest.raises(ValueError):
+        support.record_conversion(tmp_path, inputs, "paper.pdf", tmp_path / "conversion")
+    assert not (tmp_path / "conversion").exists()
+
+
+def test_conversion_record_refuses_files_that_change_during_capture(tmp_path, monkeypatch):
+    source = put(tmp_path / "paper.md", ARTICLE)
+    output = put(tmp_path / "paper.pdf", "Synthetic output bytes")
+    digest = support.digest_file
+
+    def changed(path):
+        if path == output:
+            source.write_text("A different manuscript")
+        return digest(path)
+
+    monkeypatch.setattr(support, "digest_file", changed)
+    with pytest.raises(ValueError, match="changed while recording"):
+        support.record_conversion(tmp_path, [source.name], output.name, tmp_path / "conversion")
+    assert not (tmp_path / "conversion").exists()
+
+
 def test_explicit_declaration_confirmation_is_bound_to_exact_text_and_all_selected_files(tmp_path):
     import hashlib
     root = tmp_path / "source"

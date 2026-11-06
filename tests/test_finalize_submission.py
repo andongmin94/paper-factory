@@ -84,6 +84,19 @@ def test_complete_supplied_records_can_close_preparation_without_claiming_submis
     assert before == {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob("*") if p.is_file()}
 
 
+@pytest.mark.parametrize("decision", ["not_recommended", "conditional"])
+def test_final_check_preserves_unresolved_bundle_venue_decision(prepared, tmp_path, decision):
+    root, record_path, record = prepared
+    plan = json.loads((root / "plan.json").read_text(encoding="utf-8"))
+    plan["recommendation_status"] = decision
+    support.prepare_bundle(put(root / "reviewed-plan.json", plan), root / "raw", root / "reviewed-bundle")
+    record["bundle_report"] = "reviewed-bundle/report.json"
+    report = finalizer.check(root, put(record_path, record), tmp_path / "final")
+    assert not report["submission_ready"] and report["pending"] == ["venue_recommendation"]
+    assert report["administrative_preparation_complete"]
+    assert decision in next(row["reason"] for row in report["checks"] if row["id"] == "venue_recommendation")
+
+
 @pytest.mark.parametrize("draft_fields", [{"draft_status": "incomplete"}, {"missing_evidence": ["No research comparison retained"]}])
 def test_supplied_approvals_cannot_clear_a_draft_or_missing_research_evidence(prepared, tmp_path, draft_fields):
     root, record, _ = prepared

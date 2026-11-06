@@ -168,7 +168,9 @@ def resume(folder: Path) -> dict:
 
 def evidence(root: Path, ledger_path: Path, output_dir: Path) -> dict:
     """Check literal manuscript/source bindings without asserting entailment."""
-    root, ledger = _absolute(root), _json(ledger_path)
+    root = _absolute(root)
+    ledger, ledger_hash = _json_snapshot(ledger_path)
+    ledger_path = ledger_path.resolve()
     manuscript = _relative(root, ledger.get("manuscript"))
     snapshot = manuscript.read_bytes()
     text = snapshot.decode("utf-8-sig")
@@ -218,11 +220,15 @@ def evidence(root: Path, ledger_path: Path, output_dir: Path) -> dict:
         output.append({**claim, "sources": witnesses, "issues": sorted(set(issues)), "bindings_match": not issues})
     if digest_file(manuscript) != initial:
         raise ValueError("Manuscript changed during evidence inspection")
+    if digest_file(ledger_path) != ledger_hash:
+        raise ValueError("Claim ledger changed during evidence inspection")
     for path, (_, observed_hash) in snapshots.items():
         if (digest_file(path) if path.is_file() else None) != observed_hash:
             raise ValueError("Evidence source changed during inspection")
     folder = _new_folder(output_dir)
     report = {"manuscript": ledger["manuscript"], "manuscript_sha256": initial, "claims": output,
+              "ledger_path": ledger_path.relative_to(root).as_posix() if ledger_path.is_relative_to(root) else None,
+              "ledger_sha256": ledger_hash,
               "bindings_match": all(item["bindings_match"] for item in output),
               "scope": "Literal location/hash checks only. Matching witnesses do not establish claim truth, novelty, runtime observation or scientific entailment."}
     _write(folder / "evidence.json", report)
@@ -475,7 +481,7 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     c = commands.add_parser("repository", help="Retain selected GitHub source files at one commit without executing project code")
     c.add_argument("--url", required=True)
-    c.add_argument("--ref", help="Existing branch or tag; otherwise the remote default branch")
+    c.add_argument("--ref", help="Existing branch, tag or full 40-character commit SHA; otherwise the remote default branch")
     c.add_argument("--paths", nargs="+", required=True, help="Explicit tracked repository files to retain after inspecting the tree")
     c.add_argument("--output-dir", type=Path, required=True)
     c = commands.add_parser("checkpoint")

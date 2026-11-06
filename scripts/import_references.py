@@ -40,8 +40,15 @@ def _bibtex_records(text: str):
     comment = pp.CaselessKeyword("comment")("kind") + (
         braced | pp.original_text_for(pp.nested_expr("(", ")", ignore_expr=escaped)) |
         pp.Regex(r"[^\n]*"))
-    entry = name("kind") + enclosed(pp.Regex(r"[^\s,{}()=]+")("key") +
-                                     pp.Optional(pp.Suppress(",") + fields))
+
+    def entry_body(opener, key, closer):
+        return pp.Suppress(opener) + pp.Regex(key)("key") + pp.Optional(pp.Suppress(",") + fields) + pp.Suppress(closer)
+
+    entry_kind = name.copy().add_condition(lambda t: t[0].casefold() not in {"string", "preamble", "comment"})
+    # A ')' may be part of a key, including just before the field comma.
+    # Respect a closing delimiter before the next record even without whitespace.
+    paren_key = r"[^\s,{}]+?(?=\)@[A-Za-z][\w:.+\-]*\s*[({])|[^\s,{}]+(?=\s*[,\)])"
+    entry = entry_kind("kind") + (entry_body("{", r"[^\s,{}]+", "}") | entry_body("(", paren_key, ")"))
     block = pp.Group(pp.Located(pp.Suppress("@") + (definitions | preamble | comment | entry)))
     document = pp.ZeroOrMore(pp.Regex(r"%[^\n]*").suppress() | block | pp.Regex(r"[^@]+").suppress())
     document.parse_with_tabs()

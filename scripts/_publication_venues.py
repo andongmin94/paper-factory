@@ -57,5 +57,11 @@ VENUE_RULES = {
     },
 }
 
-VENUES = tuple(VENUE_RULES)
-WORD_VENUES = tuple(venue for venue in VENUES if VENUE_RULES[venue]["output"] == "word")
+EXPORT_VENUES = tuple(VENUE_RULES)
+WORD_VENUES = tuple(venue for venue in EXPORT_VENUES if VENUE_RULES[venue]["output"] == "word")
+
+# These venues accept a host-prepared manuscript. They do not use a retained
+# Word template or the JOSS adapter. Roles refer to the private preparation bundle.
+PREPARED_MANUSCRIPTS = {"emse": ("editable_docx", ".docx"),
+                        "jmlr-mloss": ("review_pdf", ".pdf")}
+VENUES = (*EXPORT_VENUES, *PREPARED_MANUSCRIPTS)

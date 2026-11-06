@@ -62,7 +62,8 @@ def capture_repository(url: str, output_dir: Path, *, paths: list[str], ref: str
     normalized = _repository_url(url)
     selected = _paths(paths)
     if ref is not None and (not isinstance(ref, str) or not ref or ref.startswith("-")):
-        raise ValueError("ref must be a branch or tag name")
+        raise ValueError("ref must be a branch, tag or full 40-character commit SHA")
+    pinned_commit = ref.lower() if ref is not None and re.fullmatch(r"[0-9a-fA-F]{40}", ref) else None
     if not output_dir.is_absolute():
         raise ValueError("Repository capture output must be an absolute new directory")
     ensure_unlinked(output_dir)
@@ -73,15 +74,24 @@ def capture_repository(url: str, output_dir: Path, *, paths: list[str], ref: str
         temporary = Path(temporary)
         hooks = temporary / "empty-hooks"
         hooks.mkdir()
-        if ref is not None:
-            _git(["check-ref-format", "refs/heads/" + ref], cwd=temporary, hooks=hooks)
         checkout = temporary / "repository"
-        clone = ["clone", "--quiet", "--depth=1", "--single-branch", "--no-checkout",
-                 "--no-recurse-submodules", f"--template={hooks}"]
-        if ref is not None:
-            clone.append("--branch=" + ref)
-        _git([*clone, "--", normalized, str(checkout)], cwd=temporary, hooks=hooks)
-        commit = _git(["rev-parse", "--verify", "HEAD^{commit}"], cwd=checkout, hooks=hooks).decode("ascii").strip()
+        if pinned_commit is not None:
+            _git(["init", "--quiet", f"--template={hooks}", str(checkout)], cwd=temporary, hooks=hooks)
+            _git(["fetch", "--quiet", "--depth=1", "--no-tags", "--no-recurse-submodules", "--",
+                  normalized, pinned_commit], cwd=checkout, hooks=hooks)
+            revision = "FETCH_HEAD"
+        else:
+            if ref is not None:
+                _git(["check-ref-format", "refs/heads/" + ref], cwd=temporary, hooks=hooks)
+            clone = ["clone", "--quiet", "--depth=1", "--single-branch", "--no-checkout",
+                     "--no-recurse-submodules", f"--template={hooks}"]
+            if ref is not None:
+                clone.append("--branch=" + ref)
+            _git([*clone, "--", normalized, str(checkout)], cwd=temporary, hooks=hooks)
+            revision = "HEAD"
+        commit = _git(["rev-parse", "--verify", revision + "^{commit}"], cwd=checkout, hooks=hooks).decode("ascii").strip()
+        if pinned_commit is not None and commit != pinned_commit:
+            raise ValueError(f"Requested commit {pinned_commit} resolved to a different commit: {commit}")
         tree = _git(["rev-parse", "--verify", f"{commit}^{{tree}}"], cwd=checkout, hooks=hooks).decode("ascii").strip()
         object_format = _git(["rev-parse", "--show-object-format"], cwd=checkout, hooks=hooks).decode("ascii").strip()
         timestamp = _git(["show", "-s", "--format=%cI", commit], cwd=checkout, hooks=hooks).decode("ascii").strip()

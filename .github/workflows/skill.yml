@@ -29,3 +29,11 @@ jobs:
         run: python -c "import sys; sys.path.insert(0, 'scripts'); from _publication_convert import pandoc_binary, pandoc_version; print(pandoc_version(pandoc_binary()))"
       - name: Run isolated tool tests
         run: python -m pytest -q
+      - name: Package the portable skill
+        run: git archive --format=zip --prefix=paper-factory/ --output=paper-factory.zip HEAD SKILL.md LICENSE requirements.txt scripts references assets
+      - name: Upload the installable skill archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: paper-factory-skill
+          path: paper-factory.zip
+          if-no-files-found: error

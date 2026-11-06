@@ -18,7 +18,7 @@ import xml.etree.ElementTree as ET
 from _publication_files import digest_file, ensure_unlinked
 from _publication_text import section_headers
 from _author_profile import normalize_profile, profile_completeness
-from _publication_venues import VENUES
+from _publication_venues import PREPARED_MANUSCRIPTS, VENUES
 
 
 BIO_HEADINGS = {"author biography", "author biographies", "about the author", "about the authors"}
@@ -284,6 +284,76 @@ def _inside_file(root, raw):
     return path
 
 
+def record_conversion(root, inputs, output, output_dir):
+    """Snapshot host-declared conversion files, without executing a converter."""
+    ensure_unlinked(root)
+    root = root.resolve(strict=True)
+    if not root.is_dir() or not isinstance(inputs, list) or not inputs:
+        raise ValueError("Conversion requires a source root and explicit non-empty inputs")
+    paths = [_inside_file(root, name) for name in [*inputs, output]]
+    names = [path.relative_to(root).as_posix() for path in paths]
+    if len({name.casefold() for name in names}) != len(names):
+        raise ValueError("Conversion inputs and output must be distinct files")
+    if paths[-1].suffix.casefold() not in {".docx", ".pdf"}:
+        raise ValueError("Conversion output must be a prepared DOCX or PDF")
+    records = [{"path": name, "bytes": path.stat().st_size, "sha256": digest_file(path)}
+               for name, path in zip(names, paths)]
+    report = {"mode": "host_prepared_conversion", "created_at_utc": datetime.now(timezone.utc).isoformat(),
+              "inputs": records[:-1], "output": records[-1], "conversion_executed_by_tool": False,
+              "scope": "Byte snapshot after host conversion. Input selection and the conversion relationship are host-declared, not independently verified. No layout, scientific or author approval is implied."}
+    if any(digest_file(path) != record["sha256"] for path, record in zip(paths, records)):
+        raise ValueError("A conversion file changed while recording its hash")
+    folder = _new_output(output_dir)
+    _write(folder / "conversion.json", report)
+    _manifest(folder)
+    return {"output_dir": str(folder), **report}
+
+
+def _conversion_gaps(selections, outputs):
+    """Compare saved host conversion snapshots only with allowlisted files."""
+    selected = {row["path"]: row["sha256"] for row in selections}
+    output_paths = {row["path"] for row in outputs}
+    required_inputs = {row["path"] for row in selections
+                       if row["role"] in {"manuscript", "bibliography", "latex_source", "figure", "conversion_input"}
+                       and row["path"] not in output_paths}
+    records, gaps = [], []
+    for row in selections:
+        if row["role"] != "conversion_record":
+            continue
+        label = "Conversion record " + row["path"]
+        try:
+            record = _json(row["source"])
+            inputs, output = record.get("inputs"), record.get("output")
+            if record.get("mode") != "host_prepared_conversion" or not isinstance(inputs, list) or not inputs:
+                raise ValueError("Invalid conversion inputs")
+            files = [*inputs, output]
+            if any(not isinstance(item, dict) or not isinstance(item.get("path"), str) or not item["path"] or
+                   not isinstance(item.get("sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", item["sha256"])
+                   for item in files):
+                raise ValueError("Invalid conversion binding")
+            if len({item["path"].casefold() for item in files}) != len(files):
+                raise ValueError("Duplicate conversion paths")
+        except ValueError:
+            gaps.append(label + ": invalid record; regenerate the output and use record-conversion")
+            continue
+        records.append((label, inputs, output))
+    for output in outputs:
+        matching = [(label, inputs, saved) for label, inputs, saved in records if saved["path"] == output["path"]]
+        if len(matching) != 1:
+            gaps.append(f"Prepared output {output['path']}: select exactly one conversion_record for these inputs and output")
+            continue
+        label, inputs, saved = matching[0]
+        for item in [*inputs, saved]:
+            path = item["path"]
+            if path not in selected:
+                gaps.append(f"{label}: conversion file {path} is not selected; include the exact input/output bytes")
+            elif selected[path] != item["sha256"]:
+                gaps.append(f"{label}: {path} changed; regenerate {output['path']} and record the conversion again")
+        for path in sorted(required_inputs - {item["path"] for item in inputs}):
+            gaps.append(f"{label}: selected input {path} is not bound; regenerate {output['path']} with all inputs recorded")
+    return gaps
+
+
 def _declaration_status(declarations, confirmations, selections):
     """Check the scope of explicitly supplied human records, never infer consent."""
     if not isinstance(confirmations, dict) or set(confirmations) - set(DECLARATIONS):
@@ -321,12 +391,15 @@ def _declaration_status(declarations, confirmations, selections):
 
 def _evidence_gaps(selections):
     """Carry saved JSON evidence results forward; do not rerun source inspection."""
+    reports = [row for row in selections if row["role"] == "evidence" and row["source"].suffix.casefold() == ".json"]
+    if not reports:
+        return []  # Authored prose notes do not claim machine-checked bindings.
     manuscripts = [row for row in selections if row["role"] == "manuscript"]
+    selected = {row["path"]: row["sha256"] for row in selections}
+    unmatched_ledgers = {row["path"]: row["sha256"] for row in selections if row["role"] == "claim_ledger"}
+    ledger_hashes = set()
     gaps = []
-    for row in selections:
-        # Authored prose evidence notes are not machine-readable binding reports.
-        if row["role"] != "evidence" or row["source"].suffix.casefold() != ".json":
-            continue
+    for row in reports:
         label = "Evidence report " + row["path"]
         try:
             report = _json(row["source"])
@@ -335,6 +408,13 @@ def _evidence_gaps(selections):
             continue
         if len(manuscripts) != 1 or report.get("manuscript_sha256") != manuscripts[0]["sha256"]:
             gaps.append(label + ": does not bind the single selected manuscript; rerun evidence for these bytes")
+        ledger_path, ledger_hash = report.get("ledger_path"), report.get("ledger_sha256")
+        if isinstance(ledger_hash, str):
+            ledger_hashes.add(ledger_hash)
+        if isinstance(ledger_path, str) and ledger_path in selected:
+            unmatched_ledgers.pop(ledger_path, None)
+            if selected[ledger_path] != ledger_hash:
+                gaps.append(f"{label}: selected claim ledger {ledger_path} differs from the checked ledger")
         claims = report.get("claims")
         if (not isinstance(claims, list) or not claims or
                 any(not isinstance(claim, dict) or not isinstance(claim.get("id"), str) or not claim["id"] or
@@ -347,7 +427,19 @@ def _evidence_gaps(selections):
             gaps.append(label + ": unresolved claim bindings: " + ", ".join(failed))
         elif report.get("bindings_match") is not True:
             gaps.append(label + ": overall bindings are not reported as matching")
-    return gaps
+        for claim in claims:
+            sources = claim.get("sources")
+            if not isinstance(sources, list) or any(not isinstance(s, dict) or not isinstance(s.get("path"), str) for s in sources):
+                gaps.append(f"{label}: invalid source witnesses for {claim['id']}")
+                continue
+            for source in sources:
+                path = source["path"]
+                if path in selected and selected[path] != source.get("observed_sha256"):
+                    gaps.append(f"{label}: {claim['id']} does not bind the selected source bytes for {path}")
+    for path, sha in unmatched_ledgers.items():
+        if sha not in ledger_hashes:
+            gaps.append(f"No selected evidence report binds the selected claim ledger {path}")
+    return list(dict.fromkeys(gaps))
 
 
 def prepare_bundle(plan, root, output_dir):
@@ -411,6 +503,18 @@ def prepare_bundle(plan, root, output_dir):
                                "sha256": hashlib.sha256(cover_bytes).hexdigest()})
     declaration_status = _declaration_status(declarations, confirmations, approval_files)
     missing.extend(_evidence_gaps(selections))
+    venue = value["venue_id"]
+    if venue in PREPARED_MANUSCRIPTS:
+        role, suffix = PREPARED_MANUSCRIPTS[venue]
+        outputs = [row for row in selections if row["role"] in {role, "manuscript"}
+                   and row["source"].suffix.lower() == suffix]
+        if not outputs:
+            missing.append(f"Select the prepared {venue} manuscript ({role}, {suffix})")
+        else:
+            missing.extend(_conversion_gaps(selections, outputs))
+    recommendation = value.get("recommendation_status")
+    if recommendation not in (None, "conditional", "not_recommended"):
+        raise ValueError("recommendation_status must be conditional or not_recommended; a bundle cannot approve submission")
     pending = []
     if draft_status is not None:
         for role in ("manuscript", "bibliography", "venue_selection", "evidence", "guidance"):
@@ -430,14 +534,18 @@ def prepare_bundle(plan, root, output_dir):
     if value["venue_id"] == "ieee-software" and "author_photo" not in roles:
         pending.append("Retained Software guidance requests author photographs; supply approved images and confirm current requirements")
     if not cover_text and "cover_letter" not in roles:
-        pending.append("Cover letter not supplied; check whether the selected category requests one")
+        pending.append("Supply the required MLOSS cover letter with the reviewed release, repository, license and community evidence"
+                       if venue == "jmlr-mloss" else "Cover letter not supplied; check whether the selected category requests one")
     for name in DECLARATIONS:
         if declaration_status[name]["status"] == "pending":
             pending.append("Confirm actual " + name.replace("_", " "))
     pending.extend(["Reconfirm current publisher category, instructions and required files",
                     "Confirm genuine author identity, affiliation, contact and contribution selections",
-                    ("Compile with the official JOSS publisher pipeline, inspect its PDF and confirm the exact source package" if value["venue_id"] == "joss" else "Inspect every final Word/PDF page and approve the exact files"),
+                    {"joss": "Compile with the official JOSS publisher pipeline, inspect its PDF and confirm the exact source package",
+                     "emse": "Inspect the editable EMSE manuscript, its data availability statement, declarations and submission-system PDF",
+                     "jmlr-mloss": "Inspect the compiled JMLR-style PDF, its four-page text limit plus references, and prior software publications"}.get(venue, "Inspect every final Word/PDF page and approve the exact files"),
                     "Complete any submission-specific declarations in the actual portal"])
+    recommendation = recommendation or ("conditional" if draft_status is not None or missing else "not_assessed")
     folder = _new_output(output_dir)
     records = []
     for selected in selections:
@@ -453,15 +561,18 @@ def prepare_bundle(plan, root, output_dir):
     report = {"mode": "explicit_submission_file_bundle", "created_at_utc": datetime.now(timezone.utc).isoformat(),
               "title": title, "venue_id": value["venue_id"], "source_plan_sha256": plan_sha,
               "article_type": article_type or None, "draft_status": draft_status,
-              "recommendation_status": "conditional" if draft_status is not None or missing else "not_assessed",
+              "recommendation_status": recommendation,
               "guidance_status": guidance_status, "missing_evidence": missing,
               "selected_files": records, "approval_files": approval_files, "supplied_declarations": declarations,
               "supplied_confirmations": confirmations, "declaration_status": declaration_status, "pending": pending,
               "submission_ready": False, "author_approval_inferred": False, "actual_submission_performed": False,
-              "scope": "Allowlisted copies, saved JSON evidence-report/manuscript bindings and supplied cover text. Source witnesses and scientific claims are not rechecked; prose evidence notes and human declarations are not independently verified."}
+              "scope": "Allowlisted copies, saved evidence and host conversion bindings for the selected files, and supplied cover text. Source quotations, scientific claims and conversion relationships are not rechecked; prose evidence notes and human declarations are not independently verified."}
     _write(folder / "report.json", report)
-    draft_note = ("Status: **" + draft_status + "**. Recommendation: **conditional**. Article type: " + article_type +
-                  ".\n\nGuidance status: " + guidance_status + " (supplied reading record, not independently verified by this file tool).\n\n") if draft_status else ""
+    draft_note = f"Status: **{draft_status}**. Article type: {article_type}.\n\n" if draft_status else ""
+    if recommendation != "not_assessed":
+        draft_note += f"Recommendation: **{recommendation.replace('_', ' ')}**.\n\n"
+    if draft_status:
+        draft_note += f"Guidance status: {guidance_status} (supplied reading record, not independently verified by this file tool).\n\n"
     _write(folder / "checklist.md", "# Submission preparation\n\n" + title + "\n\n" + draft_note +
            "\n".join("- [ ] " + item for item in pending) +
            "\n\nNo upload or submission was performed. Supplied declarations require genuine author confirmation.\n")
@@ -558,10 +669,14 @@ def main(argv=None):
     bundle = commands.add_parser("bundle", help="Copy only explicit submission files into a new local folder")
     bundle.add_argument("--plan", type=Path, required=True)
     bundle.add_argument("--root", type=Path, required=True)
+    conversion = commands.add_parser("record-conversion", help="Snapshot declared inputs and DOCX/PDF after host conversion; does not run a converter")
+    conversion.add_argument("--root", type=Path, required=True)
+    conversion.add_argument("--inputs", nargs="+", required=True, help="All authored input files, relative to root")
+    conversion.add_argument("--file", required=True, help="Generated DOCX/PDF, relative to root")
     metadata = commands.add_parser("metadata", help="Inspect actual DOCX/PDF properties without removing them")
     metadata.add_argument("--file", type=Path, required=True)
     metadata.add_argument("--profile", type=Path)
-    for command in (authors, responses, bundle, metadata):
+    for command in (authors, responses, bundle, conversion, metadata):
         command.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
@@ -571,6 +686,8 @@ def main(argv=None):
             result = prepare_responses(args.comments, args.before, args.after, args.output_dir)
         elif args.command == "bundle":
             result = prepare_bundle(args.plan, args.root, args.output_dir)
+        elif args.command == "record-conversion":
+            result = record_conversion(args.root, args.inputs, args.file, args.output_dir)
         else:
             result = inspect_metadata(args.file, args.output_dir, profile=args.profile)
     except (OSError, ValueError, TypeError) as exc:

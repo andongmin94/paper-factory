@@ -83,6 +83,35 @@ def test_preflight_parses_official_metadata_and_multiple_affiliations_without_wr
     assert {p.name for p in manuscript.parent.iterdir()} == {"draft.md", "paper.bib"}
 
 
+@pytest.mark.parametrize("name_fields,expected", [
+    ("given-names: Ludwig\n    non-dropping-particle: van\n    surname: Beethoven", "Ludwig van Beethoven"),
+    ("name:\n      given-names: Ludwig\n      non-dropping-particle: van\n      surname: Beethoven", "Ludwig van Beethoven"),
+    ("given-names: Jane\n    dropping-particle: de\n    non-dropping-particle: van\n    surname: Doe\n    suffix: Jr.", "Jane de van Doe Jr."),
+    ("literal: Research Software Consortium", "Research Software Consortium"),
+    ("name:\n      literal: Research Software Consortium", "Research Software Consortium"),
+    ("given: Alice\n    family_name: Research", "Alice Research"),
+    ("given_name: Alice\n    family: Research", "Alice Research"),
+    ("first: Alice\n    last: Research", "Alice Research"),
+    ("firstname: Alice\n    lastname: Research", "Alice Research"),
+    ("name: 'Research, Alice'\n    literal: Ignored Group\n    given-names: Ignored\n    surname: Name", "Research, Alice"),
+    ("name:\n      name: 'Research, Alice'\n      literal: Ignored Group\n      given-names: Ignored\n      surname: Name", "Research, Alice"),
+    ("literal: Research Software Consortium\n    given-names: Ignored\n    surname: Name", "Research Software Consortium"),
+    ("given-names: Alice\n    given: Ignored\n    surname: Research\n    family: Name", "Alice Research"),
+])
+def test_author_name_forms_match_publisher_and_preserve_source(sources, tmp_path, name_fields, expected):
+    manuscript, _ = sources
+    manuscript.write_text(paper().replace("name: Alice Research", name_fields), encoding="utf-8")
+    original = manuscript.read_bytes()
+    output = tmp_path / "named-authors"
+    result = joss.export(manuscript, output)
+    report = json.loads(Path(result["format_report"]).read_text())
+    assert report["metrics"]["authors"][0] == {
+        "name": expected, "affiliations": ["1", "2"], "valid": True}
+    assert report["source_package_passed"]
+    assert not report["author_approval_inferred"]
+    assert manuscript.read_bytes() == original == (output / "paper.md").read_bytes()
+
+
 def test_export_retains_bibtex_and_images_and_records_source_only_scope(sources, tmp_path):
     from PIL import Image
     manuscript, bibliography = sources
@@ -111,6 +140,7 @@ def test_export_retains_bibtex_and_images_and_records_source_only_scope(sources,
 
 @pytest.mark.parametrize("replacement,failed", [
     (("affiliation: [2]", "affiliation: [3]"), "authors"),
+    (("  - name: Bob Scientist\n    affiliation: [2]", "  - affiliation: [2]"), "authors"),
     (("date: 2 November 2026", "date: 2026-11-02"), "date"),
     (("bibliography: paper.bib", "bibliography: another.bib"), "bibliography_metadata"),
     (("# Software Design", "# Implementation"), "section_software_design"),
@@ -168,6 +198,41 @@ def test_source_images_must_be_available_inside_bundle(sources, tmp_path, target
     with pytest.raises((ValueError, OSError)):
         joss.export(manuscript, tmp_path / "invalid")
     assert not (tmp_path / "invalid").exists()
+
+
+@pytest.mark.parametrize("markup", [
+    r"Inline figure: \includegraphics[width=2cm]{plot.png}.",
+    "\\begin{figure}\n\\includegraphics*{plot.png}\n\\end{figure}",
+    '<img src="plot.png" alt="Plot">',
+])
+def test_raw_figures_cannot_pass_export_with_missing_assets(sources, tmp_path, markup):
+    from PIL import Image
+    manuscript, _ = sources
+    Image.new("RGB", (16, 16)).save(tmp_path / "plot.png")
+    manuscript.write_text(paper().replace("# References", markup + "\n\n# References"), encoding="utf-8")
+    with pytest.raises(ValueError, match="Use Markdown image syntax"):
+        joss.export(manuscript, tmp_path / "delivery")
+    assert not (tmp_path / "delivery").exists()
+
+
+def test_literal_figure_examples_are_not_assets(sources):
+    manuscript, _ = sources
+    examples = r'''Write `\includegraphics{example.png}` or `<img src="example.png">`.
+
+```tex
+\includegraphics{example.png}
+```
+
+An expression $x \in S$ and an HTML comment <!-- <img src="example.png"> -->.
+
+\begin{figure}
+% \includegraphics{example.png}
+\end{figure}
+
+\verb|\includegraphics{example.png}|
+'''
+    manuscript.write_text(paper().replace("# References", examples + "\n# References"), encoding="utf-8")
+    assert joss.preflight(manuscript)["prefilter_passed"]
 
 
 def test_explicit_bibliography_and_resource_directory_reach_exact_source_bundle(sources, tmp_path):

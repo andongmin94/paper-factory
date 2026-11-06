@@ -1,11 +1,13 @@
 """Prepare JOSS's Markdown/BibTeX source submission without claiming PDF output."""
 
 from datetime import datetime
+from html.parser import HTMLParser
 from io import BytesIO
 import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import re
 import subprocess
 from urllib.parse import unquote, urlsplit
 
@@ -57,6 +59,46 @@ def _fields(value):
     return value.get("c", {}) if isinstance(value, dict) and value.get("t") == "MetaMap" else {}
 
 
+def _author_name(author):
+    """Read supplied display names or structured fields in Inara's order."""
+    name = author.get("name")
+    fields = _fields(name) if name is not None else author
+    if name is not None and not fields:
+        return _text(name).strip()
+    if "name" in fields or "literal" in fields:
+        return _text(fields.get("name", fields.get("literal"))).strip()
+    parts = [next((fields[key] for key in aliases if key in fields), None)
+             for aliases in (("given-names", "given", "given_name", "first", "firstname"),
+                             ("dropping-particle",), ("non-dropping-particle",),
+                             ("surname", "family_name", "family", "last", "lastname"),
+                             ("suffix",))]
+    return " ".join(_text(part).strip() for part in parts if part is not None).strip()
+
+
+class _HTMLImage(HTMLParser):
+    found = False
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "img":
+            self.found = True
+
+
+def _raw_image(node):
+    if node.get("t") not in {"RawInline", "RawBlock"}:
+        return False
+    fmt, source = node["c"]
+    if fmt == "html":
+        parser = _HTMLImage()
+        parser.feed(source)
+        return parser.found
+    if fmt in {"tex", "latex"}:
+        # Only direct graphics commands; ignore literal examples and TeX comments.
+        source = re.sub(r"\\begin\{verbatim\*?\}.*?\\end\{verbatim\*?\}", "", source, flags=re.S)
+        source = re.sub(r"\\verb\*?([^a-zA-Z\s]).*?\1|(?<!\\)%[^\n]*", "", source)
+        return bool(re.search(r"(?<!\\)\\includegraphics\s*\*?\s*[\[{]", source))
+    return False
+
+
 def _inspect(manuscript, *, bibliography=None, pandoc=None, resource_dir=None):
     ensure_unlinked(manuscript)
     if manuscript.suffix.lower() != ".md":
@@ -98,7 +140,7 @@ def _inspect(manuscript, *, bibliography=None, pandoc=None, resource_dir=None):
         supplied = (_entries(affiliation) if isinstance(affiliation, dict) and affiliation.get("t") == "MetaList"
                     else [affiliation])
         assigned = [index.strip() for value in supplied for index in _text(value).split(",")]
-        name = _text(author.get("name")).strip()
+        name = _author_name(author)
         author_rows.append({"name": name, "affiliations": assigned,
                             "valid": bool(name and assigned and all(index in indexes for index in assigned))})
     item("authors", bool(author_rows) and all(row["valid"] for row in author_rows),
@@ -171,7 +213,10 @@ def _inspect(manuscript, *, bibliography=None, pandoc=None, resource_dir=None):
             with Image.open(BytesIO(data)) as image:
                 image.verify()
         files[relative.as_posix()] = (path, data)
-    item("local_images", True, f"Retain the actual bytes of {len(images)} local referenced images; layout is not rendered.")
+    raw_image = any(_raw_image(node) for node in _nodes(blocks))
+    item("local_images", not raw_image,
+         "Use Markdown image syntax ![Caption](figures/plot.png) instead of raw TeX/HTML to include figures in the source bundle."
+         if raw_image else f"Retain the actual bytes of {len(images)} local referenced images; layout is not rendered.")
     blockers = [row["reason"] for row in items if row["status"] == "failed"]
     report = {"venue_id": "joss", "mode": "joss_source_preflight", "checked_at": CHECKED_AT,
               "source_urls": [GUIDANCE_URL, SUBMISSION_URL], "items": items, "blockers": blockers,

@@ -34,6 +34,8 @@ For Access and JORS, download the original linked by [Access guidance](ieee-acce
 
 Use the corresponding venue's template for each command. Word `preflight` reads the manuscript and checks the template without launching Word. Word `export` requires a new output directory, retains exact Markdown bytes, produces DOCX, renders that exact saved DOCX through hidden read-only Word to PDF, measures native counts, and retains conversion/format/provenance reports and all-page PNGs. A failed export retains its directory for diagnosis; do not overwrite it or reuse an earlier export as a successful result.
 
+For editable DOCX without Microsoft Word, explicitly add `--docx-only` to `export`. It uses the same official-template converter and retains the source, DOCX, conversion receipts, read-only preflight report, provenance and manifest. It does not attempt native Word/PDF or silently recover from a failed native export. Exit 0 means the manuscript preflight passed; exit 1 means DOCX and reports were created but manuscript checks failed; exit 2 is an input/conversion error. `content_format_passed` and `submission_ready` remain false, and native measurement and page review remain pending. This option is not accepted for JOSS.
+
 Conversion warnings stop the export, including Pandoc replacing a missing figure with its description. Embedded common raster images are checked for readable image structure before delivery. Read the reported diagnostic and repair the actual input in a new revision; a retained partial DOCX is a failed output. These checks do not establish visual fidelity or validate every vector format; inspect all final pages as described below.
 
 Body figures are reduced proportionally when needed to fit the publisher's column width and printable page height; smaller figures are not enlarged. This preserves image bytes but cannot ensure that labels remain readable after reduction. Inspect their actual final size during page review.
@@ -54,6 +56,22 @@ Read [JOSS guidance](joss.md) before preparing the canonical `paper.md`. Set `bi
 The bibliography defaults to sibling `paper.bib`; `--bibliography ABSOLUTE_FILE` selects a supplied BibTeX file to preserve as `paper.bib`. Use `--resource-dir ABSOLUTE_DIRECTORY` when local image paths resolve relative to another retained source directory. The tools inspect Pandoc metadata, sections, citation keys, bibliography records, and local media, then preserve `paper.md`, `paper.bib`, and referenced figures with hashes in the new output directory. Existing BibTeX/RIS/CSL-JSON import remains a separate metadata tool; RIS is not a JOSS submission bibliography.
 
 This path does not generate DOCX, call Inara, upload sources, or produce a PDF. Report the completed source checks separately from unperformed rendering and visual inspection. For a JOSS submission bundle, select manuscript and bibliography roles plus the referenced figure files. `finalize_submission.py` applies to native Word reports and rejects JOSS; do not create a synthetic Word/PDF report for a source package.
+
+## Host-prepared CS manuscripts
+
+For [EMSE Research Articles](emse.md), prepare an editable DOCX. For [JMLR MLOSS](jmlr-mloss.md), prepare the initial-review PDF using the official style and keep the cover letter separate. These two routes do not use the journal-specific `export_manuscript.py` converters or native Word finalizer.
+
+After successful host conversion and inspection of the output against the authored inputs, record their exact versions. Use `record-conversion` with all actual authored inputs: the evidence-bound manuscript, any separate LaTeX source, bibliography and figures. For example, when the canonical manuscript is Markdown and the host prepared a separate TeX source:
+
+```sh
+python /path/to/paper-factory/scripts/submission_support.py record-conversion --root /work/article --inputs paper.md paper.tex paper.bib --file paper.pdf --output-dir /work/article/conversion-1
+```
+
+For EMSE, select the actual DOCX with `--file paper.docx` and list its authored inputs. Include figure files in `--inputs` when used. The command writes `conversion.json` and a manifest into a new directory; it does not copy or convert the files. It records a host-declared relationship, not proof that a build occurred or that every dependency was listed. Do not record an old output against edited sources: regenerate it first. A matching snapshot cannot replace content or page review.
+
+In the existing `bundle` plan, set `venue_id: emse` or `jmlr-mloss`, retain the evidence-bound `manuscript`, and select the output as `editable_docx` or `review_pdf`. Select `conversion-1/conversion.json` as `conversion_record` and every recorded input using the same root-relative paths. Use `bibliography`, `latex_source` and `figure` for those authored inputs, or `conversion_input` for other authored dependencies. The bundle requires exactly one record for each prepared output, checks its input/output hashes against the selected files, and flags selected manuscript, bibliography, LaTeX and figure inputs omitted from the record. Missing records, unselected inputs and changed bytes become explicit gaps; a supplied `draft` becomes `incomplete`. Rebuild the output and create a new record after an input changes, then bundle the new files together. Existing records remain unchanged.
+
+The bundle also checks the required output role and extension; a nonexistent selected file is an input error. It does not inspect layout, run TeX, independently verify the declared conversion relationship, or certify eligibility. Ordinary `bundle` exit 0 means copies and reports were created, even when the checklist records stale output. Always read `missing_evidence` and `draft_status`; `submission_ready` remains false.
 
 ## Public ORCID facts
 

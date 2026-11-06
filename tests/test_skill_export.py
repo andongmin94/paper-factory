@@ -250,7 +250,8 @@ def test_conversion_rejects_a_python_executable_without_creating_docx(manuscript
     assert not target.exists()
 
 
-def test_prepared_author_manuscript_exports_real_docx_with_explicit_resource_dir(manuscript, tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("scope", ["native", "docx", "incomplete_docx"])
+def test_prepared_author_manuscript_exports_real_docx_with_explicit_resource_dir(manuscript, tmp_path, monkeypatch, capsys, scope):
     import submission_support
     import zipfile
     from docx import Document
@@ -258,6 +259,9 @@ def test_prepared_author_manuscript_exports_real_docx_with_explicit_resource_dir
     binary = _real_pandoc()
     manuscript.write_text(ARTICLE.replace("## References", "![A relative image](figure.png)\n\n## References", 1),
                           encoding="utf-8")
+    if scope == "incomplete_docx":
+        manuscript.write_text(manuscript.read_text(encoding="utf-8").replace(
+            "Keywords: maintenance; configuration; ownership", ""), encoding="utf-8")
     figure = tmp_path / "figure.png"
     Image.new("RGB", (480, 120), "navy").save(figure)
     profile = tmp_path / "profile.json"
@@ -276,14 +280,41 @@ def test_prepared_author_manuscript_exports_real_docx_with_explicit_resource_dir
         word_calls.append((docx, pdf))
         raise ValueError(sentinel)
     monkeypatch.setattr(exporter, "word_pdf", stop_before_word)
+    if scope != "native":
+        def no_native_report(*args, **kwargs):
+            pytest.fail("DOCX-only export must not invoke native Word compliance checks")
+        monkeypatch.setattr(exporter, "compliance_report", no_native_report)
     output = tmp_path / "export"
     result = exporter.main(["export", "--manuscript", str(prepared_manuscript), "--profile", str(prepared_profile),
                             "--venue", "ieee-software", "--output-dir", str(output), "--pandoc", str(binary),
-                            "--resource-dir", str(tmp_path)])
-    assert result == 2
-    assert json.loads(capsys.readouterr().err)["error"] == sentinel
+                            "--resource-dir", str(tmp_path)] + (["--docx-only"] if scope != "native" else []))
+    captured = capsys.readouterr()
+    if scope == "native":
+        assert result == 2
+        assert json.loads(captured.err)["error"] == sentinel
+    else:
+        assert result == (1 if scope == "incomplete_docx" else 0)
+        assert not captured.err
+        actual = json.loads(captured.out)
+        assert actual["pdf"] is None and not actual["native_word_measured"]
+        assert not actual["content_format_passed"] and not actual["submission_ready"]
+        assert actual["visual_review_status"] == "pending"
+        report = json.loads((output / "format-report.json").read_text(encoding="utf-8"))
+        assert report["mode"] == "skill_docx_export"
+        assert report["word_measurement"] is None and report["page_qa"] is None
+        assert report["binding"]["markdown_sha256"] == exporter.digest_file(prepared_manuscript)
+        assert report["binding"]["docx_sha256"] == exporter.digest_file(Path(actual["docx"]))
+        assert not report["content_format_passed"] and not report["submission_ready"]
+        assert report["blockers"] if scope == "incomplete_docx" else not report["blockers"]
+        receipts = json.loads((output / "conversion-receipts.json").read_text(encoding="utf-8"))
+        assert set(receipts) == {"docx"}
+        manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+        assert {row["path"] for row in manifest["files"]} == {
+            path.name for path in output.iterdir() if path.name != "manifest.json"}
+        assert all(exporter.digest_file(output / row["path"]) == row["sha256"] for row in manifest["files"])
+        assert (output / "manuscript.md").read_bytes() == prepared_manuscript.read_bytes()
     docx, pdf = output / "manuscript-ieee-software.docx", output / "manuscript-ieee-software.pdf"
-    assert word_calls == [(docx, pdf)]
+    assert word_calls == ([(docx, pdf)] if scope == "native" else [])
     document = Document(docx)
     assert len(document.inline_shapes) == 1
     assert document.inline_shapes[0].width < 4 * 914400
@@ -295,6 +326,14 @@ def test_prepared_author_manuscript_exports_real_docx_with_explicit_resource_dir
     assert original[figure] in images
     assert all(path.read_bytes() == contents for path, contents in original.items())
     assert not pdf.exists()
+
+
+def test_docx_only_rejects_joss_without_creating_output(manuscript, tmp_path, capsys):
+    output = tmp_path / "joss-docx"
+    assert exporter.main(["export", "--manuscript", str(manuscript), "--venue", "joss",
+                          "--output-dir", str(output), "--docx-only"]) == 2
+    assert "--docx-only is for Word venues" in json.loads(capsys.readouterr().err)["error"]
+    assert not output.exists()
 
 
 @pytest.mark.parametrize("kind", ["relative", "missing", "file"])
@@ -432,11 +471,12 @@ def test_export_binds_real_bytes_and_never_infers_approval(manuscript, tmp_path,
     assert all(exporter.digest_file(output / row["path"]) == row["sha256"] for row in manifest["files"])
 
 
-def test_changed_source_fails_but_retains_diagnostic_output(manuscript, tmp_path, monkeypatch):
+@pytest.mark.parametrize("docx_only", [False, True])
+def test_changed_source_fails_but_retains_diagnostic_output(manuscript, tmp_path, monkeypatch, docx_only):
     _mock_native_export(monkeypatch, mutate_source=True)
     output = tmp_path / "new"
     with pytest.raises(ValueError, match="changed during direct export"):
-        exporter.export(manuscript, "ieee-software", output)
+        exporter.export(manuscript, "ieee-software", output, docx_only=docx_only)
     assert (output / "manuscript.md").read_text(encoding="utf-8") == ARTICLE
     assert (output / "manuscript-ieee-software.docx").is_file()
     assert not (output / "provenance.json").exists()

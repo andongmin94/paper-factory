@@ -13,9 +13,9 @@ import sys
 
 from _publication_files import digest_file
 from _publication_templates import official_template, template_record
-from _publication_venues import VENUE_RULES
+from _publication_venues import VENUE_RULES, WORD_VENUES, VENUES
 from research_workspace import _absolute, _manifest, _new_folder, _relative, _write
-from submission_support import DECLARATIONS, VENUES, _declaration_status
+from submission_support import DECLARATIONS, _declaration_status
 
 
 def _confirmation(statement, record, files):
@@ -32,8 +32,8 @@ def check(root: Path, record_path: Path, output_dir: Path) -> dict:
     required = {"venue_id", "manuscript", "docx", "pdf", "format_report", "visual_review", "bundle_report", "scientific_review", "pages", "confirmations"}
     if not isinstance(supplied, dict) or set(supplied) != required or supplied["venue_id"] not in VENUES:
         raise ValueError("Record requires venue_id, manuscript, docx, pdf, format_report, visual_review, bundle_report, scientific_review, pages and confirmations")
-    if supplied["venue_id"] == "joss":
-        raise ValueError("JOSS uses a Markdown/BibTeX source package and publisher PDF review; this Word/PDF finalizer does not apply")
+    if supplied["venue_id"] not in WORD_VENUES:
+        raise ValueError(f"{supplied['venue_id']} does not use official-template Word measurements; this Word/PDF finalizer does not apply")
     if (not isinstance(supplied["pages"], list) or not supplied["pages"] or any(not isinstance(name, str) for name in supplied["pages"]) or
             len(set(supplied["pages"])) != len(supplied["pages"])):
         raise ValueError("pages must explicitly list distinct ordered page-image paths")
@@ -107,6 +107,10 @@ def check(root: Path, record_path: Path, output_dir: Path) -> dict:
     item("page_inspection", visual_passed, "Supplied dated page inspection must identify the exact PDF and every ordered actual page image; this is separate from author approval.")
 
     bundle = selected("bundle_report", document=True) or {}
+    venue_decision = bundle.get("recommendation_status")
+    if venue_decision in ("not_recommended", "conditional"):
+        item("venue_recommendation", False,
+             f"The bundle records {venue_decision} for this venue. Reassess the venue decision before final preparation; file checks and author confirmations do not resolve it.")
     if bundle.get("draft_status") is not None or bundle.get("missing_evidence"):
         item("draft_completion", False,
              "This bundle retains a draft/incomplete status or evidence gaps. Resolve them and prepare a new final bundle; formatting and author confirmations do not clear research gaps.")
@@ -174,7 +178,7 @@ def check(root: Path, record_path: Path, output_dir: Path) -> dict:
     for path, expected_hash in snapshots.items():
         if (digest_file(path) if path.is_file() else None) != expected_hash:
             raise ValueError("An input changed while reconciling final preparation")
-    administrative = [row for row in checks if row["id"] not in {"native_format", "page_inspection", "scientific_recommendation"}]
+    administrative = [row for row in checks if row["id"] not in {"native_format", "page_inspection", "scientific_recommendation", "venue_recommendation"}]
     report = {"mode": "existing_record_final_preparation", "created_at": datetime.now(timezone.utc).isoformat(),
               "venue_id": supplied["venue_id"], "artifact_hashes": hashes, "checks": checks,
               "native_format_passed": bool(native_passed), "page_inspection_recorded": visual_passed,
