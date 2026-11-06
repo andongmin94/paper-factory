@@ -83,6 +83,35 @@ def test_preflight_parses_official_metadata_and_multiple_affiliations_without_wr
     assert {p.name for p in manuscript.parent.iterdir()} == {"draft.md", "paper.bib"}
 
 
+@pytest.mark.parametrize("name_fields,expected", [
+    ("given-names: Ludwig\n    non-dropping-particle: van\n    surname: Beethoven", "Ludwig van Beethoven"),
+    ("name:\n      given-names: Ludwig\n      non-dropping-particle: van\n      surname: Beethoven", "Ludwig van Beethoven"),
+    ("given-names: Jane\n    dropping-particle: de\n    non-dropping-particle: van\n    surname: Doe\n    suffix: Jr.", "Jane de van Doe Jr."),
+    ("literal: Research Software Consortium", "Research Software Consortium"),
+    ("name:\n      literal: Research Software Consortium", "Research Software Consortium"),
+    ("given: Alice\n    family_name: Research", "Alice Research"),
+    ("given_name: Alice\n    family: Research", "Alice Research"),
+    ("first: Alice\n    last: Research", "Alice Research"),
+    ("firstname: Alice\n    lastname: Research", "Alice Research"),
+    ("name: 'Research, Alice'\n    literal: Ignored Group\n    given-names: Ignored\n    surname: Name", "Research, Alice"),
+    ("name:\n      name: 'Research, Alice'\n      literal: Ignored Group\n      given-names: Ignored\n      surname: Name", "Research, Alice"),
+    ("literal: Research Software Consortium\n    given-names: Ignored\n    surname: Name", "Research Software Consortium"),
+    ("given-names: Alice\n    given: Ignored\n    surname: Research\n    family: Name", "Alice Research"),
+])
+def test_author_name_forms_match_publisher_and_preserve_source(sources, tmp_path, name_fields, expected):
+    manuscript, _ = sources
+    manuscript.write_text(paper().replace("name: Alice Research", name_fields), encoding="utf-8")
+    original = manuscript.read_bytes()
+    output = tmp_path / "named-authors"
+    result = joss.export(manuscript, output)
+    report = json.loads(Path(result["format_report"]).read_text())
+    assert report["metrics"]["authors"][0] == {
+        "name": expected, "affiliations": ["1", "2"], "valid": True}
+    assert report["source_package_passed"]
+    assert not report["author_approval_inferred"]
+    assert manuscript.read_bytes() == original == (output / "paper.md").read_bytes()
+
+
 def test_export_retains_bibtex_and_images_and_records_source_only_scope(sources, tmp_path):
     from PIL import Image
     manuscript, bibliography = sources
@@ -111,6 +140,7 @@ def test_export_retains_bibtex_and_images_and_records_source_only_scope(sources,
 
 @pytest.mark.parametrize("replacement,failed", [
     (("affiliation: [2]", "affiliation: [3]"), "authors"),
+    (("  - name: Bob Scientist\n    affiliation: [2]", "  - affiliation: [2]"), "authors"),
     (("date: 2 November 2026", "date: 2026-11-02"), "date"),
     (("bibliography: paper.bib", "bibliography: another.bib"), "bibliography_metadata"),
     (("# Software Design", "# Implementation"), "section_software_design"),

@@ -18,7 +18,7 @@ Windows PowerShell에서는 `$HOME` 대신 `$env:USERPROFILE`을 사용할 수 �
 
 ### Claude.ai
 
-코드 실행·파일 생성을 활성화한 뒤 **Customize > Skills > + > Create skill > Upload a skill**에서 `paper-factory.zip`을 업로드하고 켭니다. [Skill tools CI](https://github.com/andongmin94/paper-factory/actions/workflows/skill.yml)의 해당 커밋 실행에서 `paper-factory-skill` artifact를 받으면 안에 설치용 ZIP이 있습니다. GitHub의 바깥 artifact ZIP을 한 번 풀고 **안쪽 `paper-factory.zip`**을 업로드합니다.
+코드 실행·파일 생성을 활성화한 뒤 **Customize > Skills**의 **Skill 추가(+) > Skill 업로드(Upload a skill)**에서 `paper-factory.zip`을 업로드하고 켭니다. [Skill tools CI](https://github.com/andongmin94/paper-factory/actions/workflows/skill.yml)의 해당 커밋 실행에서 `paper-factory-skill` artifact를 받으면 안에 설치용 ZIP이 있습니다. GitHub의 바깥 artifact ZIP을 한 번 풀고 **안쪽 `paper-factory.zip`**을 업로드합니다.
 
 ZIP에는 `paper-factory/SKILL.md`와 기존 스크립트·참조·에셋만 들어갑니다. 별도 Claude 전용 프롬프트나 API 키는 필요하지 않습니다. **업로드 형식 지원과 실제 Claude 실행 검증은 별개**이며, Word가 없는 환경에서는 원고 소스·서지·그림·checklist를 전달합니다. IEEE 3개 매체와 JORS는 Pandoc과 문서 의존성이 있으면 `export --docx-only`로 편집용 DOCX도 만들 수 있습니다. EMSE·JMLR MLOSS는 아래 매체별 안내를 따릅니다. Microsoft Word로 렌더링하지 않았다면 native Word/PDF 검증은 미완료입니다.
 

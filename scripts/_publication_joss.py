@@ -59,6 +59,22 @@ def _fields(value):
     return value.get("c", {}) if isinstance(value, dict) and value.get("t") == "MetaMap" else {}
 
 
+def _author_name(author):
+    """Read supplied display names or structured fields in Inara's order."""
+    name = author.get("name")
+    fields = _fields(name) if name is not None else author
+    if name is not None and not fields:
+        return _text(name).strip()
+    if "name" in fields or "literal" in fields:
+        return _text(fields.get("name", fields.get("literal"))).strip()
+    parts = [next((fields[key] for key in aliases if key in fields), None)
+             for aliases in (("given-names", "given", "given_name", "first", "firstname"),
+                             ("dropping-particle",), ("non-dropping-particle",),
+                             ("surname", "family_name", "family", "last", "lastname"),
+                             ("suffix",))]
+    return " ".join(_text(part).strip() for part in parts if part is not None).strip()
+
+
 class _HTMLImage(HTMLParser):
     found = False
 
@@ -124,7 +140,7 @@ def _inspect(manuscript, *, bibliography=None, pandoc=None, resource_dir=None):
         supplied = (_entries(affiliation) if isinstance(affiliation, dict) and affiliation.get("t") == "MetaList"
                     else [affiliation])
         assigned = [index.strip() for value in supplied for index in _text(value).split(",")]
-        name = _text(author.get("name")).strip()
+        name = _author_name(author)
         author_rows.append({"name": name, "affiliations": assigned,
                             "valid": bool(name and assigned and all(index in indexes for index in assigned))})
     item("authors", bool(author_rows) and all(row["valid"] for row in author_rows),

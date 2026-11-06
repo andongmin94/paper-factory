@@ -38,7 +38,7 @@ On Windows PowerShell, replace `$HOME` with `$env:USERPROFILE`. Do not overwrite
 
 ## Claude.ai
 
-Enable code execution and file creation, then open **Customize > Skills > + > Create skill > Upload a skill** and upload `paper-factory.zip`. It contains a single top-level `paper-factory/` folder with uppercase `SKILL.md`. Enable the skill and ask, for example: "Use paper-factory to analyze this repository and prepare an evidence-grounded incomplete draft when required evidence is missing."
+Enable code execution and file creation, then open **Customize > Skills**, use **Add skill (+) > Upload a skill**, and upload `paper-factory.zip`. It contains a single top-level `paper-factory/` folder with uppercase `SKILL.md`. Enable the skill and ask, for example: "Use paper-factory to analyze this repository and prepare an evidence-grounded incomplete draft when required evidence is missing."
 
 Network access depends on the account/admin configuration. Do not assume Git, publisher access, installed packages or Microsoft Word are available. When native Word export is unavailable, `export --docx-only` can prepare editable DOCX with conversion records if Pandoc and document dependencies are present. Include it alongside the authored Markdown, bibliography, necessary figures and existing bundle checklist; otherwise deliver those source files. Word/PDF verification stays pending. A generic built-in document renderer is not verification of this skill's native Word/PDF route. Do not install Word or switch journals merely to make export pass.
 
@@ -60,7 +60,8 @@ GitHub wraps a downloaded Actions artifact in another ZIP: extract that wrapper 
 
 Archive structure and Python tests do not prove that Claude selected the skill, that its prose is scientifically adequate, or that a real repository-to-draft case completed. Confirm actual invocation in the target host separately. The hosted Claude API has additional no-network/no-runtime-install constraints and requires a separate integration; this change does not implement or verify one.
 
-Official host documentation checked **2026-11-05** (not a journal-guideline verification):
+Official host documentation checked **2026-11-05** (not a journal-guideline verification). The direct **Add skill > Upload a skill** menu was also observed in Claude.ai on **2026-11-06**; observing this UI does not verify a successful upload or invocation.
+
 - https://code.claude.com/docs/en/skills — discovery paths, `/skill-name`, and portable frontmatter.
 - https://support.claude.com/en/articles/12512198-how-to-create-custom-skills — ZIP structure and metadata. The description is kept below the help page's stricter 200-character limit.
 - https://support.claude.com/en/articles/12512180-use-skills-in-claude — code execution prerequisite and upload UI.
