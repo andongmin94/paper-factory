@@ -107,6 +107,10 @@ def check(root: Path, record_path: Path, output_dir: Path) -> dict:
     item("page_inspection", visual_passed, "Supplied dated page inspection must identify the exact PDF and every ordered actual page image; this is separate from author approval.")
 
     bundle = selected("bundle_report", document=True) or {}
+    venue_decision = bundle.get("recommendation_status")
+    if venue_decision in ("not_recommended", "conditional"):
+        item("venue_recommendation", False,
+             f"The bundle records {venue_decision} for this venue. Reassess the venue decision before final preparation; file checks and author confirmations do not resolve it.")
     if bundle.get("draft_status") is not None or bundle.get("missing_evidence"):
         item("draft_completion", False,
              "This bundle retains a draft/incomplete status or evidence gaps. Resolve them and prepare a new final bundle; formatting and author confirmations do not clear research gaps.")
@@ -174,7 +178,7 @@ def check(root: Path, record_path: Path, output_dir: Path) -> dict:
     for path, expected_hash in snapshots.items():
         if (digest_file(path) if path.is_file() else None) != expected_hash:
             raise ValueError("An input changed while reconciling final preparation")
-    administrative = [row for row in checks if row["id"] not in {"native_format", "page_inspection", "scientific_recommendation"}]
+    administrative = [row for row in checks if row["id"] not in {"native_format", "page_inspection", "scientific_recommendation", "venue_recommendation"}]
     report = {"mode": "existing_record_final_preparation", "created_at": datetime.now(timezone.utc).isoformat(),
               "venue_id": supplied["venue_id"], "artifact_hashes": hashes, "checks": checks,
               "native_format_passed": bool(native_passed), "page_inspection_recorded": visual_passed,

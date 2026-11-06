@@ -321,12 +321,15 @@ def _declaration_status(declarations, confirmations, selections):
 
 def _evidence_gaps(selections):
     """Carry saved JSON evidence results forward; do not rerun source inspection."""
+    reports = [row for row in selections if row["role"] == "evidence" and row["source"].suffix.casefold() == ".json"]
+    if not reports:
+        return []  # Authored prose notes do not claim machine-checked bindings.
     manuscripts = [row for row in selections if row["role"] == "manuscript"]
+    selected = {row["path"]: row["sha256"] for row in selections}
+    unmatched_ledgers = {row["path"]: row["sha256"] for row in selections if row["role"] == "claim_ledger"}
+    ledger_hashes = set()
     gaps = []
-    for row in selections:
-        # Authored prose evidence notes are not machine-readable binding reports.
-        if row["role"] != "evidence" or row["source"].suffix.casefold() != ".json":
-            continue
+    for row in reports:
         label = "Evidence report " + row["path"]
         try:
             report = _json(row["source"])
@@ -335,6 +338,13 @@ def _evidence_gaps(selections):
             continue
         if len(manuscripts) != 1 or report.get("manuscript_sha256") != manuscripts[0]["sha256"]:
             gaps.append(label + ": does not bind the single selected manuscript; rerun evidence for these bytes")
+        ledger_path, ledger_hash = report.get("ledger_path"), report.get("ledger_sha256")
+        if isinstance(ledger_hash, str):
+            ledger_hashes.add(ledger_hash)
+        if isinstance(ledger_path, str) and ledger_path in selected:
+            unmatched_ledgers.pop(ledger_path, None)
+            if selected[ledger_path] != ledger_hash:
+                gaps.append(f"{label}: selected claim ledger {ledger_path} differs from the checked ledger")
         claims = report.get("claims")
         if (not isinstance(claims, list) or not claims or
                 any(not isinstance(claim, dict) or not isinstance(claim.get("id"), str) or not claim["id"] or
@@ -347,7 +357,19 @@ def _evidence_gaps(selections):
             gaps.append(label + ": unresolved claim bindings: " + ", ".join(failed))
         elif report.get("bindings_match") is not True:
             gaps.append(label + ": overall bindings are not reported as matching")
-    return gaps
+        for claim in claims:
+            sources = claim.get("sources")
+            if not isinstance(sources, list) or any(not isinstance(s, dict) or not isinstance(s.get("path"), str) for s in sources):
+                gaps.append(f"{label}: invalid source witnesses for {claim['id']}")
+                continue
+            for source in sources:
+                path = source["path"]
+                if path in selected and selected[path] != source.get("observed_sha256"):
+                    gaps.append(f"{label}: {claim['id']} does not bind the selected source bytes for {path}")
+    for path, sha in unmatched_ledgers.items():
+        if sha not in ledger_hashes:
+            gaps.append(f"No selected evidence report binds the selected claim ledger {path}")
+    return list(dict.fromkeys(gaps))
 
 
 def prepare_bundle(plan, root, output_dir):
@@ -471,7 +493,7 @@ def prepare_bundle(plan, root, output_dir):
               "selected_files": records, "approval_files": approval_files, "supplied_declarations": declarations,
               "supplied_confirmations": confirmations, "declaration_status": declaration_status, "pending": pending,
               "submission_ready": False, "author_approval_inferred": False, "actual_submission_performed": False,
-              "scope": "Allowlisted copies, saved JSON evidence-report/manuscript bindings and supplied cover text. Source witnesses and scientific claims are not rechecked; prose evidence notes and human declarations are not independently verified."}
+              "scope": "Allowlisted copies, saved evidence bindings for the selected manuscript, ledgers and included sources, and supplied cover text. Source quotations and scientific claims are not rechecked; prose evidence notes and human declarations are not independently verified."}
     _write(folder / "report.json", report)
     draft_note = f"Status: **{draft_status}**. Article type: {article_type}.\n\n" if draft_status else ""
     if recommendation != "not_assessed":

@@ -170,6 +170,41 @@ def test_source_images_must_be_available_inside_bundle(sources, tmp_path, target
     assert not (tmp_path / "invalid").exists()
 
 
+@pytest.mark.parametrize("markup", [
+    r"Inline figure: \includegraphics[width=2cm]{plot.png}.",
+    "\\begin{figure}\n\\includegraphics*{plot.png}\n\\end{figure}",
+    '<img src="plot.png" alt="Plot">',
+])
+def test_raw_figures_cannot_pass_export_with_missing_assets(sources, tmp_path, markup):
+    from PIL import Image
+    manuscript, _ = sources
+    Image.new("RGB", (16, 16)).save(tmp_path / "plot.png")
+    manuscript.write_text(paper().replace("# References", markup + "\n\n# References"), encoding="utf-8")
+    with pytest.raises(ValueError, match="Use Markdown image syntax"):
+        joss.export(manuscript, tmp_path / "delivery")
+    assert not (tmp_path / "delivery").exists()
+
+
+def test_literal_figure_examples_are_not_assets(sources):
+    manuscript, _ = sources
+    examples = r'''Write `\includegraphics{example.png}` or `<img src="example.png">`.
+
+```tex
+\includegraphics{example.png}
+```
+
+An expression $x \in S$ and an HTML comment <!-- <img src="example.png"> -->.
+
+\begin{figure}
+% \includegraphics{example.png}
+\end{figure}
+
+\verb|\includegraphics{example.png}|
+'''
+    manuscript.write_text(paper().replace("# References", examples + "\n# References"), encoding="utf-8")
+    assert joss.preflight(manuscript)["prefilter_passed"]
+
+
 def test_explicit_bibliography_and_resource_directory_reach_exact_source_bundle(sources, tmp_path):
     from PIL import Image
     manuscript, bibliography = sources

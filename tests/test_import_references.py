@@ -94,6 +94,25 @@ Second line with {nested braces}}
         warning_ids = {item.get("reference_id") for item in result["manual_review_suggestions"]}
         self.assertTrue({1, 2} <= warning_ids)
 
+    def test_bibtex_key_punctuation_and_outer_delimiters(self):
+        key = "10.1016/S0167-2789(99)00000-4"
+        for opening, closing in [("{", "}"), ("(", ")")]:
+            with self.subTest(opening=opening):
+                entry = f"@article{opening}{key}, title={{Supplied title}}{closing}"
+                empty = f"@misc{opening}key=value{closing}"
+                first, second = imports.parse_bibliography(entry + "\n" + empty, "bibtex")["references"]
+                self.assertEqual((first["source"]["key"], first["source"]["raw"], first["title"]),
+                                 (key, entry, "Supplied title"))
+                self.assertEqual((second["source"]["key"], second["source"]["raw"]), ("key=value", empty))
+                adjacent = imports.parse_bibliography(empty + entry, "bibtex")["references"]
+                self.assertEqual([row["source"]["key"] for row in adjacent], ["key=value", key])
+
+    def test_bibtex_key_characters_do_not_relax_macro_or_field_syntax(self):
+        for invalid in ["@string{prefix=}", "@preamble(prefix=)",
+                        "@misc{key=one,title=}", "@misc(key(x),title={Missing close}"]:
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                imports.parse_bibliography(invalid + "\n@misc{ok,title={Control}}", "bibtex")
+
     def test_duplicate_source_keys_remain_distinct_records(self):
         samples = {
             "bibtex": "@misc{same,title={First}}\n@misc{same,title={Second}}",

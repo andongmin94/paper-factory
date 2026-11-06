@@ -16,6 +16,8 @@ Use YAML-frontmatter `paper.md` with title, authors, affiliation mappings, tags,
 
 Use Pandoc citations (`@key`, `[@key]`) and matching BibTeX/BibLaTeX entries; cite full venue names. JOSS's Inara configuration selects APA author–date citations. Its CSL has a separate CC BY-SA 3.0 license and is not relabeled MIT or bundled here.
 
+Use Markdown image syntax such as `![Caption](figures/plot.png)` so the exporter can copy the figure at the same relative path. Raw TeX `\includegraphics` and HTML `<img>` are unsupported by this exporter.
+
 The existing preflight/export CLI validates metadata, sections, citations and local media, then preserves `paper.md`, `paper.bib`, and referenced figures. YAML is authoritative; `--profile` and `--template` are unsupported. See [tools.md](tools.md) for `--bibliography` and `--resource-dir`. Source files must ultimately accompany the software in its Git repository; export does not upload them.
 
 ## Limits and human decisions

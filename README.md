@@ -1,8 +1,10 @@
 # Paper Factory
 
-GitHub 저장소와 1차 문헌을 바탕으로 영문 논문을 작성하는 Agent Skills 형식의 스킬입니다. **Claude Code·Claude.ai·Codex에서 같은 지침과 Python 도구를 재사용**합니다. **IEEE Software, IEEE Security & Privacy, IEEE Access, Journal of Open Research Software(JORS), Journal of Open Source Software(JOSS), Empirical Software Engineering(EMSE), JMLR의 MLOSS 트랙**를 지원합니다. 에이전트가 연구 질문 선정부터 기존 연구 비교·집필·검토까지 직접 조율하고, 파일 도구가 매체별 원고 출력과 투고 준비를 돕습니다.
+GitHub 저장소와 1차 문헌을 바탕으로 영문 논문을 작성하는 Agent Skills 형식의 스킬입니다. **Claude Code·Claude.ai·Codex에서 같은 지침과 Python 도구를 재사용**합니다. **IEEE Software, IEEE Security & Privacy, IEEE Access, Journal of Open Research Software(JORS), Journal of Open Source Software(JOSS), Empirical Software Engineering(EMSE), JMLR의 MLOSS 트랙**을 지원합니다. 에이전트가 연구 질문 선정부터 기존 연구 비교·집필·검토까지 직접 조율하고, 파일 도구가 매체별 원고 출력과 투고 준비를 돕습니다.
 
 ## 빠른 시작
+
+아래 `git clone` 명령은 기본 브랜치(`main`)를 설치합니다. 아직 병합되지 않은 PR을 사용하려면 해당 PR 커밋의 CI에서 만든 설치 ZIP을 사용하세요.
 
 ### Claude Code
 
@@ -18,7 +20,7 @@ Windows PowerShell에서는 `$HOME` 대신 `$env:USERPROFILE`을 사용할 수 �
 
 코드 실행·파일 생성을 활성화한 뒤 **Customize > Skills > + > Create skill > Upload a skill**에서 `paper-factory.zip`을 업로드하고 켭니다. [Skill tools CI](https://github.com/andongmin94/paper-factory/actions/workflows/skill.yml)의 해당 커밋 실행에서 `paper-factory-skill` artifact를 받으면 안에 설치용 ZIP이 있습니다. GitHub의 바깥 artifact ZIP을 한 번 풀고 **안쪽 `paper-factory.zip`**을 업로드합니다.
 
-ZIP에는 `paper-factory/SKILL.md`와 기존 스크립트·참조·에셋만 들어갑니다. 별도 Claude 전용 프롬프트나 API 키는 필요하지 않습니다. **업로드 형식 지원과 실제 Claude 실행 검증은 별개**이며, Word가 없는 환경에서는 원고 소스·서지·그림·checklist를 전달합니다. Pandoc과 문서 의존성이 있으면 `export --docx-only`로 편집 가능한 DOCX와 변환 기록도 만들 수 있고, Word/PDF 검증은 미완료로 남깁니다.
+ZIP에는 `paper-factory/SKILL.md`와 기존 스크립트·참조·에셋만 들어갑니다. 별도 Claude 전용 프롬프트나 API 키는 필요하지 않습니다. **업로드 형식 지원과 실제 Claude 실행 검증은 별개**이며, Word가 없는 환경에서는 원고 소스·서지·그림·checklist를 전달합니다. IEEE 3개 매체와 JORS는 Pandoc과 문서 의존성이 있으면 `export --docx-only`로 편집용 DOCX도 만들 수 있습니다. EMSE·JMLR MLOSS는 아래 매체별 안내를 따릅니다. Microsoft Word로 렌더링하지 않았다면 native Word/PDF 검증은 미완료입니다.
 
 ### Codex
 
@@ -35,7 +37,7 @@ Codex에서는 `$paper-factory`, Claude Code에서는 `/paper-factory`를 사용
 $paper-factory https://github.com/owner/repository
 
 저장소와 관련 원문을 읽고, 현재 지원하는 매체 중 정확히 세 후보의 근거 적합성과 article type을 비교해.
-한 곳을 조건부로 추천한 뒤 실제 근거로 뒷받침할 수 있는 영문 초안 한 편을 작성해.
+추천할 수 있는 곳과 그 조건을 설명하고, 신규 투고 근거가 없으면 비추천으로 남겨. 실제 근거로 뒷받침할 수 있는 영문 초안 한 편을 작성해.
 초안 소스, 서지, 짧은 선정·근거·공식 지침 기록과 미확인 항목 checklist를 하나의 묶음으로 제공해.
 평가는 단순 투고 적합성보다 원고 그대로 게재를 권고할 수 있는지를 기준으로 해.
 프로젝트 코드는 실행하지 말고, 기존 자료와 횟수는 유지해.
@@ -47,7 +49,7 @@ $paper-factory https://github.com/owner/repository
 
 에이전트가 실제 파일 트리를 확인하고 README·구현·테스트·기존 실험 자료를 읽습니다. `research_workspace.py repository`는 선택한 원본 파일과 저장소 커밋·해시를 새 작업 폴더에 보존합니다. 파일명이나 README의 설명만으로 프로젝트 분야·성능·연구소프트웨어 적격성을 판정하지 않습니다.
 
-지원하는 일곱 매체·트랙 안에서 **후보 세 곳을 비교하고 한 곳을 조건부 추천한 다음, 초안 한 편을 직접 작성**합니다. 정적 소스 관찰, 실제 측정, 추론과 미확인 근거를 구분하며 저널의 현재 공식 지침과 article type을 확인합니다. 기존 서지 가져오기·근거 ledger·preflight·export·bundle 경로를 이어 사용합니다. [URL에서 초안까지 실행 절차](references/repository-to-draft.md)에 명령과 최소 결과물을 정리했습니다.
+지원하는 일곱 매체·트랙 안에서 **후보 세 곳을 비교하고 근거에 맞는 초안 한 편을 작성**합니다. 보완하면 투고할 수 있는 경우에는 조건을 적고, 신규 투고를 뒷받침할 근거가 없으면 비추천 결정을 유지합니다. 정적 소스 관찰, 실제 측정, 추론과 미확인 근거를 구분하며 저널의 현재 공식 지침과 article type을 확인합니다. 기존 서지 가져오기·근거 ledger·preflight·export·bundle 경로를 이어 사용합니다. [URL에서 초안까지 실행 절차](references/repository-to-draft.md)에 명령과 최소 결과물을 정리했습니다.
 
 저자 정보나 근거가 부족하면 이를 보완 과제로 남긴 소스 초안을 전달합니다. Word/PDF 또는 JOSS Inara 렌더링을 수행하지 못했으면 미검증으로 기록하며, 형식 검사를 통과시키기 위해 이름·결과·승인을 만들지 않습니다. 사용자 저장소 수정·코드 실행은 별도 허용 범위를 따르고, 한 사례의 초안 묶음을 전달하면 이번 작업을 마칩니다.
 
@@ -78,8 +80,6 @@ EMSE와 MLOSS의 저널별 지침에 따라 원고를 준비하고 `submission_s
 
 Access·JORS·JOSS는 2026-11-02에 공식 지침과 템플릿 원문을 확인했습니다. Access·JORS 템플릿은 재배포 허가를 확인하지 못해 포함하지 않으며, 각 매체 문서의 공식 원본을 내려받아 `--template`으로 지정합니다. 도구는 확인된 SHA-256과 일치하는 파일을 사용합니다. JOSS는 YAML·인용·서지·그림 경로를 검사해 실제 제출 소스를 보존하며, Inara PDF 렌더링은 수행하지 않습니다.
 
-
-
 ## 결과물과 작업 원칙
 
 - **원고와 근거:** 영문 원고, 소스·문헌의 출처와 해시, 주장과 근거의 연결, 필요한 보충자료를 남깁니다.
@@ -94,9 +94,10 @@ Access·JORS·JOSS는 2026-11-02에 공식 지침과 템플릿 원문을 확인�
 | 연구·집필 | Claude 또는 Codex와 대상 저장소·문헌에 대한 접근 |
 | 저장소 URL 자료 보존 | 설치된 Git과 대상 GitHub 저장소 읽기 권한; 프로젝트 코드 실행 없음 |
 | 파일 도구 | Python 3.11 이상. 문서 처리 의존성은 [requirements.txt](requirements.txt) 참조 |
-| DOCX 생성 (`export --docx-only`) | Pandoc, 문서 처리 의존성, 해당 공식 템플릿. Word 불필요; native Word/PDF 검증은 미완료 |
+| IEEE 3개 매체·JORS DOCX (`export --docx-only`) | Pandoc, 문서 처리 의존성, 해당 공식 템플릿. Word 불필요; native Word/PDF 검증은 미완료 |
 | 공식 Word/PDF 출력 | Windows, 설치된 Microsoft Word, Pandoc, 문서 처리 의존성 |
 | JOSS 소스 검사·출력 | Python, Pandoc, 기존 서지 파서. Word 불필요; 공식 PDF는 별도 Inara 환경에서 검증 |
+| EMSE / JMLR MLOSS | EMSE는 편집용 DOCX, MLOSS는 공식 스타일로 컴파일한 PDF를 준비해 `bundle`에 포함 |
 
 문서 출력에 필요한 패키지가 없을 때만 호스트의 관리 환경 또는 작업용 가상환경에 의존성을 설치합니다. 제공되는 런타임과 기존 도구를 먼저 확인하고, 전역 설치나 Word 설치를 자동으로 수행하지 않습니다. Claude.ai의 네트워크·설치 권한은 계정 설정에 따라 다릅니다. [호스트별 설치·실행 범위](references/runtime.md)를 확인하세요.
 

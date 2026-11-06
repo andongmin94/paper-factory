@@ -8,6 +8,7 @@ import sys
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+from research_workspace import evidence
 from submission_support import prepare_bundle
 
 
@@ -98,6 +99,69 @@ def test_current_matching_report_preserves_draft_not_approval(tmp_path):
     result = run_bundle(tmp_path, root, contents, plan)
     assert result["draft_status"] == "draft" and result["missing_evidence"] == []
     assert result["recommendation_status"] == "conditional"
+
+
+@pytest.mark.parametrize("changed", [None, "observation.txt", "claims.json", "copied-ledger.json"])
+def test_bundle_matches_selected_sources_and_ledgers_to_their_actual_reports(tmp_path, changed):
+    root, _, plan = prepare_case(tmp_path, "matching")
+    files = plan["files"]
+    files.remove({"role": "evidence", "path": "evidence.json"})
+    for idx, (ledger, witness) in enumerate(((root / "claims.json", "observation.txt"),
+                                             (tmp_path / "external.json", "unselected.txt")), 1):
+        (root / witness).write_text("original observation\na second observation\n")
+        value = {"manuscript": "paper.md", "claims": [
+            {"id": f"C{idx}", "claim": "A retained claim.", "manuscript_quote": "A retained claim.",
+             "kind": "source_declared", "sources": [{"path": witness, "start_line": line, "end_line": line,
+                                                     "quote": quote} for line, quote in
+                                                    [(1, "original observation"), (2, "a second observation")]]}]}
+        ledger.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8-sig")
+        out = root / f"evidence-{idx}"
+        assert evidence(root, ledger, out)["bindings_match"]
+        saved = json.loads((out / "evidence.json").read_text())
+        assert saved["ledger_sha256"] == hashlib.sha256(ledger.read_bytes()).hexdigest()
+        assert saved["ledger_path"] == (ledger.name if ledger.parent == root else None)
+        files.append({"role": "evidence", "path": f"{out.name}/evidence.json"})
+
+    # The second ledger was outside the root; only its renamed, explicitly selected copy travels.
+    (root / "copied-ledger.json").write_bytes((tmp_path / "external.json").read_bytes())
+    (tmp_path / "external.json").unlink()
+    (root / "unselected.txt").unlink()
+    files.extend([{"role": "case_record", "path": "claims.json"},
+                  {"role": "claim_ledger", "path": "copied-ledger.json"},
+                  {"role": "observation", "path": "observation.txt"}])
+    if changed:
+        path = root / changed
+        if changed == "observation.txt":
+            path.write_text("different outcome\n")
+        else:
+            ledger = json.loads(path.read_text(encoding="utf-8-sig"))
+            ledger["claims"][0]["claim"] = "A different assertion."
+            path.write_text(json.dumps(ledger))
+    result = run_bundle(tmp_path, root, {f["path"]: (root / f["path"]).read_bytes() for f in files}, plan)
+    if changed:
+        assert result["draft_status"] == "incomplete"
+        assert len(result["missing_evidence"]) == 1 and changed in result["missing_evidence"][0]
+    else:
+        assert result["draft_status"] == "draft" and not result["missing_evidence"]
+
+
+def test_evidence_refuses_a_ledger_replaced_during_inspection(tmp_path, monkeypatch):
+    root, _, _ = prepare_case(tmp_path, "matching")
+    ledger = root / "ledger.json"
+    recorded = json.loads((root / "evidence.json").read_text())
+    ledger.write_text(json.dumps({"manuscript": "paper.md", "claims": recorded["claims"]}))
+    (root / "source.py").write_text("A retained claim.\n")
+    read_bytes = Path.read_bytes
+
+    def change_ledger(path):
+        if path == root / "paper.md":
+            ledger.write_text("{}")
+        return read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", change_ledger)
+    with pytest.raises(ValueError, match="Claim ledger changed"):
+        evidence(root, ledger, tmp_path / "report")
+    assert not (tmp_path / "report").exists()
 
 
 def test_current_report_never_clears_supplied_research_gaps(tmp_path):
