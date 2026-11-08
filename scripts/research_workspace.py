@@ -254,8 +254,10 @@ def compare(before: Path, after: Path, output_dir: Path) -> dict:
     before, after = _absolute(before), _absolute(after)
     old_hash, new_hash = digest_file(before), digest_file(after)
     old, new = before.read_text(encoding="utf-8-sig"), after.read_text(encoding="utf-8-sig")
-    patch = "".join(difflib.unified_diff(old.splitlines(keepends=True), new.splitlines(keepends=True),
-                                          fromfile=before.name, tofile=after.name))
+    changes = difflib.unified_diff(old.splitlines(keepends=True), new.splitlines(keepends=True),
+                                   fromfile=before.name, tofile=after.name)
+    patch = "".join(line if line.endswith("\n") else line + "\n\\ No newline at end of file\n"
+                    for line in changes)
     if digest_file(before) != old_hash or digest_file(after) != new_hash:
         raise ValueError("Manuscript changed during comparison")
     folder = _new_folder(output_dir)
@@ -314,7 +316,7 @@ def impact(root: Path, evidence_path: Path, output_dir: Path, *, manuscript_name
             snapshots[path] = (data, hashlib.sha256(data).hexdigest() if data is not None else None)
         return snapshots[path]
 
-    focused_sources = {str(_relative(root, name)).casefold() for name in focus["source_paths"]}
+    focused_sources = {_relative(root, name) for name in focus["source_paths"]}
     selected = [{"path": name, "observed_sha256": snapshot(name)[1],
                  "status": "selected_for_reading" if snapshot(name)[1] is not None else "missing",
                  "requires_reading_for_question": True}
@@ -365,7 +367,7 @@ def impact(root: Path, evidence_path: Path, output_dir: Path, *, manuscript_name
                     matches = False
                 if not matches:
                     issues.append("source_quote_mismatch")
-            if str(path).casefold() in focused_sources:
+            if path in focused_sources:
                 issues.append("selected_for_new_question")
             witnesses.append({"path": name, "start_line": start, "end_line": end,
                               "previous_sha256": expected, "observed_sha256": observed,

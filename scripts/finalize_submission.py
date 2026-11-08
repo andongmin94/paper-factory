@@ -100,7 +100,9 @@ def check(root: Path, record_path: Path, output_dir: Path) -> dict:
         date_present = visual_date.tzinfo is not None
     except (ValueError, TypeError, AttributeError):
         date_present = False
-    visual_passed = bool(all(page_hashes) and visual.get("approved") is True and visual.get("reviewer") and date_present and
+    reviewer = visual.get("reviewer")
+    visual_passed = bool(all(page_hashes) and visual.get("approved") is True and
+                         isinstance(reviewer, str) and reviewer.strip() and date_present and
                          visual.get("pdf_sha256") == hashes["pdf"] and hashes["pdf"] is not None and
                          visual.get("page_image_sha256") == page_hashes and page_qa.get("page_count") == len(pages) and
                          [row.get("image_sha256") for row in page_qa.get("pages", [])] == page_hashes)

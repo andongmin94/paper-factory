@@ -226,6 +226,18 @@ def test_wrong_or_missing_page_inspection_does_not_get_implicit_approval(prepare
     assert not missing["page_inspection_recorded"]
 
 
+@pytest.mark.parametrize("reviewer", ["", "   ", True, {"name": "Synthetic fixture visual reviewer"}])
+def test_page_inspection_requires_a_nonblank_reviewer_name(prepared, tmp_path, reviewer):
+    root, record_path, _ = prepared
+    visual = json.loads((root / "visual.json").read_text())
+    visual["reviewer"] = reviewer
+    put(root / "visual.json", visual)
+    report = finalizer.check(root, record_path, tmp_path / "final")
+    assert not report["page_inspection_recorded"]
+    assert not report["submission_ready"]
+    assert report["pending"] == ["page_inspection"]
+
+
 def test_essential_error_prevents_unqualified_scientific_recommendation(prepared, tmp_path):
     root, record_path, _ = prepared
     review = json.loads((root / "scientific.json").read_text())

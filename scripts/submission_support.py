@@ -16,7 +16,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 
 from _publication_files import digest_file, ensure_unlinked
-from _publication_text import section_headers
+from _publication_text import mask_fenced_code, section_headers
 from _author_profile import normalize_profile, profile_completeness
 from _publication_venues import PREPARED_MANUSCRIPTS, VENUES
 
@@ -25,6 +25,8 @@ BIO_HEADINGS = {"author biography", "author biographies", "about the author", "a
 AUTHOR_START = "<!-- paper-factory:authors:start -->"
 AUTHOR_END = "<!-- paper-factory:authors:end -->"
 DECLARATIONS = ("originality", "rights", "author_approval", "funding", "conflicts", "ai_disclosure")
+DOCX_REVISION_TAGS = {"ins", "del", "moveFrom", "moveTo", "rPrChange", "pPrChange", "sectPrChange",
+                      "tblPrChange", "tblPrExChange", "tblGridChange", "trPrChange", "tcPrChange"}
 
 
 def _text(value, label, *, required=False):
@@ -67,25 +69,6 @@ def _manifest(folder):
                    "sha256": digest_file(path)} for path in sorted(folder.rglob("*")) if path.is_file()]})
 
 
-def _hide_fenced_code(markdown):
-    # Preserve offsets while ignoring headings/author markers in code examples.
-    protected, marker = [], None
-    for line in markdown.splitlines(keepends=True):
-        fence = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
-        if fence:
-            current = fence[1]
-            if marker is None:
-                marker = current
-            elif current[0] == marker[0] and len(current) >= len(marker):
-                marker = None
-            protected.append(" " * len(line.rstrip("\r\n")) + line[len(line.rstrip("\r\n")):])
-        elif marker:
-            protected.append(" " * len(line.rstrip("\r\n")) + line[len(line.rstrip("\r\n")):])
-        else:
-            protected.append(line)
-    return "".join(protected)
-
-
 def _sections(markdown):
     return section_headers(markdown)
 
@@ -101,7 +84,7 @@ def _without_biographies(markdown):
 
 def _without_author_block(preamble):
     """Replace only our explicitly delimited slot, never arbitrary front matter."""
-    protected = _hide_fenced_code(preamble)
+    protected = mask_fenced_code(preamble)
     starts = list(re.finditer(r"(?m)^" + re.escape(AUTHOR_START) + r"[ \t]*\r?$", protected))
     ends = list(re.finditer(r"(?m)^" + re.escape(AUTHOR_END) + r"[ \t]*\r?$", protected))
     if not starts and not ends:
@@ -607,11 +590,11 @@ def inspect_metadata(file, output_dir, *, profile=None):
                     else:
                         for element in tree.iter():
                             tag = element.tag.rsplit("}", 1)[-1]
-                            if tag in {"ins", "del", "moveFrom", "moveTo"}:
+                            if tag in DOCX_REVISION_TAGS:
                                 changes += 1
                             if tag == "comment":
                                 comments.append(name)
-                            if tag in {"ins", "del", "moveFrom", "moveTo", "comment"}:
+                            if tag in DOCX_REVISION_TAGS or tag == "comment":
                                 revision_authors.update(value for key, value in element.attrib.items() if key.rsplit("}", 1)[-1] in {"author", "initials"} and value)
         except (zipfile.BadZipFile, ET.ParseError) as exc:
             raise ValueError("DOCX package or metadata XML is malformed") from exc

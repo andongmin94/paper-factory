@@ -524,6 +524,72 @@ def test_retained_publisher_styles_columns_and_citations(tmp_path, venue):
     assert next(p for p in checked.paragraphs if p.text.startswith("Table 1.")).style.name == "TableCaption"
 
 
+@pytest.mark.parametrize("venue", ["ieee-software", "ieee-security-privacy"])
+def test_real_pandoc_grouped_citations_preserve_ranges_and_protected_content(tmp_path, venue):
+    from docx import Document
+    from docx.oxml.ns import qn
+    binary = _real_pandoc()
+    software = venue == "ieee-software"
+    cases = [
+        ("Comma evidence. [1, 2]", "Comma evidence.1,2", "Comma evidence [1], [2].", "1,2"),
+        ("Semicolon evidence [1; 3].", "Semicolon evidence.1,3", "Semicolon evidence [1], [3].", "1,3"),
+        ("Hyphen evidence. [1-3]", "Hyphen evidence.1–3", "Hyphen evidence [1], [2], [3].", "1–3"),
+        ("En-dash evidence. [1–3]", "En-dash evidence.1–3", "En-dash evidence [1], [2], [3].", "1–3"),
+        ("Mixed evidence. [1, 2–3]", "Mixed evidence.1,2–3", "Mixed evidence [1], [2], [3].", "1,2–3"),
+        ("**Split evidence.** [1, **2**; *3*] *retained emphasis*",
+         "Split evidence.1,2,3 retained emphasis", "Split evidence [1], [2], [3]. retained emphasis", "1,2,3"),
+    ]
+    controls = ("Unknown evidence. [1, 4]\n\nWide range evidence. [1–999999999]\n\n"
+                "Inline code. `[1, 2]` and `[1–3]`.\n\n"
+                "Linked evidence. [[1, 2]](https://example.org/group) and [[1–3]](https://example.org/range).\n\n"
+                "```text\n[1, 2]\n[1–3]\n```")
+    source = tmp_path / "groups.md"
+    source.write_text(ARTICLE.replace("A shared requirement may survive the command that first wrote it. [1]",
+                                      "\n\n".join(case[0] for case in cases) + "\n\n" + controls)
+                     .replace("[1] Example Authors, A retained source, 2025. https://example.org/source",
+                              "\n\n".join(f"[{number}] Authors, Source {number}, 2025." for number in range(1, 4))),
+                      encoding="utf-8")
+    original = source.read_bytes()
+    output = tmp_path / "groups.docx"
+    receipt = converter.convert_docx(source, output, venue_id=venue, pandoc=str(binary))
+    document = Document(output)
+    paragraphs = {paragraph.text: paragraph for paragraph in document.paragraphs}
+    for _, superscript_text, bracketed_text, numbers in cases:
+        paragraph = paragraphs[superscript_text if software else bracketed_text]
+        superscript = "".join(run.text for run in paragraph.runs if run.font.superscript)
+        assert superscript == (numbers if software else "")
+    proof = receipt["official_template"]["citation_typography"]
+    assert proof["callout_groups_formatted"] == len(cases)
+    assert proof["unknown_reference_numbers_preserved"] == ["4", "999999999"]
+    assert "Unknown evidence. [1, 4]" in paragraphs
+    assert "Wide range evidence. [1–999999999]" in paragraphs
+    assert "Inline code. [1, 2] and [1–3]." in paragraphs
+    assert "[1, 2]\n[1–3]" in paragraphs
+    linked = paragraphs["Linked evidence. [1, 2] and [1–3]."]
+    assert ["".join(link.xpath(".//w:t/text()")) for link in linked._p.xpath("./w:hyperlink")] == ["[1, 2]", "[1–3]"]
+    assert [document.part.rels[link.get(qn("r:id"))].target_ref for link in linked._p.xpath("./w:hyperlink")] == [
+        "https://example.org/group", "https://example.org/range"]
+    split = paragraphs[cases[-1][1 if software else 2]]
+    assert any("Split evidence" in run.text and run.bold for run in split.runs)
+    assert any("retained emphasis" in run.text and run.italic for run in split.runs)
+    assert source.read_bytes() == original
+    assert not checks._native_structure(output, software)["issues"]
+
+    # A missed group must fail native QA, including citations split across runs.
+    target = paragraphs[cases[0][1 if software else 2]]
+    for prefix, citation, suffix in [("Grouped evidence ", "[1, 2]", "."),
+                                     ("Range evidence. ", "[1–3]", "")]:
+        target.text = prefix
+        target.add_run(citation[:2])
+        target.add_run(citation[2:]).italic = True
+        target.add_run(suffix)
+        document.save(output)
+        issues = checks._native_structure(output, software)["issues"]
+        assert any(("superscript typography" if software else "separate brackets") in issue for issue in issues)
+        if not software:
+            assert any("after terminal punctuation" in issue for issue in issues) is bool(prefix.endswith(". "))
+
+
 @pytest.mark.parametrize("word_count,paragraph_count", [(1, 1), (1, 4), (4, 1), (4, 4)])
 def test_native_reference_counts_must_match_canonical_entries(manuscript, tmp_path, monkeypatch, word_count, paragraph_count):
     """Collapsed bibliography paragraphs must fail even when native counts fit the limit."""

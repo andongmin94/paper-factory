@@ -89,7 +89,10 @@ def _citation_typography(document, reference, *, software):
                     if old is not None:
                         properties.remove(old)
                     properties.append(deepcopy(source))
-    callout = re.compile(r'''(?:(?P<before>[.,;:!?])(?P<close>["'”’)]*)[ \t]*)?[ \t]*(?P<cites>\[\d+\](?:[ \t]*(?:,[ \t]*)?\[\d+\])*)(?P<after>[.,;:!?])?(?P<afterclose>["'”’)]*)''')
+    known_numbers = sorted(int(number) for number in known)
+    item = r"\d+(?:[ \t]*[-–][ \t]*\d+)?"
+    citation = rf"\[{item}(?:[ \t]*[,;][ \t]*{item})*[ \t]*\]"
+    callout = re.compile(rf'''(?:(?P<before>[.,;:!?])(?P<close>["'”’)]*)[ \t]*)?[ \t]*(?P<cites>{citation}(?:[ \t]*(?:[,;][ \t]*)?{citation})*)(?P<after>[.,;:!?])?(?P<afterclose>["'”’)]*)''')
     changed, unknown = 0, set()
     paragraphs = list(document.paragraphs)
     for table in document.tables:
@@ -112,14 +115,34 @@ def _citation_typography(document, reference, *, software):
         for match in reversed(list(callout.finditer(text))):
             if any(protected[match.start():match.end()]):
                 continue
-            numbers = re.findall(r"\d+", match["cites"])
-            if not set(numbers).issubset(known):
-                unknown.update(set(numbers) - known)
+            numbers, items, missing = [], [], set()
+            valid = True
+            for token in re.findall(item, match["cites"]):
+                bounds = re.findall(r"\d+", token)
+                if len(bounds) == 1:
+                    members = bounds
+                else:
+                    first, last = map(int, bounds)
+                    if last < first:
+                        valid = False
+                        continue
+                    # Validate against the finite bibliography before expanding a range.
+                    members = [str(number) for number in known_numbers if first <= number <= last]
+                    if len(members) != last - first + 1:
+                        valid = False
+                        missing.update(set(bounds) - known)
+                        missing.update(str(number) for number in [first, *(int(n) + 1 for n in members if int(n) < last)]
+                                       if str(number) not in known)
+                numbers.extend(members)
+                items.append("–".join(bounds))
+            missing.update(set(numbers) - known)
+            if not valid or missing:
+                unknown.update(missing)
                 continue
             punctuation = (match["before"] or "") + (match["after"] or "")
             closing = (match["close"] or "") + (match["afterclose"] or "")
             if software:
-                pieces = [(punctuation + closing, False), (",".join(numbers), True)]
+                pieces = [(punctuation + closing, False), (",".join(items), True)]
             else:
                 space = " " if closing or match.start() and not text[match.start() - 1].isspace() else ""
                 pieces = [(closing + space + ", ".join("[" + n + "]" for n in numbers), False), (punctuation, False)]

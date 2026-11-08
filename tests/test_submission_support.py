@@ -135,15 +135,29 @@ def test_prose_next_to_explicit_author_block_and_repeated_preparation_survive(tm
         assert prose in (tmp_path / folder / "anonymous.md").read_text()
 
 
-def test_author_markers_in_front_matter_code_are_not_deletion_instructions(tmp_path, inputs):
+@pytest.mark.parametrize("inner_fence", ["", "```text\n"])
+def test_author_markers_in_front_matter_code_are_not_deletion_instructions(tmp_path, inputs, inner_fence):
     article, profile = inputs
-    example = "```html\n<!-- paper-factory:authors:start -->\nA literal marker example.\n<!-- paper-factory:authors:end -->\n```"
+    example = "```html\n" + inner_fence + "<!-- paper-factory:authors:start -->\nA literal marker example.\n<!-- paper-factory:authors:end -->\n```"
     source = "# Title\n\n" + example + "\n\n## Abstract\n\nBounded text.\n"
     put(article, source)
     with pytest.raises(ValueError, match="Ambiguous pre-Abstract content"):
         support.prepare_authors(profile, article, tmp_path / "out")
     assert article.read_text() == source
     assert not (tmp_path / "out").exists()
+
+
+def test_author_block_next_to_fenced_marker_example_is_preserved(tmp_path, inputs):
+    article, profile = inputs
+    example = "```markdown\n```text\n<!-- paper-factory:authors:start -->\nA literal marker example.\n<!-- paper-factory:authors:end -->\n```"
+    source = ARTICLE.replace("## Abstract", example + "\n\n## Abstract", 1)
+    put(article, source)
+    support.prepare_authors(profile, article, tmp_path / "out", anonymous=True)
+    for name in ("manuscript.md", "anonymous.md"):
+        text = (tmp_path / "out" / name).read_text(encoding="utf-8")
+        assert example in text
+        assert "Old Author" not in text
+    assert article.read_text(encoding="utf-8") == source
 
 
 def test_biography_heading_in_code_example_is_preserved(tmp_path, inputs):
@@ -481,6 +495,26 @@ def test_docx_metadata_actual_author_custom_orcid_and_revision_markers(tmp_path,
     assert report["docx_comment_count"] == report["docx_tracked_change_elements"] == 1
     assert any(match["matched_profile_value"] == "Alice Research" for match in report["profile_matches"])
     assert not report["metadata_scrubbed"] and not report["fully_anonymized_claimed"]
+    assert document.read_bytes() == before
+
+
+def test_docx_metadata_reports_formatting_revisions_and_their_authors(tmp_path, inputs):
+    _, profile = inputs
+    document = tmp_path / "formatting.docx"
+    with zipfile.ZipFile(document, "w") as package:
+        package.writestr("word/document.xml", '''<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:body><w:p>
+<w:pPr><w:jc w:val="center"/><w:pPrChange w:id="1" w:author="Alice Research"><w:pPr/></w:pPrChange></w:pPr>
+<w:r><w:rPr><w:b/><w:rPrChange w:id="2" w:author="Bob Scientist"><w:rPr/></w:rPrChange></w:rPr><w:t>Formatted text.</w:t></w:r>
+</w:p><w:tbl><w:tblPr/>
+<w:tblGrid><w:gridCol w:w="1000"/><w:tblGridChange w:id="3"><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid></w:tblGridChange></w:tblGrid>
+<w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl></w:body></w:document>''')
+    before = document.read_bytes()
+    report = support.inspect_metadata(document, tmp_path / "metadata", profile=profile)
+    assert report["docx_tracked_change_elements"] == 3
+    assert report["docx_comment_count"] == 0
+    assert report["metadata"]["revision.authors"] == "Alice Research; Bob Scientist"
+    assert {match["matched_profile_value"] for match in report["profile_matches"]} == {"Alice Research", "Bob Scientist"}
     assert document.read_bytes() == before
 
 
