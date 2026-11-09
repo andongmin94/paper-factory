@@ -39,6 +39,8 @@ def test_code_and_links_do_not_create_body_citations():
     text = """# Article
 
 `array[9]` and [8](https://example.org/[7]) are code and links.
+Bracketed link [[4, 3]](https://example.org/group) and image ![[2]](figure.png).
+An [escaped \\[ label](https://example.org/[4]) remains a link.
 
 ```python
 values[6]
@@ -48,15 +50,16 @@ values[6]
 another[5]
 ~~~
 
-A real citation [1].
+A real citation [1] and a missing citation [10].
 
 ## References
 
 [1] First source.
 """
     result = editorial.check_manuscript(text)
-    assert result["metrics"]["recognized_body_citations"] == [1]
-    assert "citation_without_reference" not in codes(result)
+    assert result["metrics"]["recognized_body_citations"] == [1, 10]
+    assert [item["reference_id"] for item in result["structural_findings"]
+            if item["code"] == "citation_without_reference"] == [10]
 
 
 @pytest.mark.parametrize("opener,closer", [("```python", "````"), ("~~~text", "~~~~~")])
