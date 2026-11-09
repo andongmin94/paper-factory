@@ -26,7 +26,8 @@ AUTHOR_START = "<!-- paper-factory:authors:start -->"
 AUTHOR_END = "<!-- paper-factory:authors:end -->"
 DECLARATIONS = ("originality", "rights", "author_approval", "funding", "conflicts", "ai_disclosure")
 DOCX_REVISION_TAGS = {"ins", "del", "moveFrom", "moveTo", "rPrChange", "pPrChange", "sectPrChange",
-                      "tblPrChange", "tblPrExChange", "tblGridChange", "trPrChange", "tcPrChange"}
+                      "tblPrChange", "tblPrExChange", "tblGridChange", "trPrChange", "tcPrChange",
+                      "cellIns", "cellDel", "cellMerge"}
 
 
 def _text(value, label, *, required=False):

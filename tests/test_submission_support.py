@@ -517,12 +517,16 @@ def test_docx_metadata_reports_formatting_revisions_and_their_authors(tmp_path, 
 <w:r><w:rPr><w:b/><w:rPrChange w:id="2" w:author="Bob Scientist"><w:rPr/></w:rPrChange></w:rPr><w:t>Formatted text.</w:t></w:r>
 </w:p><w:tbl><w:tblPr/>
 <w:tblGrid><w:gridCol w:w="1000"/><w:tblGridChange w:id="3"><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid></w:tblGridChange></w:tblGrid>
-<w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl></w:body></w:document>''')
+<w:tr><w:tc><w:p/></w:tc></w:tr>
+<w:tr><w:tc><w:tcPr><w:cellIns w:id="4" w:author="Cell Inserter"/></w:tcPr><w:p/></w:tc></w:tr>
+<w:tr><w:tc><w:tcPr><w:cellDel w:id="5" w:author="Cell Deleter"/></w:tcPr><w:p/></w:tc></w:tr>
+<w:tr><w:tc><w:tcPr><w:cellMerge w:id="6" w:author="Cell Merger" w:vMerge="cont"/></w:tcPr><w:p/></w:tc></w:tr>
+</w:tbl></w:body></w:document>''')
     before = document.read_bytes()
     report = support.inspect_metadata(document, tmp_path / "metadata", profile=profile)
-    assert report["docx_tracked_change_elements"] == 3
+    assert report["docx_tracked_change_elements"] == 6
     assert report["docx_comment_count"] == 0
-    assert report["metadata"]["revision.authors"] == "Alice Research; Bob Scientist"
+    assert report["metadata"]["revision.authors"] == "Alice Research; Bob Scientist; Cell Deleter; Cell Inserter; Cell Merger"
     assert {match["matched_profile_value"] for match in report["profile_matches"]} == {"Alice Research", "Bob Scientist"}
     assert document.read_bytes() == before
 
