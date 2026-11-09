@@ -160,13 +160,22 @@ def test_author_block_next_to_fenced_marker_example_is_preserved(tmp_path, input
     assert article.read_text(encoding="utf-8") == source
 
 
-def test_biography_heading_in_code_example_is_preserved(tmp_path, inputs):
+@pytest.mark.parametrize("example", [
+    "```markdown\n## Author biographies\nAn example, not an actual author section.\n```",
+    '```{.markdown title="a`b"}\n## Author biographies\nAn example, not an actual author section.\n```',
+    "```sample``` is a literal code span.",
+])
+def test_code_examples_preserve_content_and_biography_removal(tmp_path, inputs, example):
     article, profile = inputs
-    put(article, ARTICLE.replace("The local claim survives.", "The local claim survives.\n\n```markdown\n## Author biographies\nAn example, not an actual author section.\n```"))
+    source = ARTICLE.replace("The local claim survives.", "The local claim survives.\n\n" + example)
+    put(article, source)
     support.prepare_authors(profile, article, tmp_path / "out", anonymous=True)
-    text = (tmp_path / "out/anonymous.md").read_text()
-    assert "## Author biographies\nAn example, not an actual author section." in text
-    assert "Old biographical text." not in text
+    for name in ("manuscript.md", "anonymous.md"):
+        text = (tmp_path / "out" / name).read_text(encoding="utf-8")
+        assert example in text
+        assert "## References\n\n[1] A retained source, 2026." in text
+        assert "Old biographical text." not in text
+    assert article.read_text(encoding="utf-8") == source
 
 
 @pytest.mark.parametrize("appendix_heading", ["# Appendix", "  ## Appendix ##"])

@@ -15,7 +15,9 @@ def mask_fenced_code(markdown: str) -> str:
             lines.append(_blank(line))
             if marker and marker[1][0] == fence[0] and len(marker[1]) >= len(fence) and not marker[2].strip():
                 fence = None
-        elif marker:
+        # Pandoc permits backticks in quoted fence attributes, but not bare info.
+        elif marker and (marker[1][0] == "~" or "`" not in marker[2] or
+                         re.fullmatch(r"""\s*\{(?:[^`'"]|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')*\}\s*""", marker[2])):
             fence = marker[1]
             lines.append(_blank(line))
         else:

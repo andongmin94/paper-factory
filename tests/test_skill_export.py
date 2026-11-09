@@ -526,6 +526,8 @@ def test_retained_publisher_styles_columns_and_citations(tmp_path, venue):
 
 @pytest.mark.parametrize("venue", ["ieee-software", "ieee-security-privacy"])
 def test_real_pandoc_grouped_citations_preserve_ranges_and_protected_content(tmp_path, venue, monkeypatch):
+    import zipfile
+    from xml.etree import ElementTree
     from docx import Document
     from docx.oxml.ns import qn
     binary = _real_pandoc()
@@ -536,6 +538,7 @@ def test_real_pandoc_grouped_citations_preserve_ranges_and_protected_content(tmp
         ("Hyphen evidence. [1-3]", "Hyphen evidence.1–3", "Hyphen evidence [1], [2], [3].", "1–3"),
         ("En-dash evidence. [1–3]", "En-dash evidence.1–3", "En-dash evidence [1], [2], [3].", "1–3"),
         ("Mixed evidence. [1, 2–3]", "Mixed evidence.1,2–3", "Mixed evidence [1], [2], [3].", "1,2–3"),
+        ("Footnoted evidence [1, 2][^scope].", "Footnoted evidence.1,2", "Footnoted evidence [1], [2].", "1,2"),
         ("**Split evidence.** [1, **2**; *3*] *retained emphasis*",
          "Split evidence.1,2,3 retained emphasis", "Split evidence [1], [2], [3]. retained emphasis", "1,2,3"),
     ]
@@ -554,20 +557,25 @@ def test_real_pandoc_grouped_citations_preserve_ranges_and_protected_content(tmp
     source.write_text(ARTICLE.replace("A shared requirement may survive the command that first wrote it. [1]",
                                       "\n\n".join(case[0] for case in cases) + "\n\n" + controls)
                      .replace("[1] Example Authors, A retained source, 2025. https://example.org/source",
-                              "\n\n".join(f"[{number}] Authors, Source {number}, 2025." for number in range(1, 4))),
+                              "\n\n".join(f"[{number}] Authors, Source {number}, 2025." for number in range(1, 4)))
+                     + "\n[^scope]: This exact footnote text must remain reachable.\n",
                       encoding="utf-8")
     original = source.read_bytes()
     output = tmp_path / "groups.docx"
     code_runs = []
+    footnote_ids = []
     apply_styles = converter.apply_official_styles
 
-    def capture_code_then_apply(path, reference, **kwargs):
-        code = Document(path).tables[0].cell(1, 0).paragraphs[0]
+    def capture_content_then_apply(path, reference, **kwargs):
+        document = Document(path)
+        footnote_ids.extend(document._element.xpath(".//w:footnoteReference/@w:id"))
+        assert len(footnote_ids) == 1
+        code = document.tables[0].cell(1, 0).paragraphs[0]
         assert code.style.name == "Source Code" and code.text == "result = [1, 2]"
         code_runs.extend(run._r.xml for run in code.runs)
         return apply_styles(path, reference, **kwargs)
 
-    monkeypatch.setattr(converter, "apply_official_styles", capture_code_then_apply)
+    monkeypatch.setattr(converter, "apply_official_styles", capture_content_then_apply)
     receipt = converter.convert_docx(source, output, venue_id=venue, pandoc=str(binary))
     document = Document(output)
     code = document.tables[0].cell(1, 0).paragraphs[0]
@@ -578,6 +586,13 @@ def test_real_pandoc_grouped_citations_preserve_ranges_and_protected_content(tmp
         paragraph = paragraphs[superscript_text if software else bracketed_text]
         superscript = "".join(run.text for run in paragraph.runs if run.font.superscript)
         assert superscript == (numbers if software else "")
+    footnoted = paragraphs["Footnoted evidence.1,2" if software else "Footnoted evidence [1], [2]."]
+    assert footnoted._p.xpath(".//w:footnoteReference/@w:id") == footnote_ids
+    with zipfile.ZipFile(output) as archive:
+        notes = ElementTree.fromstring(archive.read("word/footnotes.xml"))
+    note_texts = {note.get(qn("w:id")): "".join(node.text or "" for node in note.iter(qn("w:t"))).strip()
+                  for note in notes.findall(qn("w:footnote"))}
+    assert note_texts[footnote_ids[0]] == "This exact footnote text must remain reachable."
     proof = receipt["official_template"]["citation_typography"]
     assert proof["callout_groups_formatted"] == len(cases)
     assert proof["unknown_reference_numbers_preserved"] == ["4", "999999999"]

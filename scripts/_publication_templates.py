@@ -25,7 +25,8 @@ def _replace_native_text(paragraph, start, end, pieces):
         text = run.text
         runs.append((position, position + len(text), run))
         position += len(text)
-    affected = [(a, b, run) for a, b, run in runs if a < end and b > start]
+    # Non-text runs, such as footnote anchors, must survive text replacement.
+    affected = [(a, b, run) for a, b, run in runs if a < b and a < end and b > start]
     if not affected:
         return
     a, _, first = affected[0]
