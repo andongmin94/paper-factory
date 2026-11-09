@@ -75,9 +75,9 @@ def _sections(markdown):
 
 
 def _without_biographies(markdown):
-    matches = _sections(markdown)
+    matches = list(re.finditer(r"(?m)^ {0,3}(#{1,2})[ \t]+(.+?)[ \t]*#*[ \t]*$", mask_code(markdown)))
     removals = [(match.start(), matches[index + 1].start() if index + 1 < len(matches) else len(markdown))
-                for index, match in enumerate(matches) if match[1].strip().casefold() in BIO_HEADINGS]
+                for index, match in enumerate(matches) if match[1] == "##" and match[2].strip().casefold() in BIO_HEADINGS]
     for start, end in reversed(removals):
         markdown = markdown[:start] + markdown[end:]
     return markdown
@@ -497,11 +497,11 @@ def prepare_bundle(plan, root, output_dir):
     venue = value["venue_id"]
     if venue in PREPARED_MANUSCRIPTS:
         role, suffix = PREPARED_MANUSCRIPTS[venue]
-        outputs = [row for row in selections if row["role"] in {role, "manuscript"}
-                   and row["source"].suffix.lower() == suffix]
-        if not outputs:
+        outputs = [row for row in selections if (row["role"], row["source"].suffix.lower()) in
+                   {("editable_docx", ".docx"), ("review_pdf", ".pdf"), ("manuscript", suffix)}]
+        if not any(row["role"] in {role, "manuscript"} and row["source"].suffix.lower() == suffix for row in outputs):
             missing.append(f"Select the prepared {venue} manuscript ({role}, {suffix})")
-        else:
+        if outputs:
             missing.extend(_conversion_gaps(selections, outputs))
     recommendation = value.get("recommendation_status")
     if recommendation not in (None, "conditional", "not_recommended"):

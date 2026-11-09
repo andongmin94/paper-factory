@@ -223,6 +223,30 @@ def test_prepared_outputs_match_recorded_versions_after_moving_the_source_tree(t
 
 
 @pytest.mark.parametrize("variant,reason", [
+    ("matching", None),
+    ("changed", "paper.pdf changed; regenerate paper.pdf"),
+    ("absent", "Prepared output paper.pdf: select exactly one conversion_record"),
+])
+def test_emse_bundle_checks_selected_review_pdf_conversion(tmp_path, variant, reason):
+    root, plan, _ = conversion_case(tmp_path, "emse")
+    pdf = root / "paper.pdf"
+    pdf.write_bytes(b"Synthetic review PDF bytes; no document conversion is performed.")
+    record_conversion(root, ["paper.md", "paper.bib", "figure.svg"], pdf.name, root / "pdf-conversion")
+    plan["files"].append({"role": "review_pdf", "path": pdf.name})
+    if variant != "absent":
+        plan["files"].append({"role": "conversion_record", "path": "pdf-conversion/conversion.json"})
+    if variant == "changed":
+        pdf.write_bytes(b"Changed review PDF bytes after recording conversion.")
+    result = run_bundle(tmp_path, root, {f["path"]: (root / f["path"]).read_bytes() for f in plan["files"]}, plan)
+    assert result["recommendation_status"] == "not_recommended"
+    if reason is None:
+        assert result["draft_status"] == "draft" and not result["missing_evidence"]
+    else:
+        assert result["draft_status"] == "incomplete"
+        assert any(reason in gap for gap in result["missing_evidence"])
+
+
+@pytest.mark.parametrize("variant,reason", [
     ("absent", "exactly one conversion_record"),
     ("malformed", "invalid record"),
     ("unbound", "paper.bib is not bound"),

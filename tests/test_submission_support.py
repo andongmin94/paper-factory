@@ -169,16 +169,18 @@ def test_biography_heading_in_code_example_is_preserved(tmp_path, inputs):
     assert "Old biographical text." not in text
 
 
+@pytest.mark.parametrize("appendix_heading", ["# Appendix", "  ## Appendix ##"])
 @pytest.mark.parametrize("abstract_heading,biography_heading", [
     ("## Abstract", "## Author biographies ##"),
     ("  ## Abstract ##", "  ## Author biographies ##"),
 ])
-def test_author_preparation_recognizes_markdown_section_variants(tmp_path, inputs, abstract_heading, biography_heading):
+def test_author_preparation_recognizes_markdown_section_variants(tmp_path, inputs, abstract_heading, biography_heading, appendix_heading):
     article, profile = inputs
     example = "```markdown\n## Author biographies ##\nA literal biography example.\n```"
-    appendix = "  ## Appendix ##\n\nThe retained appendix remains.\n"
+    appendix = appendix_heading + "\n\nThe retained appendix remains.\n"
     source = ARTICLE.replace("## Abstract\n", abstract_heading + "\n")
     source = source.replace("## Author biographies\n", biography_heading + "\n")
+    source = source.replace("Old biographical text.", "Old biographical text.\n\n### Biography detail\n\nOld nested biography text.")
     source = source.replace("The local claim survives.", "The local claim survives.\n\n" + example)
     put(article, source + "\n" + appendix)
     original = article.read_bytes(), profile.read_bytes()
@@ -187,6 +189,7 @@ def test_author_preparation_recognizes_markdown_section_variants(tmp_path, input
     anonymous = (tmp_path / "out/anonymous.md").read_text(encoding="utf-8")
     for text in (authored, anonymous):
         assert "Old biographical text." not in text
+        assert "Old nested biography text." not in text
         assert "A bounded source example." in text
         assert "Alice Research wrote the retained tool. The local claim survives." in text
         assert "## References\n\n[1] A retained source, 2026." in text
