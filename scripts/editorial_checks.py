@@ -34,7 +34,7 @@ def _prose(text: str, *, context: str | None = None) -> str:
     labels = {label(match[1]) for match in definition.finditer(mask_code(context if context is not None else text))}
     text = mask_code(text)
     text = definition.sub(blank, text)
-    text = re.sub(r"!?\[[^\]\n]*\]\([^\n)]*\)", blank, text)
+    text = re.sub(r"!?\[(?:\\.|[^\[\]\\\n]|\[(?:\\.|[^\[\]\\\n])*\])*\]\([^\n)]*\)", blank, text)
 
     def reference_link(match):
         target = match[2] if match[2] else match[1]
