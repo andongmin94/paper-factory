@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
+import re
 import sys
 
 from _publication_files import digest_file
@@ -101,7 +102,9 @@ def prepare(root: Path, cards_path: Path, output_dir: Path) -> dict:
             prose += ["### " + field.title(), "", card[field], ""]
         prose += ["Binding status: " + ("matches" if card["bindings_match"] else ", ".join(card["issues"])), ""]
         for witness in card["witnesses"]:
-            prose += [f"- Lines {witness['start_line']}–{witness['end_line']}" + (f"; supplied pages {witness['pages']}" if witness.get("pages") else "") + ": " + ("matches" if witness["quote_matches"] else "mismatch"), "", "```text", witness["quote"], "```", ""]
+            longest_run = max((len(run) for run in re.findall(r"`+", witness["quote"])), default=0)
+            fence = "`" * max(3, longest_run + 1)
+            prose += [f"- Lines {witness['start_line']}–{witness['end_line']}" + (f"; supplied pages {witness['pages']}" if witness.get("pages") else "") + ": " + ("matches" if witness["quote_matches"] else "mismatch"), "", fence + "text", witness["quote"], fence, ""]
     with (folder / "literature-cards.md").open("x", encoding="utf-8", newline="\n") as stream:
         stream.write("\n".join(prose))
     _manifest(folder)

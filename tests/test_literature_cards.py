@@ -12,6 +12,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 cards = importlib.import_module("literature_cards")
+converter = importlib.import_module("_publication_convert")
 
 
 @pytest.fixture
@@ -46,6 +47,32 @@ def test_card_is_portable_and_does_not_inflate_selected_reading(reading, tmp_pat
     assert "not independently checked" in recorded["witnesses"][0]["page_locator_scope"]
     assert "do not prove full reading" in report["scope"]
     assert card["source"]["sha256"] in (output / "literature-cards.md").read_text(encoding="utf-8")
+    assert (root / "paper.txt").read_bytes() == original
+
+
+@pytest.mark.parametrize("source_fence", ["```", "`````"])
+def test_nested_fences_preserve_literal_witnesses_and_following_card(reading, tmp_path, source_fence):
+    root, payload, card = reading
+    quote = f'Example:\n{source_fence}python\nprint("sample")\n{source_fence}\n\n## Example result\nThe example prints `sample`.'
+    original = (quote + "\n").encode("utf-8")
+    (root / "paper.txt").write_bytes(original)
+    sha = hashlib.sha256(original).hexdigest()
+    card["source"].update(sha256=sha, text_sha256=sha)
+    card["witnesses"] = [{"start_line": 1, "end_line": 7, "quote": quote}]
+    second = {**card, "id": "P2", "title": "Following reading"}
+    payload.write_text(json.dumps({"cards": [card, second]}), encoding="utf-8")
+    output = tmp_path / "cards-output"
+    assert cards.prepare(root, payload, output)["bindings_match"]
+
+    report = json.loads((output / "literature-cards.json").read_text(encoding="utf-8"))
+    assert [row["witnesses"][0]["quote"] for row in report["cards"]] == [quote, quote]
+    parsed = subprocess.run([str(converter.pandoc_binary()), "--from=markdown", "--to=json",
+                             str(output / "literature-cards.md")],
+                            capture_output=True, text=True, check=True, timeout=30)
+    blocks = json.loads(parsed.stdout)["blocks"]
+    assert [block["c"][1] for block in blocks if block["t"] == "CodeBlock"] == [quote, quote]
+    assert [block["c"][2][0]["c"] for block in blocks
+            if block["t"] == "Header" and block["c"][0] == 2] == ["P1:", "P2:"]
     assert (root / "paper.txt").read_bytes() == original
 
 

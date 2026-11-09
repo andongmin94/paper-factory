@@ -80,7 +80,7 @@ def _citations(text: str) -> set[int]:
 
 
 def _doi(value: str) -> str | None:
-    value = unquote(value.strip()).removeprefix("https://doi.org/").removeprefix("http://doi.org/")
+    value = re.sub(r"^https?://doi\.org/", "", unquote(value.strip()), flags=re.I)
     value = re.sub(r"^doi:\s*", "", value, flags=re.I).rstrip(".,;)]}")
     return value.casefold() if re.fullmatch(r"10\.[0-9]{4,9}/[^\s<>]+", value, re.I) else None
 

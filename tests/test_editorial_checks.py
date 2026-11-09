@@ -187,18 +187,23 @@ def test_reference_identifier_markup_preserves_metadata_and_inputs(tmp_path, for
     assert (manuscript.read_bytes(), metadata.read_bytes()) == before
 
 
-def test_plain_and_linked_identifiers_still_detect_duplicates_and_mismatches():
+@pytest.mark.parametrize("supplied_doi", [
+    "10.1234/expected", "https://DOI.ORG/10.1234/expected",
+    "HTTPS://doi.org/10.1234/expected", "HTTP://DOI.ORG/10.1234/expected",
+])
+def test_plain_and_linked_identifiers_still_detect_duplicates_and_mismatches(supplied_doi):
     result = editorial.check_manuscript("""# Article
 Sources [1, 2, 3].
 ## References
 [1] First. https://doi.org/10.1234/example
 [2] Second. [https://doi.org/10.1234/example](https://doi.org/10.1234/example)
 [3] Third. [DOI](https://doi.org/10.1234/different)
-""", [{"id": 3, "doi": "10.1234/expected"}])
+""", [{"id": 3, "doi": supplied_doi}])
     findings = result["structural_findings"]
     for code in ("duplicate_doi", "duplicate_reference_url"):
         assert [item["reference_ids"] for item in findings if item["code"] == code] == [[1, 2]]
     assert [item["reference_id"] for item in findings if item["code"] == "metadata_doi_mismatch"] == [3]
+    assert "malformed_metadata_doi" not in codes(result)
 
 
 def test_explicit_bad_doi_and_metadata_mismatch():
@@ -221,15 +226,19 @@ def test_metadata_author_year_and_url_are_literal_manual_comparisons():
     assert not result["structural_findings"]
 
 
-def test_duplicate_supplied_titles_and_dois():
+@pytest.mark.parametrize("supplied_doi", [
+    "https://doi.org/10.1234/SAME", "https://DOI.ORG/10.1234/SAME",
+    "HTTPS://doi.org/10.1234/SAME", "HTTP://DOI.ORG/10.1234/SAME",
+])
+def test_duplicate_supplied_titles_and_dois(supplied_doi):
     result = editorial.check_manuscript("""# Article
 Sources [1, 2].
 ## References
 [1] Same title.
-[2] Same title.
+[2] Same title. doi:10.1234/same
 """, [{"id": 1, "title": "Same title", "doi": "10.1234/same"},
-       {"id": 2, "title": " SAME  TITLE ", "doi": "https://doi.org/10.1234/SAME"}])
-    assert {"duplicate_metadata_title", "duplicate_metadata_doi"} <= codes(result)
+       {"id": 2, "title": " SAME  TITLE ", "doi": supplied_doi}])
+    assert codes(result) == {"duplicate_metadata_title", "duplicate_metadata_doi"}
 
 
 def test_table_and_figure_calls_use_captions_not_their_own_labels():
