@@ -166,6 +166,41 @@ Both accounts [1, 2].
     assert "not checked online" in result["metadata_scope"]
 
 
+@pytest.mark.parametrize("form", ["plain", "autolink", "doi_label", "url_label", "publisher_link"])
+def test_reference_identifier_markup_preserves_metadata_and_inputs(tmp_path, form):
+    doi = "10.1234/example(2024)part"
+    url = "https://doi.org/" + doi
+    publisher = "https://publisher.example/article/42"
+    markup = {"plain": url, "autolink": f"<{url}>", "doi_label": f"[{doi}]({url})",
+              "url_label": f"[{url}]({url})", "publisher_link": f"[{doi}]({publisher})"}[form]
+    manuscript, metadata = tmp_path / "article.md", tmp_path / "references.json"
+    manuscript.write_bytes(("# Article\r\nA source [1].\r\n## References\r\n"
+                            "[1] Retained source. " + markup + "\r\n").encode())
+    metadata.write_text(json.dumps([{"id": 1, "title": "Retained source", "doi": doi,
+                                     "url": publisher if form == "publisher_link" else url}]), encoding="utf-8")
+    before = manuscript.read_bytes(), metadata.read_bytes()
+    output = tmp_path / "report"
+    editorial.write_report(manuscript, output, metadata)
+    report = json.loads((output / "editorial-report.json").read_text(encoding="utf-8"))
+    assert not report["structural_findings"]
+    assert not any(code.startswith("metadata_") for code in codes(report, "manual_review_suggestions"))
+    assert (manuscript.read_bytes(), metadata.read_bytes()) == before
+
+
+def test_plain_and_linked_identifiers_still_detect_duplicates_and_mismatches():
+    result = editorial.check_manuscript("""# Article
+Sources [1, 2, 3].
+## References
+[1] First. https://doi.org/10.1234/example
+[2] Second. [https://doi.org/10.1234/example](https://doi.org/10.1234/example)
+[3] Third. [DOI](https://doi.org/10.1234/different)
+""", [{"id": 3, "doi": "10.1234/expected"}])
+    findings = result["structural_findings"]
+    for code in ("duplicate_doi", "duplicate_reference_url"):
+        assert [item["reference_ids"] for item in findings if item["code"] == code] == [[1, 2]]
+    assert [item["reference_id"] for item in findings if item["code"] == "metadata_doi_mismatch"] == [3]
+
+
 def test_explicit_bad_doi_and_metadata_mismatch():
     result = editorial.check_manuscript("""# Article
 Sources [1, 2].

@@ -130,11 +130,14 @@ def check(root: Path, record_path: Path, output_dir: Path) -> dict:
         bundle_matches = bundle_matches and current is not None and current == row.get("sha256")
         actual_files.append({**row, "sha256": current})
     manuscripts = [row for row in actual_files if row.get("role") == "manuscript"]
+    docx_files = [row for row in actual_files if row.get("role") == "editable_docx"]
     review_pdfs = [row for row in actual_files if row.get("role") == "review_pdf"]
-    selected_native = (len(manuscripts) == 1 and hashes["docx"] is not None and manuscripts[0]["sha256"] == hashes["docx"] and
+    selected_native = (len(manuscripts) == len(docx_files) == 1 and
+                       hashes["manuscript"] is not None and manuscripts[0]["sha256"] == hashes["manuscript"] and
+                       hashes["docx"] is not None and docx_files[0]["sha256"] == hashes["docx"] and
                        all(row["sha256"] == hashes["pdf"] for row in review_pdfs))
     item("selected_files", bool(bundle_matches and bundle.get("venue_id") == supplied["venue_id"] and selected_native),
-         "Select the exact DOCX as manuscript and any review PDF as the verified PDF; every final bundle file, including a generated cover letter, must still match its recorded bytes.")
+         "Select the exact canonical Markdown as manuscript, the verified DOCX as editable_docx and any verified PDF as review_pdf; every final bundle file, including a generated cover letter, must still match its recorded bytes.")
     declarations = _declaration_status(bundle.get("supplied_declarations", {}), bundle.get("supplied_confirmations", {}), actual_files)
     declarations_passed = bool(bundle_matches and all(declarations[name]["status"] == "explicit_confirmation_recorded" for name in DECLARATIONS))
     item("author_declarations", declarations_passed, "All supplied declaration confirmations must bind their exact statement and every current final bundle file.")

@@ -86,7 +86,8 @@ def _doi(value: str) -> str | None:
 
 
 def _dois(text: str) -> list[str]:
-    return [v for m in re.finditer(r"(?i)\b10\.[0-9]{4,9}/[^\s<>\"]+", text)
+    # A Markdown link label and destination contain separate identifier tokens.
+    return [v for m in re.finditer(r"(?i)\b10\.[0-9]{4,9}/(?:(?!\]\()[^\s<>\"])+", text)
             if (v := _doi(m[0]))]
 
 
@@ -140,8 +141,8 @@ def check_manuscript(text: str, references: list[dict] | None = None) -> dict:
     dois, urls = [], []
     for entry in entries:
         dois.extend((entry["id"], value) for value in set(_dois(entry["text"])))
-        urls.extend((entry["id"], _url(m[0])) for m in re.finditer(r"https?://[^\s<>]+", entry["text"]))
-        for token in re.finditer(r"(?i)(?:\bdoi:\s*|https?://doi\.org/)([^\s<>]+)", entry["text"]):
+        urls.extend((entry["id"], _url(m[0])) for m in re.finditer(r"https?://(?:(?!\]\()[^\s<>])+", entry["text"]))
+        for token in re.finditer(r"(?i)(?:\bdoi:\s*|https?://doi\.org/)((?:(?!\]\()[^\s<>])+)", entry["text"]):
             if _doi(token[1]) is None:
                 findings.append({"code": "malformed_doi", "reference_id": entry["id"],
                                  "detail": "Explicit DOI value has invalid syntax: " + token[1].rstrip(".,;)]}")})
@@ -206,7 +207,7 @@ def check_manuscript(text: str, references: list[dict] | None = None) -> dict:
                 suggestions.append({"code": "metadata_year_not_found", "reference_id": number,
                                     "detail": "Supplied year is not printed in this reference entry; publication and access dates need manual comparison."})
             if item.get("url"):
-                actual_urls = {_url(m[0]) for m in re.finditer(r"https?://[^\s<>]+", actual)}
+                actual_urls = {_url(m[0]) for m in re.finditer(r"https?://(?:(?!\]\()[^\s<>])+", actual)}
                 if _url(item["url"]) not in actual_urls:
                     suggestions.append({"code": "metadata_url_not_printed", "reference_id": number,
                                         "detail": "Supplied URL is absent from this entry; alternate official links need manual comparison."})
