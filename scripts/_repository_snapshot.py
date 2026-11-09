@@ -44,6 +44,12 @@ def _paths(paths: list[str]) -> list[str]:
 
 def _git(arguments: list[str], *, cwd: Path, hooks: Path) -> bytes:
     environment = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "Never"}
+    # A caller's repository paths must not redirect this isolated capture.
+    # Keep GIT_CONFIG_* overrides and authentication, proxy and CA settings.
+    for name in ("GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE",
+                 "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+                 "GIT_GRAFT_FILE", "GIT_SHALLOW_FILE", "GIT_PREFIX", "GIT_NAMESPACE"):
+        environment.pop(name, None)
     command = ["git", "-c", f"core.hooksPath={hooks}", "-c", "core.fsmonitor=false",
                "-c", "submodule.recurse=false", *arguments]
     try:

@@ -349,9 +349,9 @@ def impact(root: Path, evidence_path: Path, output_dir: Path, *, manuscript_name
             elif expected != observed:
                 issues.append("source_changed" if expected is not None else "source_newly_available")
                 changed.add(name)
-            # Reuse a verified unchanged witness without re-extracting the whole body.
-            matches = observed is not None and observed == expected and not issues
-            if data is not None and not matches:
+            # Check each supplied witness against the retained source snapshot.
+            matches = False
+            if data is not None:
                 try:
                     lines = data.decode("utf-8-sig").splitlines()
                     matches = end <= len(lines) and "\n".join(lines[start - 1:end]) == quote

@@ -132,6 +132,8 @@ def test_preflight_rejects_supported_numeric_citations_in_abstract(manuscript, c
 def test_preflight_body_grouped_citation_does_not_fail_abstract_structure(manuscript):
     text = ARTICLE.replace("A shared requirement may survive the command that first wrote it. [1]",
                            "A shared requirement may survive the command that first wrote it. [1, 3–4]", 1)
+    text = text.split("## References", 1)[0] + "## References\n\n" + "\n\n".join(
+        f"[{number}] Example Authors, Retained source {number}, 2025." for number in range(1, 5)) + "\n"
     manuscript.write_text(text, encoding="utf-8")
     original = manuscript.read_bytes()
     result = exporter.preflight(manuscript, "ieee-software")
@@ -140,6 +142,93 @@ def test_preflight_body_grouped_citation_does_not_fail_abstract_structure(manusc
     assert result["prefilter_passed"]
     assert not result["native_word_measured"]
     assert manuscript.read_bytes() == original
+
+
+@pytest.mark.parametrize("citation", [
+    "[4]", "[1, 4]", "[2-4]", "[3-1]", "[1–999999999]", "[1,,2]",
+    "[1, **4**]", "[1, *4*]", "[1,\n4]",
+])
+def test_numeric_citation_gate_fails_preflight_cli_without_changing_source(manuscript, capsys, citation):
+    text = ARTICLE.replace("first wrote it. [1]", "first wrote it. " + citation)
+    text = text.split("## References", 1)[0] + "## References\n\n" + "\n\n".join(
+        f"[{number}] Example Authors, Retained source {number}, 2025." for number in range(1, 4)) + "\n"
+    manuscript.write_bytes(text.replace("\n", "\r\n").encode("utf-8"))
+    original = manuscript.read_bytes()
+    status = exporter.main(["preflight", "--manuscript", str(manuscript), "--venue", "ieee-software"])
+    result = json.loads(capsys.readouterr().out)
+    assert status == 1
+    row = next(item for item in result["items"] if item["id"] == "citation_references")
+    assert row["status"] == "failed" and row["reason"] in result["blockers"]
+    assert not result["prefilter_passed"]
+    assert manuscript.read_bytes() == original
+
+
+@pytest.mark.parametrize("citation", ["[1, **2**; *3*]", "[1,\n2–3]"])
+def test_numeric_citation_gate_accepts_formatted_and_wrapped_valid_groups(manuscript, citation):
+    text = ARTICLE.replace("first wrote it. [1]", "first wrote it. " + citation)
+    text = text.split("## References", 1)[0] + "## References\n\n" + "\n\n".join(
+        f"[{number}] Example Authors, Retained source {number}, 2025." for number in range(1, 4)) + "\n"
+    manuscript.write_text(text, encoding="utf-8")
+    original = manuscript.read_bytes()
+    result = exporter.preflight(manuscript, "ieee-software")
+    assert result["prefilter_passed"]
+    assert next(item for item in result["items"] if item["id"] == "citation_references")["status"] == "passed"
+    assert manuscript.read_bytes() == original
+
+
+def test_numeric_citation_gate_preserves_examples_and_does_not_promote_other_editorial_findings(manuscript):
+    text = ARTICLE.replace("## References", """Additional examples use (1, 4), `[3-1]`, and [[1–999999999]](https://example.org/range).
+The [1,,2][example] link and Figure 9 require separate editorial review.
+
+```text
+[1-]
+```
+
+## References""", 1) + "\n## Appendix\n[example]: https://example.org/example\n"
+    manuscript.write_text(text, encoding="utf-8")
+    original = manuscript.read_bytes()
+    result = exporter.preflight(manuscript, "ieee-software")
+    assert result["prefilter_passed"]
+    assert next(item for item in result["items"] if item["id"] == "citation_references")["status"] == "passed"
+    assert manuscript.read_bytes() == original
+
+
+def test_numeric_citation_gate_checks_appendices_after_references(manuscript):
+    manuscript.write_text(ARTICLE + "\n## Appendix\nThe extra result uses [9].\n", encoding="utf-8")
+    result = exporter.preflight(manuscript, "ieee-software")
+    assert not result["prefilter_passed"]
+    row = next(item for item in result["items"] if item["id"] == "citation_references")
+    assert row["status"] == "failed" and "[9]" in row["reason"]
+
+
+@pytest.mark.parametrize("citation", ["[1, 4]", "[1–999999999]", "[1, **4**]", "[1,\n4]"])
+def test_numeric_citation_gate_fails_compliance_with_actual_docx(manuscript, tmp_path, monkeypatch, citation):
+    """Real Pandoc/DOCX; only native Word counts and PDF rasterization are stubbed."""
+    text = ARTICLE.replace("first wrote it. [1]", "first wrote it. " + citation)
+    text = text.split("## References", 1)[0] + "## References\n\n" + "\n\n".join(
+        f"[{number}] Example Authors, Retained source {number}, 2025." for number in range(1, 4)) + "\n"
+    manuscript.write_text(text, encoding="utf-8")
+    original = manuscript.read_bytes()
+    docx, pdf = tmp_path / "actual.docx", tmp_path / "synthetic-native.pdf"
+    receipt = converter.convert_docx(manuscript, docx, venue_id="ieee-software", pandoc=str(_real_pandoc()))
+    pdf.write_bytes(b"Synthetic PDF fixture; native Word and rasterization are not exercised")
+    docx_bytes = docx.read_bytes()
+    docx_sha = exporter.digest_file(docx)
+    receipts = {"docx": receipt, "pdf": {
+        "input_sha256": exporter.digest_file(manuscript), "output_sha256": exporter.digest_file(pdf),
+        "official_template": receipt["official_template"], "source_docx_sha256": docx_sha,
+        "word_rendering": {"source_docx_sha256": docx_sha}}}
+    monkeypatch.setattr(templates, "measure_word", lambda _: {"metrics": {
+        "body_words": 300, "body_table_words": 0, "body_tables": 0, "body_figures": 0,
+        "abstract_words": 10, "reference_heading_found": True, "reference_count": 3}})
+    monkeypatch.setattr(checks, "render_pdf_pages", lambda *_: {
+        "automatic_checks": True, "issues": [], "page_count": 1, "pages": []})
+    result = checks.compliance_report(manuscript, docx, "ieee-software", pdf=pdf,
+                                      qa_root=tmp_path / "pages", conversion_receipts=receipts)
+    assert not result["content_format_passed"]
+    row = next(item for item in result["items"] if item["id"] == "citation_references")
+    assert row["status"] == "failed" and row["reason"] in result["blockers"]
+    assert manuscript.read_bytes() == original and docx.read_bytes() == docx_bytes
 
 
 def test_author_input_requires_real_typed_fields(tmp_path):
@@ -395,14 +484,15 @@ def test_existing_output_is_never_replaced(manuscript, tmp_path, monkeypatch):
     assert list(folder.iterdir()) == [sentinel]
 
 
-def _mock_native_export(monkeypatch, *, mutate_source=False):
+def _mock_native_export(monkeypatch, *, mutate_source=None):
     monkeypatch.setattr(exporter, "pandoc_binary", lambda _: Path(sys.executable))
+    monkeypatch.setattr(exporter, "image_sources", lambda *args, **kwargs: {})
     _, original = templates.official_template("ieee-software")
     def convert(source, output, **kwargs):
         digest = exporter.digest_file(source)
         output.write_bytes(b"native word fixture")
-        if mutate_source:
-            source.write_text(ARTICLE + "\nChanged\n", encoding="utf-8")
+        if mutate_source is not None:
+            mutate_source.write_text(ARTICLE + "\nChanged\n", encoding="utf-8")
         return {"input_sha256": digest, "output_sha256": exporter.digest_file(output),
                 "official_template": original}
     def render(source, output, **kwargs):
@@ -432,12 +522,14 @@ def test_export_binds_real_bytes_and_never_infers_approval(manuscript, tmp_path,
     assert all(exporter.digest_file(output / row["path"]) == row["sha256"] for row in manifest["files"])
 
 
-def test_changed_source_fails_but_retains_diagnostic_output(manuscript, tmp_path, monkeypatch):
-    _mock_native_export(monkeypatch, mutate_source=True)
+@pytest.mark.parametrize("changed_copy", [False, True])
+def test_changed_source_fails_but_retains_diagnostic_output(manuscript, tmp_path, monkeypatch, changed_copy):
     output = tmp_path / "new"
+    retained = output / "manuscript.md"
+    _mock_native_export(monkeypatch, mutate_source=retained if changed_copy else manuscript)
     with pytest.raises(ValueError, match="changed during direct export"):
         exporter.export(manuscript, "ieee-software", output)
-    assert (output / "manuscript.md").read_text(encoding="utf-8") == ARTICLE
+    assert (manuscript if changed_copy else retained).read_text(encoding="utf-8") == ARTICLE
     assert (output / "manuscript-ieee-software.docx").is_file()
     assert not (output / "provenance.json").exists()
 
@@ -603,7 +695,7 @@ def test_skill_copy_preflight_works_without_old_checkout(tmp_path):
     isolated = tmp_path / "standalone-skill"
     (isolated / "scripts").mkdir(parents=True)
     for path in (ROOT / "scripts").glob("*.py"):
-        if path.name in {"export_manuscript.py", "_author_profile.py"} or path.name.startswith("_publication_"):
+        if path.name in {"export_manuscript.py", "_author_profile.py", "editorial_checks.py"} or path.name.startswith("_publication_"):
             shutil.copyfile(path, isolated / "scripts" / path.name)
     shutil.copytree(ROOT / "assets" / "templates", isolated / "assets" / "templates")
     manuscript = tmp_path / "input.md"

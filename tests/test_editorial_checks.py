@@ -35,6 +35,63 @@ The result follows [1, 3–4].
     assert not result["scientific_merit_assessed"]
 
 
+@pytest.mark.parametrize("citation", [
+    "[3-1]", "[1–999999999]", "[1,,2]", "[1;]", "[,1]",
+    "[1-]", "[1-2-3]", "[1 2]", "[1*2]", "[1_2]", "[1*2*]", "[*1*2]",
+])
+def test_invalid_numeric_citation_groups_are_reported_without_expansion(citation):
+    result = editorial.check_manuscript(
+        "# Article\nA valid source [1]. Another claim " + citation + ".\n"
+        "## References\n[1] Retained source.\n")
+    invalid = [item for item in result["structural_findings"]
+               if item["code"] == "invalid_numeric_citation"]
+    assert len(invalid) == 1
+    assert invalid[0]["citation"] == citation
+    assert result["metrics"]["recognized_body_citations"] == [1]
+
+
+def test_valid_numeric_groups_and_adjacent_citations_remain_supported():
+    result = editorial.check_manuscript(
+        "# Article\nSources [1][2], [1, 2–3], and [2; 3].\n"
+        "## References\n[1] First source.\n[2] Second source.\n[3] Third source.\n")
+    assert result["metrics"]["recognized_body_citations"] == [1, 2, 3]
+    assert not result["structural_findings"]
+
+
+@pytest.mark.parametrize("citation,expected", [
+    ("[1, **2**]", [1, 2]), ("[1, *2*]", [1, 2]), ("[1,\n2]", [1, 2]),
+    ("[**1**, *2*–__3__]", [1, 2, 3]), ("[**1, 2–3**]", [1, 2, 3]),
+])
+def test_formatted_and_wrapped_numeric_citations_are_recognized(citation, expected):
+    result = editorial.check_manuscript(
+        "# Article\nSources " + citation + ".\n"
+        "## References\n[1] First source.\n[2] Second source.\n[3] Third source.\n")
+    assert result["metrics"]["recognized_body_citations"] == expected
+    assert not result["structural_findings"]
+
+
+def test_wrapped_numeric_link_labels_remain_protected():
+    result = editorial.check_manuscript(
+        "# Article\nActual source [1].\n"
+        "[[1,\n9]](https://example.org/group) and [1,\n8][example] are links.\n"
+        "## References\n[1] Actual source.\n"
+        "## Appendix\n[example]: https://example.org/example\n")
+    assert result["metrics"]["recognized_body_citations"] == [1]
+    assert not result["structural_findings"]
+
+
+def test_invalid_numeric_examples_in_code_and_links_are_not_citations():
+    result = editorial.check_manuscript(
+        "# Article\nActual source [1]. `[3-1]` is code.\n"
+        "[[1–999999999]](https://example.org/range) is a link.\n"
+        "The [1,,2][example] link uses a reference definition.\n"
+        "```text\n[1-]\n[,1]\n```\n"
+        "## References\n[1] Actual source.\n"
+        "## Appendix\n[example]: https://example.org/example\n")
+    assert result["metrics"]["recognized_body_citations"] == [1]
+    assert not result["structural_findings"]
+
+
 def test_code_and_links_do_not_create_body_citations():
     text = """# Article
 

@@ -19,6 +19,7 @@ from _publication_files import digest_file, ensure_unlinked
 from _author_profile import profile_completeness
 from _publication_text import mask_code, mask_fenced_code, section_headers
 from _publication_venues import VENUE_RULES, WORD_VENUES, CS_GUIDANCE, AI_GUIDANCE
+from editorial_checks import check_manuscript
 
 VENUE_LIMITS = {venue: rules["limits"] for venue, rules in VENUE_RULES.items()}
 
@@ -217,6 +218,12 @@ def validate_manuscript(markdown: str, venue_id: str, author_metadata: dict | No
             metadata_issues.append(int(entry[1]))
     items.append(_item("reference_metadata", "failed" if metadata_issues else "passed",
                        "Use retained descriptive source titles and available author/year/publication/access metadata; raw-URL-only entries: " + str(metadata_issues) + "."))
+    citation_findings = [finding for finding in check_manuscript(markdown)["structural_findings"]
+                         if finding["code"] in {"citation_without_reference", "invalid_numeric_citation"}]
+    items.append(_item("citation_references", "failed" if citation_findings else "passed",
+                       "; ".join(finding["detail"] for finding in citation_findings) or
+                       "Body citations use supported numeric syntax and resolve to numbered bibliography entries.",
+                       source=None))
     authors = profile_completeness(author_metadata)
     if not rules["biographies"]:
         for row in authors:
