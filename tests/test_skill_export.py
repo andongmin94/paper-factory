@@ -525,7 +525,7 @@ def test_retained_publisher_styles_columns_and_citations(tmp_path, venue):
 
 
 @pytest.mark.parametrize("venue", ["ieee-software", "ieee-security-privacy"])
-def test_real_pandoc_grouped_citations_preserve_ranges_and_protected_content(tmp_path, venue):
+def test_real_pandoc_grouped_citations_preserve_ranges_and_protected_content(tmp_path, venue, monkeypatch):
     from docx import Document
     from docx.oxml.ns import qn
     binary = _real_pandoc()
@@ -542,7 +542,14 @@ def test_real_pandoc_grouped_citations_preserve_ranges_and_protected_content(tmp
     controls = ("Unknown evidence. [1, 4]\n\nWide range evidence. [1–999999999]\n\n"
                 "Inline code. `[1, 2]` and `[1–3]`.\n\n"
                 "Linked evidence. [[1, 2]](https://example.org/group) and [[1–3]](https://example.org/range).\n\n"
-                "```text\n[1, 2]\n[1–3]\n```")
+                "```text\n[1, 2]\n[1–3]\n```\n\n"
+                "+-----------------------+\n"
+                "| Python example        |\n"
+                "+=======================+\n"
+                "| ```python             |\n"
+                "| result = [1, 2]       |\n"
+                "| ```                   |\n"
+                "+-----------------------+")
     source = tmp_path / "groups.md"
     source.write_text(ARTICLE.replace("A shared requirement may survive the command that first wrote it. [1]",
                                       "\n\n".join(case[0] for case in cases) + "\n\n" + controls)
@@ -551,8 +558,21 @@ def test_real_pandoc_grouped_citations_preserve_ranges_and_protected_content(tmp
                       encoding="utf-8")
     original = source.read_bytes()
     output = tmp_path / "groups.docx"
+    code_runs = []
+    apply_styles = converter.apply_official_styles
+
+    def capture_code_then_apply(path, reference, **kwargs):
+        code = Document(path).tables[0].cell(1, 0).paragraphs[0]
+        assert code.style.name == "Source Code" and code.text == "result = [1, 2]"
+        code_runs.extend(run._r.xml for run in code.runs)
+        return apply_styles(path, reference, **kwargs)
+
+    monkeypatch.setattr(converter, "apply_official_styles", capture_code_then_apply)
     receipt = converter.convert_docx(source, output, venue_id=venue, pandoc=str(binary))
     document = Document(output)
+    code = document.tables[0].cell(1, 0).paragraphs[0]
+    assert code.style.name == "Source Code" and code.text == "result = [1, 2]"
+    assert [run._r.xml for run in code.runs] == code_runs
     paragraphs = {paragraph.text: paragraph for paragraph in document.paragraphs}
     for _, superscript_text, bracketed_text, numbers in cases:
         paragraph = paragraphs[superscript_text if software else bracketed_text]

@@ -217,19 +217,28 @@ def test_responses_check_actual_after_section_and_do_not_infer_resolution(tmp_pa
 
 def test_response_anchors_follow_markdown_section_boundaries(tmp_path):
     before = put(tmp_path / "before.md", "# Article\n\n  ## Analysis ##\n\nOld analysis.\n\n  ## Limits ##\n\nOld limits.\n")
-    after = put(tmp_path / "after.md", "# Article\n\n  ## Analysis ##\n\nNew bounded analysis.\n\n  ## Limits ##\n\nNew limitation.\n")
+    after = put(tmp_path / "after.md", "# Article\n\n  ## Analysis ##\n\nNew bounded analysis.\n\n"
+                "### Implementation\n\nNew nested result.\n\n#### Details\n\nNew detailed result.\n\n"
+                "### Evaluation\n\nNew evaluation detail.\n\n"
+                "```markdown\n### Literal example\nExample only.\n```\n\n"
+                "  ## Limits ##\n\nNew limitation.\n")
     comments = put(tmp_path / "comments.json", {"comments": [
         {"id": "R1", "comment": "Clarify the analysis.", "status": "addressed", "response": "The analysis is clarified.",
-         "changes": [{"quote": "New bounded analysis.", "section": "Analysis"}]},
+         "changes": [{"quote": "New nested result.", "section": "Analysis"}]},
         {"id": "R2", "comment": "Clarify the limit.", "status": "addressed", "response": "A limitation is stated.",
          "changes": [{"quote": "New limitation.", "section": "Analysis"}]},
+        {"id": "R3", "comment": "Clarify implementation details.", "status": "addressed", "response": "The details are stated.",
+         "changes": [{"quote": "New detailed result.", "section": "Implementation"}]},
+        {"id": "R4", "comment": "Locate the evaluation.", "status": "addressed", "response": "The evaluation is stated.",
+         "changes": [{"quote": "New evaluation detail.", "section": "Implementation"}]},
+        {"id": "R5", "comment": "Locate the example.", "status": "addressed", "response": "The example is stated.",
+         "changes": [{"quote": "Example only.", "section": "Literal example"}]},
     ]})
     original = before.read_bytes(), after.read_bytes(), comments.read_bytes()
     result = support.prepare_responses(comments, before, after, tmp_path / "replies")
-    assert result["comments"][0]["changes"][0]["present_in_revised_manuscript"] is True
-    assert result["comments"][0]["issues"] == []
-    assert result["comments"][1]["changes"][0]["present_in_revised_manuscript"] is False
-    assert result["comments"][1]["issues"]
+    for row, present in zip(result["comments"], (True, False, True, False, False)):
+        assert row["changes"][0]["present_in_revised_manuscript"] is present
+        assert bool(row["issues"]) is not present
     assert original == (before.read_bytes(), after.read_bytes(), comments.read_bytes())
 
 

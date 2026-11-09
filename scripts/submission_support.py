@@ -16,7 +16,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 
 from _publication_files import digest_file, ensure_unlinked
-from _publication_text import mask_fenced_code, section_headers
+from _publication_text import mask_code, mask_fenced_code, section_headers
 from _author_profile import normalize_profile, profile_completeness
 from _publication_venues import PREPARED_MANUSCRIPTS, VENUES
 
@@ -181,6 +181,7 @@ def prepare_responses(comments, before, after, output_dir):
     value = _json(comments)
     if not isinstance(value.get("comments"), list) or not value["comments"]:
         raise ValueError("A non-empty comments list is required")
+    sections = list(re.finditer(r"(?m)^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$", mask_code(revised)))
     identifiers, rows, letter = set(), [], ["# Response to reviewer comments", "", "Draft from supplied comments and responses; author confirmation remains required.", ""]
     for entry in value["comments"]:
         if not isinstance(entry, dict):
@@ -205,9 +206,15 @@ def prepare_responses(comments, before, after, output_dir):
             section = _text(change.get("section", ""), "change section")
             found = quote in revised
             if section:
-                sections = _sections(revised)
-                found = any(heading[1].strip().casefold() == section.casefold() and quote in revised[heading.end():sections[i + 1].start() if i + 1 < len(sections) else len(revised)]
-                            for i, heading in enumerate(sections))
+                found = False
+                for index, heading in enumerate(sections):
+                    if heading[2].strip().casefold() != section.casefold():
+                        continue
+                    end = next((following.start() for following in sections[index + 1:]
+                                if len(following[1]) <= len(heading[1])), len(revised))
+                    if quote in revised[heading.end():end]:
+                        found = True
+                        break
             anchors.append({"quote": quote, "section": section, "present_in_revised_manuscript": found,
                             "also_present_in_previous_manuscript": quote in original})
         issues = []

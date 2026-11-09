@@ -86,14 +86,19 @@ def test_resume_detects_material_corruption(materials, tmp_path):
     assert result["issues"] == [{"path": "materials/source.txt", "status": "changed"}]
 
 
-def test_resume_reports_unlisted_files_without_rewriting(materials, tmp_path):
+@pytest.mark.parametrize("extra_name", ["unlisted.txt", "Source.txt"])
+def test_resume_reports_unlisted_files_without_rewriting(materials, tmp_path, extra_name):
     output = tmp_path / "snapshot"
     notes.checkpoint(materials, state(materials, tmp_path), output)
-    extra = output / "materials/unlisted.txt"
+    extra = output / "materials" / extra_name
+    if extra_name == "Source.txt" and extra.exists():
+        pytest.skip("Filesystem does not distinguish source.txt from Source.txt")
+    before = {path: path.read_bytes() for root in (materials, output) for path in root.rglob("*") if path.is_file()}
     extra.write_bytes(b"not part of the supplied research")
     result = notes.resume(output)
     assert not result["verified"]
-    assert result["issues"] == [{"path": "materials/unlisted.txt", "status": "unlisted"}]
+    assert result["issues"] == [{"path": "materials/" + extra_name, "status": "unlisted"}]
+    assert all(path.read_bytes() == data for path, data in before.items())
     assert extra.read_bytes() == b"not part of the supplied research"
 
 

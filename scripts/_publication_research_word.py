@@ -304,6 +304,8 @@ def apply_research_styles(output: Path, template: Path, venue_id: str) -> dict:
             for cell in row.cells:
                 cell.width = cell_width
                 for paragraph in cell.paragraphs:
+                    if _source_style(paragraph).casefold() in {"sourcecode", "code"}:
+                        continue  # Keep highlighted program literals out of citation typography.
                     paragraph.style = document.styles[body_style]
                     paragraph.paragraph_format.keep_with_next = index == 0 or bool(
                         not access and caption is not None and index == len(table.rows) - 1)

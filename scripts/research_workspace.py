@@ -145,16 +145,16 @@ def resume(folder: Path) -> dict:
             issues.append({"path": item["path"], "status": "changed"})
     if "checkpoint.json" not in listed or "resume.md" not in listed:
         raise ValueError("Checkpoint notes are absent from its manifest")
+    expected = {item["path"]: item for item in rows}
     for path in folder.rglob("*"):
         ensure_unlinked(path)
         if path.is_file():
             name = path.relative_to(folder).as_posix()
-            if name != "manifest.json" and name.casefold() not in listed:
+            if name != "manifest.json" and name not in expected:
                 issues.append({"path": name, "status": "unlisted"})
     materials = record.get("materials")
     if not isinstance(materials, list):
         raise ValueError("Checkpoint requires retained material records")
-    expected = {item["path"]: item for item in rows}
     for item in materials:
         if not isinstance(item, dict) or not {"path", "bytes", "sha256"} <= item.keys():
             raise ValueError("Malformed retained material record")

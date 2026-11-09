@@ -362,6 +362,8 @@ def apply_official_styles(output: Path, template: Path, *, citation_style: str) 
             for cell in row.cells:
                 cell.width = width // len(row.cells)
                 for paragraph in cell.paragraphs:
+                    if paragraph.style.name.casefold() in {"source code", "code"}:
+                        continue  # Keep highlighted program literals out of citation typography.
                     paragraph.style = document.styles["Para"]
                     paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
                     paragraph.paragraph_format.first_line_indent = 0
