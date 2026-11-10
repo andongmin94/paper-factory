@@ -78,6 +78,8 @@ $paper-factory https://github.com/owner/repository
 
 EMSE와 MLOSS의 저널별 지침에 따라 원고를 준비하고 `submission_support.py bundle`로 실제 파일을 보존합니다. 변환·검수 직후 `record-conversion`으로 입력과 출력 해시를 기록하면, 묶음을 만들 때 원고·서지·그림이나 DOCX/PDF가 달라진 경우 재생성이 필요하다고 표시합니다. 이는 기록 이후 버전 일치 검사이며 변환 성공이나 내용·레이아웃의 증명은 아닙니다. [입력과 기록 선택 방법](references/tools.md#host-prepared-cs-manuscripts)을 따르세요. 두 곳에는 `export_manuscript.py`의 기존 IEEE/JORS/JOSS 변환기를 적용하지 않습니다.
 
+IEEE 3개 매체와 JORS의 `export`는 정본 Markdown과 Markdown 그림 문법으로 참조한 로컬 파일을 같은 상대경로·원본 바이트로 보존하고 manifest에 해시를 기록합니다. `--resource-dir`은 그림을 읽을 원본 디렉터리를 지정합니다. 출력 폴더를 옮겨 같은 변환기와 필요한 공식 템플릿으로 다시 출력할 수 있으며, Word·글꼴 등 렌더링 환경은 별도로 준비해야 합니다. 지원하는 그림 경로와 제한은 [출력 도구 안내](references/tools.md#manuscript-preflight-and-official-export)를 따릅니다.
+
 Access·JORS·JOSS는 2026-11-02에 공식 지침과 템플릿 원문을 확인했습니다. Access·JORS 템플릿은 재배포 허가를 확인하지 못해 포함하지 않으며, 각 매체 문서의 공식 원본을 내려받아 `--template`으로 지정합니다. 도구는 확인된 SHA-256과 일치하는 파일을 사용합니다. JOSS는 YAML·인용·서지·그림 경로를 검사해 실제 제출 소스를 보존하며, Inara PDF 렌더링은 수행하지 않습니다.
 
 ## 결과물과 작업 원칙

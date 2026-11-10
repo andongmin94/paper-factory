@@ -366,6 +366,31 @@ def test_impact_reuses_unchanged_literal_bindings_without_rewriting_notes(materi
     assert original == {p: p.read_bytes() for p in original}
 
 
+@pytest.mark.parametrize("field,value", [
+    ("quote", "This sentence never occurred in the source."),
+    ("start_line", 1),
+    ("end_line", 3),
+    ("end_line", 999),
+])
+def test_impact_rechecks_inconsistent_prior_witnesses_with_unchanged_sources(materials, tmp_path, field, value):
+    prior = prior_evidence(materials, tmp_path, shared=True)
+    recorded = json.loads(prior.read_text(encoding="utf-8"))
+    recorded["claims"][0]["sources"][0][field] = value
+    json_file(prior, recorded)
+    original = {p: p.read_bytes() for p in [*materials.iterdir(), prior]}
+
+    result, report = impact_report(materials, tmp_path, prior)
+
+    assert result["review_needed_claim_count"] == 1
+    assert report["review_needed_claim_ids"] == ["C1"]
+    assert report["reusable_binding_claim_ids"] == ["C2", "C3"]
+    assert report["changed_source_paths"] == report["missing_source_paths"] == []
+    assert report["claims"][0]["reasons"] == ["source_quote_mismatch"]
+    assert report["claims"][0]["sources"][0]["quote_matches"] is False
+    assert report["claims"][1]["sources"][0]["quote_matches"] is True
+    assert original == {p: p.read_bytes() for p in original}
+
+
 def test_impact_shared_source_change_flags_only_its_dependent_claims(materials, tmp_path):
     prior = prior_evidence(materials, tmp_path, shared=True)
     # Even a change outside the original witness can alter its relevant context.

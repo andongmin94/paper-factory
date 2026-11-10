@@ -3,16 +3,21 @@
 from datetime import datetime, timezone
 from io import BytesIO
 import hashlib
+import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import shutil
 import subprocess
 from tempfile import TemporaryDirectory
+from urllib.parse import unquote, urlsplit
 import zipfile
 
 from _publication_files import digest_file, ensure_unlinked
 from _publication_templates import official_template, apply_official_styles
+
+
+WORD_MARKDOWN_READER = "markdown-smart-raw_tex-raw_html"
 
 
 AUTHOR_MARKER_FILTER = """-- Remove only a dedicated pair of author-control paragraphs before Abstract.
@@ -133,6 +138,75 @@ def pandoc_version(binary: Path) -> str:
     return banner
 
 
+def image_sources(markdown: Path, text: str, *, binary: Path,
+                  resource_dir: Path | None, reserved: set[str]) -> dict[str, tuple[Path, bytes]]:
+    """Snapshot the local images read by the Word converter without rewriting links."""
+    root = markdown.parent if resource_dir is None else resource_dir
+    ensure_unlinked(root)
+    if resource_dir is not None and (not root.is_absolute() or not root.is_dir()):
+        raise ValueError("Resource directory must be an existing absolute directory")
+    root = root.resolve(strict=True)
+    pandoc_version(binary)
+    command = [str(binary), "--from=" + WORD_MARKDOWN_READER, "--to=json",
+               "--standalone", "--fail-if-warnings"]
+    try:
+        parsed = subprocess.run(command, input=text, cwd=markdown.parent.resolve(),
+                                capture_output=True, text=True, encoding="utf-8", timeout=30,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0)
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError("Pandoc timed out while reading manuscript images") from exc
+    if parsed.returncode:
+        raise ValueError("Pandoc could not read manuscript images: " + parsed.stderr[:2000])
+    pending, targets = [json.loads(parsed.stdout)], set()
+    while pending:
+        node = pending.pop()
+        if isinstance(node, dict):
+            if node.get("t") == "Image":
+                targets.add(node["c"][-1][0])
+            pending.extend(node.values())
+        elif isinstance(node, list):
+            pending.extend(node)
+
+    files, destinations = {}, {}
+    reserved = {name.casefold() for name in reserved}
+    for target in sorted(targets):
+        uri = urlsplit(target)
+        decoded = unquote(uri.path, errors="strict")
+        relative = PurePosixPath(decoded)
+        if (uri.scheme or uri.netloc or uri.query or uri.fragment or relative.is_absolute()
+                or not relative.parts or ".." in relative.parts or "\\" in decoded or ":" in decoded
+                or any(ord(character) < 32 for character in decoded)):
+            raise ValueError("Use local relative image paths inside the selected resource directory: " + target)
+        # Native Word runs on Windows; retain names without platform-dependent
+        # normalization. Keep this policy usable on the supported Python 3.11+.
+        for part in relative.parts:
+            device = part.partition(".")[0].rstrip(" ").upper()
+            if (part.endswith((".", " ")) or any(character in '<>"|?*' for character in part)
+                    or re.fullmatch(r"CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|(?:COM|LPT)[1-9¹²³]", device)):
+                raise ValueError("Use portable image filenames for native Word export: " + target)
+        if relative.parts[0].casefold() in reserved:
+            raise ValueError("Referenced image conflicts with a reserved export path: " + target)
+        # Compare directory components as well as filenames for portable copies.
+        for index in range(1, len(relative.parts) + 1):
+            name = "/".join(relative.parts[:index])
+            entry = (name, index == len(relative.parts))
+            if name.casefold() in destinations and destinations[name.casefold()] != entry:
+                raise ValueError("Referenced image destination collision: " + target)
+            destinations[name.casefold()] = entry
+        name = relative.as_posix()
+        if name in files:
+            continue
+        path = root.joinpath(*relative.parts)
+        ensure_unlinked(path)
+        if not path.is_file() or not path.resolve().is_relative_to(root):
+            raise ValueError("Referenced local image is missing or not a file: " + target)
+        data = path.read_bytes()
+        if not data:
+            raise ValueError("Referenced image is empty: " + target)
+        files[name] = (path, data)
+    return files
+
+
 def convert_docx(markdown: Path, output: Path, *, venue_id: str,
                  pandoc: str | None = None, resource_dir: Path | None = None,
                  template_path: Path | None = None) -> dict:
@@ -154,7 +228,7 @@ def convert_docx(markdown: Path, output: Path, *, venue_id: str,
     output.parent.mkdir(parents=True, exist_ok=True)
     # Pandoc can exit successfully after replacing a missing figure with its
     # description. Such a degraded document is not a completed official export.
-    command = [str(binary), str(markdown.resolve()), "--from=markdown-smart-raw_tex-raw_html",
+    command = [str(binary), str(markdown.resolve()), "--from=" + WORD_MARKDOWN_READER,
                "--standalone", "--fail-if-warnings", "--to=docx", "-o", str(output.resolve())]
     if resource_dir is not None:
         command += ["--resource-path", str(resource_dir.resolve())]

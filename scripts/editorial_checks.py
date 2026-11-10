@@ -34,14 +34,28 @@ def _prose(text: str, *, context: str | None = None) -> str:
     labels = {label(match[1]) for match in definition.finditer(mask_code(context if context is not None else text))}
     text = mask_code(text)
     text = definition.sub(blank, text)
-    text = re.sub(r"!?\[(?:\\.|[^\[\]\\\n]|\[(?:\\.|[^\[\]\\\n])*\])*\]\([^\n)]*\)", blank, text)
+    # Link labels may wrap within a paragraph, just like numeric citations.
+    inline_text = r"(?:\\.|[^\[\]\\\n]|\n(?![ \t]*\n))"
+    # Link destinations may contain up to three levels of balanced parentheses.
+    destination_char = r"(?:\\.|[^()\\\n])"
+    destination_paren_1 = rf"\({destination_char}*\)"
+    destination_paren_2 = rf"\((?:{destination_char}|{destination_paren_1})*\)"
+    destination_paren_3 = rf"\((?:{destination_char}|{destination_paren_2})*\)"
+    destination = rf"(?:{destination_char}|{destination_paren_3})*"
+
+
+    text = re.sub(
+        rf"!? \[(?:{inline_text}|\[{inline_text}*\])*\]\({destination}\)".replace(" ", ""),
+        blank,
+        text)
 
     def reference_link(match):
         target = match[2] if match[2] else match[1]
         return blank(match) if label(target) in labels else match[0]
 
-    text = re.sub(r"!?\[([^\]\n]+)\]\[([^\]\n]*)\]", reference_link, text)
-    text = re.sub(r"!?\[([^\]\n]+)\]", lambda match: blank(match) if label(match[1]) in labels else match[0], text)
+    link_label = r"(?:[^\]\n]|\n(?![ \t]*\n))"
+    text = re.sub(rf"!?\[({link_label}+)\]\[({link_label}*)\]", reference_link, text)
+    text = re.sub(rf"!?\[({link_label}+)\]", lambda match: blank(match) if label(match[1]) in labels else match[0], text)
     return re.sub(r"https?://[^\s<>]+", blank, text)
 
 
@@ -66,17 +80,40 @@ def _references(text: str) -> list[dict]:
             for i, m in enumerate(starts)]
 
 
-def _citations(text: str) -> set[int]:
-    labels = set()
-    for match in re.finditer(r"\[([0-9][0-9,; \t\-–]*)\]", text):
-        for part in re.split(r"[,;]", match[1]):
+def _citations(text: str) -> tuple[set[int], list[dict]]:
+    """Read bounded numeric groups and report groups that cannot be validated."""
+    labels, findings = set(), []
+    for match in re.finditer(r"\[((?:[0-9,; \t\-–*_]|\n(?![ \t]*\n))+)\]", text):
+        if not re.search(r"[0-9]", match[1]):
+            continue
+        # Remove only paired emphasis around complete numeric tokens/groups.
+        # A marker between digits (1*2, 1_2) must not join them into another ID.
+        value = re.sub(r"(?<![0-9*_])(\*{1,3}|_{1,3})([0-9](?:[0-9,;\s\-–]*[0-9])?)\1(?![0-9*_])",
+                       r"\2", match[1])
+        group, problem = set(), None
+        for part in re.split(r"[,;]", value):
             item = re.fullmatch(r"\s*([0-9]+)(?:\s*[-–]\s*([0-9]+))?\s*", part)
             if not item:
-                continue
-            lo, hi = int(item[1]), int(item[2] or item[1])
-            if lo <= hi <= lo + 1000:
-                labels.update(range(lo, hi + 1))
-    return labels
+                problem = "Use numeric entries separated by commas or semicolons, with complete range endpoints."
+                break
+            try:
+                lo, hi = int(item[1]), int(item[2] or item[1])
+            except ValueError:
+                problem = "Numeric citation identifiers exceed the supported integer length."
+                break
+            if hi < lo:
+                problem = "Numeric citation ranges must use ascending endpoints."
+                break
+            if hi - lo > 1000:
+                problem = "Numeric citation ranges may span at most 1,001 entries for bounded validation."
+                break
+            group.update(range(lo, hi + 1))
+        if problem:
+            findings.append({"code": "invalid_numeric_citation", "citation": match[0],
+                             "detail": f"Cannot validate body citation {match[0]}. {problem}"})
+        else:
+            labels.update(group)
+    return labels, findings
 
 
 def _doi(value: str) -> str | None:
@@ -122,10 +159,10 @@ def check_manuscript(text: str, references: list[dict] | None = None) -> dict:
     body, bibliography = _sections(scan)
     entries = _references(bibliography)
     prose = _prose(body, context=scan)
-    cited = _citations(prose)
+    cited, findings = _citations(prose)
     counts = Counter(x["id"] for x in entries)
     defined = set(counts)
-    findings, suggestions = [], []
+    suggestions = []
     for number in sorted(cited - defined):
         findings.append({"code": "citation_without_reference", "reference_id": number,
                          "detail": f"Body citation [{number}] has no numbered reference."})

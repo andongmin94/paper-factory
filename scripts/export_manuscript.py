@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 import sys
 
-from _publication_convert import convert_docx, pandoc_binary
+from _publication_convert import convert_docx, image_sources, pandoc_binary
 from _publication_checks import compliance_report, validate_manuscript
 from _publication_templates import official_template, word_pdf
 from _publication_files import digest_file, ensure_unlinked
@@ -81,11 +81,18 @@ def export(manuscript: Path, venue_id: str, output_dir: Path, *,
         return source_export(manuscript, output_dir, bibliography=bibliography, pandoc=pandoc, resource_dir=resource_dir)
     if bibliography is not None:
         raise ValueError("--bibliography is for JOSS; Word venues retain numbered references in the manuscript")
-    source, _, author_source, author = _read_inputs(manuscript, profile)
+    source, text, author_source, author = _read_inputs(manuscript, profile)
     source_sha = hashlib.sha256(source).hexdigest()
     template_path, template = official_template(venue_id, template_path)
     binary = pandoc_binary(pandoc)
     ensure_unlinked(output_dir)
+    if output_dir.exists():
+        raise FileExistsError("Output directory must be new: " + str(output_dir))
+    stem = "manuscript-" + venue_id
+    images = image_sources(manuscript, text, binary=binary, resource_dir=resource_dir,
+                           reserved={"manuscript.md", "authors.json", stem + ".docx", stem + ".pdf",
+                                     "conversion-receipts.json", "format-report.json", "provenance.json",
+                                     "manifest.json", "pages"})
     output_dir.mkdir(parents=True, exist_ok=False)
     output_dir = output_dir.resolve()
     retained_source = output_dir / "manuscript.md"
@@ -94,13 +101,18 @@ def export(manuscript: Path, venue_id: str, output_dir: Path, *,
     if author_source is not None:
         with (output_dir / "authors.json").open("xb") as stream:
             stream.write(author_source)
+    for relative, (_, data) in images.items():
+        target = output_dir / relative
+        ensure_unlinked(target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("xb") as stream:
+            stream.write(data)
 
-    stem = "manuscript-" + venue_id
     docx, pdf = output_dir / (stem + ".docx"), output_dir / (stem + ".pdf")
-    # Convert the actual source path so authored relative media links resolve.
-    # Its bytes, and the retained canonical copy, are checked again below.
-    docx_receipt = convert_docx(manuscript, docx, pandoc=str(binary), venue_id=venue_id,
-                                resource_dir=resource_dir, template_path=template_path)
+    # Convert the retained source and images so this delivery can be moved and
+    # regenerated without the original resource directory or changed links.
+    docx_receipt = convert_docx(retained_source, docx, pandoc=str(binary), venue_id=venue_id,
+                                template_path=template_path)
     receipts = {"docx": docx_receipt}
     if not docx_only:
         rendered = word_pdf(docx, pdf, venue_id=venue_id)
@@ -129,6 +141,12 @@ def export(manuscript: Path, venue_id: str, output_dir: Path, *,
         raise ValueError("The canonical manuscript changed during direct export")
     if profile is not None and profile.read_bytes() != author_source:
         raise ValueError("The supplied author metadata changed during direct export")
+    for relative, (path, data) in images.items():
+        target = output_dir / relative
+        ensure_unlinked(path)
+        ensure_unlinked(target)
+        if path.read_bytes() != data or target.read_bytes() != data:
+            raise ValueError("A referenced image changed during direct export: " + relative)
     if digest_file(template_path) != template["sha256"]:
         raise ValueError("The official template changed during direct export")
     _write_json(output_dir / "format-report.json", report)

@@ -9,6 +9,8 @@ import sys
 import tempfile
 import unittest
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -615,6 +617,205 @@ ER  -
         self.assertEqual([item["reference_ids"] for item in findings
                           if item["code"] == "duplicate_doi"], [[2, 3]])
         self.assertEqual(json.dumps(references), original_json)
+
+
+_BIBTEX_ENTRY_COMMENT = '% ignored } ) , = # @ " @misc{phantom,title="unterminated\n'
+
+
+@pytest.mark.parametrize("opening,closing", [("{", "}"), ("(", ")")], ids=["braces", "parentheses"])
+@pytest.mark.parametrize("fields", [
+    "<comment>title={Source},year=2024",
+    "title <comment>={Source},year=2024",
+    "title= <comment>{Source},year=2024",
+    "title={Source} <comment>,year=2024",
+    "title={Source}, <comment>year=2024",
+    "title={Source},year=2024 <comment>",
+    "title={Source},year=2024, <comment>",
+], ids=["before-first-field", "before-equals", "before-value", "before-comma",
+        "after-comma", "after-last-value", "after-last-comma"])
+def test_bibtex_entry_comments_accept_field_boundaries(opening, closing, fields):
+    entry = "@article" + opening + "key," + fields.replace("<comment>", _BIBTEX_ENTRY_COMMENT) + closing
+
+    records = imports.parse_bibliography(entry, "bibtex")["references"]
+
+    assert len(records) == 1
+    assert records[0]["title"] == "Source"
+    assert records[0]["year"] == "2024"
+    assert records[0]["source"] == {"format": "bibtex", "key": "key", "raw": entry}
+
+
+@pytest.mark.parametrize("opening,closing", [("{", "}"), ('"', '"')], ids=["braced", "quoted"])
+@pytest.mark.parametrize("payload", [
+    r"% leading literal with {nested {DNA}} and \%",
+    "First\tline\n% literal at line start\nLast {DNA} with 50% and \\%",
+    r'50% completion with {nested {DNA}}, \"quoted\" and \%',
+], ids=["leading-percent", "multiline-percent", "inline-percent"])
+@pytest.mark.parametrize("outside_comment", [False, True], ids=["existing-literal", "with-comment"])
+def test_bibtex_entry_comments_preserve_literal_percent(opening, closing, payload, outside_comment):
+    url = "https://example.org/a%20b?value=%7Bdata%7D#part"
+    between = _BIBTEX_ENTRY_COMMENT if outside_comment else ""
+    entry = ("@article{literal,title=" + opening + payload + closing + "," + between +
+             "url=" + opening + url + closing + "}")
+
+    records = imports.parse_bibliography(entry, "bibtex")["references"]
+
+    assert len(records) == 1
+    assert records[0]["title"] == payload
+    assert records[0]["url"] == url
+    assert records[0]["source"]["raw"] == entry
+
+
+@pytest.mark.parametrize("separator", [
+    " <comment># ",
+    " # <comment>",
+    " <comment># <comment>",
+], ids=["before-hash", "after-hash", "both-sides"])
+def test_bibtex_entry_comments_preserve_supplied_macros_and_concatenation(separator):
+    definitions = ('@string{prefix={A 50% }}\n'
+                   '@string{suffix="\\% {DNA}"}\n'
+                   '@string{publicationYear="2024"}\n')
+    expression = separator.replace("<comment>", _BIBTEX_ENTRY_COMMENT).join(
+        ["PreFiX", "{Title }", "SuFfIx"])
+    entry = "@article{key,title=" + expression + ",year=PublicationYear}"
+
+    result = imports.parse_bibliography(definitions + entry, "bibtex")
+    records = result["references"]
+
+    assert len(records) == 1
+    assert records[0]["title"] == r"A 50% Title \% {DNA}"
+    assert records[0]["year"] == "2024"
+    assert records[0]["source"]["raw"] == entry
+    assert not any(item["code"] == "unresolved_bibtex_string"
+                   for item in result["manual_review_suggestions"])
+
+
+def test_bibtex_entry_comments_do_not_define_unsupplied_macros():
+    first = ('@article{first,title=notDefined, '
+             '% @string{notDefined={Counterfeit}}\nyear=2024}')
+    definition = "@string{notDefined={Supplied later}}"
+    second = "@article{second,title=notDefined}"
+
+    result = imports.parse_bibliography("\n".join([first, definition, second]), "bibtex")
+    records = result["references"]
+
+    assert [record["source"]["key"] for record in records] == ["first", "second"]
+    assert [record["source"]["raw"] for record in records] == [first, second]
+    assert "title" not in records[0]
+    assert records[1]["title"] == "Supplied later"
+    assert [item["reference_id"] for item in result["manual_review_suggestions"]
+            if item["code"] == "unresolved_bibtex_string"] == [1]
+
+
+def test_bibtex_entry_comments_preserve_raw_boundaries_tabs_crlf_and_input_bytes(tmp_path):
+    comment = _BIBTEX_ENTRY_COMMENT.replace("\n", "\r\n")
+    first = ("@article{one,\r\n\t" + comment +
+             "\ttitle=label # {원본\t50%\r\n% 값 안의 줄\r\n{DNA}}, " + comment +
+             "\tyear=2024\r\n}")
+    second = ('@misc(two,\r\n\ttitle="{Second}\t\\% value", ' + comment +
+              "\turl={https://example.org/a%20b}\r\n)")
+    text = ("% outside @misc{not-a-record,title=ignored}\r\n"
+            "@string{label={김\t}, " + comment + "}\r\n" + first +
+            "\r\n% between @string{label={Ignored}}\r\n" + second +
+            "\r\n% after @misc{also-ignored}\r\n")
+    original = b"\xef\xbb\xbf" + text.encode("utf-8")
+    source, output = tmp_path / "sources.bib", tmp_path / "imported"
+    source.write_bytes(original)
+
+    summary = imports.write_import(source, output, reference_ids=[7, 3])
+    records = json.loads((output / "references.json").read_text(encoding="utf-8"))
+    report = json.loads((output / "import-report.json").read_text(encoding="utf-8"))
+
+    assert [record["id"] for record in records] == [7, 3]
+    assert [record["source"]["key"] for record in records] == ["one", "two"]
+    assert [record["source"]["raw"] for record in records] == [first, second]
+    assert records[0]["title"] == "김\t원본\t50%\r\n% 값 안의 줄\r\n{DNA}"
+    assert records[1]["title"] == "{Second}\t\\% value"
+    assert records[1]["url"] == "https://example.org/a%20b"
+    assert summary["reference_count"] == 2
+    assert summary["source_input_sha256"] == hashlib.sha256(original).hexdigest()
+    assert report["source_input_sha256"] == summary["source_input_sha256"]
+    assert summary["source_rewritten"] is False
+    assert report["source_rewritten"] is False
+    assert summary["network_requests"] == report["network_requests"] == 0
+    assert source.read_bytes() == original
+
+
+@pytest.mark.parametrize("text", [
+    "@article{key,title={Source} % only fake }\n",
+    "@article{key,title={Source} % only fake ,\nyear=2024}",
+    "@article{key,title % only fake =\n{Source}}",
+    "@article{key,title= % only fake {Source}\n,year=2024}",
+    "@article{key,title={Source} # % only fake {Suffix}\n}",
+    "@article{key, % outside\ntitle={No closing brace\n",
+    '@article{key, % outside\ntitle="No closing quote\n',
+], ids=["missing-entry-close", "missing-comma", "missing-equals", "missing-value",
+        "missing-concatenation-part", "unclosed-braced-value", "unclosed-quoted-value"])
+def test_bibtex_entry_comments_cannot_repair_malformed_input(text, tmp_path):
+    source, output = tmp_path / "invalid.bib", tmp_path / "imported"
+    original = text.encode("utf-8")
+    source.write_bytes(original)
+
+    with pytest.raises(ValueError, match="Invalid BibTeX"):
+        imports.write_import(source, output)
+
+    assert not output.exists()
+    assert source.read_bytes() == original
+
+
+@pytest.mark.parametrize("newline,bom", [("\n", b""), ("\r\n", b"\xef\xbb\xbf")], ids=["lf", "crlf-bom"])
+@pytest.mark.parametrize("entry,line,column,expected", [
+    ("@article{broken,\n  title={Retained}\n  year=2024\n}", 5, 3, "Expected '}'"),
+    ("@article{broken,\n  title {Retained},\n  year=2024\n}", 4, 9, "Expected '='"),
+    ("@article{broken,\n  title={Retained},\n  year= % ignored } , = # @fake\n}", 6, 1, None),
+    ("@article{broken,\n  title={Retained} # % ignored {Suffix}\n}\n",
+     4, 20, "Expected a BibTeX value after '#'"),
+    # End at the value: nested_expr versions differ in trailing whitespace consumption.
+    ("@article{broken,\n  title={No closing brace", 4, 26, "Expected '}'"),
+    ('@article{broken,\n  title="No closing quote\n', 5, 1, "Expected '\"'"),
+    ("@article{broken,\n  title={Retained}\n", 5, 1, "Expected '}'"),
+    ("@article(broken,\n  title={Retained}\n", 5, 1, "Expected ')'"),
+], ids=["missing-comma", "missing-equals", "missing-value", "dangling-concatenation",
+        "unclosed-braced-value", "unclosed-quoted-value", "unclosed-entry-brace", "unclosed-entry-parenthesis"])
+def test_bibtex_error_location_reports_failed_syntax_without_output(
+        entry, line, column, expected, newline, bom, tmp_path):
+    text = "% supplied header\n\n" + entry
+    original = bom + text.replace("\n", newline).encode("utf-8")
+    source, output = tmp_path / "invalid.bib", tmp_path / "imported"
+    source.write_bytes(original)
+
+    with pytest.raises(ValueError) as failure:
+        imports.write_import(source, output)
+
+    assert not output.exists()
+    assert source.read_bytes() == original
+    message = str(failure.value)
+    assert message.startswith(f"Invalid BibTeX at line {line}, column {column}:")
+    if expected is not None:
+        assert expected in message
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
+def test_bibtex_error_location_uses_original_second_entry_offsets(newline, tmp_path):
+    text = ("% bibliography\n"
+            "@misc{first,\n"
+            "  title={첫 원고 50%}\n"
+            "}\n"
+            "\n"
+            "% second entry follows\n"
+            "@article{broken,\n"
+            "\ttitle={한글} # % missing value\n"
+            "}\n")
+    source, output = tmp_path / "two-entries.bib", tmp_path / "imported"
+    original = text.replace("\n", newline).encode("utf-8")
+    source.write_bytes(original)
+
+    with pytest.raises(ValueError) as failure:
+        imports.write_import(source, output)
+
+    assert not output.exists()
+    assert source.read_bytes() == original
+    # Columns follow source characters: the tab is one character, as are 한 and 글.
+    assert str(failure.value).startswith("Invalid BibTeX at line 8, column 13:")
 
 
 if __name__ == "__main__":

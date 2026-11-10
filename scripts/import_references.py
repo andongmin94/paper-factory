@@ -19,6 +19,8 @@ from editorial_checks import _doi
 def _bibtex_records(text: str):
     import pyparsing as pp
 
+    line_comment = pp.Regex(r"%[^\r\n]*").suppress()
+    comments = pp.ZeroOrMore(line_comment)
     name = pp.Regex(r"[A-Za-z][A-Za-z0-9_:.+\-]*")
     escaped = pp.Regex(r"\\.")
     braced = pp.original_text_for(pp.nested_expr("{", "}", ignore_expr=escaped))
@@ -27,9 +29,26 @@ def _bibtex_records(text: str):
     literal = (braced | quoted).set_parse_action(lambda t: [("literal", t[0][1:-1])])
     number = pp.Regex(r"[0-9]+").set_parse_action(lambda t: [("literal", t[0])])
     symbol = name.copy().set_parse_action(lambda t: [("symbol", t[0].casefold())])
-    value = pp.Group(pp.DelimitedList(literal | number | symbol, delim="#"))
-    field = pp.Group(name("name") + pp.Suppress("=") + value("parts"))
-    fields = pp.Group(pp.Optional(pp.DelimitedList(field, allow_trailing_delim=True)))("fields")
+    atom = literal | number | symbol
+
+
+    def missing_concatenation_value(source, location, expression, error):
+        if source[location:location + 1] == "#":
+            raise pp.ParseFatalException(
+                source, location, "Expected a BibTeX value after '#'")
+
+
+    concatenation = pp.Literal("#") + comments + pp.FollowedBy(atom)
+    concatenation.set_fail_action(missing_concatenation_value)
+
+
+    # Consume comments only at syntax boundaries; percent signs inside values are data.
+    value = pp.Group(comments + pp.DelimitedList(
+        atom + comments, delim=concatenation))
+    # Preserve the failure location after a field or entry has started.
+    field = pp.Group(name("name") + comments - pp.Suppress("=") + value("parts"))
+    fields = pp.Group(comments + pp.Optional(pp.DelimitedList(
+        field, delim=pp.Literal(",") + comments, allow_trailing_delim=True)))("fields")
 
     def enclosed(expression):
         return (pp.Suppress("{") + expression + pp.Suppress("}") |
@@ -49,8 +68,8 @@ def _bibtex_records(text: str):
     # Respect a closing delimiter before the next record even without whitespace.
     paren_key = r"[^\s,{}]+?(?=\)@[A-Za-z][\w:.+\-]*\s*[({])|[^\s,{}]+(?=\s*[,\)])"
     entry = entry_kind("kind") + (entry_body("{", r"[^\s,{}]+", "}") | entry_body("(", paren_key, ")"))
-    block = pp.Group(pp.Located(pp.Suppress("@") + (definitions | preamble | comment | entry)))
-    document = pp.ZeroOrMore(pp.Regex(r"%[^\n]*").suppress() | block | pp.Regex(r"[^@]+").suppress())
+    block = pp.Group(pp.Located(pp.Suppress("@") - (definitions | preamble | comment | entry)))
+    document = pp.ZeroOrMore(line_comment | block | pp.Regex(r"[^@]+").suppress())
     document.parse_with_tabs()
     try:
         blocks = document.parse_string(text, parse_all=True)

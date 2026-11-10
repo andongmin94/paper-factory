@@ -75,6 +75,8 @@ python scripts/import_references.py --input /work/sources.json --format csl-json
 
 Import reports use the existing `structural_findings` and `manual_review_suggestions` lists with `code`, `reference_id` (when applicable), and `detail`. Missing metadata, unmapped years/strings and numbering checks are advisory; a malformed DOI is retained and reported with the existing `malformed_metadata_doi` code. Exit0 means the import was prepared, including its findings; Exit2 means invalid input or output failure. Unparseable BibTeX/JSON syntax, non-object CSL list entries or RIS records without an `ER` terminator are rejected before output is created. Import does not verify publication identity, author names or DOI resolution. Review its report alongside the later editorial report.
 
+BibTeX syntax errors retain the parser's failure location after an entry or field has started. The reported line and column are one-based source character positions: tabs count as one character and a UTF-8 BOM is excluded. Import, JOSS preflight and JOSS source export use the same bibliography validation; the diagnostic identifies where parsing stopped, which may follow the missing token.
+
 ## Reuse author and coauthor facts
 
 Save an explicit profile outside the skill and provide it for each paper. `scripts/submission_support.py authors --profile PROFILE_JSON --manuscript MANUSCRIPT_MD --output-dir NEW` validates ordering and facts, prepares a new Markdown author block/biographies and a separate missing-information report, leaving the input unchanged. The profile contains `authors` entries with `id`, `author` and `contributions`, an `order` list, and an optional `corresponding_author` ID, `funding` and `conflicts`.
@@ -85,11 +87,13 @@ Author slots use `<!-- paper-factory:authors:start -->` and `<!-- paper-factory:
 
 Use the new Markdown and generated `authors.json` together with the official exporter: `export_manuscript.py ... --profile AUTHORS_JSON`. Preparation and export share the same multi-author profile contract and report missing fields for every author, including factual biography details. The exporter does not rewrite the byline from the profile. Adding author material changes the delivered bytes; retain the scientific version/review binding and check the new output and venue word-count rules. Do not insert unconfirmed profile choices or treat a field's presence as consent. A saved profile is not included in a checkpoint or submission bundle unless explicitly selected.
 
-If the manuscript contains relative media links such as `![Figure](figure.png)`, pass their original directory with `--resource-dir` when exporting the prepared copy from a new folder. Supply one existing absolute directory; the original media stay in that directory and the Markdown links remain unchanged. For an original `/work/source/article.md` with `/work/source/figure.png`:
+If the manuscript contains relative media links such as `![Figure](figure.png)`, pass their original directory with `--resource-dir` when exporting the prepared copy from a new folder. Supply one existing absolute source directory; author preparation leaves the original media in place and the Markdown links remain unchanged. Word export copies the referenced local relative Markdown images into its new output at the same paths, records their hashes in `manifest.json`, and converts those retained copies. For an original `/work/source/article.md` with `/work/source/figure.png`:
 
 ```sh
 python scripts/export_manuscript.py export --manuscript /work/prepared/manuscript.md --profile /work/prepared/authors.json --resource-dir /work/source --venue ieee-software --output-dir /work/exported
 ```
+
+A moved export can use its retained `manuscript.md` and images with the same converter and required template; the original resource directory is no longer needed. See the [Word export image requirements](tools.md#manuscript-preflight-and-official-export) for supported paths, rejected inputs and rendering prerequisites.
 
 ## Prepare an anonymous draft only when appropriate
 

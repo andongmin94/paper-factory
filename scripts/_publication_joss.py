@@ -51,6 +51,12 @@ def _nodes(value):
             yield from _nodes(child)
 
 
+def _citation_keys(value):
+    """Read actual Pandoc Cite identifiers without interpreting literal text."""
+    return {citation["citationId"] for node in _nodes(value) if node.get("t") == "Cite"
+            for citation in node["c"][0]}
+
+
 def _entries(value):
     return value.get("c", []) if isinstance(value, dict) and value.get("t") == "MetaList" else []
 
@@ -182,26 +188,29 @@ def _inspect(manuscript, *, bibliography=None, pandoc=None, resource_dir=None):
     bib_bytes = bibliography.read_bytes()
     imported = parse_bibliography(bib_bytes.decode("utf-8-sig"), "bibtex")
     keys = [row["source"]["key"] for row in imported["references"]]
-    cited = sorted({citation["citationId"] for node in _nodes(blocks) if node.get("t") == "Cite"
-                    for citation in node["c"][0]})
+    cited = sorted(_citation_keys(blocks))
+    metadata_cited = _citation_keys({name: value for name, value in metadata.items() if name != "nocite"})
+    # Only top-level nocite uses '*' to select every retained bibliography entry.
+    nocited = _citation_keys(metadata.get("nocite")) - {"*"}
     duplicates = sorted({key for key in keys if keys.count(key) > 1})
-    missing = sorted(set(cited) - set(keys))
+    missing = sorted((set(cited) | metadata_cited | nocited) - set(keys))
     item("bibliography_keys", not duplicates, "Duplicate BibTeX keys: " + str(duplicates))
     item("citation_keys", bool(cited) and not missing,
-         "Cite retained paper.bib entries using Pandoc citations; unresolved keys: " + str(missing))
+         "Cite retained paper.bib entries in the body; unresolved keys in body, metadata or nocite: " + str(missing))
 
     root = manuscript.parent if resource_dir is None else resource_dir
     ensure_unlinked(root)
     if resource_dir is not None and (not root.is_absolute() or not root.is_dir()):
         raise ValueError("Resource directory must be an existing absolute directory")
     files = {"paper.md": (manuscript, source), "paper.bib": (bibliography, bib_bytes)}
-    images = sorted({node["c"][-1][0] for node in _nodes(blocks) if node.get("t") == "Image"})
+    # YAML strings are Markdown too; retain their Image dependencies with the body.
+    images = sorted({node["c"][-1][0] for node in _nodes(document) if node.get("t") == "Image"})
     for target in images:
         parsed_target = urlsplit(target)
         relative = PurePosixPath(unquote(parsed_target.path))
         if (parsed_target.scheme or parsed_target.netloc or parsed_target.query or parsed_target.fragment
                 or relative.is_absolute() or ".." in relative.parts or "\\" in str(relative)
-                or not relative.parts or relative.parts[0] in {"paper.md", "paper.bib", "format-report.json", "manifest.json"}):
+                or not relative.parts or relative.parts[0].casefold() in {"paper.md", "paper.bib", "format-report.json", "manifest.json"}):
             raise ValueError("Use local relative image paths inside the source bundle: " + target)
         path = root.joinpath(*relative.parts)
         ensure_unlinked(path)
@@ -213,7 +222,7 @@ def _inspect(manuscript, *, bibliography=None, pandoc=None, resource_dir=None):
             with Image.open(BytesIO(data)) as image:
                 image.verify()
         files[relative.as_posix()] = (path, data)
-    raw_image = any(_raw_image(node) for node in _nodes(blocks))
+    raw_image = any(_raw_image(node) for node in _nodes(document))
     item("local_images", not raw_image,
          "Use Markdown image syntax ![Caption](figures/plot.png) instead of raw TeX/HTML to include figures in the source bundle."
          if raw_image else f"Retain the actual bytes of {len(images)} local referenced images; layout is not rendered.")
