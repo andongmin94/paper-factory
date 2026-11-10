@@ -15,11 +15,11 @@ import sys
 from urllib.parse import unquote, urlsplit, urlunsplit
 
 from _publication_files import digest_file, ensure_unlinked
-from _publication_text import mask_code
+from _publication_text import mask_code, mask_code_and_math
 
 
 def _prose(text: str, *, context: str | None = None) -> str:
-    """Mask code and Markdown links, keeping numbered prose citations visible.
+    """Mask code, math and Markdown links, keeping prose citations visible.
 
     Reference-style links depend on definitions that can occur outside this
     body slice, including after the bibliography. Unknown labels remain prose.
@@ -31,8 +31,8 @@ def _prose(text: str, *, context: str | None = None) -> str:
         return re.sub(r"\s+", " ", value).strip().casefold()
 
     definition = re.compile(r"(?m)^ {0,3}\[([^\]\n]+)\]:[ \t]*\S[^\n]*$")
-    labels = {label(match[1]) for match in definition.finditer(mask_code(context if context is not None else text))}
-    text = mask_code(text)
+    labels = {label(match[1]) for match in definition.finditer(mask_code_and_math(context if context is not None else text))}
+    text = mask_code_and_math(text)
     text = definition.sub(blank, text)
     # Link labels may wrap within a paragraph, just like numeric citations.
     inline_text = r"(?:\\.|[^\[\]\\\n]|\n(?![ \t]*\n))"

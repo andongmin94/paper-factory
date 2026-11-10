@@ -1,6 +1,12 @@
-"""Offset-preserving code masking for publication Markdown checks."""
+"""Offset-preserving code and math masking for publication Markdown checks."""
 
 import re
+
+
+# Inline code may wrap, but cannot cross a blank paragraph boundary.
+_INLINE_CODE = (r"(?<!`)(?P<ticks>`+)(?!`)"
+                r"(?:[^\r\n]|(?:\r\n?|\n)(?![ \t]*(?:\r\n?|\n)))*?"
+                r"(?<!`)(?P=ticks)(?!`)")
 
 
 def _blank(text: str) -> str:
@@ -27,7 +33,22 @@ def mask_fenced_code(markdown: str) -> str:
 
 def mask_code(markdown: str) -> str:
     fenced = mask_fenced_code(markdown)
-    return re.sub(r"(?<!`)(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)", lambda match: _blank(match[0]), fenced)
+    return re.sub(_INLINE_CODE, lambda match: _blank(match[0]), fenced)
+
+
+def mask_code_and_math(markdown: str) -> str:
+    """Exclude code and the converter's dollar-delimited TeX math from prose."""
+    # https://pandoc.org/MANUAL.html#extension-tex_math_dollars
+    # Neither math form crosses blank lines. Inline delimiters also distinguish
+    # whitespace and currency; escaped dollars are not math delimiters.
+    line = r"(?:\r\n?|\n)(?![ \t]*(?:\r\n?|\n))"
+    inline = rf"\$(?![\s$])(?:\\[^\r\n]|[^\\$\r\n]|{line})*?(?<!\s)\$(?!\d)"
+    display = rf"\$\$(?:\\[^\r\n]|(?!\$\$)[^\\\r\n]|{line})*?\$\$"
+    # One scan preserves delimiter precedence: dollars in code and backticks in
+    # math cannot start a different span that hides surrounding prose.
+    pattern = rf"(?P<escape>\\[^\r\n])|{_INLINE_CODE}|{display}|{inline}"
+    return re.sub(pattern, lambda match: match[0] if match["escape"] else _blank(match[0]),
+                  mask_fenced_code(markdown))
 
 
 def section_headers(markdown: str) -> list[re.Match]:

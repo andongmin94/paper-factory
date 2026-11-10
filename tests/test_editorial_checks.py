@@ -107,6 +107,30 @@ def test_invalid_numeric_examples_in_code_and_links_are_not_citations():
     assert not result["structural_findings"]
 
 
+def test_math_does_not_create_citations_or_hide_prose_citations():
+    result = editorial.check_manuscript(
+        "# Article\nA bounded parameter $x \\in [0,1]$ uses source [1].\n\n"
+        "A wrapped expression $y\n\\in [2,3]$ remains math.\n\n"
+        "$$a[3-1]$$\n\nA math literal $\\texttt{`}[7]$ precedes `code`.\n\n"
+        "Code `$` brackets citation [8] before another `$`.\n\nA separate claim needs [9].\n"
+        "## References\n[1] Actual source.\n")
+    assert result["metrics"]["recognized_body_citations"] == [1, 8, 9]
+    assert codes(result) == {"citation_without_reference"}
+    assert [item["reference_id"] for item in result["structural_findings"]] == [8, 9]
+
+
+def test_escaped_dollars_and_currency_do_not_hide_citations():
+    result = editorial.check_manuscript(
+        "# Article\nEscaped delimiters \\$text [8]\\$ remain prose.\n\n"
+        "A cost of $5 per run [9] rises to $10. Actual source [1].\n\n"
+        "Opening space $ value [10]$ remains prose.\n\n"
+        "Closing space $value [11] $ remains prose.\n\n"
+        "## References\n[1] Actual source.\n")
+    assert result["metrics"]["recognized_body_citations"] == [1, 8, 9, 10, 11]
+    assert [item["reference_id"] for item in result["structural_findings"]
+            if item["code"] == "citation_without_reference"] == [8, 9, 10, 11]
+
+
 def test_code_and_links_do_not_create_body_citations():
     text = """# Article
 
@@ -146,10 +170,20 @@ def test_longer_closing_fences_hide_code_without_hiding_following_citations(open
 
 def test_inline_code_with_literal_backticks_does_not_create_citations():
     result = editorial.check_manuscript(
-        "# Article\nUse ``literal `array[9]` notation``; the actual source is [1].\n"
+        "# Article\nUse ``literal `array[9]`\nnotation``; the actual source is [1].\n"
         "## References\n[1] Actual source.\n")
     assert result["metrics"]["recognized_body_citations"] == [1]
     assert not result["structural_findings"]
+
+
+def test_unmatched_backticks_across_paragraphs_do_not_hide_citations():
+    result = editorial.check_manuscript(
+        "# Article\nAn unmatched `marker.\n\nThe result cites [9].\n\n"
+        "Another `marker. Actual source [1].\n"
+        "## References\n[1] Actual source.\n")
+    assert result["metrics"]["recognized_body_citations"] == [1, 9]
+    assert [item["reference_id"] for item in result["structural_findings"]
+            if item["code"] == "citation_without_reference"] == [9]
 
 
 def test_reference_heading_inside_code_does_not_end_the_real_body():

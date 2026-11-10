@@ -17,7 +17,7 @@ from pathlib import Path
 
 from _publication_files import digest_file, ensure_unlinked
 from _author_profile import profile_completeness
-from _publication_text import mask_code, mask_fenced_code, section_headers
+from _publication_text import mask_code, mask_code_and_math, mask_fenced_code, section_headers
 from _publication_venues import VENUE_RULES, WORD_VENUES, CS_GUIDANCE, AI_GUIDANCE
 from editorial_checks import check_manuscript
 
@@ -153,6 +153,7 @@ def validate_manuscript(markdown: str, venue_id: str, author_metadata: dict | No
     keyword_lines = re.findall(r"(?mi)^Keywords:\s*(.+)$", prose)
     keywords = [word.strip() for line in keyword_lines for word in line.split(";") if word.strip()]
     abstract = re.sub(r"(?mi)^Keywords:.*$", "", abstract).strip()
+    abstract_prose = mask_code_and_math(abstract)
     references = parts.get("references", "")
     entries = list(re.finditer(r"(?ms)^\[(\d+)\]\s+(.+?)(?=\n\[\d+\]\s|\Z)", references))
     numbers = [int(entry[1]) for entry in entries]
@@ -179,7 +180,7 @@ def validate_manuscript(markdown: str, venue_id: str, author_metadata: dict | No
     abstract_detail = (f"Abstract estimate {_words(abstract)} words; allowed {limits.get('min_abstract_words', 1)}–{abstract_max}."
                        if abstract_max is not None else f"Abstract estimate {_words(abstract)} words; template target about 100, not a verified hard maximum.")
     items = [_item("abstract", "passed" if abstract_passed else "failed", abstract_detail, source=source),
-             _item("abstract_structure", "passed" if len(re.split(r"\n\s*\n", abstract)) == 1 and not re.search(r"\[\d+(?:[ \t]*[-–,;][ \t]*\d+)*[ \t]*\]|\{\{(?:source|document|citation):", abstract) else "failed",
+             _item("abstract_structure", "passed" if len(re.split(r"\n\s*\n", abstract)) == 1 and not re.search(r"\[\d+(?:[ \t]*[-–,;][ \t]*\d+)*[ \t]*\]|\{\{(?:source|document|citation):", abstract_prose) else "failed",
                    "Use a single-paragraph abstract without reference citations " + ("(skill preparation convention for JORS)." if venue_id == "jors" else "as specified by the publisher template."), source=None if venue_id == "jors" else source),
              _item("reference_count", "passed" if entries and (reference_max is None or len(entries) <= reference_max) and numbers == list(range(1, len(entries) + 1)) else "failed",
                    f"Canonical references: {len(entries)}; sequential unique labels required. " + (f"Maximum {reference_max}." if reference_max is not None else "No reference cap established by the checked guidance."), source=source),

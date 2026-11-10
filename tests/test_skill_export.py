@@ -118,13 +118,37 @@ def test_preflight_rejects_invalid_consecutive_references(manuscript, case, coun
 @pytest.mark.parametrize("citation", ["[1]", "[1, 3]", "[1-4]", "[1; 3]", "[1, 3–4]"])
 def test_preflight_rejects_supported_numeric_citations_in_abstract(manuscript, citation):
     text = ARTICLE.replace("A conditional static example explains a maintenance decision.",
-                           "A conditional static example explains a maintenance decision " + citation + ".", 1)
+                           "A conditional static example bounds $x \\in [0,1]$ " + citation + ".", 1)
     manuscript.write_text(text, encoding="utf-8")
     original = manuscript.read_bytes()
     result = exporter.preflight(manuscript, "ieee-software")
     statuses = {row["id"]: row["status"] for row in result["items"]}
     assert statuses["abstract_structure"] == "failed"
     assert not result["prefilter_passed"]
+    assert not result["native_word_measured"]
+    assert manuscript.read_bytes() == original
+
+
+def test_math_in_body_and_abstract_passes_preflight_cli(manuscript, capsys):
+    text = ARTICLE.replace("A conditional static example explains a maintenance decision.",
+                           "A conditional static example bounds $p \\in [0,1]$.", 1)
+    text = text.replace("first wrote it. [1]", "first wrote it. [1]\n\n"
+                        "The parameter is bounded by $x \\in [0,1]$.\n\n$$a[3-1]$$")
+    manuscript.write_text(text, encoding="utf-8")
+    original = manuscript.read_bytes()
+    parsed = subprocess.run([str(_real_pandoc()), "--from=" + converter.WORD_MARKDOWN_READER,
+                             "--to=json", "--standalone", str(manuscript)],
+                            capture_output=True, text=True, encoding="utf-8", check=True, timeout=30)
+    math = [node["c"] for block in json.loads(parsed.stdout)["blocks"] if block["t"] == "Para"
+            for node in block["c"] if node["t"] == "Math"]
+    assert [(kind["t"], content) for kind, content in math] == [
+        ("InlineMath", r"p \in [0,1]"), ("InlineMath", r"x \in [0,1]"),
+        ("DisplayMath", "a[3-1]")]
+    status = exporter.main(["preflight", "--manuscript", str(manuscript), "--venue", "ieee-software"])
+    result = json.loads(capsys.readouterr().out)
+    statuses = {row["id"]: row["status"] for row in result["items"]}
+    assert status == 0 and result["prefilter_passed"]
+    assert statuses["abstract_structure"] == statuses["citation_references"] == "passed"
     assert not result["native_word_measured"]
     assert manuscript.read_bytes() == original
 
@@ -147,6 +171,8 @@ def test_preflight_body_grouped_citation_does_not_fail_abstract_structure(manusc
 @pytest.mark.parametrize("citation", [
     "[4]", "[1, 4]", "[2-4]", "[3-1]", "[1–999999999]", "[1,,2]",
     "[1, **4**]", "[1, *4*]", "[1,\n4]",
+    pytest.param("An unmatched `marker.\n\nThe result cites [9].\n\nAnother `marker.",
+                 id="backticks-across-paragraphs"),
 ])
 def test_numeric_citation_gate_fails_preflight_cli_without_changing_source(manuscript, capsys, citation):
     text = ARTICLE.replace("first wrote it. [1]", "first wrote it. " + citation)
