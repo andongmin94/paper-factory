@@ -36,7 +36,18 @@ def _prose(text: str, *, context: str | None = None) -> str:
     text = definition.sub(blank, text)
     # Link labels may wrap within a paragraph, just like numeric citations.
     inline_text = r"(?:\\.|[^\[\]\\\n]|\n(?![ \t]*\n))"
-    text = re.sub(rf"!?\[(?:{inline_text}|\[{inline_text}*\])*\]\([^\n)]*\)", blank, text)
+    # Link destinations may contain up to three levels of balanced parentheses.
+    destination_char = r"(?:\\.|[^()\\\n])"
+    destination_paren_1 = rf"\({destination_char}*\)"
+    destination_paren_2 = rf"\((?:{destination_char}|{destination_paren_1})*\)"
+    destination_paren_3 = rf"\((?:{destination_char}|{destination_paren_2})*\)"
+    destination = rf"(?:{destination_char}|{destination_paren_3})*"
+
+
+    text = re.sub(
+        rf"!? \[(?:{inline_text}|\[{inline_text}*\])*\]\({destination}\)".replace(" ", ""),
+        blank,
+        text)
 
     def reference_link(match):
         target = match[2] if match[2] else match[1]

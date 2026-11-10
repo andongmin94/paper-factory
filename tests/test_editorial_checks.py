@@ -80,6 +80,21 @@ def test_wrapped_numeric_link_labels_remain_protected():
     assert not result["structural_findings"]
 
 
+def test_inline_link_with_nested_parentheses_in_destination_is_not_a_citation():
+    result = editorial.check_manuscript(
+        "# Article\n"
+        "Actual source [1].\n"
+        "[[9]](https://example.org/path_(v2_(draft_(final)))[9]) "
+        "is a documentation link.\n"
+        "## References\n"
+        "[1] Actual source.\n"
+    )
+
+
+    assert result["metrics"]["recognized_body_citations"] == [1]
+    assert not result["structural_findings"]
+
+
 def test_invalid_numeric_examples_in_code_and_links_are_not_citations():
     result = editorial.check_manuscript(
         "# Article\nActual source [1]. `[3-1]` is code.\n"
