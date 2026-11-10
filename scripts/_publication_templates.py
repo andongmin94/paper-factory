@@ -15,6 +15,23 @@ from _publication_files import digest_file, ensure_unlinked
 ROOT = Path(__file__).resolve().parents[1] / "assets" / "templates"
 
 
+def _citation_matches(paragraph, pattern, text):
+    """Keep native math between callout ranges, using the existing text offsets."""
+    from docx.oxml.ns import qn
+    from docx.text.run import Run
+
+    start, end, follows_math = 0, 0, False
+    for element in paragraph._p.xpath(".//w:r | .//m:oMath"):
+        if element.tag == qn("m:oMath"):
+            for match in pattern.finditer(text, start, end):
+                yield match, follows_math
+            start, follows_math = end, True
+        else:
+            end += len(Run(element, paragraph).text)
+    for match in pattern.finditer(text, start, end):
+        yield match, follows_math
+
+
 def _replace_native_text(paragraph, start, end, pieces):
     """Replace a visible text span without flattening links or inline styles."""
     from docx.oxml import OxmlElement
@@ -25,7 +42,8 @@ def _replace_native_text(paragraph, start, end, pieces):
         text = run.text
         runs.append((position, position + len(text), run))
         position += len(text)
-    affected = [(a, b, run) for a, b, run in runs if a < end and b > start]
+    # Non-text runs, such as footnote anchors, must survive text replacement.
+    affected = [(a, b, run) for a, b, run in runs if a < b and a < end and b > start]
     if not affected:
         return
     a, _, first = affected[0]
@@ -89,7 +107,10 @@ def _citation_typography(document, reference, *, software):
                     if old is not None:
                         properties.remove(old)
                     properties.append(deepcopy(source))
-    callout = re.compile(r'''(?:(?P<before>[.,;:!?])(?P<close>["'”’)]*)[ \t]*)?[ \t]*(?P<cites>\[\d+\](?:[ \t]*(?:,[ \t]*)?\[\d+\])*)(?P<after>[.,;:!?])?(?P<afterclose>["'”’)]*)''')
+    known_numbers = sorted(int(number) for number in known)
+    item = r"\d+(?:[ \t]*[-–][ \t]*\d+)?"
+    citation = rf"\[{item}(?:[ \t]*[,;][ \t]*{item})*[ \t]*\]"
+    callout = re.compile(rf'''(?:(?P<before>[.,;:!?])(?P<close>["'”’)]*)[ \t]*)?[ \t]*(?P<cites>{citation}(?:[ \t]*(?:[,;][ \t]*)?{citation})*)(?P<after>[.,;:!?])?(?P<afterclose>["'”’)]*)''')
     changed, unknown = 0, set()
     paragraphs = list(document.paragraphs)
     for table in document.tables:
@@ -109,19 +130,40 @@ def _citation_typography(document, reference, *, software):
             protected.extend([guarded] * len(content))
         if paragraph.style.name.casefold() in {"source code", "code"}:
             continue
-        for match in reversed(list(callout.finditer(text))):
+        for match, follows_math in reversed(list(_citation_matches(paragraph, callout, text))):
             if any(protected[match.start():match.end()]):
                 continue
-            numbers = re.findall(r"\d+", match["cites"])
-            if not set(numbers).issubset(known):
-                unknown.update(set(numbers) - known)
+            numbers, items, missing = [], [], set()
+            valid = True
+            for token in re.findall(item, match["cites"]):
+                bounds = re.findall(r"\d+", token)
+                if len(bounds) == 1:
+                    members = bounds
+                else:
+                    first, last = map(int, bounds)
+                    if last < first:
+                        valid = False
+                        continue
+                    # Validate against the finite bibliography before expanding a range.
+                    members = [str(number) for number in known_numbers if first <= number <= last]
+                    if len(members) != last - first + 1:
+                        valid = False
+                        missing.update(set(bounds) - known)
+                        missing.update(str(number) for number in [first, *(int(n) + 1 for n in members if int(n) < last)]
+                                       if str(number) not in known)
+                numbers.extend(members)
+                items.append("–".join(bounds))
+            missing.update(set(numbers) - known)
+            if not valid or missing:
+                unknown.update(missing)
                 continue
             punctuation = (match["before"] or "") + (match["after"] or "")
             closing = (match["close"] or "") + (match["afterclose"] or "")
             if software:
-                pieces = [(punctuation + closing, False), (",".join(numbers), True)]
+                pieces = [(punctuation + closing, False), (",".join(items), True)]
             else:
-                space = " " if closing or match.start() and not text[match.start() - 1].isspace() else ""
+                space = " " if (closing or follows_math and match.start() == match.pos
+                                or match.start() and not text[match.start() - 1].isspace()) else ""
                 pieces = [(closing + space + ", ".join("[" + n + "]" for n in numbers), False), (punctuation, False)]
             _replace_native_text(paragraph, match.start(), match.end(), pieces)
             changed += 1
@@ -339,6 +381,8 @@ def apply_official_styles(output: Path, template: Path, *, citation_style: str) 
             for cell in row.cells:
                 cell.width = width // len(row.cells)
                 for paragraph in cell.paragraphs:
+                    if paragraph.style.name.casefold() in {"source code", "code"}:
+                        continue  # Keep highlighted program literals out of citation typography.
                     paragraph.style = document.styles["Para"]
                     paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
                     paragraph.paragraph_format.first_line_indent = 0

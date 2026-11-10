@@ -135,36 +135,73 @@ def test_prose_next_to_explicit_author_block_and_repeated_preparation_survive(tm
         assert prose in (tmp_path / folder / "anonymous.md").read_text()
 
 
-def test_author_markers_in_front_matter_code_are_not_deletion_instructions(tmp_path, inputs):
+@pytest.mark.parametrize("code_open,code_close", [
+    ("```html\n", "\n```"),
+    ("```html\n```text\n", "\n```"),
+    ("`The literal author-slot example begins here.\n", "\nThe example ends here.`"),
+])
+def test_author_markers_in_front_matter_code_are_not_deletion_instructions(tmp_path, inputs, code_open, code_close):
     article, profile = inputs
-    example = "```html\n<!-- paper-factory:authors:start -->\nA literal marker example.\n<!-- paper-factory:authors:end -->\n```"
+    example = code_open + "<!-- paper-factory:authors:start -->\nA literal marker example.\n<!-- paper-factory:authors:end -->" + code_close
     source = "# Title\n\n" + example + "\n\n## Abstract\n\nBounded text.\n"
     put(article, source)
+    original = article.read_bytes()
     with pytest.raises(ValueError, match="Ambiguous pre-Abstract content"):
         support.prepare_authors(profile, article, tmp_path / "out")
-    assert article.read_text() == source
+    assert article.read_bytes() == original
     assert not (tmp_path / "out").exists()
 
 
-def test_biography_heading_in_code_example_is_preserved(tmp_path, inputs):
+@pytest.mark.parametrize("code_open,code_close", [
+    ("```markdown\n```text\n", "\n```"),
+    ("`The literal author-slot example begins here.\n", "\nThe example ends here.`"),
+])
+def test_author_block_next_to_code_marker_example_is_preserved(tmp_path, inputs, code_open, code_close):
     article, profile = inputs
-    put(article, ARTICLE.replace("The local claim survives.", "The local claim survives.\n\n```markdown\n## Author biographies\nAn example, not an actual author section.\n```"))
+    example = code_open + "<!-- paper-factory:authors:start -->\nA literal marker example.\n<!-- paper-factory:authors:end -->" + code_close
+    source = ARTICLE.replace("## Abstract", example + "\n\n## Abstract", 1)
+    put(article, source)
+    original = article.read_bytes()
     support.prepare_authors(profile, article, tmp_path / "out", anonymous=True)
-    text = (tmp_path / "out/anonymous.md").read_text()
-    assert "## Author biographies\nAn example, not an actual author section." in text
-    assert "Old biographical text." not in text
+    for name in ("manuscript.md", "anonymous.md"):
+        content = (tmp_path / "out" / name).read_bytes()
+        assert example.encode("utf-8") in content
+        assert b"Old Author" not in content
+    assert (tmp_path / "out/manuscript.md").read_text(encoding="utf-8").count("Bob Scientist | Lab B") == 1
+    assert "Bob Scientist | Lab B" not in (tmp_path / "out/anonymous.md").read_text(encoding="utf-8")
+    assert article.read_bytes() == original
 
 
+@pytest.mark.parametrize("example", [
+    "```markdown\n## Author biographies\nAn example, not an actual author section.\n```",
+    '```{.markdown title="a`b"}\n## Author biographies\nAn example, not an actual author section.\n```',
+    "```sample``` is a literal code span.",
+])
+def test_code_examples_preserve_content_and_biography_removal(tmp_path, inputs, example):
+    article, profile = inputs
+    source = ARTICLE.replace("The local claim survives.", "The local claim survives.\n\n" + example)
+    put(article, source)
+    support.prepare_authors(profile, article, tmp_path / "out", anonymous=True)
+    for name in ("manuscript.md", "anonymous.md"):
+        text = (tmp_path / "out" / name).read_text(encoding="utf-8")
+        assert example in text
+        assert "## References\n\n[1] A retained source, 2026." in text
+        assert "Old biographical text." not in text
+    assert article.read_text(encoding="utf-8") == source
+
+
+@pytest.mark.parametrize("appendix_heading", ["# Appendix", "  ## Appendix ##"])
 @pytest.mark.parametrize("abstract_heading,biography_heading", [
     ("## Abstract", "## Author biographies ##"),
     ("  ## Abstract ##", "  ## Author biographies ##"),
 ])
-def test_author_preparation_recognizes_markdown_section_variants(tmp_path, inputs, abstract_heading, biography_heading):
+def test_author_preparation_recognizes_markdown_section_variants(tmp_path, inputs, abstract_heading, biography_heading, appendix_heading):
     article, profile = inputs
     example = "```markdown\n## Author biographies ##\nA literal biography example.\n```"
-    appendix = "  ## Appendix ##\n\nThe retained appendix remains.\n"
+    appendix = appendix_heading + "\n\nThe retained appendix remains.\n"
     source = ARTICLE.replace("## Abstract\n", abstract_heading + "\n")
     source = source.replace("## Author biographies\n", biography_heading + "\n")
+    source = source.replace("Old biographical text.", "Old biographical text.\n\n### Biography detail\n\nOld nested biography text.")
     source = source.replace("The local claim survives.", "The local claim survives.\n\n" + example)
     put(article, source + "\n" + appendix)
     original = article.read_bytes(), profile.read_bytes()
@@ -173,6 +210,7 @@ def test_author_preparation_recognizes_markdown_section_variants(tmp_path, input
     anonymous = (tmp_path / "out/anonymous.md").read_text(encoding="utf-8")
     for text in (authored, anonymous):
         assert "Old biographical text." not in text
+        assert "Old nested biography text." not in text
         assert "A bounded source example." in text
         assert "Alice Research wrote the retained tool. The local claim survives." in text
         assert "## References\n\n[1] A retained source, 2026." in text
@@ -203,19 +241,28 @@ def test_responses_check_actual_after_section_and_do_not_infer_resolution(tmp_pa
 
 def test_response_anchors_follow_markdown_section_boundaries(tmp_path):
     before = put(tmp_path / "before.md", "# Article\n\n  ## Analysis ##\n\nOld analysis.\n\n  ## Limits ##\n\nOld limits.\n")
-    after = put(tmp_path / "after.md", "# Article\n\n  ## Analysis ##\n\nNew bounded analysis.\n\n  ## Limits ##\n\nNew limitation.\n")
+    after = put(tmp_path / "after.md", "# Article\n\n  ## Analysis ##\n\nNew bounded analysis.\n\n"
+                "### Implementation\n\nNew nested result.\n\n#### Details\n\nNew detailed result.\n\n"
+                "### Evaluation\n\nNew evaluation detail.\n\n"
+                "```markdown\n### Literal example\nExample only.\n```\n\n"
+                "  ## Limits ##\n\nNew limitation.\n")
     comments = put(tmp_path / "comments.json", {"comments": [
         {"id": "R1", "comment": "Clarify the analysis.", "status": "addressed", "response": "The analysis is clarified.",
-         "changes": [{"quote": "New bounded analysis.", "section": "Analysis"}]},
+         "changes": [{"quote": "New nested result.", "section": "Analysis"}]},
         {"id": "R2", "comment": "Clarify the limit.", "status": "addressed", "response": "A limitation is stated.",
          "changes": [{"quote": "New limitation.", "section": "Analysis"}]},
+        {"id": "R3", "comment": "Clarify implementation details.", "status": "addressed", "response": "The details are stated.",
+         "changes": [{"quote": "New detailed result.", "section": "Implementation"}]},
+        {"id": "R4", "comment": "Locate the evaluation.", "status": "addressed", "response": "The evaluation is stated.",
+         "changes": [{"quote": "New evaluation detail.", "section": "Implementation"}]},
+        {"id": "R5", "comment": "Locate the example.", "status": "addressed", "response": "The example is stated.",
+         "changes": [{"quote": "Example only.", "section": "Literal example"}]},
     ]})
     original = before.read_bytes(), after.read_bytes(), comments.read_bytes()
     result = support.prepare_responses(comments, before, after, tmp_path / "replies")
-    assert result["comments"][0]["changes"][0]["present_in_revised_manuscript"] is True
-    assert result["comments"][0]["issues"] == []
-    assert result["comments"][1]["changes"][0]["present_in_revised_manuscript"] is False
-    assert result["comments"][1]["issues"]
+    for row, present in zip(result["comments"], (True, False, True, False, False)):
+        assert row["changes"][0]["present_in_revised_manuscript"] is present
+        assert bool(row["issues"]) is not present
     assert original == (before.read_bytes(), after.read_bytes(), comments.read_bytes())
 
 
@@ -276,6 +323,50 @@ def test_bundle_only_allowlisted_files_and_exact_hashes(tmp_path):
     assert not result["submission_ready"] and not result["actual_submission_performed"]
     manifest = json.loads((tmp_path / "package/manifest.json").read_text())
     assert all(support.digest_file(tmp_path / "package" / row["path"]) == row["sha256"] for row in manifest["files"])
+
+
+def test_conversion_record_preserves_files_and_requires_a_new_output(tmp_path):
+    source = put(tmp_path / "paper.md", ARTICLE)
+    output = tmp_path / "paper.docx"
+    output.write_bytes(b"Supplied synthetic output, not a valid Word document.")
+    original = {path.name: path.read_bytes() for path in (source, output)}
+    record = support.record_conversion(tmp_path, [source.name], output.name, tmp_path / "conversion")
+    saved = json.loads((tmp_path / "conversion/conversion.json").read_text())
+    assert {key: value for key, value in record.items() if key != "output_dir"} == saved
+    for row in [*record["inputs"], record["output"]]:
+        assert (tmp_path / row["path"]).read_bytes() == original[row["path"]]
+        assert row["sha256"] == support.digest_file(tmp_path / row["path"])
+    assert record["conversion_executed_by_tool"] is False
+    manifest = json.loads((tmp_path / "conversion/manifest.json").read_text())
+    assert manifest["files"][0]["sha256"] == support.digest_file(tmp_path / "conversion/conversion.json")
+    with pytest.raises(FileExistsError):
+        support.record_conversion(tmp_path, [source.name], output.name, tmp_path / "conversion")
+    assert json.loads((tmp_path / "conversion/conversion.json").read_text()) == saved
+
+
+@pytest.mark.parametrize("inputs", [["../private.md"], ["paper.md", "paper.pdf"], []])
+def test_conversion_record_rejects_escaping_or_overlapping_inputs(tmp_path, inputs):
+    put(tmp_path / "paper.md", ARTICLE)
+    put(tmp_path / "paper.pdf", "Synthetic output bytes")
+    with pytest.raises(ValueError):
+        support.record_conversion(tmp_path, inputs, "paper.pdf", tmp_path / "conversion")
+    assert not (tmp_path / "conversion").exists()
+
+
+def test_conversion_record_refuses_files_that_change_during_capture(tmp_path, monkeypatch):
+    source = put(tmp_path / "paper.md", ARTICLE)
+    output = put(tmp_path / "paper.pdf", "Synthetic output bytes")
+    digest = support.digest_file
+
+    def changed(path):
+        if path == output:
+            source.write_text("A different manuscript")
+        return digest(path)
+
+    monkeypatch.setattr(support, "digest_file", changed)
+    with pytest.raises(ValueError, match="changed while recording"):
+        support.record_conversion(tmp_path, [source.name], output.name, tmp_path / "conversion")
+    assert not (tmp_path / "conversion").exists()
 
 
 def test_explicit_declaration_confirmation_is_bound_to_exact_text_and_all_selected_files(tmp_path):
@@ -437,6 +528,30 @@ def test_docx_metadata_actual_author_custom_orcid_and_revision_markers(tmp_path,
     assert report["docx_comment_count"] == report["docx_tracked_change_elements"] == 1
     assert any(match["matched_profile_value"] == "Alice Research" for match in report["profile_matches"])
     assert not report["metadata_scrubbed"] and not report["fully_anonymized_claimed"]
+    assert document.read_bytes() == before
+
+
+def test_docx_metadata_reports_formatting_revisions_and_their_authors(tmp_path, inputs):
+    _, profile = inputs
+    document = tmp_path / "formatting.docx"
+    with zipfile.ZipFile(document, "w") as package:
+        package.writestr("word/document.xml", '''<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:body><w:p>
+<w:pPr><w:jc w:val="center"/><w:pPrChange w:id="1" w:author="Alice Research"><w:pPr/></w:pPrChange></w:pPr>
+<w:r><w:rPr><w:b/><w:rPrChange w:id="2" w:author="Bob Scientist"><w:rPr/></w:rPrChange></w:rPr><w:t>Formatted text.</w:t></w:r>
+</w:p><w:tbl><w:tblPr/>
+<w:tblGrid><w:gridCol w:w="1000"/><w:tblGridChange w:id="3"><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid></w:tblGridChange></w:tblGrid>
+<w:tr><w:tc><w:p/></w:tc></w:tr>
+<w:tr><w:tc><w:tcPr><w:cellIns w:id="4" w:author="Cell Inserter"/></w:tcPr><w:p/></w:tc></w:tr>
+<w:tr><w:tc><w:tcPr><w:cellDel w:id="5" w:author="Cell Deleter"/></w:tcPr><w:p/></w:tc></w:tr>
+<w:tr><w:tc><w:tcPr><w:cellMerge w:id="6" w:author="Cell Merger" w:vMerge="cont"/></w:tcPr><w:p/></w:tc></w:tr>
+</w:tbl></w:body></w:document>''')
+    before = document.read_bytes()
+    report = support.inspect_metadata(document, tmp_path / "metadata", profile=profile)
+    assert report["docx_tracked_change_elements"] == 6
+    assert report["docx_comment_count"] == 0
+    assert report["metadata"]["revision.authors"] == "Alice Research; Bob Scientist; Cell Deleter; Cell Inserter; Cell Merger"
+    assert {match["matched_profile_value"] for match in report["profile_matches"]} == {"Alice Research", "Bob Scientist"}
     assert document.read_bytes() == before
 
 

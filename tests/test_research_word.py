@@ -3,6 +3,7 @@
 from io import BytesIO
 from pathlib import Path
 import sys
+from xml.etree import ElementTree
 import zipfile
 
 from docx import Document
@@ -79,6 +80,17 @@ def authored(tmp_path, venue, template):
 def test_maps_selected_publisher_without_losing_content(tmp_path, venue):
     template = reference(tmp_path, venue)
     path = authored(tmp_path, venue, template)
+    doc = Document(path)
+    equation = doc.add_paragraph("As established. ")
+    math, run, text = (OxmlElement(name) for name in ("m:oMath", "m:r", "m:t"))
+    text.text = "x"
+    run.append(text)
+    math.append(run)
+    equation._p.append(math)
+    equation.add_run("[1].")
+    next(p for p in doc.paragraphs if p.text == "References")._p.addprevious(equation._p)
+    math_xml = ElementTree.tostring(math)
+    doc.save(path)
     original_template = template.read_bytes()
     proof = apply_research_styles(path, template, venue)
     doc = Document(path)
@@ -89,6 +101,10 @@ def test_maps_selected_publisher_without_losing_content(tmp_path, venue):
     assert body.text == ("The result survives review [1], [2]." if venue == "ieee-access"
                          else "The result survives review (1, 2).")
     assert body.runs[0].bold
+    equation = next(p for p in doc.paragraphs if p.text.startswith("As established"))
+    assert "".join(equation._p.xpath("./w:r/w:t/text() | ./m:oMath//m:t/text()")) == (
+        "As established. x [1]." if venue == "ieee-access" else "As established. x (1).")
+    assert ElementTree.tostring(equation._p.xpath("./m:oMath")[0]) == math_xml
     assert next(p for p in doc.paragraphs if p.text.startswith("Literal code")).text.endswith(". [1]")
     assert next(p for p in doc.paragraphs if p.style.name == "Source Code").text.endswith(". [1]")
     assert next(p for p in doc.paragraphs if p.text.startswith("An unbound")).text.endswith(". [9]")
@@ -124,6 +140,12 @@ def test_tables_and_figures_fit_without_replacing_media_or_prose(tmp_path, venue
     for row_index, row in enumerate(table.rows):
         for col_index, cell in enumerate(row.cells):
             cell.text = f"retained cell {row_index}:{col_index}"
+    # Match Pandoc's highlighted Python runs, which do not use Verbatim Char.
+    for name in ("NormalTok", "DecValTok"):
+        doc.styles.add_style(name, WD_STYLE_TYPE.CHARACTER)
+    code = table.cell(1, 0).add_paragraph(style="Source Code")
+    for text, style in (("result = [", "NormalTok"), ("1", "DecValTok"), ("]", "NormalTok")):
+        code.add_run(text).style = doc.styles[style]
     refs._p.addprevious(table._tbl)
     caption = doc.add_paragraph("Table 1. Retained content")
     if venue == "ieee-access":
@@ -131,11 +153,16 @@ def test_tables_and_figures_fit_without_replacing_media_or_prose(tmp_path, venue
     else:
         table._tbl.addprevious(caption._p)
     doc.save(path)
-    apply_research_styles(path, template, venue)
+    code_runs = [run._r.xml for run in Document(path).tables[0].cell(1, 0).paragraphs[-1].runs]
+    proof = apply_research_styles(path, template, venue)
     doc = Document(path)
     table = doc.tables[0]
     assert [[cell.text for cell in row.cells] for row in table.rows] == [
-        ["retained cell 0:0", "retained cell 0:1"], ["retained cell 1:0", "retained cell 1:1"]]
+        ["retained cell 0:0", "retained cell 0:1"], ["retained cell 1:0\nresult = [1]", "retained cell 1:1"]]
+    code = table.cell(1, 0).paragraphs[-1]
+    assert code.style.name == "Source Code"
+    assert [run._r.xml for run in code.runs] == code_runs
+    assert proof["citation_typography"]["callout_groups_formatted"] == 1
     caption = next(p for p in doc.paragraphs if p.text.startswith("Table 1."))
     assert (caption._p.getnext() is table._tbl if venue == "ieee-access" else table._tbl.getnext() is caption._p)
     assert native_structure(path, venue)["issues"] == []

@@ -145,16 +145,16 @@ def resume(folder: Path) -> dict:
             issues.append({"path": item["path"], "status": "changed"})
     if "checkpoint.json" not in listed or "resume.md" not in listed:
         raise ValueError("Checkpoint notes are absent from its manifest")
+    expected = {item["path"]: item for item in rows}
     for path in folder.rglob("*"):
         ensure_unlinked(path)
         if path.is_file():
             name = path.relative_to(folder).as_posix()
-            if name != "manifest.json" and name.casefold() not in listed:
+            if name != "manifest.json" and name not in expected:
                 issues.append({"path": name, "status": "unlisted"})
     materials = record.get("materials")
     if not isinstance(materials, list):
         raise ValueError("Checkpoint requires retained material records")
-    expected = {item["path"]: item for item in rows}
     for item in materials:
         if not isinstance(item, dict) or not {"path", "bytes", "sha256"} <= item.keys():
             raise ValueError("Malformed retained material record")
@@ -168,7 +168,9 @@ def resume(folder: Path) -> dict:
 
 def evidence(root: Path, ledger_path: Path, output_dir: Path) -> dict:
     """Check literal manuscript/source bindings without asserting entailment."""
-    root, ledger = _absolute(root), _json(ledger_path)
+    root = _absolute(root)
+    ledger, ledger_hash = _json_snapshot(ledger_path)
+    ledger_path = ledger_path.resolve()
     manuscript = _relative(root, ledger.get("manuscript"))
     snapshot = manuscript.read_bytes()
     text = snapshot.decode("utf-8-sig")
@@ -218,11 +220,15 @@ def evidence(root: Path, ledger_path: Path, output_dir: Path) -> dict:
         output.append({**claim, "sources": witnesses, "issues": sorted(set(issues)), "bindings_match": not issues})
     if digest_file(manuscript) != initial:
         raise ValueError("Manuscript changed during evidence inspection")
+    if digest_file(ledger_path) != ledger_hash:
+        raise ValueError("Claim ledger changed during evidence inspection")
     for path, (_, observed_hash) in snapshots.items():
         if (digest_file(path) if path.is_file() else None) != observed_hash:
             raise ValueError("Evidence source changed during inspection")
     folder = _new_folder(output_dir)
     report = {"manuscript": ledger["manuscript"], "manuscript_sha256": initial, "claims": output,
+              "ledger_path": ledger_path.relative_to(root).as_posix() if ledger_path.is_relative_to(root) else None,
+              "ledger_sha256": ledger_hash,
               "bindings_match": all(item["bindings_match"] for item in output),
               "scope": "Literal location/hash checks only. Matching witnesses do not establish claim truth, novelty, runtime observation or scientific entailment."}
     _write(folder / "evidence.json", report)
@@ -248,8 +254,10 @@ def compare(before: Path, after: Path, output_dir: Path) -> dict:
     before, after = _absolute(before), _absolute(after)
     old_hash, new_hash = digest_file(before), digest_file(after)
     old, new = before.read_text(encoding="utf-8-sig"), after.read_text(encoding="utf-8-sig")
-    patch = "".join(difflib.unified_diff(old.splitlines(keepends=True), new.splitlines(keepends=True),
-                                          fromfile=before.name, tofile=after.name))
+    changes = difflib.unified_diff(old.splitlines(keepends=True), new.splitlines(keepends=True),
+                                   fromfile=before.name, tofile=after.name)
+    patch = "".join(line if line.endswith("\n") else line + "\n\\ No newline at end of file\n"
+                    for line in changes)
     if digest_file(before) != old_hash or digest_file(after) != new_hash:
         raise ValueError("Manuscript changed during comparison")
     folder = _new_folder(output_dir)
@@ -308,7 +316,7 @@ def impact(root: Path, evidence_path: Path, output_dir: Path, *, manuscript_name
             snapshots[path] = (data, hashlib.sha256(data).hexdigest() if data is not None else None)
         return snapshots[path]
 
-    focused_sources = {str(_relative(root, name)).casefold() for name in focus["source_paths"]}
+    focused_sources = {_relative(root, name) for name in focus["source_paths"]}
     selected = [{"path": name, "observed_sha256": snapshot(name)[1],
                  "status": "selected_for_reading" if snapshot(name)[1] is not None else "missing",
                  "requires_reading_for_question": True}
@@ -359,7 +367,7 @@ def impact(root: Path, evidence_path: Path, output_dir: Path, *, manuscript_name
                     matches = False
                 if not matches:
                     issues.append("source_quote_mismatch")
-            if str(path).casefold() in focused_sources:
+            if path in focused_sources:
                 issues.append("selected_for_new_question")
             witnesses.append({"path": name, "start_line": start, "end_line": end,
                               "previous_sha256": expected, "observed_sha256": observed,
@@ -475,7 +483,7 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     c = commands.add_parser("repository", help="Retain selected GitHub source files at one commit without executing project code")
     c.add_argument("--url", required=True)
-    c.add_argument("--ref", help="Existing branch or tag; otherwise the remote default branch")
+    c.add_argument("--ref", help="Existing branch, tag or full 40-character commit SHA; otherwise the remote default branch")
     c.add_argument("--paths", nargs="+", required=True, help="Explicit tracked repository files to retain after inspecting the tree")
     c.add_argument("--output-dir", type=Path, required=True)
     c = commands.add_parser("checkpoint")

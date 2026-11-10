@@ -96,6 +96,25 @@ Second line with {nested braces}}
         warning_ids = {item.get("reference_id") for item in result["manual_review_suggestions"]}
         self.assertTrue({1, 2} <= warning_ids)
 
+    def test_bibtex_key_punctuation_and_outer_delimiters(self):
+        key = "10.1016/S0167-2789(99)00000-4"
+        for opening, closing in [("{", "}"), ("(", ")")]:
+            with self.subTest(opening=opening):
+                entry = f"@article{opening}{key}, title={{Supplied title}}{closing}"
+                empty = f"@misc{opening}key=value{closing}"
+                first, second = imports.parse_bibliography(entry + "\n" + empty, "bibtex")["references"]
+                self.assertEqual((first["source"]["key"], first["source"]["raw"], first["title"]),
+                                 (key, entry, "Supplied title"))
+                self.assertEqual((second["source"]["key"], second["source"]["raw"]), ("key=value", empty))
+                adjacent = imports.parse_bibliography(empty + entry, "bibtex")["references"]
+                self.assertEqual([row["source"]["key"] for row in adjacent], ["key=value", key])
+
+    def test_bibtex_key_characters_do_not_relax_macro_or_field_syntax(self):
+        for invalid in ["@string{prefix=}", "@preamble(prefix=)",
+                        "@misc{key=one,title=}", "@misc(key(x),title={Missing close}"]:
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                imports.parse_bibliography(invalid + "\n@misc{ok,title={Control}}", "bibtex")
+
     def test_duplicate_source_keys_remain_distinct_records(self):
         samples = {
             "bibtex": "@misc{same,title={First}}\n@misc{same,title={Second}}",
@@ -692,12 +711,12 @@ def test_bibtex_entry_comments_preserve_raw_boundaries_tabs_crlf_and_input_bytes
     first = ("@article{one,\r\n\t" + comment +
              "\ttitle=label # {원본\t50%\r\n% 값 안의 줄\r\n{DNA}}, " + comment +
              "\tyear=2024\r\n}")
-    second = ('@misc(two,\r\n\ttitle="{Second}\t\\% value", ' + comment +
+    second = ('@misc(two,\r\n\ttitle=label # "{Second}\t\\% value", ' + comment +
               "\turl={https://example.org/a%20b}\r\n)")
-    text = ("% outside @misc{not-a-record,title=ignored}\r\n"
+    text = ("Bibliography notes\r\n% outside @misc{not-a-record,title=ignored}\r\n"
             "@string{label={김\t}, " + comment + "}\r\n" + first +
-            "\r\n% between @string{label={Ignored}}\r\n" + second +
-            "\r\n% after @misc{also-ignored}\r\n")
+            "\r\nNotes between records\r\n% between @string{label={Ignored}}\r\n" + second +
+            "\r\nFinal notes\r\n% after @misc{also-ignored}\r\n")
     original = b"\xef\xbb\xbf" + text.encode("utf-8")
     source, output = tmp_path / "sources.bib", tmp_path / "imported"
     source.write_bytes(original)
@@ -710,7 +729,7 @@ def test_bibtex_entry_comments_preserve_raw_boundaries_tabs_crlf_and_input_bytes
     assert [record["source"]["key"] for record in records] == ["one", "two"]
     assert [record["source"]["raw"] for record in records] == [first, second]
     assert records[0]["title"] == "김\t원본\t50%\r\n% 값 안의 줄\r\n{DNA}"
-    assert records[1]["title"] == "{Second}\t\\% value"
+    assert records[1]["title"] == "김\t{Second}\t\\% value"
     assert records[1]["url"] == "https://example.org/a%20b"
     assert summary["reference_count"] == 2
     assert summary["source_input_sha256"] == hashlib.sha256(original).hexdigest()

@@ -1,7 +1,7 @@
-"""Portable native Word-export inputs: actual Pandoc; explicit Word/PDF stubs.
+"""Portable Word-export inputs: actual Pandoc; explicit native Word/PDF stubs.
 
-The main API has no DOCX-only mode. These tests exercise its existing native
-export path without claiming that Microsoft Word or page review ran.
+Native cases do not claim Microsoft Word or page review; the representative
+DOCX-only portability case also checks that native services are not called.
 """
 
 import hashlib
@@ -143,23 +143,33 @@ def test_moved_word_source_rebuilds_without_original_images(tmp_path, pandoc, re
     assert (moved / "manifest.json").read_bytes() == saved_manifest
 
 
-def test_explicit_resource_directory_is_retained_and_rebuilds_independently(tmp_path, pandoc):
+@pytest.mark.parametrize("docx_only", [False, True])
+def test_explicit_resource_directory_is_retained_and_rebuilds_independently(tmp_path, pandoc, monkeypatch, docx_only):
+    if docx_only:
+        def unexpected_native_service(*args, **kwargs):
+            pytest.fail("DOCX-only image export must not call native Word/PDF services")
+        monkeypatch.setattr(exporter, "word_pdf", unexpected_native_service)
+        monkeypatch.setattr(exporter, "compliance_report", unexpected_native_service)
     source = manuscript(tmp_path / "prepared", "![Evidence](figures/plot.png)")
     png(source.parent / "figures/plot.png", "red")
     resources = tmp_path / "resources"
     picture = png(resources / "figures/plot.png", "navy")
     output = tmp_path / "delivery"
     result = exporter.export(source, "ieee-software", output, resource_dir=resources,
-                             pandoc=pandoc)
+                             pandoc=pandoc, docx_only=docx_only)
     assert picture in embedded_images(Path(result["docx"]))
     moved = tmp_path / "moved"
     shutil.move(str(output), moved)
     shutil.rmtree(source.parent)
     shutil.rmtree(resources)
     rebuilt = exporter.export(moved / "manuscript.md", "ieee-software", tmp_path / "rebuilt",
-                              pandoc=pandoc)
+                              pandoc=pandoc, docx_only=docx_only)
     assert picture in embedded_images(Path(rebuilt["docx"]))
     assert_retained_image(moved, "figures/plot.png", picture)
+    assert_retained_image(tmp_path / "rebuilt", "figures/plot.png", picture)
+    if docx_only:
+        assert result["pdf"] is None and rebuilt["pdf"] is None
+        assert not result["native_word_measured"] and not rebuilt["native_word_measured"]
 
 
 def test_explicit_bundle_rebuilds_export_after_original_and_export_removal(tmp_path, pandoc):

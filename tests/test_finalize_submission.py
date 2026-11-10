@@ -12,6 +12,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 finalizer = importlib.import_module("finalize_submission")
 support = importlib.import_module("submission_support")
+workspace = importlib.import_module("research_workspace")
 
 
 def put(path, value):
@@ -35,11 +36,21 @@ def prepared(tmp_path):
     root = tmp_path / "study"
     raw = root / "raw"
     manuscript = put(raw / "article.md", "# Synthetic fixture article\n\n## Abstract\n\nBounded content.\n")
+    put(raw / "observation.txt", "Bounded source observation.\n")
+    ledger = put(raw / "claims.json", {"manuscript": "article.md", "claims": [{
+        "id": "C1", "kind": "source_declared", "claim": "Bounded content.", "manuscript_quote": "Bounded content.",
+        "sources": [{"path": "observation.txt", "start_line": 1, "end_line": 1, "quote": "Bounded source observation."}],
+    }]})
+    assert workspace.evidence(raw, ledger, raw / "evidence")["bindings_match"]
     docx = put(raw / "article.docx", "Synthetic native bytes; this helper trusts a supplied bound report and does not render.")
     pdf = put(raw / "article.pdf", "Synthetic PDF bytes; no PDF parser is invoked by this reconciliation test.")
     put(raw / "photo.jpg", "Synthetic approved photograph placeholder.")
     pages = [put(root / "pages" / f"page-{i}.png", f"Synthetic rendered page {i}") for i in (1, 2)]
-    rows = [{"role": role, "path": name} for role, name in (("manuscript", "article.docx"), ("review_pdf", "article.pdf"), ("author_photo", "photo.jpg"))]
+    rows = [{"role": role, "path": name} for role, name in (
+        ("manuscript", "article.md"), ("editable_docx", "article.docx"), ("review_pdf", "article.pdf"),
+        ("author_photo", "photo.jpg"), ("claim_ledger", "claims.json"), ("source", "observation.txt"),
+        ("evidence", "evidence/evidence.json"),
+    )]
     approval = [{"path": "files/" + row["path"], "sha256": sha(raw / row["path"])} for row in rows]
     cover = "Synthetic fixture cover letter."
     approval.append({"path": "cover-letter.md", "sha256": hashlib.sha256((cover + "\n").encode()).hexdigest()})
@@ -71,8 +82,11 @@ def prepared(tmp_path):
     return root, record_path, record
 
 
-def test_complete_supplied_records_can_close_preparation_without_claiming_submission(prepared, tmp_path):
+def test_generated_evidence_and_bundle_can_close_preparation_without_claiming_submission(prepared, tmp_path):
     root, record, _ = prepared
+    evidence = json.loads((root / "bundle/files/evidence/evidence.json").read_text())
+    assert evidence["bindings_match"] and evidence["manuscript_sha256"] == sha(root / "raw/article.md")
+    assert not json.loads((root / "bundle/report.json").read_text())["missing_evidence"]
     before = {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob("*") if p.is_file()}
     result = finalizer.check(root, record, tmp_path / "final")
     assert result["submission_ready"]
@@ -82,6 +96,19 @@ def test_complete_supplied_records_can_close_preparation_without_claiming_submis
     assert not result["actual_submission_performed"] and not result["author_approval_inferred"]
     assert not result["word_or_research_executed"]
     assert before == {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+
+
+@pytest.mark.parametrize("decision", ["not_recommended", "conditional"])
+def test_final_check_preserves_unresolved_bundle_venue_decision(prepared, tmp_path, decision):
+    root, record_path, record = prepared
+    plan = json.loads((root / "plan.json").read_text(encoding="utf-8"))
+    plan["recommendation_status"] = decision
+    support.prepare_bundle(put(root / "reviewed-plan.json", plan), root / "raw", root / "reviewed-bundle")
+    record["bundle_report"] = "reviewed-bundle/report.json"
+    report = finalizer.check(root, put(record_path, record), tmp_path / "final")
+    assert not report["submission_ready"] and report["pending"] == ["venue_recommendation"]
+    assert report["administrative_preparation_complete"]
+    assert decision in next(row["reason"] for row in report["checks"] if row["id"] == "venue_recommendation")
 
 
 @pytest.mark.parametrize("draft_fields", [{"draft_status": "incomplete"}, {"missing_evidence": ["No research comparison retained"]}])
@@ -140,21 +167,32 @@ def test_changed_native_file_cannot_reuse_a_successful_format_report(prepared, t
     assert "selected_files" in report["pending"]
 
 
-def test_native_docx_in_a_companion_role_does_not_select_the_manuscript(prepared, tmp_path):
+@pytest.mark.parametrize("role", ["manuscript", "editable_docx"])
+@pytest.mark.parametrize("change", ["missing", "companion", "duplicate"])
+def test_final_bundle_requires_distinct_source_and_native_roles(prepared, tmp_path, role, change):
     root, record, _ = prepared
     bundle = json.loads((root / "bundle/report.json").read_text())
-    next(row for row in bundle["approval_files"] if row["role"] == "manuscript")["role"] = "companion"
+    row = next(row for row in bundle["approval_files"] if row["role"] == role)
+    if change == "missing":
+        bundle["approval_files"].remove(row)
+    elif change == "companion":
+        row["role"] = "companion"
+    else:
+        duplicate = {**row, "path": "duplicate" + Path(row["path"]).suffix}
+        (root / "bundle" / duplicate["path"]).write_bytes((root / "bundle" / row["path"]).read_bytes())
+        bundle["approval_files"].append(duplicate)
     put(root / "bundle/report.json", bundle)
     report = finalizer.check(root, record, tmp_path / "final")
     assert "selected_files" in report["pending"]
     assert not report["submission_ready"]
 
 
-def test_confirmed_bundle_pdf_must_be_the_visually_checked_native_pdf(prepared, tmp_path):
+@pytest.mark.parametrize("role", ["manuscript", "editable_docx", "review_pdf"])
+def test_confirmed_bundle_files_must_match_the_checked_source_and_exports(prepared, tmp_path, role):
     root, record_path, record = prepared
     bundle = json.loads((root / "bundle/report.json").read_text())
-    row = next(row for row in bundle["approval_files"] if row["role"] == "review_pdf")
-    put(root / "bundle" / row["path"], "Different selected PDF; explicitly synthetic fresh confirmations below.")
+    row = next(row for row in bundle["approval_files"] if row["role"] == role)
+    put(root / "bundle" / row["path"], "Different selected bytes; explicitly synthetic fresh confirmations below.")
     row["sha256"] = sha(root / "bundle" / row["path"])
     for name, statement in bundle["supplied_declarations"].items():
         bundle["supplied_confirmations"][name] = confirmation(statement, bundle["approval_files"])
@@ -173,7 +211,7 @@ def test_old_scientific_review_is_not_assigned_to_changed_manuscript(prepared, t
     put(root / "raw/article.md", "Changed scientific manuscript.")
     report = finalizer.check(root, record, tmp_path / "final")
     assert not report["scientific_content"]["review_current"]
-    assert "scientific_recommendation" in report["pending"]
+    assert {"selected_files", "scientific_recommendation"} <= set(report["pending"])
 
 
 @pytest.mark.parametrize("formats", [("docx",), ("pdf",), ("docx", "pdf")])
@@ -211,6 +249,18 @@ def test_wrong_or_missing_page_inspection_does_not_get_implicit_approval(prepare
     put(record_path, record)
     missing = finalizer.check(root, record_path, tmp_path / "missing")
     assert not missing["page_inspection_recorded"]
+
+
+@pytest.mark.parametrize("reviewer", ["", "   ", True, {"name": "Synthetic fixture visual reviewer"}])
+def test_page_inspection_requires_a_nonblank_reviewer_name(prepared, tmp_path, reviewer):
+    root, record_path, _ = prepared
+    visual = json.loads((root / "visual.json").read_text())
+    visual["reviewer"] = reviewer
+    put(root / "visual.json", visual)
+    report = finalizer.check(root, record_path, tmp_path / "final")
+    assert not report["page_inspection_recorded"]
+    assert not report["submission_ready"]
+    assert report["pending"] == ["page_inspection"]
 
 
 def test_essential_error_prevents_unqualified_scientific_recommendation(prepared, tmp_path):

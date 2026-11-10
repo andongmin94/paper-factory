@@ -18,6 +18,8 @@ Citation follow-up — 2026-11-09: checked Pandoc's [uncited-item selection](htt
 
 Use YAML-frontmatter `paper.md` with title, authors, affiliation mappings, tags, date (for example `2 November 2026`), and `bibliography: paper.bib`. Current guidance is 750–1,750 words and requires Summary, Statement of need, State of the field, Software design, Research impact statement, and AI usage disclosure. Include References and applicable funding acknowledgments.
 
+Author names may use a string in `name`, structured fields directly on the author or nested under `name`, or a `literal` name. Preflight follows [Inara’s name-field aliases, precedence and display order](https://github.com/openjournals/inara/blob/88ee5d656f147d801448ce77ad8375619d383df6/data/filters/normalize-author-names.lua) without rewriting the supplied Markdown.
+
 Use Pandoc citations (`@key`, `[@key]`) and matching BibTeX/BibLaTeX entries; cite full venue names. JOSS's Inara configuration selects APA author–date citations. Its CSL has a separate CC BY-SA 3.0 license and is not relabeled MIT or bundled here.
 
 Citation checks resolve actual Pandoc Cite identifiers in the body and YAML metadata against the retained `paper.bib`, and still require at least one body citation. Only the top-level `nocite` field treats `@*` as a selector for all bibliography entries. Explicit `nocite` keys must exist even alongside `@*`; unknown keys block source export. This is deliberately stricter than Pandoc 3.9 citeproc, which silently ignores unknown `nocite` keys. A nested field such as `notes.nocite` has no selector exception. Empty values or values without actual Cite nodes add no keys.
@@ -28,8 +30,18 @@ The existing preflight/export CLI validates metadata, sections, citations and lo
 
 Images parsed as Pandoc Image nodes in the body or YAML metadata use the same local-path and file checks and are retained at the same relative paths. The original manuscript and image bytes remain unchanged. Retaining an image does not establish that its metadata field or content meets journal policy; keep the title plain text as current JOSS guidance requires.
 
+Use Markdown image syntax such as `![Caption](figures/plot.png)` so the exporter can copy the figure at the same relative path. Raw TeX `\includegraphics` and HTML `<img>` in the body or YAML metadata are unsupported by this exporter.
+
 ## Limits and human decisions
 
 No Word or Inara PDF rendering runs in this path. Source checks cannot establish PDF layout or visual approval, and native-Word finalization does not apply. Image collection does not infer dependencies from plain path strings or raw HTML/LaTeX, or collect the complete Inara runtime and publisher assets.
+
+For a separate PDF check, use the publisher's unchanged [Inara renderer](https://github.com/openjournals/inara/blob/88ee5d656f147d801448ce77ad8375619d383df6/README.md). It supports Docker or its native Makefile. With the upstream Pandoc, LuaLaTeX, package and font requirements available, the native command is:
+
+```sh
+make -C /absolute/inara pdf ARTICLE=/absolute/source/paper.md JOURNAL=joss TARGET_FOLDER=/absolute/new/pdf-output
+```
+
+Inspect every output page and resolve missing references or rendering warnings before claiming final layout approval. A zero compiler exit alone does not establish this approval or current submission eligibility.
 
 Disclose actual AI tools, assistance and human validation. JOSS bars AI-written author–editor/reviewer conversations except translation, and reserves reviewer judgments for humans. Keep automated review as author-side diagnostics; never infer human verification or consent. Actual software eligibility, review and submission remain separate from format checks.

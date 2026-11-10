@@ -17,7 +17,7 @@ from pathlib import Path
 
 from _publication_files import digest_file, ensure_unlinked
 from _author_profile import profile_completeness
-from _publication_text import mask_code, mask_fenced_code, section_headers
+from _publication_text import mask_code, mask_inline_markup, mask_fenced_code, section_headers
 from _publication_venues import VENUE_RULES, WORD_VENUES, CS_GUIDANCE, AI_GUIDANCE
 from editorial_checks import check_manuscript
 
@@ -153,6 +153,7 @@ def validate_manuscript(markdown: str, venue_id: str, author_metadata: dict | No
     keyword_lines = re.findall(r"(?mi)^Keywords:\s*(.+)$", prose)
     keywords = [word.strip() for line in keyword_lines for word in line.split(";") if word.strip()]
     abstract = re.sub(r"(?mi)^Keywords:.*$", "", abstract).strip()
+    abstract_prose = mask_inline_markup(abstract)
     references = parts.get("references", "")
     entries = list(re.finditer(r"(?ms)^\[(\d+)\]\s+(.+?)(?=\n\[\d+\]\s|\Z)", references))
     numbers = [int(entry[1]) for entry in entries]
@@ -179,7 +180,7 @@ def validate_manuscript(markdown: str, venue_id: str, author_metadata: dict | No
     abstract_detail = (f"Abstract estimate {_words(abstract)} words; allowed {limits.get('min_abstract_words', 1)}–{abstract_max}."
                        if abstract_max is not None else f"Abstract estimate {_words(abstract)} words; template target about 100, not a verified hard maximum.")
     items = [_item("abstract", "passed" if abstract_passed else "failed", abstract_detail, source=source),
-             _item("abstract_structure", "passed" if len(re.split(r"\n\s*\n", abstract)) == 1 and not re.search(r"\[\d+(?:[ \t]*[-–,;][ \t]*\d+)*[ \t]*\]|\{\{(?:source|document|citation):", abstract) else "failed",
+             _item("abstract_structure", "passed" if len(re.split(r"\n\s*\n", abstract)) == 1 and not re.search(r"\[\d+(?:[ \t]*[-–,;][ \t]*\d+)*[ \t]*\]|\{\{(?:source|document|citation):", abstract_prose) else "failed",
                    "Use a single-paragraph abstract without reference citations " + ("(skill preparation convention for JORS)." if venue_id == "jors" else "as specified by the publisher template."), source=None if venue_id == "jors" else source),
              _item("reference_count", "passed" if entries and (reference_max is None or len(entries) <= reference_max) and numbers == list(range(1, len(entries) + 1)) else "failed",
                    f"Canonical references: {len(entries)}; sequential unique labels required. " + (f"Maximum {reference_max}." if reference_max is not None else "No reference cap established by the checked guidance."), source=source),
@@ -333,6 +334,7 @@ def render_pdf_pages(pdf: Path, output_root: Path) -> dict:
 def _native_structure(docx: Path, software: bool) -> dict:
     from docx import Document
     from docx.oxml.ns import qn
+    from _publication_templates import _citation_matches
     document = Document(docx)
     paragraphs = document.paragraphs
     required = {"Title_document", "Abstract", "ReferenceHead", "Bib_entry"}
@@ -353,17 +355,30 @@ def _native_structure(docx: Path, software: bool) -> dict:
             break
         if paragraph.style.name not in {"Authors", "Title_document"}:
             before_refs.append(paragraph)
+    from docx.text.run import Run
+    citation = re.compile(r"\[\d+(?:[ \t]*[-–,;][ \t]*\d+)*[ \t]*\]")
     for paragraph in before_refs:
         if paragraph.style.name.casefold() in {"source code", "code"}:
             continue
-        for run in paragraph.runs:
-            properties = run._r.rPr
-            inline_style = properties.find(qn("w:rStyle")) if properties is not None else None
-            code = inline_style is not None and "verbatim" in inline_style.get(qn("w:val"), "").casefold()
-            if software and not code and re.search(r"(?<![\w])\[(?:" + "|".join(known or {"0"}) + r")\]", run.text):
+        text = ""
+        for element in paragraph._p.xpath(".//w:r"):
+            run = Run(element, paragraph)
+            style = " ".join(element.xpath("./w:rPr/w:rStyle/@w:val")).casefold()
+            if run.style is not None:
+                style += " " + run.style.name.casefold()
+            protected = any(term in style for term in ("verbatim", "code")) or bool(element.xpath("ancestor::w:hyperlink"))
+            text += "\0" * len(run.text) if protected else run.text
+        for match, _ in _citation_matches(paragraph, citation, text):
+            numbers = re.findall(r"\d+", match[0])
+            if not set(numbers).issubset(known):
+                continue
+            if software:
                 issues.append("Software retains a bracketed body citation instead of publisher superscript typography.")
-        if not software and re.search(r"[.!?]\s+\[\d+\]", paragraph.text):
-            issues.append("S&P body citation appears after terminal punctuation instead of inside it.")
+            else:
+                if len(numbers) > 1:
+                    issues.append("S&P body references must each use separate brackets.")
+                if re.search(r"[.!?][\"'”’)]*[ \t]*$", text[match.pos:match.start()]):
+                    issues.append("S&P body citation appears after terminal punctuation instead of inside it.")
     keywords = [paragraph.text for paragraph in paragraphs if paragraph.text.casefold().startswith("keywords:")]
     if any(paragraph.style.name == "Abstract" and paragraph.text.casefold().startswith("keywords:") for paragraph in paragraphs):
         issues.append("Keywords must not be counted as part of the Abstract style.")
@@ -457,7 +472,15 @@ def compliance_report(markdown: Path, docx: Path | None, venue_id: str, *, pdf: 
         items.append(_item("all_pages", "pending", "Render and structurally check every actual exported PDF page.", stage="native"))
     items.append(_item("export_binding", "failed" if binding_issues else "passed", "; ".join(binding_issues) or "Actual Markdown, publisher template, Word and Word-native PDF hashes match their conversion receipts.", stage="native", source=template["download_url"]))
     review = visual_review or {}
-    reviewed = bool(pages and review.get("pdf_sha256") == binding.get("pdf_sha256") and review.get("approved") is True and review.get("reviewer") and review.get("reviewed_at") and review.get("page_image_sha256") == [page["image_sha256"] for page in pages["pages"]])
+    try:
+        review_date = datetime.fromisoformat(review.get("reviewed_at", "").replace("Z", "+00:00"))
+        date_present = review_date.tzinfo is not None
+    except (ValueError, TypeError, AttributeError):
+        date_present = False
+    reviewer = review.get("reviewer")
+    reviewed = bool(pages and review.get("pdf_sha256") == binding.get("pdf_sha256") and
+                    review.get("approved") is True and isinstance(reviewer, str) and reviewer.strip() and
+                    date_present and review.get("page_image_sha256") == [page["image_sha256"] for page in pages["pages"]])
     items.append(_item("visual_review", "passed" if reviewed else "pending", "An actual reviewer must inspect every bound PDF page; automatic bounds, glyph and PNG checks are not approval.", stage="submission"))
     if digest_file(markdown) != initial_sha or docx is not None and docx.is_file() and digest_file(docx) != binding["docx_sha256"] or pdf is not None and pdf.is_file() and digest_file(pdf) != binding["pdf_sha256"]:
         raise ValueError("The manuscript or native exports changed during journal compliance inspection")

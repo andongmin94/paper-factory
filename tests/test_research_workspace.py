@@ -86,14 +86,19 @@ def test_resume_detects_material_corruption(materials, tmp_path):
     assert result["issues"] == [{"path": "materials/source.txt", "status": "changed"}]
 
 
-def test_resume_reports_unlisted_files_without_rewriting(materials, tmp_path):
+@pytest.mark.parametrize("extra_name", ["unlisted.txt", "Source.txt"])
+def test_resume_reports_unlisted_files_without_rewriting(materials, tmp_path, extra_name):
     output = tmp_path / "snapshot"
     notes.checkpoint(materials, state(materials, tmp_path), output)
-    extra = output / "materials/unlisted.txt"
+    extra = output / "materials" / extra_name
+    if extra_name == "Source.txt" and extra.exists():
+        pytest.skip("Filesystem does not distinguish source.txt from Source.txt")
+    before = {path: path.read_bytes() for root in (materials, output) for path in root.rglob("*") if path.is_file()}
     extra.write_bytes(b"not part of the supplied research")
     result = notes.resume(output)
     assert not result["verified"]
-    assert result["issues"] == [{"path": "materials/unlisted.txt", "status": "unlisted"}]
+    assert result["issues"] == [{"path": "materials/" + extra_name, "status": "unlisted"}]
+    assert all(path.read_bytes() == data for path, data in before.items())
     assert extra.read_bytes() == b"not part of the supplied research"
 
 
@@ -240,6 +245,24 @@ def test_compare_reports_exact_text_and_structure(materials, tmp_path):
     assert report["after"]["markdown_table_count"] == 1
     assert "-# A decision" in (output / "changes.diff").read_text()
     assert "+# New decision" in (output / "changes.diff").read_text()
+    assert original == (before.read_bytes(), after.read_bytes())
+
+
+@pytest.mark.parametrize("old,new,hunk", [
+    ("old text", "new text",
+     "@@ -1 +1 @@\n-old text\n\\ No newline at end of file\n+new text\n\\ No newline at end of file\n"),
+    ("same", "same\n", "@@ -1 +1 @@\n-same\n\\ No newline at end of file\n+same\n"),
+    ("same\n", "same", "@@ -1 +1 @@\n-same\n+same\n\\ No newline at end of file\n"),
+    ("old\nlast", "new\nlast", "@@ -1,2 +1,2 @@\n-old\n+new\n last\n\\ No newline at end of file\n"),
+])
+def test_compare_preserves_missing_final_newlines(tmp_path, old, new, hunk):
+    before, after = tmp_path / "before.md", tmp_path / "after.md"
+    before.write_bytes(old.encode("utf-8"))
+    after.write_bytes(new.encode("utf-8"))
+    original = before.read_bytes(), after.read_bytes()
+    output = tmp_path / "comparison"
+    assert not notes.compare(before, after, output)["identical_bytes"]
+    assert (output / "changes.diff").read_text() == "--- before.md\n+++ after.md\n" + hunk
     assert original == (before.read_bytes(), after.read_bytes())
 
 
@@ -412,6 +435,28 @@ def test_impact_explicit_new_question_requires_selected_sources_to_be_reread(mat
     assert report["claims"][0]["reasons"] == ["selected_for_new_question"]
     assert report["selected_sources"][0]["requires_reading_for_question"]
     assert report["reusable_binding_claim_ids"] == ["C3"]
+
+
+def test_impact_source_focus_distinguishes_case_sensitive_paths(materials, tmp_path):
+    other_source = materials / "Source.txt"
+    if other_source.exists():
+        pytest.skip("Filesystem does not distinguish source.txt from Source.txt")
+    other_source.write_text("independent witness\n", encoding="utf-8")
+    payload = ledger(materials, tmp_path)
+    value = json.loads(payload.read_text())
+    value["claims"].append({"id": "C2", "claim": "Independent source condition", "kind": "source_declared",
+                            "manuscript_quote": "The unchanged claim survives.", "sources": [
+                                {"path": "Source.txt", "start_line": 1, "end_line": 1, "quote": "independent witness"}]})
+    json_file(payload, value)
+    output = tmp_path / "prior-evidence"
+    assert notes.evidence(materials, payload, output)["bindings_match"]
+    focus = json_file(tmp_path / "focus.json", {"question": "Revisit the selected source only",
+                      "claim_ids": [], "source_paths": ["source.txt"]})
+    _, report = impact_report(materials, tmp_path, output / "evidence.json", focus=focus)
+    assert report["review_needed_claim_ids"] == ["C1"]
+    assert report["claims"][0]["reasons"] == ["selected_for_new_question"]
+    assert report["reusable_binding_claim_ids"] == ["C2"]
+    assert report["claims"][1]["reasons"] == []
 
 
 def test_impact_direct_claim_focus_does_not_guess_relevance_for_other_claims(materials, tmp_path):

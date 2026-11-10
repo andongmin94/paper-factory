@@ -42,6 +42,38 @@ def item(result, name):
     return next(row for row in result["items"] if row["id"] == name)
 
 
+@pytest.mark.parametrize("reviewer,reviewed_at,status", [
+    ("   ", "2026-10-29T12:00:00+09:00", "pending"),
+    (True, "2026-10-29T12:00:00+09:00", "pending"),
+    ("Fixture reviewer", "not a date", "pending"),
+    ("Fixture reviewer", "2026-10-29T12:00:00", "pending"),
+    ("Fixture reviewer", "2026-10-29T12:00:00+09:00", "passed"),
+])
+def test_visual_review_requires_named_reviewer_and_dated_record(tmp_path, monkeypatch, reviewer, reviewed_at, status):
+    templates = importlib.import_module("_publication_templates")
+    manuscript, docx, pdf = (tmp_path / name for name in ("paper.md", "paper.docx", "paper.pdf"))
+    manuscript.write_text(ARTICLE, encoding="utf-8")
+    docx.write_bytes(b"Synthetic DOCX binding only")
+    pdf.write_bytes(b"Synthetic PDF binding only")
+
+    def unavailable_word(*args, **kwargs):
+        raise ValueError("This isolated record test does not run Microsoft Word")
+
+    monkeypatch.setattr(templates, "measure_word", unavailable_word)
+    page_hash = "a" * 64
+    monkeypatch.setattr(checks, "render_pdf_pages", lambda *args: {
+        "automatic_checks": True, "issues": [], "page_count": 1,
+        "pages": [{"image_sha256": page_hash}],
+    })
+    report = checks.compliance_report(manuscript, docx, "ieee-software", pdf=pdf,
+                                     qa_root=tmp_path / "pages", visual_review={
+        "approved": True, "reviewer": reviewer, "reviewed_at": reviewed_at,
+        "pdf_sha256": checks.digest_file(pdf), "page_image_sha256": [page_hash],
+    })
+    assert item(report, "visual_review")["status"] == status
+    assert not report["submission_ready"]
+
+
 @pytest.mark.parametrize("fence", ["```", "~~~~", "    "])
 def test_code_examples_do_not_replace_abstract_or_bibliography(fence):
     if fence == "    ":

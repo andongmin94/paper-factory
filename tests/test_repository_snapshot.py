@@ -55,7 +55,7 @@ def local_clone(repository, monkeypatch):
 
     def redirected(command, *arguments, **kwargs):
         calls.append((list(command), kwargs))
-        if "clone" in command:
+        if "clone" in command or "fetch" in command:
             command = list(command)
             # Only replace the remote URL; all capture commands use real Git.
             command[command.index(URL)] = repository.as_uri()
@@ -101,11 +101,57 @@ def test_capture_retains_selected_original_bytes_and_pinned_provenance(tmp_path,
     assert not any("checkout" in command or "submodule" in command for command, _ in local_clone)
 
 
-def test_default_ref_captures_the_actual_default_branch(tmp_path, repository, local_clone):
-    result = snapshot.capture_repository(URL, tmp_path / "default", paths=["README.md"])
-    assert result["requested_ref"] is None
+@pytest.mark.parametrize("ref", [None, "main"])
+def test_default_and_named_branch_refs_capture_the_branch(tmp_path, repository, local_clone, ref):
+    result = snapshot.capture_repository(URL, tmp_path / "default", paths=["README.md"], ref=ref)
+    assert result["requested_ref"] == ref
     assert result["commit_sha"] == git(repository, "rev-parse", "HEAD").decode().strip()
     assert (tmp_path / "default/sources/README.md").read_bytes() == b"Later default-branch revision\n"
+
+
+@pytest.mark.parametrize("uppercase", [False, True])
+def test_full_commit_sha_captures_an_unadvertised_past_commit(tmp_path, repository, local_clone, uppercase):
+    commit = git(repository, "rev-parse", "HEAD~2").decode().strip()
+    ref = commit.upper() if uppercase else commit
+    output = tmp_path / "past-commit"
+    result = snapshot.capture_repository(URL, output, paths=["README.md", "src/analysis.py"], ref=ref)
+    assert result["requested_ref"] == ref
+    assert result["commit_sha"] == commit
+    assert result["tree_sha"] == git(repository, "rev-parse", commit + "^{tree}").decode().strip()
+    assert result["git_object_format"] == "sha1"
+    assert (result["tracked_entry_count"], result["retained_file_count"], result["unretained_entry_count"]) == (3, 2, 1)
+    for source in result["sources"]:
+        original = git(repository, "show", commit + ":" + source["repository_path"])
+        assert (output / source["path"]).read_bytes() == original
+        assert source["git_blob_sha"] == git(repository, "rev-parse", commit + ":" + source["repository_path"]).decode().strip()
+        assert source["sha256"] == hashlib.sha256(original).hexdigest()
+        assert source["bytes"] == len(original)
+        assert source["commit_pinned_url"] == URL + "/blob/" + commit + "/" + source["repository_path"]
+    assert not result["project_code_executed"]
+    assert not (repository / "PROJECT_EXECUTED").exists()
+    fetch, = [command for command, _ in local_clone if "fetch" in command]
+    assert {"--depth=1", "--no-tags", "--no-recurse-submodules"} <= set(fetch)
+    assert fetch[-2:] == [URL, commit]
+    assert not any("clone" in command or "checkout" in command or "submodule" in command for command, _ in local_clone)
+
+
+def test_full_sha_must_resolve_to_the_requested_commit(tmp_path, repository, local_clone):
+    git(repository, "tag", "-a", "annotated", "-m", "Annotated tag")
+    tag_object = git(repository, "rev-parse", "annotated").decode().strip()
+    output = tmp_path / "tag-object"
+    with pytest.raises(ValueError, match="resolved to a different commit"):
+        snapshot.capture_repository(URL, output, paths=["README.md"], ref=tag_object)
+    assert not output.exists()
+    assert not any("ls-tree" in command for command, _ in local_clone)
+
+
+def test_unavailable_commit_sha_fails_without_fallback_or_output(tmp_path, local_clone):
+    output = tmp_path / "missing-commit"
+    with pytest.raises(ValueError, match="Git fetch failed"):
+        snapshot.capture_repository(URL, output, paths=["README.md"], ref="0" * 40)
+    assert not output.exists()
+    assert len([command for command, _ in local_clone if "fetch" in command]) == 1
+    assert not any("clone" in command for command, _ in local_clone)
 
 
 @pytest.mark.parametrize("ref", [None, "capture-v1"])

@@ -107,10 +107,39 @@ def test_invalid_numeric_examples_in_code_and_links_are_not_citations():
     assert not result["structural_findings"]
 
 
+def test_math_does_not_create_citations_or_hide_prose_citations():
+    result = editorial.check_manuscript(
+        "# Article\nA bounded parameter $x \\in [0,1]$ uses source [1].\n\n"
+        "A wrapped expression $y\n\\in [2,3]$ remains math.\n\n"
+        "$$a[3-1]$$\n\nA math literal $\\texttt{`}[7]$ precedes `code`.\n\n"
+        "Code `$` brackets citation [8] before another `$`.\n\n"
+        "The [API](https://example.org/$value) motivates claim [9] ($x$).\n\n"
+        "A [$z \\in [4,5]$ and `array[6]`](https://example.org/$endpoint) label remains a link.\n\n"
+        "Code `[fake` leaves citation [10]](https://example.org/fake) visible.\n"
+        "## References\n[1] Actual source.\n")
+    assert result["metrics"]["recognized_body_citations"] == [1, 8, 9, 10]
+    assert codes(result) == {"citation_without_reference"}
+    assert [item["reference_id"] for item in result["structural_findings"]] == [8, 9, 10]
+
+
+def test_escaped_dollars_and_currency_do_not_hide_citations():
+    result = editorial.check_manuscript(
+        "# Article\nEscaped delimiters \\$text [8]\\$ remain prose.\n\n"
+        "A cost of $5 per run [9] rises to $10. Actual source [1].\n\n"
+        "Opening space $ value [10]$ remains prose.\n\n"
+        "Closing space $value [11] $ remains prose.\n\n"
+        "## References\n[1] Actual source.\n")
+    assert result["metrics"]["recognized_body_citations"] == [1, 8, 9, 10, 11]
+    assert [item["reference_id"] for item in result["structural_findings"]
+            if item["code"] == "citation_without_reference"] == [8, 9, 10, 11]
+
+
 def test_code_and_links_do_not_create_body_citations():
     text = """# Article
 
 `array[9]` and [8](https://example.org/[7]) are code and links.
+Bracketed link [[4, 3]](https://example.org/group) and image ![[2]](figure.png).
+An [escaped \\[ label](https://example.org/[4]) remains a link.
 
 ```python
 values[6]
@@ -120,15 +149,16 @@ values[6]
 another[5]
 ~~~
 
-A real citation [1].
+A real citation [1] and a missing citation [10].
 
 ## References
 
 [1] First source.
 """
     result = editorial.check_manuscript(text)
-    assert result["metrics"]["recognized_body_citations"] == [1]
-    assert "citation_without_reference" not in codes(result)
+    assert result["metrics"]["recognized_body_citations"] == [1, 10]
+    assert [item["reference_id"] for item in result["structural_findings"]
+            if item["code"] == "citation_without_reference"] == [10]
 
 
 @pytest.mark.parametrize("opener,closer", [("```python", "````"), ("~~~text", "~~~~~")])
@@ -143,10 +173,20 @@ def test_longer_closing_fences_hide_code_without_hiding_following_citations(open
 
 def test_inline_code_with_literal_backticks_does_not_create_citations():
     result = editorial.check_manuscript(
-        "# Article\nUse ``literal `array[9]` notation``; the actual source is [1].\n"
+        "# Article\nUse ``literal `array[9]`\nnotation``; the actual source is [1].\n"
         "## References\n[1] Actual source.\n")
     assert result["metrics"]["recognized_body_citations"] == [1]
     assert not result["structural_findings"]
+
+
+def test_unmatched_backticks_across_paragraphs_do_not_hide_citations():
+    result = editorial.check_manuscript(
+        "# Article\nAn unmatched `marker.\n\nThe result cites [9].\n\n"
+        "Another `marker. Actual source [1].\n"
+        "## References\n[1] Actual source.\n")
+    assert result["metrics"]["recognized_body_citations"] == [1, 9]
+    assert [item["reference_id"] for item in result["structural_findings"]
+            if item["code"] == "citation_without_reference"] == [9]
 
 
 def test_reference_heading_inside_code_does_not_end_the_real_body():
@@ -238,6 +278,46 @@ Both accounts [1, 2].
     assert "not checked online" in result["metadata_scope"]
 
 
+@pytest.mark.parametrize("form", ["plain", "autolink", "doi_label", "url_label", "publisher_link"])
+def test_reference_identifier_markup_preserves_metadata_and_inputs(tmp_path, form):
+    doi = "10.1234/example(2024)part"
+    url = "https://doi.org/" + doi
+    publisher = "https://publisher.example/article/42"
+    markup = {"plain": url, "autolink": f"<{url}>", "doi_label": f"[{doi}]({url})",
+              "url_label": f"[{url}]({url})", "publisher_link": f"[{doi}]({publisher})"}[form]
+    manuscript, metadata = tmp_path / "article.md", tmp_path / "references.json"
+    manuscript.write_bytes(("# Article\r\nA source [1].\r\n## References\r\n"
+                            "[1] Retained source. " + markup + "\r\n").encode())
+    metadata.write_text(json.dumps([{"id": 1, "title": "Retained source", "doi": doi,
+                                     "url": publisher if form == "publisher_link" else url}]), encoding="utf-8")
+    before = manuscript.read_bytes(), metadata.read_bytes()
+    output = tmp_path / "report"
+    editorial.write_report(manuscript, output, metadata)
+    report = json.loads((output / "editorial-report.json").read_text(encoding="utf-8"))
+    assert not report["structural_findings"]
+    assert not any(code.startswith("metadata_") for code in codes(report, "manual_review_suggestions"))
+    assert (manuscript.read_bytes(), metadata.read_bytes()) == before
+
+
+@pytest.mark.parametrize("supplied_doi", [
+    "10.1234/expected", "https://DOI.ORG/10.1234/expected",
+    "HTTPS://doi.org/10.1234/expected", "HTTP://DOI.ORG/10.1234/expected",
+])
+def test_plain_and_linked_identifiers_still_detect_duplicates_and_mismatches(supplied_doi):
+    result = editorial.check_manuscript("""# Article
+Sources [1, 2, 3].
+## References
+[1] First. https://doi.org/10.1234/example
+[2] Second. [https://doi.org/10.1234/example](https://doi.org/10.1234/example)
+[3] Third. [DOI](https://doi.org/10.1234/different)
+""", [{"id": 3, "doi": supplied_doi}])
+    findings = result["structural_findings"]
+    for code in ("duplicate_doi", "duplicate_reference_url"):
+        assert [item["reference_ids"] for item in findings if item["code"] == code] == [[1, 2]]
+    assert [item["reference_id"] for item in findings if item["code"] == "metadata_doi_mismatch"] == [3]
+    assert "malformed_metadata_doi" not in codes(result)
+
+
 def test_explicit_bad_doi_and_metadata_mismatch():
     result = editorial.check_manuscript("""# Article
 Sources [1, 2].
@@ -258,15 +338,19 @@ def test_metadata_author_year_and_url_are_literal_manual_comparisons():
     assert not result["structural_findings"]
 
 
-def test_duplicate_supplied_titles_and_dois():
+@pytest.mark.parametrize("supplied_doi", [
+    "https://doi.org/10.1234/SAME", "https://DOI.ORG/10.1234/SAME",
+    "HTTPS://doi.org/10.1234/SAME", "HTTP://DOI.ORG/10.1234/SAME",
+])
+def test_duplicate_supplied_titles_and_dois(supplied_doi):
     result = editorial.check_manuscript("""# Article
 Sources [1, 2].
 ## References
 [1] Same title.
-[2] Same title.
+[2] Same title. doi:10.1234/same
 """, [{"id": 1, "title": "Same title", "doi": "10.1234/same"},
-       {"id": 2, "title": " SAME  TITLE ", "doi": "https://doi.org/10.1234/SAME"}])
-    assert {"duplicate_metadata_title", "duplicate_metadata_doi"} <= codes(result)
+       {"id": 2, "title": " SAME  TITLE ", "doi": supplied_doi}])
+    assert codes(result) == {"duplicate_metadata_title", "duplicate_metadata_doi"}
 
 
 def test_table_and_figure_calls_use_captions_not_their_own_labels():

@@ -15,11 +15,11 @@ import sys
 from urllib.parse import unquote, urlsplit, urlunsplit
 
 from _publication_files import digest_file, ensure_unlinked
-from _publication_text import mask_code
+from _publication_text import mask_code, mask_inline_markup
 
 
 def _prose(text: str, *, context: str | None = None) -> str:
-    """Mask code and Markdown links, keeping numbered prose citations visible.
+    """Mask code, math and Markdown links, keeping prose citations visible.
 
     Reference-style links depend on definitions that can occur outside this
     body slice, including after the bibliography. Unknown labels remain prose.
@@ -31,23 +31,9 @@ def _prose(text: str, *, context: str | None = None) -> str:
         return re.sub(r"\s+", " ", value).strip().casefold()
 
     definition = re.compile(r"(?m)^ {0,3}\[([^\]\n]+)\]:[ \t]*\S[^\n]*$")
-    labels = {label(match[1]) for match in definition.finditer(mask_code(context if context is not None else text))}
-    text = mask_code(text)
+    labels = {label(match[1]) for match in definition.finditer(mask_inline_markup(context if context is not None else text))}
+    text = mask_inline_markup(text)
     text = definition.sub(blank, text)
-    # Link labels may wrap within a paragraph, just like numeric citations.
-    inline_text = r"(?:\\.|[^\[\]\\\n]|\n(?![ \t]*\n))"
-    # Link destinations may contain up to three levels of balanced parentheses.
-    destination_char = r"(?:\\.|[^()\\\n])"
-    destination_paren_1 = rf"\({destination_char}*\)"
-    destination_paren_2 = rf"\((?:{destination_char}|{destination_paren_1})*\)"
-    destination_paren_3 = rf"\((?:{destination_char}|{destination_paren_2})*\)"
-    destination = rf"(?:{destination_char}|{destination_paren_3})*"
-
-
-    text = re.sub(
-        rf"!? \[(?:{inline_text}|\[{inline_text}*\])*\]\({destination}\)".replace(" ", ""),
-        blank,
-        text)
 
     def reference_link(match):
         target = match[2] if match[2] else match[1]
@@ -117,13 +103,14 @@ def _citations(text: str) -> tuple[set[int], list[dict]]:
 
 
 def _doi(value: str) -> str | None:
-    value = unquote(value.strip()).removeprefix("https://doi.org/").removeprefix("http://doi.org/")
+    value = re.sub(r"^https?://doi\.org/", "", unquote(value.strip()), flags=re.I)
     value = re.sub(r"^doi:\s*", "", value, flags=re.I).rstrip(".,;)]}")
     return value.casefold() if re.fullmatch(r"10\.[0-9]{4,9}/[^\s<>]+", value, re.I) else None
 
 
 def _dois(text: str) -> list[str]:
-    return [v for m in re.finditer(r"(?i)\b10\.[0-9]{4,9}/[^\s<>\"]+", text)
+    # A Markdown link label and destination contain separate identifier tokens.
+    return [v for m in re.finditer(r"(?i)\b10\.[0-9]{4,9}/(?:(?!\]\()[^\s<>\"])+", text)
             if (v := _doi(m[0]))]
 
 
@@ -177,8 +164,8 @@ def check_manuscript(text: str, references: list[dict] | None = None) -> dict:
     dois, urls = [], []
     for entry in entries:
         dois.extend((entry["id"], value) for value in set(_dois(entry["text"])))
-        urls.extend((entry["id"], _url(m[0])) for m in re.finditer(r"https?://[^\s<>]+", entry["text"]))
-        for token in re.finditer(r"(?i)(?:\bdoi:\s*|https?://doi\.org/)([^\s<>]+)", entry["text"]):
+        urls.extend((entry["id"], _url(m[0])) for m in re.finditer(r"https?://(?:(?!\]\()[^\s<>])+", entry["text"]))
+        for token in re.finditer(r"(?i)(?:\bdoi:\s*|https?://doi\.org/)((?:(?!\]\()[^\s<>])+)", entry["text"]):
             if _doi(token[1]) is None:
                 findings.append({"code": "malformed_doi", "reference_id": entry["id"],
                                  "detail": "Explicit DOI value has invalid syntax: " + token[1].rstrip(".,;)]}")})
@@ -243,7 +230,7 @@ def check_manuscript(text: str, references: list[dict] | None = None) -> dict:
                 suggestions.append({"code": "metadata_year_not_found", "reference_id": number,
                                     "detail": "Supplied year is not printed in this reference entry; publication and access dates need manual comparison."})
             if item.get("url"):
-                actual_urls = {_url(m[0]) for m in re.finditer(r"https?://[^\s<>]+", actual)}
+                actual_urls = {_url(m[0]) for m in re.finditer(r"https?://(?:(?!\]\()[^\s<>])+", actual)}
                 if _url(item["url"]) not in actual_urls:
                     suggestions.append({"code": "metadata_url_not_printed", "reference_id": number,
                                         "detail": "Supplied URL is absent from this entry; alternate official links need manual comparison."})
