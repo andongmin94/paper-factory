@@ -168,7 +168,7 @@ def _inspect(manuscript, *, bibliography=None, pandoc=None, resource_dir=None):
         relative = PurePosixPath(unquote(parsed_target.path))
         if (parsed_target.scheme or parsed_target.netloc or parsed_target.query or parsed_target.fragment
                 or relative.is_absolute() or ".." in relative.parts or "\\" in str(relative)
-                or not relative.parts or relative.parts[0] in {"paper.md", "paper.bib", "format-report.json", "manifest.json"}):
+                or not relative.parts or relative.parts[0].casefold() in {"paper.md", "paper.bib", "format-report.json", "manifest.json"}):
             raise ValueError("Use local relative image paths inside the source bundle: " + target)
         path = root.joinpath(*relative.parts)
         ensure_unlinked(path)

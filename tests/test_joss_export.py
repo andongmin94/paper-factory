@@ -852,3 +852,66 @@ def test_bibtex_error_location_is_consistent_across_clis(
         assert expected in errors[0]
     assert not imported.exists() and not exported.exists()
     assert (manuscript.read_bytes(), bibliography.read_bytes()) == (original_md, original_bib)
+
+
+@pytest.mark.parametrize("relative,target", [
+    ("PAPER.MD", "PAPER.MD"),
+    ("Paper.Bib", "Paper.Bib"),
+    ("FORMAT-REPORT.JSON", "FORMAT-REPORT.JSON"),
+    ("Manifest.Json", "Manifest.Json"),
+    ("PAPER.MD/plot.png", "PAPER.MD/plot.png"),
+    ("Paper.Bib/plot.png", "Paper.Bib/plot.png"),
+    ("FORMAT-REPORT.JSON/plot.png", "FORMAT-REPORT.JSON/plot.png"),
+    ("Manifest.Json/plot.png", "Manifest.Json/plot.png"),
+    ("PAPER.BIB", "%50APER.BIB"),
+    ("Manifest.Json/plot.png", "./Manifest.Json/plot.png"),
+])
+@pytest.mark.parametrize("operation", ["preflight", "export"])
+def test_reserved_output_case_variants_fail_before_output(sources, tmp_path, relative, target, operation):
+    manuscript, bibliography = sources
+    manuscript.write_text(metadata_paper("abstract: '![Plot](" + target + ")'"), encoding="utf-8")
+    # Keep fixtures separate from paper.bib even on a case-insensitive filesystem.
+    resources = tmp_path / "resources"
+    picture = image_bytes(resources / relative)
+    original = manuscript.read_bytes(), bibliography.read_bytes()
+    document = pandoc_document(manuscript)
+    assert any(node.get("t") == "Image" for node in joss._nodes(document["meta"]))
+    output = tmp_path / "invalid"
+
+    with pytest.raises(ValueError, match="local relative image paths"):
+        if operation == "preflight":
+            joss.preflight(manuscript, resource_dir=resources)
+        else:
+            joss.export(manuscript, output, resource_dir=resources)
+
+    assert not output.exists()
+    assert (manuscript.read_bytes(), bibliography.read_bytes()) == original
+    assert (resources / relative).read_bytes() == picture
+
+
+@pytest.mark.parametrize("relative", [
+    "Figures/Plot.PNG", "PAPER.BIB.png", "figures/PAPER.BIB", "Manifest.Json.assets/plot.png",
+])
+def test_reserved_output_case_check_preserves_other_image_paths(sources, tmp_path, relative):
+    manuscript, bibliography = sources
+    manuscript.write_bytes(("\ufeff" + metadata_paper("abstract: '![Plot](" + relative + ")'"))
+                           .replace("\n", "\r\n").encode("utf-8"))
+    resources = tmp_path / "resources"
+    picture = image_bytes(resources / relative)
+    original = manuscript.read_bytes(), bibliography.read_bytes()
+    assert joss.preflight(manuscript, resource_dir=resources)["prefilter_passed"]
+    output = tmp_path / "delivery"
+    result = joss.export(manuscript, output, resource_dir=resources)
+
+    assert result["source_package_passed"] and not result["publisher_pdf_rendered"]
+    assert not result["submission_ready"]
+    assert (output / "paper.md").read_bytes() == original[0]
+    assert (output / "paper.bib").read_bytes() == original[1]
+    assert (output / relative).read_bytes() == picture
+    rows = json.loads((output / "manifest.json").read_text(encoding="utf-8"))["files"]
+    assert {row["path"] for row in rows} == {"paper.md", "paper.bib", "format-report.json", relative}
+    for row in rows:
+        data = (output / row["path"]).read_bytes()
+        assert row["bytes"] == len(data) and row["sha256"] == hashlib.sha256(data).hexdigest()
+    assert (manuscript.read_bytes(), bibliography.read_bytes()) == original
+    assert (resources / relative).read_bytes() == picture
