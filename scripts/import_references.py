@@ -29,9 +29,22 @@ def _bibtex_records(text: str):
     literal = (braced | quoted).set_parse_action(lambda t: [("literal", t[0][1:-1])])
     number = pp.Regex(r"[0-9]+").set_parse_action(lambda t: [("literal", t[0])])
     symbol = name.copy().set_parse_action(lambda t: [("symbol", t[0].casefold())])
+    atom = literal | number | symbol
+
+
+    def missing_concatenation_value(source, location, expression, error):
+        if source[location:location + 1] == "#":
+            raise pp.ParseFatalException(
+                source, location, "Expected a BibTeX value after '#'")
+
+
+    concatenation = pp.Literal("#") + comments + pp.FollowedBy(atom)
+    concatenation.set_fail_action(missing_concatenation_value)
+
+
     # Consume comments only at syntax boundaries; percent signs inside values are data.
     value = pp.Group(comments + pp.DelimitedList(
-        (literal | number | symbol) + comments, delim=pp.Literal("#") + comments))
+        atom + comments, delim=concatenation))
     # Preserve the failure location after a field or entry has started.
     field = pp.Group(name("name") + comments - pp.Suppress("=") + value("parts"))
     fields = pp.Group(comments + pp.Optional(pp.DelimitedList(

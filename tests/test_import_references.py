@@ -748,7 +748,8 @@ def test_bibtex_entry_comments_cannot_repair_malformed_input(text, tmp_path):
     ("@article{broken,\n  title={Retained}\n  year=2024\n}", 5, 3, "Expected '}'"),
     ("@article{broken,\n  title {Retained},\n  year=2024\n}", 4, 9, "Expected '='"),
     ("@article{broken,\n  title={Retained},\n  year= % ignored } , = # @fake\n}", 6, 1, None),
-    ("@article{broken,\n  title={Retained} # % ignored {Suffix}\n}\n", 4, 20, None),
+    ("@article{broken,\n  title={Retained} # % ignored {Suffix}\n}\n",
+     4, 20, "Expected a BibTeX value after '#'"),
     # End at the value: nested_expr versions differ in trailing whitespace consumption.
     ("@article{broken,\n  title={No closing brace", 4, 26, "Expected '}'"),
     ('@article{broken,\n  title="No closing quote\n', 5, 1, "Expected '\"'"),

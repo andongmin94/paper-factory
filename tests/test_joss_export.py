@@ -813,13 +813,16 @@ def test_bibtex_field_comments_reach_joss_package_without_rewriting(sources, tmp
         assert row["sha256"] == hashlib.sha256((output / row["path"]).read_bytes()).hexdigest()
 
 
-@pytest.mark.parametrize("fields,location", [
-    (" title={Retained} % missing separator\n author={Researcher, Alice},\n year=2025\n}", (5, 2)),
-    (" title {Retained},\n author={Researcher, Alice},\n year=2025\n}", (4, 8)),
-    (" title = % comment with a fake {value}\n}", (5, 1)),
-], ids=["missing-comma", "missing-equals", "missing-value"])
+@pytest.mark.parametrize("fields,location,expected", [
+    (" title={Retained} % missing separator\n author={Researcher, Alice},\n year=2025\n}", (5, 2), None),
+    (" title {Retained},\n author={Researcher, Alice},\n year=2025\n}", (4, 8), None),
+    (" title = % comment with a fake {value}\n}", (5, 1), None),
+    (" title={Retained} # % missing concatenation value\n}", (4, 19),
+     "Expected a BibTeX value after '#'"),
+], ids=["missing-comma", "missing-equals", "missing-value", "missing-concatenation-value"])
 @pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
-def test_bibtex_error_location_is_consistent_across_clis(sources, tmp_path, fields, location, newline):
+def test_bibtex_error_location_is_consistent_across_clis(
+        sources, tmp_path, fields, location, expected, newline):
     manuscript, bibliography = sources
     text = "% retained annotation\n@string{prefix={Retained}}\n@article{retained,\n" + fields
     original_bib = b"\xef\xbb\xbf" + text.replace("\n", newline).encode()
@@ -845,5 +848,7 @@ def test_bibtex_error_location_is_consistent_across_clis(sources, tmp_path, fiel
     assert errors[0] == errors[1] == errors[2]
     line, column = location
     assert errors[0].startswith(f"Invalid BibTeX at line {line}, column {column}:")
+    if expected is not None:
+        assert expected in errors[0]
     assert not imported.exists() and not exported.exists()
     assert (manuscript.read_bytes(), bibliography.read_bytes()) == (original_md, original_bib)
