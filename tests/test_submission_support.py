@@ -145,9 +145,10 @@ def test_author_markers_in_front_matter_code_are_not_deletion_instructions(tmp_p
     example = code_open + "<!-- paper-factory:authors:start -->\nA literal marker example.\n<!-- paper-factory:authors:end -->" + code_close
     source = "# Title\n\n" + example + "\n\n## Abstract\n\nBounded text.\n"
     put(article, source)
+    original = article.read_bytes()
     with pytest.raises(ValueError, match="Ambiguous pre-Abstract content"):
         support.prepare_authors(profile, article, tmp_path / "out")
-    assert article.read_bytes() == source.encode("utf-8")
+    assert article.read_bytes() == original
     assert not (tmp_path / "out").exists()
 
 
@@ -160,6 +161,7 @@ def test_author_block_next_to_code_marker_example_is_preserved(tmp_path, inputs,
     example = code_open + "<!-- paper-factory:authors:start -->\nA literal marker example.\n<!-- paper-factory:authors:end -->" + code_close
     source = ARTICLE.replace("## Abstract", example + "\n\n## Abstract", 1)
     put(article, source)
+    original = article.read_bytes()
     support.prepare_authors(profile, article, tmp_path / "out", anonymous=True)
     for name in ("manuscript.md", "anonymous.md"):
         content = (tmp_path / "out" / name).read_bytes()
@@ -167,7 +169,7 @@ def test_author_block_next_to_code_marker_example_is_preserved(tmp_path, inputs,
         assert b"Old Author" not in content
     assert (tmp_path / "out/manuscript.md").read_text(encoding="utf-8").count("Bob Scientist | Lab B") == 1
     assert "Bob Scientist | Lab B" not in (tmp_path / "out/anonymous.md").read_text(encoding="utf-8")
-    assert article.read_bytes() == source.encode("utf-8")
+    assert article.read_bytes() == original
 
 
 @pytest.mark.parametrize("example", [
