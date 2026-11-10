@@ -840,6 +840,7 @@ def test_bibtex_field_comments_reach_joss_package_without_rewriting(sources, tmp
         " year = {2025},", " year = % before the value\n {2025} % before the comma\n ,")
     supplied = supplied.replace(
         "\n}", '\n % final comment containing } ) @fake{key,title={ignored}}\n}')
+    supplied = "Bibliography for related work\n% Example only: @misc{phantom,title={Ignored}}\n" + supplied
     original_bib = bom + supplied.replace("\n", newline).encode()
     bibliography.write_bytes(original_bib)
     manuscript.write_text(metadata_paper("abstract: 'A source [@retained].'\nnocite: '[@retained; @*]'"),

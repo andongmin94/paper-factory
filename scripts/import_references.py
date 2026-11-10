@@ -69,7 +69,7 @@ def _bibtex_records(text: str):
     paren_key = r"[^\s,{}]+?(?=\)@[A-Za-z][\w:.+\-]*\s*[({])|[^\s,{}]+(?=\s*[,\)])"
     entry = entry_kind("kind") + (entry_body("{", r"[^\s,{}]+", "}") | entry_body("(", paren_key, ")"))
     block = pp.Group(pp.Located(pp.Suppress("@") - (definitions | preamble | comment | entry)))
-    document = pp.ZeroOrMore(line_comment | block | pp.Regex(r"[^@]+").suppress())
+    document = pp.ZeroOrMore(line_comment | block | pp.Regex(r"[^@%]+").suppress())
     document.parse_with_tabs()
     try:
         blocks = document.parse_string(text, parse_all=True)

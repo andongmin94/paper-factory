@@ -711,12 +711,12 @@ def test_bibtex_entry_comments_preserve_raw_boundaries_tabs_crlf_and_input_bytes
     first = ("@article{one,\r\n\t" + comment +
              "\ttitle=label # {원본\t50%\r\n% 값 안의 줄\r\n{DNA}}, " + comment +
              "\tyear=2024\r\n}")
-    second = ('@misc(two,\r\n\ttitle="{Second}\t\\% value", ' + comment +
+    second = ('@misc(two,\r\n\ttitle=label # "{Second}\t\\% value", ' + comment +
               "\turl={https://example.org/a%20b}\r\n)")
-    text = ("% outside @misc{not-a-record,title=ignored}\r\n"
+    text = ("Bibliography notes\r\n% outside @misc{not-a-record,title=ignored}\r\n"
             "@string{label={김\t}, " + comment + "}\r\n" + first +
-            "\r\n% between @string{label={Ignored}}\r\n" + second +
-            "\r\n% after @misc{also-ignored}\r\n")
+            "\r\nNotes between records\r\n% between @string{label={Ignored}}\r\n" + second +
+            "\r\nFinal notes\r\n% after @misc{also-ignored}\r\n")
     original = b"\xef\xbb\xbf" + text.encode("utf-8")
     source, output = tmp_path / "sources.bib", tmp_path / "imported"
     source.write_bytes(original)
@@ -729,7 +729,7 @@ def test_bibtex_entry_comments_preserve_raw_boundaries_tabs_crlf_and_input_bytes
     assert [record["source"]["key"] for record in records] == ["one", "two"]
     assert [record["source"]["raw"] for record in records] == [first, second]
     assert records[0]["title"] == "김\t원본\t50%\r\n% 값 안의 줄\r\n{DNA}"
-    assert records[1]["title"] == "{Second}\t\\% value"
+    assert records[1]["title"] == "김\t{Second}\t\\% value"
     assert records[1]["url"] == "https://example.org/a%20b"
     assert summary["reference_count"] == 2
     assert summary["source_input_sha256"] == hashlib.sha256(original).hexdigest()
