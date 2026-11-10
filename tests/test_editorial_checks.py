@@ -112,11 +112,14 @@ def test_math_does_not_create_citations_or_hide_prose_citations():
         "# Article\nA bounded parameter $x \\in [0,1]$ uses source [1].\n\n"
         "A wrapped expression $y\n\\in [2,3]$ remains math.\n\n"
         "$$a[3-1]$$\n\nA math literal $\\texttt{`}[7]$ precedes `code`.\n\n"
-        "Code `$` brackets citation [8] before another `$`.\n\nA separate claim needs [9].\n"
+        "Code `$` brackets citation [8] before another `$`.\n\n"
+        "The [API](https://example.org/$value) motivates claim [9] ($x$).\n\n"
+        "A [$z \\in [4,5]$ and `array[6]`](https://example.org/$endpoint) label remains a link.\n\n"
+        "Code `[fake` leaves citation [10]](https://example.org/fake) visible.\n"
         "## References\n[1] Actual source.\n")
-    assert result["metrics"]["recognized_body_citations"] == [1, 8, 9]
+    assert result["metrics"]["recognized_body_citations"] == [1, 8, 9, 10]
     assert codes(result) == {"citation_without_reference"}
-    assert [item["reference_id"] for item in result["structural_findings"]] == [8, 9]
+    assert [item["reference_id"] for item in result["structural_findings"]] == [8, 9, 10]
 
 
 def test_escaped_dollars_and_currency_do_not_hide_citations():

@@ -15,7 +15,7 @@ import sys
 from urllib.parse import unquote, urlsplit, urlunsplit
 
 from _publication_files import digest_file, ensure_unlinked
-from _publication_text import mask_code, mask_code_and_math
+from _publication_text import mask_code, mask_inline_markup
 
 
 def _prose(text: str, *, context: str | None = None) -> str:
@@ -31,23 +31,9 @@ def _prose(text: str, *, context: str | None = None) -> str:
         return re.sub(r"\s+", " ", value).strip().casefold()
 
     definition = re.compile(r"(?m)^ {0,3}\[([^\]\n]+)\]:[ \t]*\S[^\n]*$")
-    labels = {label(match[1]) for match in definition.finditer(mask_code_and_math(context if context is not None else text))}
-    text = mask_code_and_math(text)
+    labels = {label(match[1]) for match in definition.finditer(mask_inline_markup(context if context is not None else text))}
+    text = mask_inline_markup(text)
     text = definition.sub(blank, text)
-    # Link labels may wrap within a paragraph, just like numeric citations.
-    inline_text = r"(?:\\.|[^\[\]\\\n]|\n(?![ \t]*\n))"
-    # Link destinations may contain up to three levels of balanced parentheses.
-    destination_char = r"(?:\\.|[^()\\\n])"
-    destination_paren_1 = rf"\({destination_char}*\)"
-    destination_paren_2 = rf"\((?:{destination_char}|{destination_paren_1})*\)"
-    destination_paren_3 = rf"\((?:{destination_char}|{destination_paren_2})*\)"
-    destination = rf"(?:{destination_char}|{destination_paren_3})*"
-
-
-    text = re.sub(
-        rf"!? \[(?:{inline_text}|\[{inline_text}*\])*\]\({destination}\)".replace(" ", ""),
-        blank,
-        text)
 
     def reference_link(match):
         target = match[2] if match[2] else match[1]

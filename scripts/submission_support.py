@@ -16,7 +16,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 
 from _publication_files import digest_file, ensure_unlinked
-from _publication_text import mask_code, mask_fenced_code, section_headers
+from _publication_text import mask_code, section_headers
 from _author_profile import normalize_profile, profile_completeness
 from _publication_venues import PREPARED_MANUSCRIPTS, VENUES
 
@@ -85,7 +85,7 @@ def _without_biographies(markdown):
 
 def _without_author_block(preamble):
     """Replace only our explicitly delimited slot, never arbitrary front matter."""
-    protected = mask_fenced_code(preamble)
+    protected = mask_code(preamble)
     starts = list(re.finditer(r"(?m)^" + re.escape(AUTHOR_START) + r"[ \t]*\r?$", protected))
     ends = list(re.finditer(r"(?m)^" + re.escape(AUTHOR_END) + r"[ \t]*\r?$", protected))
     if not starts and not ends:

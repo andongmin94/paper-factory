@@ -1,4 +1,4 @@
-"""Offset-preserving code and math masking for publication Markdown checks."""
+"""Offset-preserving Markdown masking for publication checks."""
 
 import re
 
@@ -36,17 +36,25 @@ def mask_code(markdown: str) -> str:
     return re.sub(_INLINE_CODE, lambda match: _blank(match[0]), fenced)
 
 
-def mask_code_and_math(markdown: str) -> str:
-    """Exclude code and the converter's dollar-delimited TeX math from prose."""
+def mask_inline_markup(markdown: str) -> str:
+    """Exclude code, dollar math and inline links without moving prose."""
     # https://pandoc.org/MANUAL.html#extension-tex_math_dollars
     # Neither math form crosses blank lines. Inline delimiters also distinguish
     # whitespace and currency; escaped dollars are not math delimiters.
     line = r"(?:\r\n?|\n)(?![ \t]*(?:\r\n?|\n))"
     inline = rf"\$(?![\s$])(?:\\[^\r\n]|[^\\$\r\n]|{line})*?(?<!\s)\$(?!\d)"
     display = rf"\$\$(?:\\[^\r\n]|(?!\$\$)[^\\\r\n]|{line})*?\$\$"
-    # One scan preserves delimiter precedence: dollars in code and backticks in
-    # math cannot start a different span that hides surrounding prose.
-    pattern = rf"(?P<escape>\\[^\r\n])|{_INLINE_CODE}|{display}|{inline}"
+    # Reuse the supported bracketed labels and balanced link destinations.
+    label = r"(?:\\.|[^\[\]\\\n]|\n(?![ \t]*\n))"
+    destination_char = r"(?:\\.|[^()\\\n])"
+    paren_1 = rf"\({destination_char}*\)"
+    paren_2 = rf"\((?:{destination_char}|{paren_1})*\)"
+    paren_3 = rf"\((?:{destination_char}|{paren_2})*\)"
+    destination = rf"(?:{destination_char}|{paren_3})*"
+    link = rf"!?\[(?:{label}|\[{label}*\])*\]\({destination}\)"
+    # Consume the first complete span atomically. Delimiters in a link, code
+    # or math span cannot open another span that hides surrounding prose.
+    pattern = rf"(?P<escape>\\[^\r\n])|{_INLINE_CODE}|{display}|{inline}|{link}"
     return re.sub(pattern, lambda match: match[0] if match["escape"] else _blank(match[0]),
                   mask_fenced_code(markdown))
 

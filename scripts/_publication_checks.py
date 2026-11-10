@@ -17,7 +17,7 @@ from pathlib import Path
 
 from _publication_files import digest_file, ensure_unlinked
 from _author_profile import profile_completeness
-from _publication_text import mask_code, mask_code_and_math, mask_fenced_code, section_headers
+from _publication_text import mask_code, mask_inline_markup, mask_fenced_code, section_headers
 from _publication_venues import VENUE_RULES, WORD_VENUES, CS_GUIDANCE, AI_GUIDANCE
 from editorial_checks import check_manuscript
 
@@ -153,7 +153,7 @@ def validate_manuscript(markdown: str, venue_id: str, author_metadata: dict | No
     keyword_lines = re.findall(r"(?mi)^Keywords:\s*(.+)$", prose)
     keywords = [word.strip() for line in keyword_lines for word in line.split(";") if word.strip()]
     abstract = re.sub(r"(?mi)^Keywords:.*$", "", abstract).strip()
-    abstract_prose = mask_code_and_math(abstract)
+    abstract_prose = mask_inline_markup(abstract)
     references = parts.get("references", "")
     entries = list(re.finditer(r"(?ms)^\[(\d+)\]\s+(.+?)(?=\n\[\d+\]\s|\Z)", references))
     numbers = [int(entry[1]) for entry in entries]

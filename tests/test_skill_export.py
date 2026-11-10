@@ -131,7 +131,8 @@ def test_preflight_rejects_supported_numeric_citations_in_abstract(manuscript, c
 
 def test_math_in_body_and_abstract_passes_preflight_cli(manuscript, capsys):
     text = ARTICLE.replace("A conditional static example explains a maintenance decision.",
-                           "A conditional static example bounds $p \\in [0,1]$.", 1)
+                           "A conditional static example bounds $p \\in [0,1]$. "
+                           "A [guide $q \\in [2,3]$ and `array[4]`](https://example.org/guide) explains the notation.", 1)
     text = text.replace("first wrote it. [1]", "first wrote it. [1]\n\n"
                         "The parameter is bounded by $x \\in [0,1]$.\n\n$$a[3-1]$$")
     manuscript.write_text(text, encoding="utf-8")
@@ -144,12 +145,37 @@ def test_math_in_body_and_abstract_passes_preflight_cli(manuscript, capsys):
     assert [(kind["t"], content) for kind, content in math] == [
         ("InlineMath", r"p \in [0,1]"), ("InlineMath", r"x \in [0,1]"),
         ("DisplayMath", "a[3-1]")]
+    guide = next(node["c"][1] for block in json.loads(parsed.stdout)["blocks"] if block["t"] == "Para"
+                 for node in block["c"] if node["t"] == "Link" and node["c"][2][0] == "https://example.org/guide")
+    assert [node["c"][1] for node in guide if node["t"] == "Math"] == [r"q \in [2,3]"]
+    assert [node["c"][1] for node in guide if node["t"] == "Code"] == ["array[4]"]
     status = exporter.main(["preflight", "--manuscript", str(manuscript), "--venue", "ieee-software"])
     result = json.loads(capsys.readouterr().out)
     statuses = {row["id"]: row["status"] for row in result["items"]}
     assert status == 0 and result["prefilter_passed"]
     assert statuses["abstract_structure"] == statuses["citation_references"] == "passed"
     assert not result["native_word_measured"]
+    assert manuscript.read_bytes() == original
+
+
+def test_link_dollar_cannot_hide_missing_citation_before_math(manuscript, capsys):
+    text = ARTICLE.replace("first wrote it. [1]", "first wrote it. [1]\n\n"
+                           "The [API](https://example.org/$value) describes an unsupported claim [9] ($x$).")
+    manuscript.write_text(text, encoding="utf-8")
+    original = manuscript.read_bytes()
+    parsed = subprocess.run([str(_real_pandoc()), "--from=" + converter.WORD_MARKDOWN_READER,
+                             "--to=json", "--standalone", str(manuscript)],
+                            capture_output=True, text=True, encoding="utf-8", check=True, timeout=30)
+    inlines = [node for block in json.loads(parsed.stdout)["blocks"] if block["t"] == "Para"
+               for node in block["c"]]
+    assert any(node["t"] == "Link" and node["c"][2][0] == "https://example.org/$value" for node in inlines)
+    assert any(node["t"] == "Str" and node["c"] == "[9]" for node in inlines)
+    assert [node["c"] for node in inlines if node["t"] == "Math"] == [[{"t": "InlineMath"}, "x"]]
+    status = exporter.main(["preflight", "--manuscript", str(manuscript), "--venue", "ieee-software"])
+    result = json.loads(capsys.readouterr().out)
+    row = next(item for item in result["items"] if item["id"] == "citation_references")
+    assert status == 1 and not result["prefilter_passed"]
+    assert row["status"] == "failed" and "[9]" in row["reason"]
     assert manuscript.read_bytes() == original
 
 
