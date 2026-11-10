@@ -686,6 +686,7 @@ def test_real_pandoc_grouped_citations_preserve_ranges_and_protected_content(tmp
         ("**Split evidence.** [1, **2**; *3*] *retained emphasis*",
          "Split evidence.1,2,3 retained emphasis", "Split evidence [1], [2], [3]. retained emphasis", "1,2,3"),
     ]
+    math_cases = [("The result is ", "x"), ("The earlier result holds. ", "y")]
     controls = ("Unknown evidence. [1, 4]\n\nWide range evidence. [1–999999999]\n\n"
                 "Inline code. `[1, 2]` and `[1–3]`.\n\n"
                 "Linked evidence. [[1, 2]](https://example.org/group) and [[1–3]](https://example.org/range).\n\n"
@@ -699,7 +700,9 @@ def test_real_pandoc_grouped_citations_preserve_ranges_and_protected_content(tmp
                 "+-----------------------+")
     source = tmp_path / "groups.md"
     source.write_text(ARTICLE.replace("A shared requirement may survive the command that first wrote it. [1]",
-                                      "\n\n".join(case[0] for case in cases) + "\n\n" + controls)
+                                      "\n\n".join([case[0] for case in cases] +
+                                                  [prefix + "$" + value + "$ [1]." for prefix, value in math_cases])
+                                      + "\n\n" + controls)
                      .replace("[1] Example Authors, A retained source, 2025. https://example.org/source",
                               "\n\n".join(f"[{number}] Authors, Source {number}, 2025." for number in range(1, 4)))
                      + "\n[^scope]: This exact footnote text must remain reachable.\n",
@@ -708,6 +711,7 @@ def test_real_pandoc_grouped_citations_preserve_ranges_and_protected_content(tmp
     output = tmp_path / "groups.docx"
     code_runs = []
     footnote_ids = []
+    math_xml = {}
     apply_styles = converter.apply_official_styles
 
     def capture_content_then_apply(path, reference, **kwargs):
@@ -717,6 +721,11 @@ def test_real_pandoc_grouped_citations_preserve_ranges_and_protected_content(tmp
         code = document.tables[0].cell(1, 0).paragraphs[0]
         assert code.style.name == "Source Code" and code.text == "result = [1, 2]"
         code_runs.extend(run._r.xml for run in code.runs)
+        for prefix, _ in math_cases:
+            paragraph = next(p for p in document.paragraphs if p.text.startswith(prefix.rstrip()))
+            nodes = paragraph._p.xpath("./m:oMath")
+            assert len(nodes) == 1
+            math_xml[prefix] = ElementTree.tostring(nodes[0])
         return apply_styles(path, reference, **kwargs)
 
     monkeypatch.setattr(converter, "apply_official_styles", capture_content_then_apply)
@@ -730,6 +739,18 @@ def test_real_pandoc_grouped_citations_preserve_ranges_and_protected_content(tmp
         paragraph = paragraphs[superscript_text if software else bracketed_text]
         superscript = "".join(run.text for run in paragraph.runs if run.font.superscript)
         assert superscript == (numbers if software else "")
+    for prefix, value in math_cases:
+        paragraph = next(p for p in document.paragraphs if p.text.startswith(prefix.rstrip()))
+        nodes = paragraph._p.xpath("./m:oMath")
+        assert len(nodes) == 1 and ElementTree.tostring(nodes[0]) == math_xml[prefix]
+        content = []
+        for child in paragraph._p:
+            if child.tag == qn("m:oMath"):
+                content.append("<math>" + "".join(node.text or "" for node in child.iter(qn("m:t"))) + "</math>")
+            else:
+                content.extend(node.text or "" for node in child.iter(qn("w:t")))
+        assert "".join(content) == prefix + "<math>" + value + "</math>" + (".1" if software else " [1].")
+        assert "".join(run.text for run in paragraph.runs if run.font.superscript) == ("1" if software else "")
     footnoted = paragraphs["Footnoted evidence.1,2" if software else "Footnoted evidence [1], [2]."]
     assert footnoted._p.xpath(".//w:footnoteReference/@w:id") == footnote_ids
     with zipfile.ZipFile(output) as archive:
@@ -738,7 +759,7 @@ def test_real_pandoc_grouped_citations_preserve_ranges_and_protected_content(tmp
                   for note in notes.findall(qn("w:footnote"))}
     assert note_texts[footnote_ids[0]] == "This exact footnote text must remain reachable."
     proof = receipt["official_template"]["citation_typography"]
-    assert proof["callout_groups_formatted"] == len(cases)
+    assert proof["callout_groups_formatted"] == len(cases) + len(math_cases)
     assert proof["unknown_reference_numbers_preserved"] == ["4", "999999999"]
     assert "Unknown evidence. [1, 4]" in paragraphs
     assert "Wide range evidence. [1–999999999]" in paragraphs

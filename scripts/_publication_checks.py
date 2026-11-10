@@ -334,6 +334,7 @@ def render_pdf_pages(pdf: Path, output_root: Path) -> dict:
 def _native_structure(docx: Path, software: bool) -> dict:
     from docx import Document
     from docx.oxml.ns import qn
+    from _publication_templates import _citation_matches
     document = Document(docx)
     paragraphs = document.paragraphs
     required = {"Title_document", "Abstract", "ReferenceHead", "Bib_entry"}
@@ -367,7 +368,7 @@ def _native_structure(docx: Path, software: bool) -> dict:
                 style += " " + run.style.name.casefold()
             protected = any(term in style for term in ("verbatim", "code")) or bool(element.xpath("ancestor::w:hyperlink"))
             text += "\0" * len(run.text) if protected else run.text
-        for match in citation.finditer(text):
+        for match, _ in _citation_matches(paragraph, citation, text):
             numbers = re.findall(r"\d+", match[0])
             if not set(numbers).issubset(known):
                 continue
@@ -376,7 +377,7 @@ def _native_structure(docx: Path, software: bool) -> dict:
             else:
                 if len(numbers) > 1:
                     issues.append("S&P body references must each use separate brackets.")
-                if re.search(r"[.!?][\"'”’)]*[ \t]*$", text[:match.start()]):
+                if re.search(r"[.!?][\"'”’)]*[ \t]*$", text[match.pos:match.start()]):
                     issues.append("S&P body citation appears after terminal punctuation instead of inside it.")
     keywords = [paragraph.text for paragraph in paragraphs if paragraph.text.casefold().startswith("keywords:")]
     if any(paragraph.style.name == "Abstract" and paragraph.text.casefold().startswith("keywords:") for paragraph in paragraphs):

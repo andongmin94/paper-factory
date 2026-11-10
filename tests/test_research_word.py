@@ -3,6 +3,7 @@
 from io import BytesIO
 from pathlib import Path
 import sys
+from xml.etree import ElementTree
 import zipfile
 
 from docx import Document
@@ -79,6 +80,17 @@ def authored(tmp_path, venue, template):
 def test_maps_selected_publisher_without_losing_content(tmp_path, venue):
     template = reference(tmp_path, venue)
     path = authored(tmp_path, venue, template)
+    doc = Document(path)
+    equation = doc.add_paragraph("As established. ")
+    math, run, text = (OxmlElement(name) for name in ("m:oMath", "m:r", "m:t"))
+    text.text = "x"
+    run.append(text)
+    math.append(run)
+    equation._p.append(math)
+    equation.add_run("[1].")
+    next(p for p in doc.paragraphs if p.text == "References")._p.addprevious(equation._p)
+    math_xml = ElementTree.tostring(math)
+    doc.save(path)
     original_template = template.read_bytes()
     proof = apply_research_styles(path, template, venue)
     doc = Document(path)
@@ -89,6 +101,10 @@ def test_maps_selected_publisher_without_losing_content(tmp_path, venue):
     assert body.text == ("The result survives review [1], [2]." if venue == "ieee-access"
                          else "The result survives review (1, 2).")
     assert body.runs[0].bold
+    equation = next(p for p in doc.paragraphs if p.text.startswith("As established"))
+    assert "".join(equation._p.xpath("./w:r/w:t/text() | ./m:oMath//m:t/text()")) == (
+        "As established. x [1]." if venue == "ieee-access" else "As established. x (1).")
+    assert ElementTree.tostring(equation._p.xpath("./m:oMath")[0]) == math_xml
     assert next(p for p in doc.paragraphs if p.text.startswith("Literal code")).text.endswith(". [1]")
     assert next(p for p in doc.paragraphs if p.style.name == "Source Code").text.endswith(". [1]")
     assert next(p for p in doc.paragraphs if p.text.startswith("An unbound")).text.endswith(". [9]")

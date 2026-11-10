@@ -15,6 +15,23 @@ from _publication_files import digest_file, ensure_unlinked
 ROOT = Path(__file__).resolve().parents[1] / "assets" / "templates"
 
 
+def _citation_matches(paragraph, pattern, text):
+    """Keep native math between callout ranges, using the existing text offsets."""
+    from docx.oxml.ns import qn
+    from docx.text.run import Run
+
+    start, end, follows_math = 0, 0, False
+    for element in paragraph._p.xpath(".//w:r | .//m:oMath"):
+        if element.tag == qn("m:oMath"):
+            for match in pattern.finditer(text, start, end):
+                yield match, follows_math
+            start, follows_math = end, True
+        else:
+            end += len(Run(element, paragraph).text)
+    for match in pattern.finditer(text, start, end):
+        yield match, follows_math
+
+
 def _replace_native_text(paragraph, start, end, pieces):
     """Replace a visible text span without flattening links or inline styles."""
     from docx.oxml import OxmlElement
@@ -113,7 +130,7 @@ def _citation_typography(document, reference, *, software):
             protected.extend([guarded] * len(content))
         if paragraph.style.name.casefold() in {"source code", "code"}:
             continue
-        for match in reversed(list(callout.finditer(text))):
+        for match, follows_math in reversed(list(_citation_matches(paragraph, callout, text))):
             if any(protected[match.start():match.end()]):
                 continue
             numbers, items, missing = [], [], set()
@@ -145,7 +162,8 @@ def _citation_typography(document, reference, *, software):
             if software:
                 pieces = [(punctuation + closing, False), (",".join(items), True)]
             else:
-                space = " " if closing or match.start() and not text[match.start() - 1].isspace() else ""
+                space = " " if (closing or follows_math and match.start() == match.pos
+                                or match.start() and not text[match.start() - 1].isspace()) else ""
                 pieces = [(closing + space + ", ".join("[" + n + "]" for n in numbers), False), (punctuation, False)]
             _replace_native_text(paragraph, match.start(), match.end(), pieces)
             changed += 1

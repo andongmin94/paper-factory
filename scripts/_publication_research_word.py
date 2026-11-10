@@ -4,7 +4,7 @@ from copy import deepcopy
 from pathlib import Path
 import re
 
-from _publication_templates import _replace_native_text
+from _publication_templates import _citation_matches, _replace_native_text
 
 
 _CITATIONS = re.compile(
@@ -52,7 +52,7 @@ def _format_citations(paragraphs, known, *, access):
         if _source_style(paragraph).casefold() in {"sourcecode", "code", "references", "aubios"}:
             continue
         text, protected = _citation_runs(paragraph)
-        for match in reversed(list(_CITATIONS.finditer(text))):
+        for match, follows_math in reversed(list(_citation_matches(paragraph, _CITATIONS, text))):
             if any(protected[match.start():match.end()]):
                 continue
             numbers = set(re.findall(r"\d+", match["cites"]))
@@ -61,7 +61,8 @@ def _format_citations(paragraphs, known, *, access):
                 continue
             punctuation = (match["before"] or "") + (match["after"] or "")
             closing = (match["close"] or "") + (match["afterclose"] or "")
-            space = " " if closing or match.start() and not text[match.start() - 1].isspace() else ""
+            space = " " if (closing or follows_math and match.start() == match.pos
+                            or match.start() and not text[match.start() - 1].isspace()) else ""
             citations = match["cites"].strip()
             if not access:
                 citations = "(" + ", ".join(re.findall(r"\[([^]]+)\]", citations)) + ")"
@@ -364,7 +365,7 @@ def native_structure(docx: Path, venue_id: str) -> dict:
         if _source_style(paragraph).casefold() in {"sourcecode", "code", "references"}:
             continue
         text, protected = _citation_runs(paragraph)
-        for match in (_CITATIONS if access else _PAREN_CITATIONS).finditer(text):
+        for match, _ in _citation_matches(paragraph, _CITATIONS if access else _PAREN_CITATIONS, text):
             if match["before"] and set(re.findall(r"\d+", match["cites"])) <= known and not any(protected[match.start():match.end()]):
                 issues.append("Body citations must appear before terminal punctuation.")
     prefix = "index terms " if access else "keywords:"
