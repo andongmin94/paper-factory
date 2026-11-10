@@ -811,3 +811,39 @@ def test_bibtex_field_comments_reach_joss_package_without_rewriting(sources, tmp
     manifest = json.loads((output / "manifest.json").read_text())
     for row in manifest["files"]:
         assert row["sha256"] == hashlib.sha256((output / row["path"]).read_bytes()).hexdigest()
+
+
+@pytest.mark.parametrize("fields,location", [
+    (" title={Retained} % missing separator\n author={Researcher, Alice},\n year=2025\n}", (5, 2)),
+    (" title {Retained},\n author={Researcher, Alice},\n year=2025\n}", (4, 8)),
+    (" title = % comment with a fake {value}\n}", (5, 1)),
+], ids=["missing-comma", "missing-equals", "missing-value"])
+@pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
+def test_bibtex_error_location_is_consistent_across_clis(sources, tmp_path, fields, location, newline):
+    manuscript, bibliography = sources
+    text = "% retained annotation\n@string{prefix={Retained}}\n@article{retained,\n" + fields
+    original_bib = b"\xef\xbb\xbf" + text.replace("\n", newline).encode()
+    bibliography.write_bytes(original_bib)
+    original_md = manuscript.read_bytes()
+    imported, exported = tmp_path / "imported", tmp_path / "exported"
+    commands = [
+        [sys.executable, str(ROOT / "scripts/import_references.py"), "--input", str(bibliography),
+         "--output-dir", str(imported)],
+        [sys.executable, str(ROOT / "scripts/export_manuscript.py"), "preflight", "--venue", "joss",
+         "--manuscript", str(manuscript), "--pandoc", str(joss.pandoc_binary())],
+        [sys.executable, str(ROOT / "scripts/export_manuscript.py"), "export", "--venue", "joss",
+         "--manuscript", str(manuscript), "--pandoc", str(joss.pandoc_binary()),
+         "--output-dir", str(exported)],
+    ]
+    errors = []
+    for command in commands:
+        completed = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True,
+                                   encoding="utf-8", timeout=30)
+        assert completed.returncode == 2
+        assert completed.stdout == ""
+        errors.append(json.loads(completed.stderr)["error"])
+    assert errors[0] == errors[1] == errors[2]
+    line, column = location
+    assert errors[0].startswith(f"Invalid BibTeX at line {line}, column {column}:")
+    assert not imported.exists() and not exported.exists()
+    assert (manuscript.read_bytes(), bibliography.read_bytes()) == (original_md, original_bib)

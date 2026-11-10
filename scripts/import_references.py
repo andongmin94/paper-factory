@@ -32,7 +32,8 @@ def _bibtex_records(text: str):
     # Consume comments only at syntax boundaries; percent signs inside values are data.
     value = pp.Group(comments + pp.DelimitedList(
         (literal | number | symbol) + comments, delim=pp.Literal("#") + comments))
-    field = pp.Group(name("name") + comments + pp.Suppress("=") + value("parts"))
+    # Preserve the failure location after a field or entry has started.
+    field = pp.Group(name("name") + comments - pp.Suppress("=") + value("parts"))
     fields = pp.Group(comments + pp.Optional(pp.DelimitedList(
         field, delim=pp.Literal(",") + comments, allow_trailing_delim=True)))("fields")
 
@@ -47,7 +48,7 @@ def _bibtex_records(text: str):
         pp.Regex(r"[^\n]*"))
     entry = name("kind") + enclosed(pp.Regex(r"[^\s,{}()=]+")("key") +
                                      pp.Optional(pp.Suppress(",") + fields))
-    block = pp.Group(pp.Located(pp.Suppress("@") + (definitions | preamble | comment | entry)))
+    block = pp.Group(pp.Located(pp.Suppress("@") - (definitions | preamble | comment | entry)))
     document = pp.ZeroOrMore(line_comment | block | pp.Regex(r"[^@]+").suppress())
     document.parse_with_tabs()
     try:

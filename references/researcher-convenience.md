@@ -75,6 +75,8 @@ python scripts/import_references.py --input /work/sources.json --format csl-json
 
 Import reports use the existing `structural_findings` and `manual_review_suggestions` lists with `code`, `reference_id` (when applicable), and `detail`. Missing metadata, unmapped years/strings and numbering checks are advisory; a malformed DOI is retained and reported with the existing `malformed_metadata_doi` code. Exit0 means the import was prepared, including its findings; Exit2 means invalid input or output failure. Unparseable BibTeX/JSON syntax, non-object CSL list entries or RIS records without an `ER` terminator are rejected before output is created. Import does not verify publication identity, author names or DOI resolution. Review its report alongside the later editorial report.
 
+BibTeX syntax errors retain the parser's failure location after an entry or field has started. The reported line and column are one-based source character positions: tabs count as one character and a UTF-8 BOM is excluded. Import, JOSS preflight and JOSS source export use the same bibliography validation; the diagnostic identifies where parsing stopped, which may follow the missing token.
+
 ## Reuse author and coauthor facts
 
 Save an explicit profile outside the skill and provide it for each paper. `scripts/submission_support.py authors --profile PROFILE_JSON --manuscript MANUSCRIPT_MD --output-dir NEW` validates ordering and facts, prepares a new Markdown author block/biographies and a separate missing-information report, leaving the input unchanged. The profile contains `authors` entries with `id`, `author` and `contributions`, an `order` list, and an optional `corresponding_author` ID, `funding` and `conflicts`.

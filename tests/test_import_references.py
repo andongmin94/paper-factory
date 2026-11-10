@@ -743,5 +743,60 @@ def test_bibtex_entry_comments_cannot_repair_malformed_input(text, tmp_path):
     assert source.read_bytes() == original
 
 
+@pytest.mark.parametrize("newline,bom", [("\n", b""), ("\r\n", b"\xef\xbb\xbf")], ids=["lf", "crlf-bom"])
+@pytest.mark.parametrize("entry,line,column,expected", [
+    ("@article{broken,\n  title={Retained}\n  year=2024\n}", 5, 3, "Expected '}'"),
+    ("@article{broken,\n  title {Retained},\n  year=2024\n}", 4, 9, "Expected '='"),
+    ("@article{broken,\n  title={Retained},\n  year= % ignored } , = # @fake\n}", 6, 1, None),
+    ("@article{broken,\n  title={Retained} # % ignored {Suffix}\n}\n", 4, 20, None),
+    # End at the value: nested_expr versions differ in trailing whitespace consumption.
+    ("@article{broken,\n  title={No closing brace", 4, 26, "Expected '}'"),
+    ('@article{broken,\n  title="No closing quote\n', 5, 1, "Expected '\"'"),
+    ("@article{broken,\n  title={Retained}\n", 5, 1, "Expected '}'"),
+    ("@article(broken,\n  title={Retained}\n", 5, 1, "Expected ')'"),
+], ids=["missing-comma", "missing-equals", "missing-value", "dangling-concatenation",
+        "unclosed-braced-value", "unclosed-quoted-value", "unclosed-entry-brace", "unclosed-entry-parenthesis"])
+def test_bibtex_error_location_reports_failed_syntax_without_output(
+        entry, line, column, expected, newline, bom, tmp_path):
+    text = "% supplied header\n\n" + entry
+    original = bom + text.replace("\n", newline).encode("utf-8")
+    source, output = tmp_path / "invalid.bib", tmp_path / "imported"
+    source.write_bytes(original)
+
+    with pytest.raises(ValueError) as failure:
+        imports.write_import(source, output)
+
+    assert not output.exists()
+    assert source.read_bytes() == original
+    message = str(failure.value)
+    assert message.startswith(f"Invalid BibTeX at line {line}, column {column}:")
+    if expected is not None:
+        assert expected in message
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
+def test_bibtex_error_location_uses_original_second_entry_offsets(newline, tmp_path):
+    text = ("% bibliography\n"
+            "@misc{first,\n"
+            "  title={첫 원고 50%}\n"
+            "}\n"
+            "\n"
+            "% second entry follows\n"
+            "@article{broken,\n"
+            "\ttitle={한글} # % missing value\n"
+            "}\n")
+    source, output = tmp_path / "two-entries.bib", tmp_path / "imported"
+    original = text.replace("\n", newline).encode("utf-8")
+    source.write_bytes(original)
+
+    with pytest.raises(ValueError) as failure:
+        imports.write_import(source, output)
+
+    assert not output.exists()
+    assert source.read_bytes() == original
+    # Columns follow source characters: the tab is one character, as are 한 and 글.
+    assert str(failure.value).startswith("Invalid BibTeX at line 8, column 13:")
+
+
 if __name__ == "__main__":
     unittest.main()
