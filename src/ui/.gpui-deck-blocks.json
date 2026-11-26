@@ -1,0 +1,24 @@
+{
+  "preset": {
+    "preset": "v1.base.zinc.blue.neutral.pretendard.pretendard.outline.default",
+    "files": [
+      "assets/Bootstrap-LICENSE.txt",
+      "assets/Lucide-LICENSE.txt",
+      "assets/Neumorphism-LICENSE.txt",
+      "assets/Pretendard-LICENSE.txt",
+      "assets/Pretendard-Regular.otf",
+      "assets/SpaceMono-LICENSE.txt",
+      "assets/SpaceMono-Regular.ttf",
+      "assets/Spectral-LICENSE.txt",
+      "assets/Spectral-Regular.ttf",
+      "assets/bootstrap-activity.svg",
+      "assets/bootstrap-bookmark.svg",
+      "assets/lucide-activity.svg",
+      "assets/lucide-bookmark.svg",
+      "icons.rs",
+      "mod.rs",
+      "showcase.rs",
+      "style.rs"
+    ]
+  }
+}

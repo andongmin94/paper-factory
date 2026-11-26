@@ -1,30 +1,58 @@
 //! The manuscript window: one `.tex` file in a GPUI Deck editor.
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Instant,
+};
 
 use futures::channel::oneshot;
 use gpui::{
-    AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _, IntoElement,
-    ParentElement as _, PathPromptOptions, PromptLevel, Render, Role, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window, actions, div, px,
-    rgb,
+    AnyElement, AppContext as _, Axis, Context, Entity, FocusHandle, FontWeight,
+    InteractiveElement as _, IntoElement, ParentElement as _, PathPromptOptions, PromptLevel,
+    Render, Role, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Task,
+    Window, actions, div, prelude::FluentBuilder as _, px,
 };
 use gpui_deck::{
     AlertDialog, Button, DialogBackdrop, DialogClose, DialogDescription, DialogEvent, DialogPopup,
-    DialogState, DialogTitle, InputAccessibility, InputEditorStyle,
-    input::{EditorState, InputEvent},
+    DialogState, DialogTitle, InputAccessibility, InputEditorStyle, Resizable, ResizablePanel,
+    ResizableState,
+    input::{EditorState, InputEvent, Position},
 };
 
-use crate::document::Document;
+use crate::{
+    compile::{self, Problem},
+    document::Document,
+    highlight,
+    latex::{self, Heading},
+    pdf::PdfDocument,
+    preview::{PdfPreview, PreviewEvent},
+    ui::{
+        Palette,
+        preset::Tokens,
+        recipes::{ButtonVariant, Kbd, KbdGroup},
+    },
+};
 
-actions!(paper_factory, [Open, Save, SaveAs]);
+actions!(
+    paper_factory,
+    [Open, Save, SaveAs, Compile, ZoomIn, ZoomOut, ZoomToFit]
+);
+
+const NO_PDF_HINT: &str = "컴파일(Ctrl+B)하면 PDF가 여기에 표시됩니다.";
+
+/// The platform's primary shortcut modifier, as printed on its keys.
+#[cfg(target_os = "macos")]
+pub const MODIFIER_KEY: &str = "⌘";
+#[cfg(not(target_os = "macos"))]
+pub const MODIFIER_KEY: &str = "Ctrl";
 
 #[cfg(target_os = "windows")]
-const EDITOR_FONT: &str = "Consolas";
+pub const EDITOR_FONT: &str = "Consolas";
 #[cfg(target_os = "macos")]
-const EDITOR_FONT: &str = "Menlo";
+pub const EDITOR_FONT: &str = "Menlo";
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-const EDITOR_FONT: &str = "DejaVu Sans Mono";
+pub const EDITOR_FONT: &str = "DejaVu Sans Mono";
 
 /// The answer to the unsaved-changes dialog.
 enum Choice {
@@ -44,20 +72,32 @@ pub struct Workspace {
     discard_cancel_focus: FocusHandle,
     /// Receives the dialog's answer while it is open.
     pending_choice: Option<oneshot::Sender<Choice>>,
-    _subscriptions: [Subscription; 3],
+    outline: Vec<Heading>,
+    preview: Entity<PdfPreview>,
+    compiling: bool,
+    tokens: Tokens,
+    /// Outline, editor and preview widths, resizable by dragging their dividers.
+    panes: Entity<ResizableState>,
+    _subscriptions: [Subscription; 5],
 }
 
 impl Workspace {
-    pub fn new(path: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        path: Option<PathBuf>,
+        tokens: Tokens,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let editor = cx.new(|cx| {
-            let mut editor = EditorState::new(window, cx).soft_wrap(true);
+            let mut editor = EditorState::new(window, cx)
+                .soft_wrap(true)
+                .language(highlight::LANGUAGE);
+            editor.set_highlighter_factory(highlight::factory(), cx);
             editor.set_editor_style(InputEditorStyle {
-                foreground: rgb(0x1f2328).into(),
-                muted_foreground: rgb(0x8c959f).into(),
-                selection: rgb(0xb6d7ff).into(),
-                caret: rgb(0x0969da).into(),
-                editor_active_line: Some(rgb(0xf3f6fa).into()),
-                ..Default::default()
+                editor_active_line: Some(tokens.accent.opacity(0.06)),
+                editor_gutter_background: Some(tokens.surface),
+                highlight_styles: highlight::styles(),
+                ..tokens.editor_style()
             });
             editor.set_accessibility(
                 InputAccessibility::new(Some(Role::MultilineTextInput))
@@ -65,13 +105,20 @@ impl Workspace {
             );
             editor
         });
-        let editor_events = cx.subscribe_in(&editor, window, |this, _, event, window, cx| {
-            if matches!(event, InputEvent::Change) && !this.dirty {
+        let editor_events = cx.subscribe_in(&editor, window, |this, editor, event, window, cx| {
+            if !matches!(event, InputEvent::Change) {
+                return;
+            }
+            this.outline = latex::outline(&editor.read(cx).value());
+            if !this.dirty {
                 this.dirty = true;
                 this.refresh_title(window);
-                cx.notify();
             }
+            cx.notify();
         });
+
+        // Cursor moves change the outline's current section.
+        let editor_observation = cx.observe(&editor, |_, _, cx| cx.notify());
 
         let discard_cancel_focus = cx.focus_handle();
         let discard_dialog =
@@ -84,6 +131,26 @@ impl Workspace {
             {
                 let _ = sender.send(Choice::Cancel);
             }
+        });
+
+        let preview = cx.new(|_| PdfPreview::new(tokens));
+        let panes = cx.new(|cx| {
+            ResizableState::new(
+                Axis::Horizontal,
+                [
+                    ResizablePanel::new(0.16)
+                        .limits(0.08..=0.3)
+                        .pixel_limits(px(160.)..=px(360.))
+                        .collapsible(0.),
+                    ResizablePanel::new(0.42).pixel_limits(px(320.)..=px(10_000.)),
+                    ResizablePanel::new(0.42).pixel_limits(px(280.)..=px(10_000.)),
+                ],
+                cx,
+            )
+        });
+        let preview_events = cx.subscribe_in(&preview, window, |this, _, event, window, cx| {
+            let PreviewEvent::JumpToLine(line) = event;
+            this.jump_to(*line, window, cx);
         });
 
         let weak = cx.weak_entity();
@@ -100,7 +167,18 @@ impl Workspace {
             discard_dialog,
             discard_cancel_focus,
             pending_choice: None,
-            _subscriptions: [editor_events, dialog_observation, dialog_events],
+            outline: Vec::new(),
+            preview,
+            compiling: false,
+            tokens,
+            panes,
+            _subscriptions: [
+                editor_events,
+                editor_observation,
+                dialog_observation,
+                dialog_events,
+                preview_events,
+            ],
         };
         if let Some(path) = path {
             this.load(&path, window, cx);
@@ -114,6 +192,7 @@ impl Workspace {
     fn load(&mut self, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
         match Document::open(path) {
             Ok((document, text)) => {
+                self.outline = latex::outline(&text);
                 self.editor.update(cx, |editor, cx| {
                     editor.set_value(text, window, cx);
                     // A native file dialog leaves the window without a focused element.
@@ -122,10 +201,118 @@ impl Workspace {
                 self.document = document;
                 self.dirty = false;
                 self.refresh_title(window);
+                // Show the PDF from an earlier compile until the next one.
+                let existing = path.with_extension("pdf");
+                if existing.is_file() {
+                    self.show_pdf(existing, cx);
+                } else {
+                    self.preview
+                        .update(cx, |preview, cx| preview.set_message(NO_PDF_HINT, cx));
+                }
                 cx.notify();
             }
             Err(error) => show_error(window, cx, "파일을 열지 못했습니다", &error),
         }
+    }
+
+    /// Loads `pdf` in the background and shows it.
+    fn show_pdf(&mut self, pdf: PathBuf, cx: &mut Context<Self>) {
+        let preview = self.preview.clone();
+        cx.spawn(async move |_, cx| {
+            let document = cx
+                .background_executor()
+                .spawn(async move { PdfDocument::open(&pdf) })
+                .await;
+            preview.update(cx, |preview, cx| match document {
+                Ok(document) => {
+                    let status = format!("{}쪽", document.page_sizes.len());
+                    preview.set_document(Arc::new(document), Some(status.into()), cx)
+                }
+                Err(error) => preview.set_message(format!("{error:#}"), cx),
+            });
+        })
+        .detach();
+    }
+
+    fn compile(&mut self, _: &Compile, window: &mut Window, cx: &mut Context<Self>) {
+        if self.compiling {
+            return;
+        }
+        let Some(engine) = compile::find_engine() else {
+            self.preview.update(cx, |preview, cx| {
+                preview.set_problems(
+                    vec![Problem {
+                        text: "Tectonic을 찾지 못했습니다. PATH 또는 ~/.local/tectonic에 tectonic을 설치하세요."
+                            .into(),
+                        line: None,
+                    }],
+                    cx,
+                )
+            });
+            return;
+        };
+        // The engine reads the file on disk, so unsaved edits are saved first.
+        let saved = if self.dirty || self.document.path.is_none() {
+            self.save(false, window, cx)
+        } else {
+            Task::ready(true)
+        };
+        self.compiling = true;
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            let tex = match saved.await {
+                true => this
+                    .update(cx, |this, _| this.document.path.clone())
+                    .ok()
+                    .flatten(),
+                false => None,
+            };
+            let Some(tex) = tex else {
+                this.update(cx, |this, cx| {
+                    this.compiling = false;
+                    cx.notify();
+                })
+                .ok();
+                return;
+            };
+            let started = Instant::now();
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let outcome = compile::compile(&engine, &tex)?;
+                    let document = outcome.pdf.as_deref().map(PdfDocument::open).transpose()?;
+                    anyhow::Ok((outcome.log, document))
+                })
+                .await;
+            let seconds = started.elapsed().as_secs_f32();
+            this.update(cx, |this, cx| {
+                this.compiling = false;
+                this.preview.update(cx, |preview, cx| match result {
+                    Ok((_, Some(document))) => {
+                        let status =
+                            format!("{}쪽 · 컴파일 {seconds:.1}초", document.page_sizes.len());
+                        preview.set_document(Arc::new(document), Some(status.into()), cx)
+                    }
+                    Ok((log, None)) => preview.set_problems(compile::problems(&log), cx),
+                    Err(error) => preview.set_problems(
+                        vec![Problem {
+                            text: format!("{error:#}"),
+                            line: None,
+                        }],
+                        cx,
+                    ),
+                });
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn jump_to(&mut self, line: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.editor.update(cx, |editor, cx| {
+            editor.set_cursor_position(Position::new(line as u32, 0), window, cx);
+        });
     }
 
     fn write(&mut self, path: &Path, window: &mut Window, cx: &mut Context<Self>) -> bool {
@@ -208,48 +395,63 @@ impl Workspace {
     }
 
     fn render_discard_dialog(&self, cx: &Context<Self>) -> AlertDialog {
+        let tokens = self.tokens;
+        let palette = self.palette();
         let message = format!("{}의 변경 내용을 저장할까요?", self.document.display_name());
         let detail = "저장하지 않으면 변경 내용이 사라집니다.";
         let popup = DialogPopup::new()
-            .w(px(420.))
-            .p_5()
+            .w(px(440.))
+            .p_6()
             .flex()
             .flex_col()
-            .gap_3()
-            .bg(rgb(0xffffff))
+            .gap_2()
+            .rounded(tokens.radius)
+            .bg(tokens.surface)
             .border_1()
-            .border_color(rgb(0xd0d7de))
-            .rounded_lg()
+            .border_color(tokens.border)
+            .text_color(tokens.ink)
             .shadow_lg()
-            .child(DialogTitle::new().text_lg().child(message.clone()))
+            .child(
+                DialogTitle::new()
+                    .text_lg()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(message.clone()),
+            )
             .child(
                 DialogDescription::new()
-                    .text_color(rgb(0x59636e))
+                    .text_sm()
+                    .text_color(tokens.muted)
                     .child(detail),
             )
             .child(
                 div()
+                    .mt_4()
                     .flex()
                     .justify_end()
                     .gap_2()
                     .child(DialogClose::new(&self.discard_dialog).trigger(|button| {
-                        dialog_button(button.track_focus(&self.discard_cancel_focus), "취소")
+                        ButtonVariant::Outline
+                            .apply(button.track_focus(&self.discard_cancel_focus), palette)
+                            .accessibility_label("취소")
+                            .child("취소")
                     }))
                     .child(
-                        dialog_button(Button::new("discard-changes"), "저장 안 함").on_click(
-                            cx.listener(|this, _, window, cx| {
+                        ButtonVariant::Ghost
+                            .apply(Button::new("discard-changes"), palette)
+                            .accessibility_label("저장 안 함")
+                            .on_click(cx.listener(|this, _, window, cx| {
                                 this.choose(Choice::Discard, window, cx)
-                            }),
-                        ),
+                            }))
+                            .child("저장 안 함"),
                     )
                     .child(
-                        dialog_button(Button::new("save-changes"), "저장")
-                            .bg(rgb(0x0969da))
-                            .text_color(rgb(0xffffff))
-                            .hover(|style| style.bg(rgb(0x0860ca)))
+                        ButtonVariant::Primary
+                            .apply(Button::new("save-changes"), palette)
+                            .accessibility_label("저장")
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.choose(Choice::Save, window, cx)
-                            })),
+                            }))
+                            .child("저장"),
                     ),
             );
         AlertDialog::new(&self.discard_dialog)
@@ -260,7 +462,7 @@ impl Workspace {
                     .absolute()
                     .inset_0()
                     .bg(gpui::black())
-                    .opacity(0.3),
+                    .opacity(0.35),
             )
             .popup(popup)
     }
@@ -333,91 +535,319 @@ fn show_error(window: &mut Window, cx: &mut gpui::App, message: &str, error: &an
     drop(window.prompt(PromptLevel::Critical, message, Some(&detail), &["확인"], cx));
 }
 
-fn toolbar_button(id: &'static str, label: &'static str) -> Button {
-    Button::new(id)
-        .accessibility_label(label)
-        .h(px(30.))
-        .px_3()
-        .rounded_md()
-        .border_1()
-        .border_color(rgb(0xd0d7de))
-        .bg(rgb(0xf6f8fa))
-        .hover(|style| style.bg(rgb(0xeaeef2)))
-        .focus_visible(|style| style.border_color(rgb(0x0969da)))
-        .child(label)
+/// A titled card holding one of the three panes.
+fn pane(
+    tokens: Tokens,
+    title: &'static str,
+    extra: Option<AnyElement>,
+    body: AnyElement,
+) -> AnyElement {
+    tokens
+        .panel()
+        .size_full()
+        .flex()
+        .flex_col()
+        .overflow_hidden()
+        .child(
+            div()
+                .h(px(38.))
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap_2()
+                .px_3()
+                .border_b_1()
+                .border_color(tokens.border)
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(tokens.muted)
+                        .child(title),
+                )
+                .children(extra),
+        )
+        .child(div().flex_1().min_h_0().child(body))
+        .into_any_element()
 }
 
-fn dialog_button(button: Button, label: &'static str) -> Button {
-    button
-        .accessibility_label(label)
-        .h(px(32.))
-        .px_4()
-        .rounded_md()
-        .border_1()
-        .border_color(rgb(0xd0d7de))
-        .bg(rgb(0xf6f8fa))
-        .hover(|style| style.bg(rgb(0xeaeef2)))
-        .focus_visible(|style| style.border_color(rgb(0x0969da)).border_2())
-        .child(label)
+/// The keycaps for a modifier shortcut such as Ctrl+B.
+fn shortcut(id: &'static str, key: &'static str, palette: Palette) -> KbdGroup {
+    KbdGroup::new(id, palette)
+        .key(Kbd::new((id, 0usize), MODIFIER_KEY, palette))
+        .key(Kbd::new((id, 1usize), key, palette))
+}
+
+impl Workspace {
+    fn palette(&self) -> Palette {
+        Palette {
+            control_height: gpui::rems(2.125),
+            font_size: gpui::rems(0.875),
+            ..self.tokens.palette()
+        }
+    }
+
+    fn render_toolbar(&self, cx: &Context<Self>) -> impl IntoElement {
+        let tokens = self.tokens;
+        let palette = self.palette();
+        let name = self.document.display_name();
+        let folder: SharedString = match &self.document.path {
+            Some(path) => path
+                .parent()
+                .map(|dir| dir.display().to_string())
+                .unwrap_or_default()
+                .into(),
+            None => "저장되지 않은 새 원고".into(),
+        };
+        let action = |id: &'static str, label: &'static str| {
+            ButtonVariant::Ghost
+                .apply(Button::new(id), palette)
+                .accessibility_label(label)
+                .child(label)
+        };
+        let keys = palette;
+        div()
+            .h(px(52.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap_1()
+            .px_4()
+            .bg(tokens.surface)
+            .border_b_1()
+            .border_color(tokens.border)
+            .child(
+                div()
+                    .mr_3()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .size(px(22.))
+                            .rounded(px(6.))
+                            .bg(tokens.accent)
+                            .text_color(tokens.on_accent)
+                            .text_xs()
+                            .font_weight(FontWeight::BOLD)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child("P"),
+                    )
+                    .child(
+                        div()
+                            .font_family(tokens.heading)
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Paper Factory"),
+                    ),
+            )
+            .child(
+                action("open", "열기")
+                    .on_click(cx.listener(|this, _, window, cx| this.open(&Open, window, cx))),
+            )
+            .child(
+                action("save", "저장").on_click(
+                    cx.listener(|this, _, window, cx| this.save_action(&Save, window, cx)),
+                ),
+            )
+            .child(action("save-as", "다른 이름으로 저장").on_click(
+                cx.listener(|this, _, window, cx| this.save_as_action(&SaveAs, window, cx)),
+            ))
+            .child(
+                div()
+                    .id("document-status")
+                    .role(Role::Label)
+                    .aria_label(format!("{name} {folder}"))
+                    .flex_1()
+                    .min_w_0()
+                    .mx_4()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .gap_2()
+                    .child(div().font_weight(FontWeight::MEDIUM).child(name))
+                    .when(self.dirty, |this| {
+                        this.child(
+                            div()
+                                .size(px(7.))
+                                .flex_none()
+                                .rounded_full()
+                                .bg(tokens.accent),
+                        )
+                    })
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_xs()
+                            .text_color(tokens.muted)
+                            .child(folder),
+                    ),
+            )
+            .child(shortcut("compile-keys", "B", keys).mr_2())
+            .child(
+                ButtonVariant::Primary
+                    .apply(Button::new("compile"), palette)
+                    .accessibility_label("컴파일")
+                    .disabled(self.compiling)
+                    .px_4()
+                    .font_weight(FontWeight::MEDIUM)
+                    .on_click(cx.listener(|this, _, window, cx| this.compile(&Compile, window, cx)))
+                    .child(if self.compiling {
+                        "컴파일 중…"
+                    } else {
+                        "컴파일"
+                    }),
+            )
+    }
+
+    fn render_outline(&self, cx: &Context<Self>) -> AnyElement {
+        let tokens = self.tokens;
+        let palette = self.palette();
+        let cursor_line = self.editor.read(cx).cursor_position().line as usize;
+        // The section containing the cursor is the last heading at or above it.
+        let current = self
+            .outline
+            .iter()
+            .rposition(|heading| heading.line <= cursor_line);
+        // Indent relative to the document's top heading level.
+        let top = self
+            .outline
+            .iter()
+            .map(|heading| heading.level)
+            .min()
+            .unwrap_or(0);
+        let headings = self.outline.iter().enumerate().map(|(index, heading)| {
+            let line = heading.line;
+            let depth = heading.level - top;
+            let selected = current == Some(index);
+            ButtonVariant::Ghost
+                .apply(Button::new(("heading", index)), palette)
+                .accessibility_label(heading.title.clone())
+                .current(selected)
+                .w_full()
+                .h(px(30.))
+                .flex_none()
+                .pr_2()
+                .pl(px(10. + 14. * depth as f32))
+                .justify_start()
+                .text_color(if selected {
+                    tokens.accent
+                } else if depth == 0 {
+                    tokens.ink
+                } else {
+                    tokens.muted
+                })
+                .when(selected, |this| {
+                    this.bg(palette.highlight).font_weight(FontWeight::MEDIUM)
+                })
+                .on_click(cx.listener(move |this, _, window, cx| this.jump_to(line, window, cx)))
+                .child(div().truncate().child(heading.title.clone()))
+        });
+        let body = if self.outline.is_empty() {
+            div()
+                .p_3()
+                .text_sm()
+                .text_color(tokens.muted)
+                .child("\\section을 쓰면 여기에 목차가 생깁니다.")
+                .into_any_element()
+        } else {
+            div()
+                .id("outline")
+                .role(Role::Navigation)
+                .aria_label("목차")
+                .size_full()
+                .p_1()
+                .flex()
+                .flex_col()
+                .overflow_y_scroll()
+                .children(headings)
+                .into_any_element()
+        };
+        pane(tokens, "목차", None, body)
+    }
+
+    fn render_editor(&self, cx: &Context<Self>) -> AnyElement {
+        let tokens = self.tokens;
+        let position = self.editor.read(cx).cursor_position();
+        let extra = div()
+            .ml_auto()
+            .text_xs()
+            .text_color(tokens.muted)
+            .child(format!(
+                "{}줄 {}칸",
+                position.line + 1,
+                position.character + 1
+            ))
+            .into_any_element();
+        let body = div()
+            .size_full()
+            .pr_2()
+            .bg(tokens.surface)
+            .font_family(EDITOR_FONT)
+            .text_size(px(14.5))
+            .child(self.editor.clone())
+            .into_any_element();
+        pane(tokens, "원고", Some(extra), body)
+    }
 }
 
 impl Render for Workspace {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let status: SharedString = match &self.document.path {
-            Some(path) => path.display().to_string().into(),
-            None => "저장되지 않은 새 원고".into(),
-        };
+        let tokens = self.tokens;
+        let palette = self.palette();
         div()
             .id("workspace")
             .key_context("Workspace")
             .on_action(cx.listener(Self::open))
             .on_action(cx.listener(Self::save_action))
             .on_action(cx.listener(Self::save_as_action))
+            .on_action(cx.listener(Self::compile))
+            .on_action(cx.listener(|this, _: &ZoomIn, _, cx| {
+                this.preview.update(cx, |preview, cx| preview.zoom_in(cx))
+            }))
+            .on_action(cx.listener(|this, _: &ZoomOut, _, cx| {
+                this.preview.update(cx, |preview, cx| preview.zoom_out(cx))
+            }))
+            .on_action(cx.listener(|this, _: &ZoomToFit, _, cx| {
+                this.preview
+                    .update(cx, |preview, cx| preview.zoom_to_fit(cx))
+            }))
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(0xffffff))
-            .text_color(rgb(0x1f2328))
+            .bg(tokens.canvas)
+            .text_color(tokens.ink)
             .text_size(px(14.))
+            .font_family(tokens.font)
+            .child(self.render_toolbar(cx))
             .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .px_3()
-                    .py_2()
-                    .border_b_1()
-                    .border_color(rgb(0xd0d7de))
-                    .child(
-                        toolbar_button("open", "열기").on_click(
-                            cx.listener(|this, _, window, cx| this.open(&Open, window, cx)),
-                        ),
-                    )
-                    .child(toolbar_button("save", "저장").on_click(
-                        cx.listener(|this, _, window, cx| this.save_action(&Save, window, cx)),
-                    ))
-                    .child(toolbar_button("save-as", "다른 이름으로 저장").on_click(
-                        cx.listener(|this, _, window, cx| this.save_as_action(&SaveAs, window, cx)),
-                    ))
-                    .child(
-                        div()
-                            .id("document-status")
-                            .role(Role::Label)
-                            .aria_label(status.clone())
-                            .ml_2()
-                            .text_color(rgb(0x59636e))
-                            .truncate()
-                            .child(status),
-                    ),
-            )
-            .child(
-                div()
+                Resizable::new("panes", &self.panes)
                     .flex_1()
                     .min_h_0()
-                    .px_2()
-                    .font_family(EDITOR_FONT)
-                    .text_size(px(15.))
-                    .child(self.editor.clone()),
+                    .p_2()
+                    .panel(self.render_outline(cx))
+                    .handle(move |index, handle| {
+                        handle
+                            .accessibility_label(if index == 0 {
+                                "목차 너비"
+                            } else {
+                                "편집기와 미리보기 너비"
+                            })
+                            .w(px(8.))
+                            .rounded_sm()
+                            .hover(|style| style.bg(palette.highlight))
+                            .focus_visible(|style| style.bg(palette.highlight))
+                    })
+                    .panel(self.render_editor(cx))
+                    .panel(
+                        tokens
+                            .panel()
+                            .size_full()
+                            .overflow_hidden()
+                            .child(self.preview.clone()),
+                    ),
             )
             .child(self.render_discard_dialog(cx))
     }
