@@ -1,0 +1,3 @@
+# GPUI Deck's editing engine needs a larger main-thread stack on Windows.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "link-arg=/STACK:8000000"]

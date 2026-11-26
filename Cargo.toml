@@ -1,0 +1,13 @@
+[package]
+name = "paper-factory"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+# Keep the GPUI snapshot family on the exact versions GPUI Deck pins.
+gpui = { package = "gpui-pre", version = "=0.3.12" }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.12", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
+gpui-deck = "=0.0.1"
+anyhow = "1"
+futures = "0.3"
