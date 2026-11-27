@@ -13,3 +13,6 @@ anyhow = "1"
 futures = "0.3"
 hayro = "0.9"
 image = { version = "0.25", default-features = false }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+similar = "3.2.1"

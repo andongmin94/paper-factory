@@ -64,8 +64,8 @@ pub fn compile(engine: &Path, tex: &Path) -> Result<Outcome> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Problem {
     pub text: String,
-    /// 0-based line in the manuscript.
-    pub line: Option<usize>,
+    /// The source file and 0-based line, relative to the compiled document's folder.
+    pub location: Option<(PathBuf, usize)>,
 }
 
 /// The engine's error lines, or the end of the log when it reported none.
@@ -84,16 +84,26 @@ pub fn problems(log: &str) -> Vec<Problem> {
         .into_iter()
         .map(|text| Problem {
             text: text.to_owned(),
-            line: source_line(text),
+            location: source_location(text),
         })
         .collect()
 }
 
-/// Reads `file.tex:22:` from an engine message as 0-based line 21.
-fn source_line(text: &str) -> Option<usize> {
-    let after = &text[text.find(".tex:")? + ".tex:".len()..];
-    let digits = after.split(':').next()?;
-    digits.trim().parse::<usize>().ok()?.checked_sub(1)
+/// Reads `chapters/intro.tex:22:` from an engine message as that file's 0-based line 21.
+/// Tectonic may omit the extension, as in `chapters/intro:22:`.
+fn source_location(text: &str) -> Option<(PathBuf, usize)> {
+    let message = text.strip_prefix("error:").unwrap_or(text).trim_start();
+    let (path, rest) = message.split_once(':')?;
+    if path.is_empty() || path.contains(char::is_whitespace) {
+        return None;
+    }
+    let digits = rest.split(':').next()?;
+    let line = digits.trim().parse::<usize>().ok()?.checked_sub(1)?;
+    let mut path = PathBuf::from(path);
+    if path.extension().is_none() {
+        path.set_extension("tex");
+    }
+    Some((path, line))
 }
 
 #[cfg(test)]
@@ -108,14 +118,26 @@ mod tests {
             vec![
                 Problem {
                     text: "error: paper.tex:5: Undefined control sequence".into(),
-                    line: Some(4),
+                    location: Some(("paper.tex".into(), 4)),
                 },
                 Problem {
                     text: "error: halted".into(),
-                    line: None,
+                    location: None,
                 },
             ]
         );
         assert_eq!(problems("a\nb").len(), 2);
+        assert_eq!(
+            problems("error: chapters/intro.tex:12: Missing $ inserted")[0].location,
+            Some(("chapters/intro.tex".into(), 11))
+        );
+        assert_eq!(
+            problems("error: chapters/method:3: Undefined control sequence")[0].location,
+            Some(("chapters/method.tex".into(), 2))
+        );
+        assert_eq!(
+            problems("error: something bad happened inside XeTeX")[0].location,
+            None
+        );
     }
 }

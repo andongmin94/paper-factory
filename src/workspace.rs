@@ -21,12 +21,14 @@ use gpui_deck::{
 };
 
 use crate::{
+    assistant::{Accepted, Assistant, AssistantEvent, Snapshot},
     compile::{self, Problem},
     document::Document,
     highlight,
     latex::{self, Heading},
     pdf::PdfDocument,
     preview::{PdfPreview, PreviewEvent},
+    project::{self, Include},
     ui::{
         Palette,
         preset::Tokens,
@@ -36,7 +38,9 @@ use crate::{
 
 actions!(
     paper_factory,
-    [Open, Save, SaveAs, Compile, ZoomIn, ZoomOut, ZoomToFit]
+    [
+        Open, OpenFolder, Save, SaveAs, Compile, AskAgent, ZoomIn, ZoomOut, ZoomToFit
+    ]
 );
 
 const NO_PDF_HINT: &str = "컴파일(Ctrl+B)하면 PDF가 여기에 표시됩니다.";
@@ -73,12 +77,20 @@ pub struct Workspace {
     /// Receives the dialog's answer while it is open.
     pending_choice: Option<oneshot::Sender<Choice>>,
     outline: Vec<Heading>,
+    /// Files the current document pulls in.
+    includes: Vec<Include>,
+    /// The manuscript folder and its source files, relative to it.
+    project_root: Option<PathBuf>,
+    files: Vec<PathBuf>,
+    /// The document to compile; the current file when it is a document itself.
+    main: Option<PathBuf>,
+    assistant: Entity<Assistant>,
     preview: Entity<PdfPreview>,
     compiling: bool,
     tokens: Tokens,
     /// Outline, editor and preview widths, resizable by dragging their dividers.
     panes: Entity<ResizableState>,
-    _subscriptions: [Subscription; 5],
+    _subscriptions: [Subscription; 6],
 }
 
 impl Workspace {
@@ -109,7 +121,9 @@ impl Workspace {
             if !matches!(event, InputEvent::Change) {
                 return;
             }
-            this.outline = latex::outline(&editor.read(cx).value());
+            let text = editor.read(cx).value();
+            this.outline = latex::outline(&text);
+            this.includes = project::includes(&text);
             if !this.dirty {
                 this.dirty = true;
                 this.refresh_title(window);
@@ -149,8 +163,21 @@ impl Workspace {
             )
         });
         let preview_events = cx.subscribe_in(&preview, window, |this, _, event, window, cx| {
-            let PreviewEvent::JumpToLine(line) = event;
-            this.jump_to(*line, window, cx);
+            let PreviewEvent::JumpTo(file, line) = event;
+            // Engine paths are relative to the compiled document's folder.
+            let base = this
+                .main
+                .as_deref()
+                .and_then(Path::parent)
+                .map(Path::to_path_buf);
+            if let Some(base) = base {
+                this.open_at(base.join(file), Some(*line), window, cx);
+            }
+        });
+        let assistant = cx.new(|cx| Assistant::new(tokens, window, cx));
+        let assistant_events = cx.subscribe_in(&assistant, window, |this, _, event, window, cx| {
+            let AssistantEvent::Apply(accepted) = event;
+            this.apply_revision(accepted, window, cx);
         });
 
         let weak = cx.weak_entity();
@@ -168,6 +195,11 @@ impl Workspace {
             discard_cancel_focus,
             pending_choice: None,
             outline: Vec::new(),
+            includes: Vec::new(),
+            project_root: None,
+            files: Vec::new(),
+            main: None,
+            assistant,
             preview,
             compiling: false,
             tokens,
@@ -178,6 +210,7 @@ impl Workspace {
                 dialog_observation,
                 dialog_events,
                 preview_events,
+                assistant_events,
             ],
         };
         if let Some(path) = path {
@@ -193,16 +226,29 @@ impl Workspace {
         match Document::open(path) {
             Ok((document, text)) => {
                 self.outline = latex::outline(&text);
+                self.includes = project::includes(&text);
                 self.editor.update(cx, |editor, cx| {
                     editor.set_value(text, window, cx);
                     // A native file dialog leaves the window without a focused element.
                     editor.focus(window, cx);
                 });
+                let previous_main = self.main.clone();
                 self.document = document;
                 self.dirty = false;
+                let text = self.editor.read(cx).value();
+                self.refresh_project(&text);
                 self.refresh_title(window);
+                // Another file of the same document keeps the current preview.
+                if previous_main.is_some() && previous_main == self.main {
+                    cx.notify();
+                    return;
+                }
                 // Show the PDF from an earlier compile until the next one.
-                let existing = path.with_extension("pdf");
+                let existing = self
+                    .main
+                    .clone()
+                    .unwrap_or_else(|| path.to_path_buf())
+                    .with_extension("pdf");
                 if existing.is_file() {
                     self.show_pdf(existing, cx);
                 } else {
@@ -244,7 +290,7 @@ impl Workspace {
                     vec![Problem {
                         text: "Tectonic을 찾지 못했습니다. PATH 또는 ~/.local/tectonic에 tectonic을 설치하세요."
                             .into(),
-                        line: None,
+                        location: None,
                     }],
                     cx,
                 )
@@ -262,7 +308,9 @@ impl Workspace {
         cx.spawn_in(window, async move |this, cx| {
             let tex = match saved.await {
                 true => this
-                    .update(cx, |this, _| this.document.path.clone())
+                    .update(cx, |this, _| {
+                        this.main.clone().or(this.document.path.clone())
+                    })
                     .ok()
                     .flatten(),
                 false => None,
@@ -297,7 +345,7 @@ impl Workspace {
                     Err(error) => preview.set_problems(
                         vec![Problem {
                             text: format!("{error:#}"),
-                            line: None,
+                            location: None,
                         }],
                         cx,
                     ),
@@ -315,10 +363,152 @@ impl Workspace {
         });
     }
 
+    /// Finds the project folder, its sources and the document to compile.
+    fn refresh_project(&mut self, text: &str) {
+        let Some(path) = self.document.path.clone() else {
+            return;
+        };
+        let root = self
+            .project_root
+            .clone()
+            .filter(|root| path.starts_with(root))
+            .unwrap_or_else(|| project::find_root(&path, text));
+        self.files = project::scan(&root);
+        self.main = Some(project::main_document(&root, &path, text, &self.files));
+        self.project_root = Some(root);
+    }
+
+    /// Opens `path`, after resolving unsaved changes, and moves to `line`.
+    fn open_at(
+        &mut self,
+        path: PathBuf,
+        line: Option<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let same = self
+            .document
+            .path
+            .as_deref()
+            .is_some_and(|current| same_path(current, &path));
+        if same {
+            if let Some(line) = line {
+                self.jump_to(line, window, cx);
+            }
+            return;
+        }
+        let confirmed = self.confirm_discard(window, cx);
+        cx.spawn_in(window, async move |this, cx| {
+            if !confirmed.await {
+                return;
+            }
+            this.update_in(cx, |this, window, cx| {
+                this.load(&path, window, cx);
+                if let Some(line) = line {
+                    this.jump_to(line, window, cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn open_folder(&mut self, _: &OpenFolder, window: &mut Window, cx: &mut Context<Self>) {
+        let confirmed = self.confirm_discard(window, cx);
+        cx.spawn_in(window, async move |this, cx| {
+            if !confirmed.await {
+                return;
+            }
+            let Ok(chosen) = cx.update(|_, cx| {
+                cx.prompt_for_paths(PathPromptOptions {
+                    files: false,
+                    directories: true,
+                    multiple: false,
+                    prompt: Some("폴더 열기".into()),
+                })
+            }) else {
+                return;
+            };
+            let Ok(Ok(Some(paths))) = chosen.await else {
+                return;
+            };
+            let Some(root) = paths.into_iter().next() else {
+                return;
+            };
+            this.update_in(cx, |this, window, cx| {
+                let files = project::scan(&root);
+                // Without a current file, prefer the folder's main document.
+                let placeholder = root.join(".paper-factory-none.tex");
+                let main = project::main_document(&root, &placeholder, "", &files);
+                let first_tex = files
+                    .iter()
+                    .find(|file| file.extension().is_some_and(|ext| ext == "tex"))
+                    .map(|file| root.join(file));
+                this.project_root = Some(root);
+                this.main = None;
+                match (main != placeholder).then_some(main).or(first_tex) {
+                    Some(path) => this.load(&path, window, cx),
+                    None => show_message(window, cx, "이 폴더에는 .tex 파일이 없습니다"),
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Opens the AI request dialog for the selection, or the whole file.
+    fn ask_agent(&mut self, _: &AskAgent, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(file), Some(project)) = (self.document.path.clone(), self.project_root.clone())
+        else {
+            return show_message(window, cx, "AI에게 요청하려면 먼저 원고를 저장하세요");
+        };
+        let editor = self.editor.read(cx);
+        let text = editor.value().to_string();
+        let selected = editor.selected_range();
+        let range = if selected.is_empty() {
+            0..text.len()
+        } else {
+            selected
+        };
+        let snapshot = Snapshot {
+            file,
+            project,
+            text,
+            range,
+        };
+        self.assistant
+            .update(cx, |assistant, cx| assistant.open(snapshot, window, cx));
+    }
+
+    /// Puts an accepted revision into the editor, unless the text changed since the request.
+    fn apply_revision(&mut self, accepted: &Accepted, window: &mut Window, cx: &mut Context<Self>) {
+        let Accepted { snapshot, revised } = accepted;
+        let same_file = self
+            .document
+            .path
+            .as_deref()
+            .is_some_and(|current| same_path(current, &snapshot.file));
+        if !same_file || *self.editor.read(cx).value() != *snapshot.text {
+            return show_message(
+                window,
+                cx,
+                "요청한 뒤 원고가 바뀌어 수정안을 적용하지 않았습니다. 다시 요청하세요.",
+            );
+        }
+        let range = snapshot.range.clone();
+        let revised = revised.clone();
+        self.editor.update(cx, |editor, cx| {
+            editor.set_selected_range(range, cx);
+            editor.replace(revised, window, cx);
+            editor.focus(window, cx);
+        });
+    }
+
     fn write(&mut self, path: &Path, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let text = self.editor.read(cx).value();
         match self.document.save_to(path, &text) {
             Ok(()) => {
+                self.refresh_project(&text);
                 self.dirty = false;
                 self.refresh_title(window);
                 cx.notify();
@@ -529,10 +719,37 @@ impl Workspace {
     }
 }
 
+fn same_path(a: &Path, b: &Path) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
+}
+
+fn show_message(window: &mut Window, cx: &mut gpui::App, message: &str) {
+    notify(window, cx, PromptLevel::Info, message, None);
+}
+
 fn show_error(window: &mut Window, cx: &mut gpui::App, message: &str, error: &anyhow::Error) {
     let detail = format!("{error:#}");
-    // The only answer dismisses the prompt, so its result carries nothing.
-    drop(window.prompt(PromptLevel::Critical, message, Some(&detail), &["확인"], cx));
+    notify(window, cx, PromptLevel::Critical, message, Some(&detail));
+}
+
+/// Shows a one-button prompt. The prompt closes when its answer receiver is
+/// dropped, so the receiver is held until the author dismisses it.
+fn notify(
+    window: &mut Window,
+    cx: &mut gpui::App,
+    level: PromptLevel,
+    message: &str,
+    detail: Option<&str>,
+) {
+    let answer = window.prompt(level, message, detail, &["확인"], cx);
+    cx.foreground_executor()
+        .spawn(async move {
+            answer.await.ok();
+        })
+        .detach();
 }
 
 /// A titled card holding one of the three panes.
@@ -646,6 +863,9 @@ impl Workspace {
                 action("open", "열기")
                     .on_click(cx.listener(|this, _, window, cx| this.open(&Open, window, cx))),
             )
+            .child(action("open-folder", "폴더 열기").on_click(
+                cx.listener(|this, _, window, cx| this.open_folder(&OpenFolder, window, cx)),
+            ))
             .child(
                 action("save", "저장").on_click(
                     cx.listener(|this, _, window, cx| this.save_action(&Save, window, cx)),
@@ -685,6 +905,41 @@ impl Workspace {
                             .child(folder),
                     ),
             )
+            .child(match self.assistant.read(cx).running_label() {
+                Some(label) => div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .mr_2()
+                    .child(div().text_sm().text_color(tokens.accent).child(label))
+                    .child(
+                        ButtonVariant::Ghost
+                            .apply(Button::new("cancel-agent"), palette)
+                            .accessibility_label("AI 작업 취소")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.assistant
+                                    .update(cx, |assistant, cx| assistant.cancel(cx))
+                            }))
+                            .child("취소"),
+                    )
+                    .into_any_element(),
+                None => ButtonVariant::Outline
+                    .apply(Button::new("ask-agent"), palette)
+                    .accessibility_label("AI에게 요청")
+                    .mr_2()
+                    .gap_2()
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.ask_agent(&AskAgent, window, cx)),
+                    )
+                    .child("AI 요청")
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(tokens.muted)
+                            .child(format!("{MODIFIER_KEY}+K")),
+                    )
+                    .into_any_element(),
+            })
             .child(shortcut("compile-keys", "B", keys).mr_2())
             .child(
                 ButtonVariant::Primary
@@ -700,6 +955,74 @@ impl Workspace {
                         "컴파일"
                     }),
             )
+    }
+
+    fn render_files(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        let tokens = self.tokens;
+        let palette = self.palette();
+        let root = self.project_root.as_ref()?;
+        if self.files.len() < 2 {
+            return None;
+        }
+        let current = self.document.path.as_deref();
+        let rows = self.files.iter().enumerate().map(|(index, file)| {
+            let path = root.join(file);
+            let selected = current.is_some_and(|current| same_path(current, &path));
+            let is_main = self
+                .main
+                .as_deref()
+                .is_some_and(|main| same_path(main, &path));
+            let depth = file.components().count().saturating_sub(1);
+            let name = file
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            ButtonVariant::Ghost
+                .apply(Button::new(("file", index)), palette)
+                .accessibility_label(file.display().to_string())
+                .current(selected)
+                .w_full()
+                .h(px(28.))
+                .flex_none()
+                .gap_2()
+                .pr_2()
+                .pl(px(10. + 14. * depth as f32))
+                .justify_start()
+                .text_color(if selected { tokens.accent } else { tokens.ink })
+                .when(selected, |this| this.bg(palette.highlight))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.open_at(path.clone(), None, window, cx)
+                }))
+                .child(div().min_w_0().truncate().child(name))
+                .when(is_main, |this| {
+                    this.child(
+                        div()
+                            .flex_none()
+                            .px_1()
+                            .rounded_sm()
+                            .text_xs()
+                            .text_color(tokens.accent)
+                            .bg(palette.highlight)
+                            .child("기본"),
+                    )
+                })
+        });
+        Some(
+            div()
+                .id("files")
+                .role(Role::Navigation)
+                .aria_label("프로젝트 파일")
+                .flex_none()
+                .max_h(px(220.))
+                .p_1()
+                .flex()
+                .flex_col()
+                .overflow_y_scroll()
+                .border_b_1()
+                .border_color(tokens.border)
+                .children(rows)
+                .into_any_element(),
+        )
     }
 
     fn render_outline(&self, cx: &Context<Self>) -> AnyElement {
@@ -722,7 +1045,7 @@ impl Workspace {
             let line = heading.line;
             let depth = heading.level - top;
             let selected = current == Some(index);
-            ButtonVariant::Ghost
+            let item = ButtonVariant::Ghost
                 .apply(Button::new(("heading", index)), palette)
                 .accessibility_label(heading.title.clone())
                 .current(selected)
@@ -743,9 +1066,42 @@ impl Workspace {
                     this.bg(palette.highlight).font_weight(FontWeight::MEDIUM)
                 })
                 .on_click(cx.listener(move |this, _, window, cx| this.jump_to(line, window, cx)))
-                .child(div().truncate().child(heading.title.clone()))
+                .child(div().truncate().child(heading.title.clone()));
+            (line, item.into_any_element())
         });
-        let body = if self.outline.is_empty() {
+        // Included files appear where the document pulls them in.
+        let base = self
+            .document
+            .path
+            .as_deref()
+            .and_then(Path::parent)
+            .map(Path::to_path_buf);
+        let links = self
+            .includes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, include)| {
+                let path = base.as_ref()?.join(&include.target);
+                let label = format!("↳ {}", include.target.display());
+                let item = ButtonVariant::Ghost
+                    .apply(Button::new(("include", index)), palette)
+                    .accessibility_label(format!("{} 열기", include.target.display()))
+                    .w_full()
+                    .h(px(28.))
+                    .flex_none()
+                    .px_2()
+                    .justify_start()
+                    .text_xs()
+                    .text_color(tokens.accent)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.open_at(path.clone(), None, window, cx)
+                    }))
+                    .child(div().truncate().child(label));
+                Some((include.line, item.into_any_element()))
+            });
+        let mut entries: Vec<(usize, AnyElement)> = headings.chain(links).collect();
+        entries.sort_by_key(|(line, _)| *line);
+        let outline = if entries.is_empty() {
             div()
                 .p_3()
                 .text_sm()
@@ -757,15 +1113,28 @@ impl Workspace {
                 .id("outline")
                 .role(Role::Navigation)
                 .aria_label("목차")
-                .size_full()
+                .flex_1()
+                .min_h_0()
                 .p_1()
                 .flex()
                 .flex_col()
                 .overflow_y_scroll()
-                .children(headings)
+                .children(entries.into_iter().map(|(_, item)| item))
                 .into_any_element()
         };
-        pane(tokens, "목차", None, body)
+        let body = div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .children(self.render_files(cx))
+            .child(outline)
+            .into_any_element();
+        let title = if self.files.len() < 2 {
+            "목차"
+        } else {
+            "파일 · 목차"
+        };
+        pane(tokens, title, None, body)
     }
 
     fn render_editor(&self, cx: &Context<Self>) -> AnyElement {
@@ -804,6 +1173,8 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::save_action))
             .on_action(cx.listener(Self::save_as_action))
             .on_action(cx.listener(Self::compile))
+            .on_action(cx.listener(Self::open_folder))
+            .on_action(cx.listener(Self::ask_agent))
             .on_action(cx.listener(|this, _: &ZoomIn, _, cx| {
                 this.preview.update(cx, |preview, cx| preview.zoom_in(cx))
             }))
@@ -849,6 +1220,7 @@ impl Render for Workspace {
                             .child(self.preview.clone()),
                     ),
             )
+            .child(self.assistant.clone())
             .child(self.render_discard_dialog(cx))
     }
 }

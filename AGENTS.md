@@ -4,7 +4,7 @@ Paper Factory is a native Rust + GPUI manuscript desktop app. Think Tank is a se
 
 ## Current state
 
-A single-file `.tex` editor with highlighting, an outline, Tectonic compilation, and a hayro PDF preview runs on Windows. There is no multi-file project support or agent integration yet. README.md lists what has and has not been verified; keep it accurate as capabilities are added.
+A multi-file LaTeX project editor with highlighting, an outline, Tectonic compilation, a hayro PDF preview, and read-only Claude Code proposals and Think Tank reviews runs on Windows. Codex integration is not implemented; its CLI was not available to verify. README.md lists what has and has not been verified; keep it accurate as capabilities are added.
 
 ## Implementation
 

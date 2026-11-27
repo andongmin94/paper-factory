@@ -38,8 +38,9 @@ enum Zoom {
 
 /// Requests from the preview to the rest of the window.
 pub enum PreviewEvent {
-    /// A problem with a known source line was clicked.
-    JumpToLine(usize),
+    /// A problem with a known source location was clicked. The path is
+    /// relative to the compiled document's folder.
+    JumpTo(std::path::PathBuf, usize),
 }
 
 pub struct PdfPreview {
@@ -349,9 +350,14 @@ impl PdfPreview {
                 .font_family(crate::workspace::EDITOR_FONT)
                 .text_xs()
                 .child(problem.text.clone());
-            match problem.line {
-                Some(line) => Button::new(("problem", index))
-                    .accessibility_label(format!("{}번째 줄로 이동: {}", line + 1, problem.text))
+            match problem.location.clone() {
+                Some((file, line)) => Button::new(("problem", index))
+                    .accessibility_label(format!(
+                        "{} {}번째 줄로 이동: {}",
+                        file.display(),
+                        line + 1,
+                        problem.text
+                    ))
                     .w_full()
                     .px_1()
                     .rounded_sm()
@@ -359,9 +365,9 @@ impl PdfPreview {
                     .justify_start()
                     .text_color(self.tokens.ink)
                     .hover(|style| style.bg(error.opacity(0.08)))
-                    .on_click(
-                        cx.listener(move |_, _, _, cx| cx.emit(PreviewEvent::JumpToLine(line))),
-                    )
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        cx.emit(PreviewEvent::JumpTo(file.clone(), line))
+                    }))
                     .child(row)
                     .into_any_element(),
                 None => div().px_1().child(row).into_any_element(),

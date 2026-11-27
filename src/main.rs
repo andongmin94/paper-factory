@@ -1,9 +1,12 @@
+mod agent;
+mod assistant;
 mod compile;
 mod document;
 mod highlight;
 mod latex;
 mod pdf;
 mod preview;
+mod project;
 // The installed preset and recipes carry optional pieces this app does not use.
 #[allow(dead_code, unused_imports)]
 mod ui;
@@ -15,28 +18,20 @@ use gpui::{
 };
 use gpui_deck::Root;
 
-use workspace::{Compile, Open, Save, SaveAs, Workspace, ZoomIn, ZoomOut, ZoomToFit};
+use workspace::{
+    AskAgent, Compile, Open, OpenFolder, Save, SaveAs, Workspace, ZoomIn, ZoomOut, ZoomToFit,
+};
 
-#[cfg(target_os = "macos")]
-const SHORTCUTS: [&str; 7] = [
-    "cmd-o",
-    "cmd-s",
-    "cmd-shift-s",
-    "cmd-b",
-    "cmd-=",
-    "cmd--",
-    "cmd-0",
-];
-#[cfg(not(target_os = "macos"))]
-const SHORTCUTS: [&str; 7] = [
-    "ctrl-o",
-    "ctrl-s",
-    "ctrl-shift-s",
-    "ctrl-b",
-    "ctrl-=",
-    "ctrl--",
-    "ctrl-0",
-];
+/// A shortcut on the platform's primary modifier key.
+macro_rules! key {
+    ($keys:literal) => {
+        if cfg!(target_os = "macos") {
+            concat!("cmd-", $keys)
+        } else {
+            concat!("ctrl-", $keys)
+        }
+    };
+}
 
 fn main() {
     let path = std::env::args_os().nth(1).map(std::path::PathBuf::from);
@@ -45,15 +40,16 @@ fn main() {
         gpui_deck::init(cx);
         ui::preset::register_fonts(cx);
         let tokens = ui::preset::selected().tokens(false);
-        let [open, save, save_as, compile, zoom_in, zoom_out, zoom_fit] = SHORTCUTS;
         cx.bind_keys([
-            KeyBinding::new(open, Open, None),
-            KeyBinding::new(save, Save, None),
-            KeyBinding::new(save_as, SaveAs, None),
-            KeyBinding::new(compile, Compile, None),
-            KeyBinding::new(zoom_in, ZoomIn, None),
-            KeyBinding::new(zoom_out, ZoomOut, None),
-            KeyBinding::new(zoom_fit, ZoomToFit, None),
+            KeyBinding::new(key!("o"), Open, None),
+            KeyBinding::new(key!("shift-o"), OpenFolder, None),
+            KeyBinding::new(key!("s"), Save, None),
+            KeyBinding::new(key!("shift-s"), SaveAs, None),
+            KeyBinding::new(key!("b"), Compile, None),
+            KeyBinding::new(key!("k"), AskAgent, None),
+            KeyBinding::new(key!("="), ZoomIn, None),
+            KeyBinding::new(key!("-"), ZoomOut, None),
+            KeyBinding::new(key!("0"), ZoomToFit, None),
         ]);
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {
